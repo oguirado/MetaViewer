@@ -5,7 +5,7 @@
  * subscription. Its presence distinguishes waiting for frames from no runtime;
  * it does not attest transport health or adapter availability.
  */
-import { computed, defineComponent, h, inject, markRaw, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
+import { computed, defineComponent, h, inject, markRaw, nextTick, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch } from 'vue';
 import DemoDialog from './demo/DemoDialog.vue';
 import IdentitiesDialog from './identities/IdentitiesDialog.vue';
 import HandoffNotice from './handoff/HandoffNotice.vue';
@@ -32,6 +32,20 @@ import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {Pick<InstanceType<typeof WallWorkspace>['$props'], 'projectionView'|'intentBuilders'|'controlRegistry'|'scheduler'|'tileScheduler'>} WallRuntime */
 /** @typedef {{readRaw:()=>Promise<string|null>,writeAtomic:(json:string)=>Promise<void>}} LayoutStorage */
 const identitiesOpen = ref(false);
+const moreOpen = ref(false);
+const overlayCoordinator = /** @type {ReturnType<typeof import('./surfaces/overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
+const appOverlayOwner = {};
+const moreMenu = ref(/** @type {HTMLElement|null} */ (null));
+const morePopup = ref(/** @type {HTMLElement|null} */ (null));
+watch(moreOpen, async open => {
+  if (!open) { if (morePopup.value?.matches?.(':popover-open')) morePopup.value.hidePopover(); return; }
+  await nextTick();
+  if (moreOpen.value) /** @type {any} */ (morePopup.value)?.showPopover?.({source:moreMenu.value?.querySelector('button')});
+});
+/** @param {Event} event */
+function closeMore(event) { if (!moreMenu.value?.contains(/** @type {Node|null} */ (event.target))) moreOpen.value = false; }
+onMounted(() => globalThis.document?.addEventListener?.('pointerdown', closeMore, true));
+onBeforeUnmount(() => globalThis.document?.removeEventListener?.('pointerdown', closeMore, true));
 const demoOpen=ref(false), entryMessage=ref('');
 let entryTimer=/** @type {ReturnType<typeof setTimeout>|undefined} */(undefined);
 onBeforeUnmount(()=>clearTimeout(entryTimer));
@@ -643,13 +657,14 @@ function onCapsuleLifecycle({surfaceId,completion}) {
   });
 }
 const pendingModeSwitch = ref(/** @type {any} */ (null));
-const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value));
+const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value || moreOpen.value || settingsOpen.value || multislotOpen.value || terminalOpen.value || railOpen.value));
 function syncModalAttr(open = modalOpen.value) {
+  if (overlayCoordinator) { overlayCoordinator.set(appOverlayOwner, open); return; }
   const body = /** @type {any} */ (globalThis.document)?.body;
   if (!body) return;
   if (open) {
-    if (typeof body.setAttribute === 'function') body.setAttribute('data-mv-modal', 'true');
-    if (body.dataset) body.dataset.mvModal = 'true';
+    if (typeof body.setAttribute === 'function') body.setAttribute('data-mv-modal', 'open');
+    if (body.dataset) body.dataset.mvModal = 'open';
   } else {
     if (typeof body.removeAttribute === 'function') body.removeAttribute('data-mv-modal');
     if (body.dataset) delete body.dataset.mvModal;
@@ -1266,12 +1281,17 @@ const chromeWorkspace = markRaw(defineComponent({
       <template #actions>
         <span class="mv-entry-copy"><UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
         <span class="mv-entry-feedback" role="status" aria-live="polite" aria-atomic="true">{{ entryMessage }}</span></span>
-        <UiButton id="shell-automate-demo" data-semantic-anchor="demo/open" label="Automate from a demo" :aria-expanded="demoOpen" @click="demoOpen=true" />
         <UiButton id="shell-identities" data-semantic-anchor="identities/open" label="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
-        <UiButton id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative" />
-        <UiButton id="shell-settings" data-semantic-anchor="settings/open" label="Settings" :aria-expanded="settingsOpen" @click="toggleSettings" />
-        <UiButton id="shell-multislot" data-semantic-anchor="capsule/open-multislot" label="Open in multislot" :aria-expanded="multislotOpen" :disabled="!selectedSurface" @click="openMultislot" />
-        <UiButton id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal" :aria-expanded="terminalOpen" @click="toggleTerminal" />
+        <div ref="moreMenu" class="mv-more-menu" @keydown.esc="moreOpen = false">
+          <UiButton id="shell-more" data-semantic-anchor="shell/menu/more" label="More" aria-haspopup="menu" aria-controls="shell-more-menu" :aria-expanded="moreOpen" @click="moreOpen = !moreOpen" />
+          <div :hidden="!moreOpen" id="shell-more-menu" ref="morePopup" popover="manual" class="mv-menu-popover" role="menu" aria-label="More">
+        <UiButton role="menuitem" id="shell-automate-demo" data-semantic-anchor="demo/open" label="Automate from a demo" :aria-expanded="demoOpen" @click="moreOpen = false; demoOpen=true" />
+        <UiButton role="menuitem" id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="moreOpen = false; toggleCreative()" />
+        <UiButton role="menuitem" id="shell-settings" data-semantic-anchor="settings/open" label="Settings" :aria-expanded="settingsOpen" @click="moreOpen = false; toggleSettings()" />
+        <UiButton role="menuitem" id="shell-multislot" data-semantic-anchor="capsule/open-multislot" label="Open in multislot" :aria-expanded="multislotOpen" :disabled="!selectedSurface" @click="moreOpen = false; openMultislot()" />
+        <UiButton role="menuitem" id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal" :aria-expanded="terminalOpen" @click="moreOpen = false; toggleTerminal()" />
+          </div>
+        </div>
       </template>
     </TopBar>
     <div v-if="!nestedMode.displayOnly" id="mv-layout-notice" class="mv-layout-notice">
@@ -1306,9 +1326,8 @@ const chromeWorkspace = markRaw(defineComponent({
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <RoleSurface :surface-id="capsuleId" :control="surface.control" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
+            <RoleSurface :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
-              <UiButton v-if="wallInputState(surface) === 'view'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
               <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? 'Taking control…' }}</span>
               <span v-else-if="wallInputState(surface) === 'unavailable'" class="mv-input-indicator__text" role="status">Input unavailable in this window</span>
@@ -1438,4 +1457,18 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
   color: var(--cuk-semantic-text-primary);
   z-index: var(--cuk-component-dialog-host-z-index);
 }
+</style>
+
+<style>
+.mv-more-menu { position:relative; }
+.mv-menu-popover { position:absolute; right:0; top:100%; z-index:10000; display:flex; flex-direction:column; min-width:220px; padding:6px; gap:4px; border:1px solid var(--cuk-semantic-border-subtle); border-radius:var(--cuk-semantic-radius-md); background:var(--cuk-semantic-surface-chrome); color:var(--cuk-semantic-text-primary); box-shadow:var(--cuk-semantic-shadow-md); }
+.mv-menu-popover button { text-align:left; }
+.mv-menu-popover[popover] { margin:0; position:fixed; inset:auto; position-area:bottom span-left; position-try-fallbacks:flip-block,flip-inline; max-height:calc(100vh - 24px); overflow:auto; }
+.mv-menu-popover[popover]:not(:popover-open) { display:none; }
+.mv-tile { position:relative; }
+.mv-tile .cuk-capsule-panel__axes { display:none; }
+.mv-tile .cuk-capsule-panel__actions > button:not([id^="window-"]):not([data-semantic-anchor$="/close"]) { display:none; }
+/* Window-hidden is permanent presentation state, including the entire shell. */
+.mv-tile[hidden] { display:none !important; }
+.dv-resize-container:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])), .dv-groupview:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])) { display:none !important; }
 </style>

@@ -8,13 +8,13 @@ import { fileURLToPath } from 'node:url';
  * @param {{electron:typeof import('electron'),window:import('electron').BrowserWindow,
  * bridge:Awaited<ReturnType<typeof import('./xpraHumanBridge.js').openXpraHumanBridge>>,
  * bounds:{x:number,y:number,width:number,height:number},
- * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,rawKeyboard?:boolean,
+ * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,rawKeyboard?:boolean,initiallyVisible?:boolean,
  * capsuleSize:()=>{width:number,height:number},
  * axContext?:()=>{sensitive?:boolean,password?:boolean,row?:number}|null,clientQuery?:string,
  * recoverBridge?:()=>Promise<any>,onState?:(state:string)=>void,onFailure:(error:unknown)=>void}} options
  */
 export async function attachXpraHumanTile({ electron, window, bridge, bounds, trace,
-  isActive, capsuleSize, writable = true, rawKeyboard = false, axContext = () => null, clientQuery = xpraClientQuery(writable),
+  isActive, capsuleSize, writable = true, rawKeyboard = false, initiallyVisible = true, axContext = () => null, clientQuery = xpraClientQuery(writable),
   recoverBridge = async () => bridge, onState = () => {}, onFailure }) {
   const { WebContentsView, session, ipcMain } = electron;
   if (typeof isActive !== 'function' || isActive() !== true || typeof capsuleSize !== 'function' ||
@@ -79,7 +79,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     if (!live()) return;
     trace.setActive(state === 'ready');
     onState(state);
-    void wc.executeJavaScript(`{const overlay=document.getElementById('metaviewer-reconnecting');if(overlay)overlay.hidden=${state === 'ready'};}`)
+    void wc.executeJavaScript(`{const overlay=document.getElementById('metaviewer-reconnecting');if(overlay){overlay.hidden=${state === 'ready'};overlay.textContent=${JSON.stringify(state === 'reconnecting' ? 'Reconnecting…' : 'Connecting…')};}}`)
       .catch(() => {});
   }
   /** @param {{x:number,y:number,width:number,height:number}} rect */
@@ -109,6 +109,8 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     }
   };
   ipcMain.on('metaviewer:human-trace.v0.3', onTrace);
+  // A role mount must not cover renderer menus while readiness is pending.
+  view.setVisible(initiallyVisible);
   window.contentView.addChildView(view);
   async function close() {
     if (detached) return;
@@ -149,6 +151,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
         // Reload through the same authenticated request hook. A replacement
         // bridge supplies a fresh origin and capability, never a cached token.
         await wc.loadURL(origin + '/metaviewer-tile.html' + clientQuery);
+        publish('reconnecting');
         await waitForXpraClient(wc, {writable, rawKeyboard, isActive:live});
       }, onState:publish});
     return Object.freeze({ view, resize, close,

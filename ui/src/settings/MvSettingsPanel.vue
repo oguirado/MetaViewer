@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+import { computed, inject, onMounted, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { setKitScheme } from 'capsule-ui-kit/theme';
 import {
   MV_DEFAULT_RECORDING_FPS,
@@ -56,6 +56,19 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['scheme-change']);
+const hiddenSessionSettings = /** @type {{get:()=>number,set:(value:number)=>void}|null} */ (inject('hiddenSessionSettings', null));
+const hiddenSessionLimit = ref(hiddenSessionSettings?.get() ?? 4), hiddenSessionError = ref('');
+/** @param {Event} event */
+function changeHiddenSessionLimit(event) {
+  const input = /** @type {HTMLInputElement} */ (event.target);
+  hiddenSessionError.value = '';
+  try {
+    if (!input.value.trim()) throw Error('HIDDEN_SESSION_LIMIT_INVALID');
+    const value = Number(input.value);
+    hiddenSessionSettings?.set(value); hiddenSessionLimit.value = value;
+  } catch { hiddenSessionError.value = 'Enter a non-negative whole number. The previous limit is still active.'; }
+}
+
 
 /** Density model: the parent applies it to the UI density. @type {import('vue').Ref<string>} */
 const densityModel = defineModel('density', { default: MV_DENSITY });
@@ -479,6 +492,11 @@ onBeforeUnmount(() => {
     :data-semantic-anchor="MV_SETTINGS_ANCHORS.panel"
   >
     <h2 class="mv4-set-title">Settings</h2>
+    <label v-if="hiddenSessionSettings" class="mv4-density">Hidden live sessions
+      <input id="settings-hidden-live-sessions" data-semantic-anchor="settings/hidden-live-sessions" aria-label="Hidden live sessions" type="number" min="0" step="1" :value="hiddenSessionLimit" @change="changeHiddenSessionLimit" />
+      <span>Older hidden views disconnect beyond this limit. Shown tiles stay connected.</span>
+    </label>
+    <p v-if="hiddenSessionError" role="alert">{{ hiddenSessionError }}</p>
     <div
       :id="MV_SETTINGS_IDS.schemeGroup"
       class="mv4-scheme"

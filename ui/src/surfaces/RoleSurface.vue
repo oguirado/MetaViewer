@@ -65,10 +65,35 @@ function collectClipRects(el) {
 }
 </script>
 <script setup>
-import { onMounted, onBeforeUnmount, ref, watch } from 'vue';
-const props = defineProps({surfaceId:{type:String,required:true},control:{type:String,default:'agent'}});
-const emit = defineEmits(['mode','reveal','stopped','lifecycle']);
+import { onMounted, onBeforeUnmount, ref, watch, inject, nextTick } from 'vue';
+const props = defineProps({surfaceId:{type:String,required:true},label:{type:String,default:''},control:{type:String,default:'agent'},canTakeControl:{type:Boolean,default:false}});
+const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control']);
 const progress = ref(''), confirmed = ref(false);
+const overlays = /** @type {ReturnType<typeof import('./overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
+const hiddenSessions = /** @type {ReturnType<typeof import('./hiddenSessions.js').createHiddenSessionPool>|null} */ (inject('hiddenSessionPool', null));
+const menuOpen = ref(false), menuHost = ref(/** @type {HTMLElement|null} */ (null)), headerTarget = ref(/** @type {Element|null} */ (null)), resourceReleased = ref(false);
+const menuOwner = {};
+const menuPopup = ref(/** @type {HTMLElement|null} */ (null));
+watch(menuOpen, async open => {
+  if (!open) { if (menuPopup.value?.matches?.(':popover-open')) menuPopup.value.hidePopover(); return; }
+  await nextTick();
+  if (menuOpen.value) /** @type {any} */ (menuPopup.value)?.showPopover?.({source:menuHost.value?.querySelector?.('button')});
+});
+watch(menuOpen, open => overlays?.set(menuOwner, open), {flush:'sync'});
+/** @param {Event} event */
+function closeMenu(event) { if (!menuHost.value?.contains(/** @type {Node|null} */ (event.target))) menuOpen.value = false; }
+/** @param {()=>void} action */
+function runMenu(action) { menuOpen.value = false; action(); }
+function isGeometricallyShown() {
+  const {scrollAncestors, wallViewport} = collectClipRects(root.value);
+  return clipRoleBounds(root.value?.getBoundingClientRect(), scrollAncestors, wallViewport).visible && !!root.value?.getClientRects().length;
+}
+function releaseHiddenSession() {
+  resourceReleased.value = true;
+  void revoke();
+}
+function reconnectReleased() { resourceReleased.value = false; void sync(); }
+
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const root = ref(/** @type {HTMLElement|null} */ (null));
 const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
@@ -80,12 +105,13 @@ let timer = /** @type {ReturnType<typeof setInterval>|undefined} */ (undefined);
 const scrollCleanups = [];
 const wanted = () => role.value === 'human' || role.value === 'agent' && watching.value && props.control === 'agent';
 async function revoke() {
+  hiddenSessions?.remove(props.surfaceId);
   mounted = false; signature = ''; shown = true;
   try { await api?.close(props.surfaceId); } catch { /* host window teardown also revokes */ }
 }
 async function sync() {
   if (ended) { if (!notifiedEnd) { notifiedEnd = true; emit('mode', {surfaceId:props.surfaceId,mode:'closed'}); } return; }
-  if (!api || !alive || error.value || progress.value) return;
+  if (!api || !alive || error.value || progress.value || resourceReleased.value) return;
   if (busy) { resync = true; return; }
   busy = true;
   try {
@@ -98,7 +124,10 @@ async function sync() {
     const box = root.value?.getBoundingClientRect();
     const {scrollAncestors, wallViewport} = collectClipRects(root.value);
     const clipped = clipRoleBounds(box, scrollAncestors, wallViewport);
-    const visible = clipped.visible && !isModalActive() && !!root.value?.getClientRects().length;
+    const geometricallyShown = clipped.visible && !!root.value?.getClientRects().length;
+    const visible = geometricallyShown && !isModalActive();
+    if (mounted) hiddenSessions?.update(props.surfaceId, geometricallyShown, releaseHiddenSession, isGeometricallyShown);
+    if (resourceReleased.value) return;
     if (!wanted()) { if (mounted) await revoke(); return; }
     // Temporary clipping, docking and window visibility must not revoke the
     // authenticated session. Hide the native view and retain its connection.
@@ -118,10 +147,19 @@ async function sync() {
     const bounds = clipped.bounds;
     const next = JSON.stringify(bounds);
     if (mounted && next === signature) return;
+    const attaching = !mounted;
+    if (attaching) viewState.value = 'connecting';
     const reply = mounted ? await api.resize(props.surfaceId,bounds) : await api.mount(props.surfaceId,bounds);
     if (!alive || !wanted()) { await revoke(); return; }
     if (!reply.ok) throw Error(reply.code);
     mounted = true; signature = next; error.value = '';
+    if (attaching) {
+      viewState.value = 'ready';
+      // Native role views stay hidden through their initial async mount.
+      // Reconcile against the current modal/geometry state before exposing one.
+      if (reply.visible === false) { shown = false; resync = true; }
+    }
+    hiddenSessions?.update(props.surfaceId, true, releaseHiddenSession, isGeometricallyShown);
   } catch (e) { error.value = /** @type {Error} */(e).message || 'XPRA_REFUSED'; await revoke(); }
   finally {
     busy = false;
@@ -178,6 +216,8 @@ async function confirmLogin() {
   catch (reason) { error.value = /** @type {Error} */(reason).message; }
 }
 onMounted(async () => {
+  headerTarget.value = root.value?.closest?.('.mv-tile')?.querySelector('.cuk-capsule-panel__actions') ?? null;
+  globalThis.document?.addEventListener?.('pointerdown', closeMenu, true);
   if (!api) return;
   try {
     const status = await api.status(props.surfaceId);
@@ -186,34 +226,45 @@ onMounted(async () => {
     role.value = status.role; emit('mode', {surfaceId:props.surfaceId,mode:status.role});
     bindScrollListeners();
     await sync();
+    if (!alive) return; // An in-flight native mount may finish after unmount.
     timer = setInterval(() => { void sync(); },100);
   } catch (e) { error.value = /** @type {Error} */(e).message; }
 });
 watch(() => props.control, () => { if (props.control !== 'agent') watching.value = false; void sync(); });
 watch(watching, () => { void sync(); });
 watch(progress, () => { if (!progress.value && ended) void sync(); });
-onBeforeUnmount(() => { alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); void revoke(); });
+onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.document?.removeEventListener?.('pointerdown', closeMenu, true); alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); void revoke(); });
 </script>
 <template>
   <div class="mv-role-surface" :data-capsule-role="role || 'unproven'">
-    <div v-if="api && role" class="mv-role-actions">
-      <button type="button" :disabled="!!progress" @click="lifecycle('switchMode')">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>
-      <button type="button" :disabled="!!progress" @click="lifecycle('stop')">Stop capsule</button>
-      <button v-if="role === 'human'" type="button" :disabled="confirmed || !!progress" @click="confirmLogin">{{ confirmed ? 'Login confirmed' : 'I logged in' }}</button>
-      <span v-if="progress" role="status">{{ progress }}</span>
-    </div>
-    <div v-if="role === 'agent' && api && control === 'agent'" class="mv-role-watch">
-      <button type="button" :aria-pressed="watching" @click="watching = !watching">{{ watching ? 'Close watch' : 'Watch read-only' }}</button>
-    </div>
+    <Teleport v-if="api && role" :to="headerTarget || 'body'" :disabled="!headerTarget">
+      <div ref="menuHost" class="mv-role-menu-host" @keydown.esc="menuOpen = false">
+        <span class="mv-role-mode-badge">{{ role }}</span>
+        <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
+        <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
+          <button :id="`tile-switch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/mode/switch`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('switchMode'))">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>
+          <button v-if="role === 'human'" role="menuitem" :id="`tile-login-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/login/confirm`" type="button" :disabled="confirmed || !!progress" @click="runMenu(confirmLogin)">{{ confirmed ? 'Login confirmed' : 'I logged in' }}</button>
+          <button v-if="role === 'agent' && control === 'agent'" role="menuitem" :id="`tile-watch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/watch`" type="button" @click="runMenu(() => watching = !watching)">{{ watching ? 'Close watch' : 'Watch read-only' }}</button>
+          <button :id="`tile-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/stop`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('stop'))">Stop capsule</button>
+          <template v-if="role === 'agent'"><hr role="separator"><button :aria-label="`Take control of ${label || surfaceId} (emergency)`" :id="`tile-take-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/control/emergency`" role="menuitem" type="button" :disabled="!canTakeControl" @click="runMenu(() => emit('take-control'))">Take control (emergency)</button></template>
+        </div>
+      </div>
+    </Teleport>
+    <span v-if="progress" role="status">{{ progress }}</span>
     <div ref="root" class="mv-role-viewport">
       <div v-if="role === 'agent'" v-show="!watching" :inert="watching" class="mv-role-agent-canvas"><slot /></div>
+      <button v-if="resourceReleased" :id="`tile-reconnect-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/reconnect`" type="button" @click="reconnectReleased">Disconnected to save resources, click to reconnect</button>
       <button v-if="error" type="button" @click="error = ''; sync()">Reopen</button>
-      <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (viewState === 'reconnecting' ? 'Reconnecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
+      <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
       <p v-else-if="error" role="alert">{{ error }}</p>
     </div>
   </div>
 </template>
 <style scoped>
+.mv-role-menu-host { position:relative; display:flex; align-items:center; gap:6px; }
+.mv-role-mode-badge { font-size:11px; text-transform:capitalize; }
+.mv-role-menu-button { min-width:28px; min-height:28px; }
+.mv-role-menu-host hr { width:100%; }
 :global(.mv-tile:has([data-capsule-role="human"]) [data-semantic-anchor$="/control"]) { display:none; }
 .mv-role-surface { display:flex; flex-direction:column; width:100%; height:100%; min-height:0; }
 .mv-role-viewport { position:relative; flex:1; min-height:0; overflow:hidden; }

@@ -150,7 +150,8 @@ async function roleHostFixture(t, role='human', failure=null, native=false) {
 test('human mount uses writable native view; IPC carries no bridge token',async t=>{
  const f=await roleHostFixture(t);
  const reply=await f.request('mount',{surfaceId:f.surface.surface_id,bounds});
- assert.deepEqual(reply,{ok:true,role:'human'});assert.deepEqual(f.modes,[false]);
+ assert.deepEqual(reply,{ok:true,role:'human',visible:false});assert.deepEqual(f.modes,[false]);
+ assert.equal(f.tileOptions[0].initiallyVisible,false,'host defers native visibility until renderer admission');
  assert.deepEqual(f.calls[0],{writable:true});assert(!JSON.stringify(reply).includes('never-renderer'));
  await f.request('close',{surfaceId:f.surface.surface_id});assert.deepEqual(f.calls.slice(1),['tile-close','bridge-close']);
  await assert.rejects(f.handler('foreign',{schema:'metaviewer.roles/v0.3',op:'choices'}),/SENDER/);
@@ -190,7 +191,7 @@ test('human role never instantiates the canvas input slot; agent keeps it', asyn
  const renderer=vue.createRenderer({createElement:node,createText:text=>({...node('#text'),text}),createComment:text=>({...node('#comment'),text}),
   setText(n,text){n.text=text;},setComment(n,text){n.text=text;},setElementText(n,text){n.text=text;n.children=[];},
   patchProp(n,key,_prev,value){n.props[key]=value;},insert(n,parent,anchor){n.parent=parent;const at=parent.children.indexOf(anchor);if(at<0)parent.children.push(n);else parent.children.splice(at,0,n);},
-  remove(n){if(n.parent)n.parent.children.splice(n.parent.children.indexOf(n),1);},parentNode:n=>n.parent,nextSibling:()=>null});
+  remove(n){if(n.parent)n.parent.children.splice(n.parent.children.indexOf(n),1);},parentNode:n=>n.parent,nextSibling:()=>null,querySelector:()=>null});
  const tags=n=>[n.tag,...n.children.flatMap(tags)];
  try {
   for(const role of ['human','agent']) {
@@ -231,6 +232,8 @@ test('human role never instantiates the canvas input slot; agent keeps it', asyn
   try {
    switchingApp.mount(switching);await new Promise(r=>setTimeout(r,20));await vue.nextTick();
    const all=n=>[n,...n.children.flatMap(all)];
+   all(switching).find(n=>n.tag==='button'&&n.props['aria-haspopup']==='menu').props.onClick();
+   await vue.nextTick();
    all(switching).find(n=>n.tag==='button'&&n.text==='Switch to agent mode').props.onClick();
    await new Promise(r=>setTimeout(r,20));await vue.nextTick();
    assert(all(switching).some(n=>n.text==='Switching to agent…'));assert.deepEqual(lifecycleEvents,[]);
@@ -246,6 +249,8 @@ test('human role never instantiates the canvas input slot; agent keeps it', asyn
   }});
   departedApp.mount(departed);await new Promise(r=>setTimeout(r,20));await vue.nextTick();
   const allDeparted=n=>[n,...n.children.flatMap(allDeparted)];
+  allDeparted(departed).find(n=>n.tag==='button'&&n.props['aria-haspopup']==='menu').props.onClick();
+  await vue.nextTick();
   allDeparted(departed).find(n=>n.tag==='button'&&n.text==='Switch to agent mode').props.onClick();
   await new Promise(r=>setTimeout(r,20));departedApp.unmount();
   finishSwitch({ok:true,surfaceId:'after-unmount'});await new Promise(r=>setTimeout(r,20));
@@ -258,7 +263,7 @@ test('human role never instantiates the canvas input slot; agent keeps it', asyn
    const all=n=>[n,...n.children.flatMap(all)];
    assert(all(failed).some(n=>n.text==='XPRA_CLIENT_READY_TIMEOUT'));
    assert.equal(attempts,1,'failure must not disappear into an automatic mount loop');
-   const retry=all(failed).find(n=>n.tag==='button');assert(retry);
+   const retry=all(failed).find(n=>n.tag==='button'&&n.text==='Reopen');assert(retry);
    retry.props.onClick();await new Promise(r=>setTimeout(r,20));assert.equal(attempts,2);
   } finally {failedApp.unmount();}
  } finally {globalThis.metaviewerRoles=oldApi;globalThis.innerWidth=oldWidth;globalThis.innerHeight=oldHeight;}
@@ -466,12 +471,33 @@ test('a child crash during initial readiness preserves its typed error',async()=
 
 test('host and native tile integrate child failure cleanup and explicit reopen',async t=>{
  const f=await roleHostFixture(t,'human',null,true),surfaceId=f.surface.surface_id;
- assert.deepEqual(await f.request('mount',{surfaceId,bounds}),{ok:true,role:'human'});
+ assert.deepEqual(await f.request('mount',{surfaceId,bounds}),{ok:true,role:'human',visible:false});
  const old=f.f.children[0].webContents;old.emit('unresponsive');
  await new Promise(r=>setTimeout(r,20));
  assert.deepEqual((await f.request('status',{surfaceId})).view,{state:'error',code:'XPRA_VIEW_UNRESPONSIVE'});
  assert.equal(f.f.children.length,0);assert(f.calls.includes('bridge-close'));
- assert.deepEqual(await f.request('mount',{surfaceId,bounds}),{ok:true,role:'human'});
+ assert.deepEqual(await f.request('mount',{surfaceId,bounds}),{ok:true,role:'human',visible:false});
  assert.equal(f.f.children.length,1);assert.notEqual(f.f.children[0].webContents,old);
  assert.deepEqual((await f.request('status',{surfaceId})).view,{state:'ready'});
+});
+
+
+async function pendingVisibilityOracle(initiallyVisible = false) {
+ const f=fakeElectron(); f.readiness.ready=false;
+ const pending=attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,
+  trace:{setActive(){},record(){}},isActive:()=>true,initiallyVisible,
+  capsuleSize:()=>({width:1280,height:900}),onFailure:assert.fail});
+ let tile;
+ try {
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.children.length,1);
+  assert.equal(f.children[0].visible,false,'connecting child cannot obscure a renderer menu');
+  f.readiness.ready=true;tile=await pending;
+  assert.equal(tile.view.visible,false,'readiness alone cannot bypass modal ownership');
+  tile.setVisible(true);assert.equal(tile.view.visible,true,'renderer explicitly admits visibility');
+ } finally { f.readiness.ready=true;tile ??= await pending;await tile.close(); }
+ }
+test('P18B a pending native role mount stays hidden until renderer visibility admission', () => pendingVisibilityOracle());
+test('P18B mutant: showing a pending native view bypasses menu occlusion', async () => {
+ await assert.rejects(()=>pendingVisibilityOracle(true),{code:'ERR_ASSERTION'});
 });

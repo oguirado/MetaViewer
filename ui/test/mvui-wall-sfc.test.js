@@ -105,7 +105,7 @@ describe('edited SurfacePanel still compiles', async () => {
 
   test('tile wrapper and shared decision reach the kit panel', () => {
     const template = source.slice(source.indexOf('<template>'));
-    assert.match(template, /<div class="mv-tile" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code">/);
+    assert.match(template, /<div class="mv-tile" :hidden="presentationHidden" :data-mv-window-hidden="String\(presentationHidden\)" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code">/);
     assert.ok(template.includes(":presentation-status=\"tile.tile === 'error' ? 'Surface update unavailable' : tile.status\""));
     assert.match(template, /<\/CapsulePanel>\s*<\/div>\s*<\/template>/s);
   });

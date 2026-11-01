@@ -1,3 +1,4 @@
+import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 // UX-CHIP: verify the wall tile no longer renders the covering "View only —
 // press Control to interact" overlay chip, while keeping take/release control
 // and pending/unavailable/interactive states reachable in the non-overlapping
@@ -98,9 +99,9 @@ async function loadApp(source) {
   return importCode(code, `uxchip-app-${serial}`);
 }
 
-function createRenderer() {
+function createRenderer(activity = { calls: 0 }) {
   return vue.createRenderer({
-    createElement: (tag) => ({ tag, props: {}, children: [], parent: null }),
+    createElement: (tag) => ({ tag, props: {}, children: [], parent: null, style:{display:''}, getBoundingClientRect:()=>({x:0,y:0,width:320,height:200}),getClientRects:()=>[1] }),
     createText: (text) => ({ text, parent: null }),
     createComment: (comment) => ({ comment, parent: null }),
     insert(child, parent, anchor = null) {
@@ -118,7 +119,7 @@ function createRenderer() {
     setElementText(node, text) { node.children = []; node.text = text; },
     parentNode: (node) => node.parent ?? null,
     nextSibling: (node) => node.parent?.children[node.parent.children.indexOf(node) + 1] ?? null,
-    patchProp(node, key, _old, value) { node.props[key] = value; },
+    patchProp(node, key, _old, value) { activity.calls++; node.props[key] = value; },
     querySelector: () => null,
     setScopeId() {},
   });
@@ -187,7 +188,11 @@ async function mountFixture(t, { source = APP_SOURCE, inputAvailable = true, hol
   const oldWindow = globalThis.window;
   const oldDocument = globalThis.document;
   globalThis.window = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: undefined };
-  globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
+  const listeners = new Map();
+  globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null,
+    addEventListener(type, fn) { if (!listeners.has(type)) listeners.set(type, new Set()); listeners.get(type).add(fn); },
+    removeEventListener(type, fn) { listeners.get(type)?.delete(fn); },
+  };
   const frameListeners = new Set();
   const framesPort = {
     subscribeFrames(listener) {
@@ -222,7 +227,8 @@ async function mountFixture(t, { source = APP_SOURCE, inputAvailable = true, hol
   };
   const App = await loadApp(source);
   const root = { children: [] };
-  const app = createRenderer().createApp(App, {
+  const activity = { calls: 0 };
+  const app = createRenderer(activity).createApp(App, {
     layout: {}, scope: {}, storage: { readRaw: async () => null, writeAtomic: async () => {} },
     nestedHost: { getNestedDepth: () => 0, getSelfCapsuleId: () => null },
     authorityHost, runtime,
@@ -234,6 +240,7 @@ async function mountFixture(t, { source = APP_SOURCE, inputAvailable = true, hol
     resetSurface: () => {},
     dispose: () => {},
   });
+  installRoleMenuInput(t, app);
   app.mount(root);
   t.after(() => {
     try { app.unmount(); } catch { /* ignore unmount errors */ }
@@ -242,9 +249,12 @@ async function mountFixture(t, { source = APP_SOURCE, inputAvailable = true, hol
     globalThis.document = oldDocument;
   });
   await tick();
+  await openRoleMenuInput(root);
   return {
     root,
     submitted,
+    activity,
+    listenerCount: () => [...listeners.values()].reduce((sum, set) => sum + set.size, 0),
     grantHeld() { const fn = heldGrant; heldGrant = null; fn?.(); },
   };
 }
@@ -264,10 +274,11 @@ test('UX-CHIP: view, pending, interactive, and release states render in .mv-inpu
   assert.ok(surfaceEl, 'SurfaceCanvas root is rendered');
   assert.ok(host.children.indexOf(indicator) < host.children.indexOf(surfaceEl), 'indicator precedes SurfaceCanvas in flow');
 
-  const take = anchored(root, 'capsule/cap-alpha/input/take');
+  const take = anchored(root, 'capsule/cap-alpha/control/emergency');
   assert.ok(take, 'take control button is reachable');
-  assert.equal(take.props.label, 'Take control');
-  assert.equal(take.props['aria-label'], 'Take control of Alpha Browser');
+  assert.equal(take.props.disabled, false, 'available emergency action is enabled');
+  assert.equal(take.text, 'Take control (emergency)');
+  assert.equal(take.props['aria-label'], 'Take control of Alpha Browser (emergency)');
 
   take.props.onClick();
   await tick();
@@ -302,19 +313,38 @@ test('UX-CHIP: unavailable state renders compact role=status feedback without an
   assert.ok(indicator);
   assert.equal(indicator.props.class, 'mv-input-indicator');
   assert.equal(indicator.props['data-input-state'], 'unavailable');
-  assert.equal(anchored(root, 'capsule/cap-alpha/input/take'), null);
+  assert.equal(anchored(root, 'capsule/cap-alpha/control/emergency')?.props.disabled, true, 'unavailable emergency action cannot be invoked');
   const status = findAll(indicator, (node) => node.props?.role === 'status');
   assert.equal(status.length, 1);
   assert.equal(status[0].text, 'Input unavailable in this window');
 });
 
 test('UX-CHIP mutant: removing the take-control action fails the reachability oracle; re-adding the overlay fails the contract', async (t) => {
-  const takeLine = '<UiButton v-if="wallInputState(surface) === \'view\'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />';
+  const takeLine = ':can-take-control="wallInputState(surface) === \'view\'"';
   assert.equal(APP_SOURCE.split(takeLine).length, 2, 'unique take-control button line');
-  const noTakeMutant = APP_SOURCE.replace(takeLine, '<span v-if="wallInputState(surface) === \'view\'" class="mv-input-indicator__text">View only</span>');
+  const noTakeMutant = APP_SOURCE.replace(takeLine, ':can-take-control="false"');
   const { root } = await mountFixture(t, { source: noTakeMutant });
-  assert.equal(anchored(root, 'capsule/cap-alpha/input/take'), null, 'mutant has no take-control action');
+  assert.equal(anchored(root, 'capsule/cap-alpha/control/emergency').props.disabled, true, 'mutant has no available emergency action');
 
   const overlayMutant = APP_SOURCE.replace('class="mv-input-indicator"', 'class="mv-input-chip"');
   assert.equal(checkIndicatorContract(overlayMutant).ok, false, 'overlay class mutant is rejected');
+});
+
+// Do not pass renderer nodes to assertion diffs: their parent/VNode links are
+// cyclic and Node's diagnostic expansion can consume gigabytes on a mismatch.
+test('P18B mounted App stays quiescent across menu toggles and idle ticks', async t => {
+  const { root, activity, listenerCount } = await mountFixture(t);
+  const initialListeners = listenerCount();
+  t.after(() => assert.equal(listenerCount(), 0, 'document listeners are released on unmount'));
+  const more = findAll(root, n => n.props?.id === 'shell-more')[0];
+  assert.ok(!!more, 'More is reachable');
+  for (let i = 0; i < 20; i++) { more.props.onClick(); await tick(); }
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const settledCalls = activity.calls;
+  const settledNodes = findAll(root, () => true).length;
+  for (let i = 0; i < 100; i++) await tick();
+  assert.equal(listenerCount(), initialListeners, 'menu transitions never accumulate document listeners');
+  assert.equal(activity.calls, settledCalls, 'no self-sustaining render/prop feedback at idle');
+  assert.equal(findAll(root, () => true).length, settledNodes, 'no idle listener-driven tree growth');
+  assert.ok(settledCalls < 2000, 'menu transitions have bounded render work');
 });

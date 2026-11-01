@@ -213,3 +213,6 @@ export function createFixtureRuntime(keyOrFixture) {
   }
   return { ok: true, mount: { fixture, runtime, calls, terminal: null } };
 }
+
+// Renderer services share the entry's existing runtime import seam.
+export { installSurfacePresentation } from '../surfaces/presentationServices.js';

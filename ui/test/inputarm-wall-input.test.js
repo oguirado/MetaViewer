@@ -1,3 +1,4 @@
+import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 // INPUT-ARM (FEEDBACK R-INPUT): the operator takes control of a capsule from
 // the wall and immediately clicks and types in it, and always sees the state.
 //
@@ -143,7 +144,7 @@ const RECT = Object.freeze({ x: 0, y: 0, left: 0, top: 0, width: 320, height: 20
 function createDoubleRenderer(captured) {
   const doc = { activeElement: null };
   const element = (tag) => {
-    if (tag !== 'canvas') return { tag, props: {}, children: [], parent: null };
+    if (tag !== 'canvas') return { tag, props: {}, children: [], parent: null, style:{display:''}, getBoundingClientRect:()=>({x:0,y:0,width:320,height:200}),getClientRects:()=>[1] };
     const canvas = {
       tag, props: {}, children: [], parent: null, width: RECT.width, height: RECT.height,
       getBoundingClientRect: () => ({ ...RECT }),
@@ -351,6 +352,7 @@ async function mountApp(t, stack, source = APP_SOURCE, { withInputPort = true } 
     authorityHost: createAuthorityAdapter(stack.api.authority), runtime,
   });
   app.provide('inputPort', inputPort);
+  installRoleMenuInput(t, app);
   app.mount(root);
   t.after(() => {
     try { app.unmount(); } catch { /* Teardown never fails the gate. */ }
@@ -360,6 +362,7 @@ async function mountApp(t, stack, source = APP_SOURCE, { withInputPort = true } 
     globalThis.document = oldDocument;
   });
   await tick();
+  await openRoleMenuInput(root);
   const canvas = () => captured.canvases.find((node) => node.parent !== null) ?? null;
   const chip = () => anchored(root, 'capsule/s1/input');
   return {
@@ -405,8 +408,8 @@ async function takeFromWallAndType(t, { source = APP_SOURCE, grant = true } = {}
 test('INPUT-ARM: wall Control arms the capsule; a click and keys reach the core through the packaged input path', async (t) => {
   const { stack, view, before, sentBeforeTake, after } = await takeFromWallAndType(t);
   assert.deepEqual(before, { chip: 'view', focusable: false }, 'agent-controlled tile starts view-only');
-  const take = anchored(view.root, 'capsule/s1/input/take');
-  assert.equal(take, null, 'the view-only chip is replaced once interactive');
+  const take = anchored(view.root, 'capsule/s1/control/emergency');
+  assert.equal(take?.props.disabled, true, 'emergency takeover is disabled once interactive');
   assert.equal(sentBeforeTake, 0, 'a view-only click sends nothing');
   assert.equal(after.chip, 'interactive');
   assert.equal(after.focusable, true, 'the canvas becomes focusable at once (no multislot WRITE toggle)');
@@ -461,12 +464,12 @@ test('INPUT-ARM: the view-only indicator is a keyboard-reachable take-control bu
   const indicator = view.chip();
   assert.ok(indicator, 'tile input indicator is rendered');
   assert.equal(indicator.props.class, 'mv-input-indicator');
-  const take = anchored(view.root, 'capsule/s1/input/take');
+  const take = anchored(view.root, 'capsule/s1/control/emergency');
   assert.ok(take, 'view-only indicator action is rendered');
   assert.equal(take.tag, 'button', 'kit button (native focusable control)');
-  assert.equal(take.props.label, 'Take control');
-  assert.equal(take.props['aria-label'], 'Take control of default');
-  assert.equal(take.props.id, 'mv-input-take-s1');
+  assert.equal(take.text, 'Take control (emergency)');
+  assert.equal(take.props['aria-label'], 'Take control of default (emergency)');
+  assert.equal(take.props.id, 'tile-take-s1');
   take.props.onClick();
   await until(() => view.chipState() === 'interactive', 'indicator take arms after the host grant');
   assert.equal(view.focusable(), true);
@@ -492,7 +495,7 @@ test('INPUT-ARM: unavailable state is shown as compact status in the indicator w
   const stack = await createStack(t);
   const view = await mountApp(t, stack, APP_SOURCE, { withInputPort: false });
   assert.equal(view.chipState(), 'unavailable');
-  assert.equal(anchored(view.root, 'capsule/s1/input/take'), null, 'take button is not offered when unavailable');
+  assert.equal(anchored(view.root, 'capsule/s1/control/emergency')?.props.disabled, true, 'takeover cannot be invoked when input is unavailable');
   const statusNodes = findAll(view.chip(), (node) => node.props?.role === 'status');
   assert.equal(statusNodes.length, 1, 'unavailable state is announced via role=status');
   assert.equal(statusNodes[0].text, 'Input unavailable in this window');
@@ -561,15 +564,15 @@ test('INPUT-ARM: a take still awaiting the host grant is never interactive (no a
 
 const WALL_BINDING = ':input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)"';
 const HUMAN_GATE = "return surface.control === 'human' && wallInputArmed.value[surface.id] === true;";
-const TAKE_BUTTON = '<UiButton v-if="wallInputState(surface) === \'view\'" :id="`mv-input-take-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/take`" class="mv-input-indicator__action" label="Take control" :aria-label="`Take control of ${surfaceLabel(surface)}`" @click="takeWallControl(surface)" />';
+const TAKE_BUTTON = ':can-take-control="wallInputState(surface) === \'view\'"';
 
 test('INPUT-ARM mutant: removing the take-control action entirely fails the reachability oracle', async (t) => {
   assert.equal(APP_SOURCE.split(TAKE_BUTTON).length, 2, 'take-control button anchor is unique');
-  const mutant = APP_SOURCE.replace(TAKE_BUTTON, '<span v-if="wallInputState(surface) === \'view\'" class="mv-input-indicator__text">View only</span>');
+  const mutant = APP_SOURCE.replace(TAKE_BUTTON, ':can-take-control="false"');
   const stack = await createStack(t);
   const view = await mountApp(t, stack, mutant);
   assert.equal(view.chipState(), 'view');
-  assert.equal(anchored(view.root, 'capsule/s1/input/take'), null, 'mutant removes the take-control button, failing the reachability oracle');
+  assert.equal(anchored(view.root, 'capsule/s1/control/emergency').props.disabled, true, 'mutant disables the emergency menu action, failing the reachability oracle');
 });
 
 test('INPUT-ARM mutant: wall input never armed (the R-INPUT bug) fails the oracle', async (t) => {

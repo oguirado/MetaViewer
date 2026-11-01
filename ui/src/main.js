@@ -1,11 +1,10 @@
-import RoleSurface from './surfaces/RoleSurface.vue';
 /// <reference path="./kit.d.ts" />
-import { createApp } from 'vue';
+import { createApp, defineAsyncComponent } from 'vue';
 import App from './App.vue';
 import { createAuthorityAdapter, createAuthorityRuntime, createTerminalBroker, requireAck } from './core/hostAdapters.js';
 import { createSettingsHost } from './settings/settingsHost.js';
 import { parseStateQuery, resolveFixture } from './fixtures/resolveState.js';
-import { createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE, TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed, createCapturePort, createCaptureState, createCaptureDouble, INPUT_WRITE_FIXTURE, INPUT_WRITE_KEY, createInputPort, createInputDouble, createSessionTransport, TERMINAL_LIVE_COMMANDS, TERMINAL_LIVE_PROVIDERS } from './fixtures/fixtureRuntime.js';
+import { installSurfacePresentation, createFixtureRuntime, createLiveReplayMount, LIVE_REPLAY_FIXTURE, TILE_CHROME_FIXTURE, TILE_CHROME_KEY, fixtureCaptureSeed, createCapturePort, createCaptureState, createCaptureDouble, INPUT_WRITE_FIXTURE, INPUT_WRITE_KEY, createInputPort, createInputDouble, createSessionTransport, TERMINAL_LIVE_COMMANDS, TERMINAL_LIVE_PROVIDERS } from './fixtures/fixtureRuntime.js';
 import 'capsule-ui-kit/theme.css';
 import './design/metaviewer.css';
 import { createWallLayout, migrateWallLayout } from './wall/layout.js';
@@ -448,7 +447,10 @@ async function bootstrap() {
       runtime: /** @type {InstanceType<typeof App>['$props']['runtime']} */ (/** @type {unknown} */ (fixtureMount?.runtime ?? liveRuntime)),
       terminal: fixtureMount?.terminal ?? null });
     if (framePortRouter) application.provide?.('framePortRouter', framePortRouter);
-    application.component('RoleSurface', RoleSurface);
+    if (typeof defineAsyncComponent === 'function') {
+      application.component('RoleSurface', defineAsyncComponent(() => import('./surfaces/RoleSurface.vue')));
+    }
+    if (typeof installSurfacePresentation === 'function') installSurfacePresentation(application, document, preferences);
     application.provide?.('inputPort', inputPort);
     installKitTheme(application);
     // Kit declaration predates its shipped MetaViewer schemes.

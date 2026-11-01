@@ -102,7 +102,7 @@ test('mvui17 wall fold: pending busy and refusal reset are wired; template untou
   assert.match(setup, /snapshot\.value\?\.status/);
   assert.match(setup, /snapshot\.value\?\.error\?\.code/);
   assert.match(setup, /isLiveAxisTileState\(tile\.value\.tile\)/);
-  assert.match(template, /<div class="mv-tile" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code">/);
+  assert.match(template, /<div class="mv-tile" :hidden="presentationHidden" :data-mv-window-hidden="String\(presentationHidden\)" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code">/);
   assert.ok(template.includes(":presentation-status=\"tile.tile === 'error' ? 'Surface update unavailable' : tile.status\""));
   assert.doesNotMatch(template, /v-if/);
 });

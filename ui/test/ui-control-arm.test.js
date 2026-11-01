@@ -1,3 +1,4 @@
+import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 /**
  * UI-CONTROL-ARM: taking Control arms keyboard input across all wall paths
  * (header Control, indicator Take control, handoff, and attaching to an
@@ -155,7 +156,7 @@ const RECT = Object.freeze({ x: 0, y: 0, left: 0, top: 0, width: 320, height: 20
 
 function createDoubleRenderer(captured, doc) {
   const element = (tag) => {
-    if (tag !== 'canvas') return { tag, props: {}, children: [], parent: null };
+    if (tag !== 'canvas') return { tag, props: {}, children: [], parent: null, style:{display:''}, getBoundingClientRect:()=>({x:0,y:0,width:320,height:200}),getClientRects:()=>[1] };
     const canvas = {
       tag, props: {}, children: [], parent: null, width: RECT.width, height: RECT.height,
       getBoundingClientRect: () => ({ ...RECT }),
@@ -350,7 +351,8 @@ async function mountApp(t, stack, { source = APP_SOURCE, canvasComponent = Defau
   const oldWindow = globalThis.window;
   const oldDocument = globalThis.document;
   const doc = { activeElement, documentElement: { dataset: {} }, getElementById: () => null };
-  globalThis.window = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: undefined };
+  const fixtureWindow = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame: undefined };
+  globalThis.window = fixtureWindow;
   globalThis.document = doc;
   const runtime = createAuthorityRuntime(stack.framesPort);
   stack.publish(stack.surfaces.get('s1'));
@@ -363,15 +365,21 @@ async function mountApp(t, stack, { source = APP_SOURCE, canvasComponent = Defau
     authorityHost: createAuthorityAdapter(stack.api.authority), runtime,
   });
   app.provide('inputPort', inputPort);
+  installRoleMenuInput(t, app);
   app.mount(root);
   t.after(() => {
-    try { app.unmount(); } catch { /* ignore teardown */ }
+    // Several fixtures share a test; after-hooks run in registration order.
+    // Unmount against this fixture's globals so child polling is always disposed.
+    globalThis.window = fixtureWindow;
+    globalThis.document = doc;
+    app.unmount();
     inputPort.dispose();
     runtime.dispose();
     globalThis.window = oldWindow;
     globalThis.document = oldDocument;
   });
   await tick();
+  await openRoleMenuInput(root);
   const canvas = (id = 's1') => captured.canvases.find((node) => node.parent !== null && (node.props.id === `capsule/${id}/input` || captured.canvases.filter((c) => c.parent !== null).length === 1)) ?? null;
   const chip = (id = 's1') => anchored(root, `capsule/${id}/input`);
   const chipStatusText = (id = 's1') => {
@@ -438,7 +446,7 @@ test('UI-CONTROL-ARM 2: the canvas is focused on enable unless typing in a text 
   const stack = await createStack(t, { initialControl: 'agent' });
   const view = await mountApp(t, stack);
   assert.equal(view.focused(), false, 'starts unfocused before control');
-  const take = anchored(view.root, 'capsule/s1/input/take');
+  const take = anchored(view.root, 'capsule/s1/control/emergency');
   take.props.onClick();
   await until(() => view.chipState() === 'interactive', 'chip Take control arms input');
   await settle();

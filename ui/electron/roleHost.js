@@ -185,7 +185,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
             keyboard:keycodes ? {layout:clientKeyboardLayout,keycodes} : undefined});
         },
         showView: (bridge, recoverBridge) => tileFactory({electron,window,bridge,bounds,recoverBridge,
-          trace:recorder || dummyTrace,isActive:active,writable:role === 'human',rawKeyboard:!!keycodes,
+          trace:recorder || dummyTrace,isActive:active,initiallyVisible:false,writable:role === 'human',rawKeyboard:!!keycodes,
           capsuleSize:() => ({width:1280,height:900}),
           clientQuery:xpraClientQuery(role === 'human',clientKeyboardLayout),
           onState: (/** @type {string} */ state) => {
@@ -211,7 +211,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (!active()) throw refuse('XPRA_ROLE_OWNERSHIP');
       await session.open();
       if (!active()) { await close(surfaceId); throw refuse('XPRA_ROLE_OWNERSHIP'); }
-      return {ok:true,role};
+      return {ok:true,role,visible:false};
     } catch (error) {
       if (/** @type {any} */(error)?.code === 'XPRA_CLIENT_READY_TIMEOUT') console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${roleFor(authoritative(surfaceId)) === 'human' ? 'human' : 'watch'} stage=TIMEOUT detail=XPRA_CLIENT_READY_TIMEOUT`);
       await close(surfaceId); trace?.close(); throw error;

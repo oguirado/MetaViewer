@@ -350,7 +350,7 @@ export function mirrorKitFoldedSnapshot(snapshot) {
 }
 </script>
 <script setup>
-import { computed, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
+import { computed, inject, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
 import NetworkPanel from '../netmode/NetworkPanel.vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
 import TileCaptureChrome from './TileCaptureChrome.vue';
@@ -400,6 +400,12 @@ validatePanelDeps({
   tileScheduler: props.tileScheduler,
 });
 
+// A hidden presentation owns the whole panel shell, including its capture rail.
+const windowPresentation = /** @type {{revision:import('vue').Ref<number>,get:()=>{state:(id:string)=>{hidden:boolean}}|null}|null} */ (inject('capsuleWindowPresentation', null));
+const presentationHidden = computed(() => {
+  windowPresentation?.revision.value;
+  return windowPresentation?.get()?.state(props.presentationInstance || props.capsuleId)?.hidden ?? false;
+});
 // Object dependencies travel by injection: the kit panel reads the view, scheduler
 // and registry through its documented inject fallback, and the frames lane reads
 // the tile scheduler under the same key it injects.
@@ -610,7 +616,7 @@ function onActivateSurface() {
 }
 </script>
 <template>
-  <div class="mv-tile" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code">
+  <div class="mv-tile" :hidden="presentationHidden" :data-mv-window-hidden="String(presentationHidden)" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code">
   <div class="mv-tile-rail">
   <NetworkPanel :open="networkOpen && !props.displayOnly" :display-only="props.displayOnly" :capsule-id="props.capsuleId" :identity="row?.profile_id ?? ''" :refusal-code="row?.refusal?.code ?? row?.readinessError?.code ?? ''" @open="networkOpen=true" @close="networkOpen=false" />
   <TileCaptureChrome

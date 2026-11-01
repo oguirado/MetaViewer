@@ -11,7 +11,7 @@ export const xpraClientQuery = (writable, keyboardLayout) => {
 export const xpraTileDocument = `<!doctype html><meta charset="utf-8"><title>Capsule browser</title>
 <style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#182330}iframe{position:absolute;width:1280px;height:900px;border:0;transform-origin:0 0}#metaviewer-reconnecting{position:fixed;inset:0;z-index:1;display:grid;place-items:center;background:#182330e8;color:#fff;font:16px sans-serif}#metaviewer-reconnecting[hidden]{display:none}</style>
 <iframe id="metaviewer-xpra-client" title="Capsule browser"></iframe>
-<div id="metaviewer-reconnecting" role="status" aria-live="polite">Reconnecting…</div>
+<div id="metaviewer-reconnecting" role="status" aria-live="polite">Connecting…</div>
 <script>
 const frame=document.querySelector('iframe');
 function fit(){const scale=Math.min(innerWidth/1280,innerHeight/900);frame.style.transform='scale('+scale+')';frame.style.left=(innerWidth-1280*scale)/2+'px';frame.style.top=(innerHeight-900*scale)/2+'px';}
