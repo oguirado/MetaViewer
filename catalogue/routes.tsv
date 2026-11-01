@@ -128,6 +128,7 @@ protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
 boot-pending-clr.md	changes/unreleased/boot-pending-clr.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
+cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
 display-polish.md	changes/unreleased/display-polish.md
 e1-rehearsal.md	changes/unreleased/e1-rehearsal.md
 e4-create.md	changes/unreleased/e4-create.md
@@ -1083,6 +1084,7 @@ test_hosted_fixes.py	tests/ci/test_hosted_fixes.py
 testhos-bd5b7a00eba7	tests/ci/test_hosted_run3_policy.py
 test_kit_stage.py	tests/ci/test_kit_stage.py
 testpac-88bf0eb64a4b	tests/ci/test_package_identity.py
+testpac-528f12db65fb	tests/ci/test_packaged_display_ci.py
 test_pkg_install.py	tests/ci/test_pkg_install.py
 testpol-d97a05834ea0	tests/ci/test_policy_hardening.py
 testrou-0aa0e22181f8	tests/ci/test_round2_t7_regressions.py
