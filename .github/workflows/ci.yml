@@ -2600,6 +2600,109 @@ jobs:
           command -v xvfb-run
           command -v strace
           command -v zip
+      - name: Run packaged DISPLAY regression
+        env:
+          JOB_ID: package
+          PLATFORM: ${{ matrix.platform }}
+          CAPSULE_UI_KIT_REPO: ${{ github.workspace }}/kit-checkout
+          MV_KIT_CHECKOUT: ${{ github.workspace }}/kit-checkout
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ github.workspace }}/ui/node_modules/electron/dist
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package-cargo-target
+        run: |
+          set +e
+          set -u -o pipefail
+          EVDIR="${RUNNER_TEMP}/metaviewer-ci/${JOB_ID}/${PLATFORM}"
+          mkdir -p "${EVDIR}"
+          WF_SHA="$(python3 -c 'import hashlib; print(hashlib.sha256(open(".github/workflows/ci.yml","rb").read()).hexdigest())')"
+          ISSUER="CI/${JOB_ID}/${GITHUB_RUN_ID} [VM]"
+          LOG="$EVDIR/package-display.log"
+          SANE="${LOG}.sane"
+          : > "$LOG"
+          if [ -n "${MV_PACKAGE_DISPLAY_LOG_FIXTURE:-}" ]; then
+            cat "$MV_PACKAGE_DISPLAY_LOG_FIXTURE" > "$LOG"
+            rc="${MV_PACKAGE_DISPLAY_FIXTURE_RC:-0}"
+          else
+            bash .github/workflows/offline.sh timeout 1200 xvfb-run -a -s "-screen 0 1280x900x24" env -u XAUTHORITY node --test --test-reporter=spec ui/test/display-electron.test.js > "$LOG" 2>&1
+            rc=$?
+          fi
+          reason="packaged DISPLAY regression green"
+          if [ "$rc" -ne 0 ]; then
+            reason="packaged DISPLAY regression failed (rc $rc)"
+          elif grep -Eq '# SKIP|needs the pinned kit checkout and CARGO_TARGET_DIR|^﹣ |^[ℹ#] skipped [1-9]|^[ℹ#] fail [1-9]' "$LOG"; then
+            printf 'FAIL packaged DISPLAY regression skipped or failed in node --test output\n' >> "$LOG"
+            rc=1
+            reason="packaged DISPLAY regression skipped in hosted package job"
+          elif ! grep -Fq '✔ packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail' "$LOG"; then
+            printf 'FAIL packaged DISPLAY regression pass line absent from node --test output\n' >> "$LOG"
+            rc=1
+            reason="packaged DISPLAY regression pass line absent"
+          fi
+          outcome=FAIL
+          [ "$rc" -eq 0 ] && outcome=PASS
+          GATE="package-display" PLATFORM="$PLATFORM" ISSUER="$ISSUER" WF_SHA="$WF_SHA" RC="$rc" OUTCOME="$outcome" \
+          REASON="$reason" EVDIR="$EVDIR" RAW="$LOG" SANE="$SANE" FIXTURE="ui/test/display-electron.test.js" \
+          COUNTSRC="parsed:node-test" CWD="$(pwd -P)" SHA="${GITHUB_SHA:-0000000000000000000000000000000000000000}" \
+          python3 - <<'PYEOF' || exit 2
+          import hashlib, json, os, re
+          e = os.environ
+          text = open(e['RAW'], 'rb').read().decode('utf-8', 'replace')
+          for prefix in ('gh' + 'p_', 'gh' + 's_', 'gh' + 'o_', 'gh' + 'u_', 'gh' + 'r_', 'github_' + 'pat_', 'AK' + 'IA', 'xox' + 'b-', 'MV0-SYNTHETIC-SENTINEL-'):
+              p_pat = r'(?:\\?\r?\n)?'.join(r'(?:%s|%%(?:25)*(?:%02x|%02x))' % (re.escape(c), ord(c.lower()), ord(c.upper())) for c in prefix)
+              text = re.sub(p_pat + r'(?:[A-Za-z0-9_\-]|%(?:25)*[0-9a-fA-F]{2}|\\\r?\n){4,}', '[REDACTED]', text, flags=re.I)
+          text = text.replace('__MV0_PRIVATE_SOURCE_SENTINEL__', '[REDACTED]')
+          open(e['SANE'], 'w', encoding='utf-8').write(text)
+          def sha_file(p):
+              with open(p, 'rb') as f:
+                  return hashlib.sha256(f.read()).hexdigest()
+          rc = int(e['RC'])
+          m_pass = re.search(r'^[ℹ#] pass (\d+)$', text, re.M)
+          m_fail = re.search(r'^[ℹ#] fail (\d+)$', text, re.M)
+          m_skip = re.search(r'^[ℹ#] skipped (\d+)$', text, re.M)
+          has_check = '✔ packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail' in text
+          has_skip_marker = bool(re.search(r'# SKIP|needs the pinned kit checkout and CARGO_TARGET_DIR|^﹣ ', text, re.M))
+          passed = int(m_pass.group(1)) if m_pass else (1 if (e['OUTCOME'] == 'PASS' and has_check) else 0)
+          failed = int(m_fail.group(1)) if m_fail else (0 if e['OUTCOME'] == 'PASS' else 1)
+          skipped = int(m_skip.group(1)) if m_skip else (1 if has_skip_marker else 0)
+          if e['OUTCOME'] != 'PASS' and failed == 0 and skipped == 0:
+              failed = 1
+          unskipped_ok = (e['OUTCOME'] == 'PASS' and rc == 0 and has_check and not has_skip_marker and passed >= 1 and failed == 0 and skipped == 0)
+          receipt = {
+              'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
+              'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
+              'scope': {'unit': 'W0-CI-MATRIX', 'platform': e['PLATFORM'], 'feature': e['GATE'],
+                        'artifact': e['GATE'] + '.receipt.json'},
+              'argv': ['bash', '.github/workflows/offline.sh', 'timeout', '1200', 'xvfb-run', '-a', '-s', '-screen 0 1280x900x24', 'env', '-u', 'XAUTHORITY', 'node', '--test', '--test-reporter=spec', 'ui/test/display-electron.test.js'],
+              'cwd': e['CWD'],
+              'rc': rc, 'outcome': e['OUTCOME'], 'reason': e['REASON'],
+              'identities': {'gate_revision': e['SHA'], 'instrument_sha256': sha_file(e['FIXTURE']),
+                             'sanitized_log_sha256': sha_file(e['SANE']), 'configuration_sha256': e['WF_SHA'],
+                             'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
+              'product_identity': None,
+              'assertions': [
+                  {'id': 'exit-status', 'expected': 'rc 0', 'observed': 'rc %d' % rc, 'accepted': e['OUTCOME'] == 'PASS'},
+                  {'id': 'unskipped-packaged-display',
+                   'expected': '✔ packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail (skipped=0)',
+                   'observed': 'passed=%d failed=%d skipped=%d check=%s' % (passed, failed, skipped, has_check),
+                   'accepted': bool(unskipped_ok)},
+              ],
+              'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
+          out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
+          with open(out, 'w', encoding='utf-8') as f:
+              json.dump(receipt, f, indent=2)
+          print('receipt: ' + out)
+          PYEOF
+          {
+            echo "## package-display [VM] rc ${rc}"
+            echo "outcome ${outcome}: ${reason}"
+            echo '```'
+            tail -n 40 "$SANE"
+            echo '```'
+            echo '```'
+            grep -E '^FAIL' "$SANE" | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -n 40 "$SANE"
+          exit "$rc"
       - name: Build and witness package
         if: always()
         id: package-evidence
@@ -2663,6 +2766,28 @@ jobs:
                       skipped = int(s.group(1)) if s else 0
                       failed = 0
                       passed = total - skipped
+          disp_path = os.path.join(e['EVDIR'], 'package-display.receipt.json')
+          disp_rec = json.load(open(disp_path)) if os.path.isfile(disp_path) else None
+          assertions = [{'id': 'exit-status', 'expected': 'rc 0',
+                         'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
+                         'accepted': e['OUTCOME'] == 'PASS'}]
+          if isinstance(disp_rec, dict):
+              disp_counts = disp_rec.get('counts') if isinstance(disp_rec.get('counts'), dict) else {}
+              disp_ok = (
+                  disp_rec.get('outcome') == 'PASS'
+                  and type(disp_rec.get('rc')) is int and disp_rec.get('rc') == 0
+                  and type(disp_counts.get('passed')) is int and disp_counts.get('passed') >= 1
+                  and type(disp_counts.get('failed')) is int and disp_counts.get('failed') == 0
+                  and type(disp_counts.get('skipped')) is int and disp_counts.get('skipped') == 0
+              )
+              assertions.append({
+                  'id': 'packaged-display-regression',
+                  'expected': 'PASS (passed>=1, skipped=0)',
+                  'observed': '%s (passed=%s, skipped=%s)' % (
+                      disp_rec.get('outcome'), disp_counts.get('passed'), disp_counts.get('skipped')
+                  ),
+                  'accepted': bool(disp_ok and e['OUTCOME'] == 'PASS'),
+              })
           receipt = {
               'schema': 'gate_receipt/v1', 'gate_id': e['GATE'], 'leg': e['GATE'], 'profile': 'W0',
               'owner': 'W0-CI-MATRIX', 'issuer': e['ISSUER'],
@@ -2675,9 +2800,7 @@ jobs:
                              'log_sha256': sha_file(e['RAW']), 'fixture_sha256': [sha_file(e['FIXTURE'])]},
               'product_identity': (json.load(open(os.path.join(e['MV_PKG_OUT'], 'product-evidence.json')))
                                    if e['OUTCOME'] == 'PASS' else None),
-              'assertions': [{'id': 'exit-status', 'expected': 'rc 0',
-                              'observed': 'unexecuted' if rc is None else 'rc %d' % rc,
-                              'accepted': e['OUTCOME'] == 'PASS'}],
+              'assertions': assertions,
               'counts': {'passed': passed, 'failed': failed, 'skipped': skipped, 'source': e['COUNTSRC']}}
           out = os.path.join(e['EVDIR'], e['GATE'] + '.receipt.json')
           with open(out, 'w') as f:
@@ -2702,6 +2825,8 @@ jobs:
           rc=1
           if [ "${SETUP_RESULT:-failure}" != success ]; then
             printf 'FAIL prerequisite step did not complete successfully\n' > "$LOG"
+          elif [ -f "$EVDIR/package-display.receipt.json" ] && ! python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); c=r.get("counts") or {}; sys.exit(0 if r.get("outcome")=="PASS" and type(r.get("rc")) is int and r.get("rc")==0 and type(c.get("passed")) is int and c.get("passed")>=1 and c.get("failed")==0 and c.get("skipped")==0 else 1)' "$EVDIR/package-display.receipt.json"; then
+            printf 'FAIL packaged DISPLAY regression receipt did not pass without skips\n' > "$LOG"
           elif [ "$PLATFORM" != arm64 ] && [ "$PLATFORM" != x64 ]; then
             printf 'FAIL unsupported package architecture\n' > "$LOG"
           else
