@@ -21,7 +21,7 @@ import (
 )
 
 func displayTestTarget() DisplayTarget {
-	return DisplayTarget{Container: "srf-id-test", Run: "test-run", Window: "w1", XID: 42, Width: 2, Height: 1}
+	return DisplayTarget{Container: "srf-id-test", Run: "test-run", Window: "w1", Display: ":100", XID: 42, Width: 2, Height: 1}
 }
 func displayTestXWD(t DisplayTarget, value byte) []byte {
 	b := make([]byte, 100+4*t.Width*t.Height)
@@ -93,6 +93,12 @@ func TestDisplaySenderHelper(t *testing.T) {
 		os.Exit(13)
 	}
 	target := displayTestTarget()
+	bias := uint64(0)
+	if rawBias := os.Getenv("MV_DISPLAY_TEST_BIAS"); rawBias != "" {
+		if parsed, err := strconv.ParseUint(rawBias, 10, 8); err == nil {
+			bias = parsed
+		}
+	}
 	os.Stdout.Write(displayTestHello(d))
 	mode := os.Getenv("MV_DISPLAY_TEST_MODE")
 	if mode == "stderr" {
@@ -117,7 +123,10 @@ func TestDisplaySenderHelper(t *testing.T) {
 				time.Sleep(time.Millisecond)
 			}
 		}
-		if _, e = os.Stdout.Write(displayTestRecord(target, d, seq)); e != nil {
+		rec := displayTestRecord(target, d, seq+bias)
+		binary.BigEndian.PutUint64(rec[16:], seq)
+		binary.BigEndian.PutUint64(rec[32:], seq)
+		if _, e = os.Stdout.Write(rec); e != nil {
 			os.Exit(0)
 		}
 		if mode == "exit" {
@@ -427,7 +436,7 @@ func TestDisplayResolveNativeWindow(t *testing.T) {
 	if e = os.Mkdir(stateDir, 0700); e != nil {
 		t.Fatal(e)
 	}
-	b := capsule.Binding{Container: target.Container, RunID: target.Run, NativeKind: "browser", Window: "w1", FramesRoot: filepath.Join(root, target.Run, "frames", "w1"), Surface: capsule.Surface{Geometry: capsule.Geometry{W: 2, H: 1}}}
+	b := capsule.Binding{Container: target.Container, RunID: target.Run, NativeKind: "browser", Window: "w1", FramesRoot: filepath.Join(root, target.Run, "frames", "w1"), Surface: capsule.Surface{Display: ":100", Geometry: capsule.Geometry{W: 2, H: 1}}}
 	path := filepath.Join(stateDir, target.Container+".json")
 	state := map[string]any{"Ready": true, "Capsule": map[string]string{"container": target.Container, "run_id": target.Run}, "XIDs": map[string]string{"w1": "42"}}
 	write := func() {
@@ -440,6 +449,31 @@ func TestDisplayResolveNativeWindow(t *testing.T) {
 	got, e := ResolveDisplayTarget(b, stateDir)
 	if e != nil || got != target {
 		t.Fatalf("native window mapping: %+v %v", got, e)
+	}
+	b101 := b
+	b101.Surface.Display = ":101"
+	got101, e := ResolveDisplayTarget(b101, stateDir)
+	if e != nil || got101.Display != ":101" {
+		t.Fatalf("expected :101 display target, got %+v (%v)", got101, e)
+	}
+	for _, badDisplay := range []string{"", "   ", ";evil", "::", "100", ":100;id", ":abc"} {
+		bad := b
+		bad.Surface.Display = badDisplay
+		if _, e = ResolveDisplayTarget(bad, stateDir); e == nil {
+			t.Fatalf("invalid display %q accepted", badDisplay)
+		} else {
+			var ref *DisplayTapRefusal
+			if !errors.As(e, &ref) {
+				t.Fatalf("expected typed DisplayTapRefusal for %q, got %T (%v)", badDisplay, e, e)
+			}
+			wantCode := "DISPLAY_INVALID"
+			if strings.TrimSpace(badDisplay) == "" {
+				wantCode = "DISPLAY_MISSING"
+			}
+			if ref.Code != wantCode {
+				t.Fatalf("display %q refusal code = %q, want %q", badDisplay, ref.Code, wantCode)
+			}
+		}
 	}
 	if _, e = ResolveDisplayTarget(b, ""); e == nil {
 		t.Fatal("default state unexpectedly resolved custom state")
@@ -578,10 +612,340 @@ func TestDisplaySenderStderrDiagnostic(t *testing.T) {
 }
 
 func TestDisplayProductionGetimageCommand(t *testing.T) {
-	cmd := displayGetimageCommand(context.Background(), displayTestTarget())
-	want := []string{"docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY=:100", "srf-id-test", "sh", "-c", "while :; do /usr/local/libexec/srf-fbread getimage :100 42 2>/dev/null || exit 9; sleep 0.03; done"}
-	if fmt.Sprint(cmd.Args) != fmt.Sprint(want) {
-		t.Fatalf("production sender: %q", cmd.Args)
+	// Single-capsule mv-live-1 (:100) golden argv and binding.
+	t100 := displayTestTarget()
+	cmd100 := displayGetimageCommand(context.Background(), t100)
+	want100 := []string{"docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY=:100", "srf-id-test", "sh", "-c", "while :; do /usr/local/libexec/srf-fbread getimage :100 42 2>/dev/null || exit 9; sleep 0.03; done"}
+	if fmt.Sprint(cmd100.Args) != fmt.Sprint(want100) {
+		t.Fatalf("production sender (:100): %q", cmd100.Args)
+	}
+	body100, digest100 := displayBinding(t100)
+	var parsed100 map[string]any
+	if err := json.Unmarshal(body100, &parsed100); err != nil || parsed100["display"] != ":100" {
+		t.Fatalf("binding (:100) = %s (%v)", body100, err)
+	}
+
+	// Second capsule mv-live-2 (:101) uses its own display in both -e DISPLAY= and getimage arg, plus binding.
+	t101 := DisplayTarget{Container: "srf-id-mv-live-2", Run: "run-2", Window: "w1", Display: ":101", XID: 77, Width: 2, Height: 1}
+	cmd101 := displayGetimageCommand(context.Background(), t101)
+	want101 := []string{"docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY=:101", "srf-id-mv-live-2", "sh", "-c", "while :; do /usr/local/libexec/srf-fbread getimage :101 77 2>/dev/null || exit 9; sleep 0.03; done"}
+	if fmt.Sprint(cmd101.Args) != fmt.Sprint(want101) {
+		t.Fatalf("production sender (:101): %q", cmd101.Args)
+	}
+	body101, digest101 := displayBinding(t101)
+	var parsed101 map[string]any
+	if err := json.Unmarshal(body101, &parsed101); err != nil || parsed101["display"] != ":101" || digest101 == digest100 {
+		t.Fatalf("binding (:101) = %s (%v)", body101, err)
+	}
+}
+
+func TestDisplayTwoCapsulesDistinctDisplaysAndRingsAndRestart(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-display-multi-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Mkdir(filepath.Join(root, "metaviewer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(root, "identity-state")
+	if err := os.Mkdir(stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	writeState := func(container, run string, xid uint32) {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{
+			"Ready":   true,
+			"Capsule": map[string]string{"container": container, "run_id": run},
+			"XIDs":    map[string]string{"w1": strconv.FormatUint(uint64(xid), 10)},
+		})
+		if err := os.WriteFile(filepath.Join(stateDir, container+".json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeState("srf-id-mv-live-1", "run-1", 42)
+	writeState("srf-id-mv-live-2", "run-2", 84)
+
+	var mu sync.Mutex
+	bindings := map[string]capsule.Binding{
+		"surface-1": {
+			Container:  "srf-id-mv-live-1",
+			RunID:      "run-1",
+			NativeKind: "browser",
+			Window:     "w1",
+			FramesRoot: filepath.Join(root, "run-1", "frames", "w1"),
+			Surface:    capsule.Surface{SurfaceID: "surface-1", Display: ":100", Geometry: capsule.Geometry{W: 2, H: 1}},
+		},
+		"surface-2": {
+			Container:  "srf-id-mv-live-2",
+			RunID:      "run-2",
+			NativeKind: "browser",
+			Window:     "w1",
+			FramesRoot: filepath.Join(root, "run-2", "frames", "w1"),
+			Surface:    capsule.Surface{SurfaceID: "surface-2", Display: ":101", Geometry: capsule.Geometry{W: 2, H: 1}},
+		},
+	}
+	spawnedArgs := map[string][][]string{}
+	tap := NewDisplayTaps(context.Background(), DisplayTapConfig{
+		RuntimeDir: root,
+		Admit:      func() error { return nil },
+		Resolve: func(id string) (DisplayTarget, error) {
+			mu.Lock()
+			b, ok := bindings[id]
+			mu.Unlock()
+			if !ok {
+				return DisplayTarget{}, errors.New("unknown surface")
+			}
+			return ResolveDisplayTarget(b, stateDir)
+		},
+		Command: func(ctx context.Context, target DisplayTarget) *exec.Cmd {
+			prod := displayGetimageCommand(ctx, target)
+			mu.Lock()
+			spawnedArgs[target.Container] = append(spawnedArgs[target.Container], append([]string(nil), prod.Args...))
+			mu.Unlock()
+			exe, err := os.Executable()
+			if err != nil {
+				panic(err)
+			}
+			bias := "0"
+			if target.Display == ":101" {
+				bias = "100"
+			}
+			cmd := exec.CommandContext(ctx, exe, "-test.run=^TestDisplaySenderHelper$")
+			cmd.Env = append(os.Environ(), "MV_DISPLAY_TEST_HELPER=1", "MV_DISPLAY_TEST_MODE=burst", "MV_DISPLAY_TEST_BIAS="+bias)
+			return cmd
+		},
+	})
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = tap.Close(ctx)
+	})
+
+	tap.StartReplies([]json.RawMessage{
+		json.RawMessage(`{"event":"created","data":{"surface":{"surface_id":"surface-1"}}}`),
+		json.RawMessage(`{"event":"created","data":{"surface":{"surface_id":"surface-2"}}}`),
+	})
+
+	ring1, err := DisplayRingPath(root, "surface-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ring2, err := DisplayRingPath(root, "surface-2")
+	if err != nil || ring1 == ring2 {
+		t.Fatalf("expected distinct ring paths, got %q and %q (%v)", ring1, ring2, err)
+	}
+
+	var gen2Before uint64
+	displayEventually(t, func() bool {
+		b1, m1, _, e1 := displaySnapshot(ring1)
+		b2, m2, g2, e2 := displaySnapshot(ring2)
+		if e1 != nil || e2 != nil || m1 != 80 || m2 != 80 {
+			return false
+		}
+		gen2Before = g2
+		return bytes.Equal(b1, []byte{82, 81, 80, 82, 81, 80}) && bytes.Equal(b2, []byte{182, 181, 180, 182, 181, 180})
+	})
+
+	mu.Lock()
+	args1 := spawnedArgs["srf-id-mv-live-1"]
+	args2 := spawnedArgs["srf-id-mv-live-2"]
+	mu.Unlock()
+	if len(args1) == 0 || len(args2) == 0 {
+		t.Fatalf("expected spawned commands for both capsules, got %d and %d", len(args1), len(args2))
+	}
+	if !strings.Contains(strings.Join(args1[0], " "), "DISPLAY=:100") || !strings.Contains(strings.Join(args1[0], " "), "getimage :100 42") {
+		t.Fatalf("capsule 1 wrong display argv: %q", args1[0])
+	}
+	if !strings.Contains(strings.Join(args2[0], " "), "DISPLAY=:101") || !strings.Contains(strings.Join(args2[0], " "), "getimage :101 84") {
+		t.Fatalf("capsule 2 wrong display argv: %q", args2[0])
+	}
+
+	// Simulate capsule 2 stop and restart with a new run_id and XID on :101.
+	stopCtx, cancelStop := context.WithTimeout(context.Background(), time.Second)
+	defer cancelStop()
+	if err := tap.Stop(stopCtx, "surface-2"); err != nil {
+		t.Fatal(err)
+	}
+	writeState("srf-id-mv-live-2", "run-2-restarted", 99)
+	mu.Lock()
+	b2 := bindings["surface-2"]
+	b2.RunID = "run-2-restarted"
+	bindings["surface-2"] = b2
+	mu.Unlock()
+	tap.StartReplies([]json.RawMessage{
+		json.RawMessage(`{"event":"created","data":{"surface":{"surface_id":"surface-2"}}}`),
+	})
+	displayEventually(t, func() bool {
+		_, m2, g2, e2 := displaySnapshot(ring2)
+		return e2 == nil && m2 == 80 && g2 != gen2Before
+	})
+	mu.Lock()
+	latestArgs2 := spawnedArgs["srf-id-mv-live-2"][len(spawnedArgs["srf-id-mv-live-2"])-1]
+	mu.Unlock()
+	if !strings.Contains(strings.Join(latestArgs2, " "), "DISPLAY=:101") || !strings.Contains(strings.Join(latestArgs2, " "), "getimage :101 99") {
+		t.Fatalf("restarted capsule 2 wrong display argv: %q", latestArgs2)
+	}
+}
+
+func TestDisplayMissingDisplayTypedRefusalKeepsVerifiedAvailable(t *testing.T) {
+	root, b, native := ramFixture(t)
+	pub := publisher(t, root)
+	ringRoot, err := os.MkdirTemp("/dev/shm", "mv-display-refusal-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(ringRoot) })
+	if err := os.Mkdir(filepath.Join(ringRoot, "metaviewer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	stateDir := filepath.Join(ringRoot, "identity-state")
+	if err := os.Mkdir(stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	noDispBinding := b
+	noDispBinding.NativeKind = "browser"
+	noDispBinding.RunID = "run-nodisp"
+	noDispBinding.Surface.SurfaceID = "surface-nodisp"
+	noDispBinding.Surface.Display = ""
+	rawState, _ := json.Marshal(map[string]any{
+		"Ready":   true,
+		"Capsule": map[string]string{"container": noDispBinding.Container, "run_id": noDispBinding.RunID},
+		"XIDs":    map[string]string{noDispBinding.Window: "42"},
+	})
+	if err := os.WriteFile(filepath.Join(stateDir, noDispBinding.Container+".json"), rawState, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var diag bytes.Buffer
+	spawned := 0
+	tap := NewDisplayTaps(context.Background(), DisplayTapConfig{
+		RuntimeDir:  ringRoot,
+		Diagnostics: &diag,
+		Admit:       func() error { return nil },
+		Resolve: func(string) (DisplayTarget, error) {
+			return ResolveDisplayTarget(noDispBinding, stateDir)
+		},
+		Command: func(ctx context.Context, target DisplayTarget) *exec.Cmd {
+			spawned++
+			return exec.CommandContext(ctx, "sh", "-c", "exit 9")
+		},
+	})
+	t.Cleanup(func() { _ = tap.Close(context.Background()) })
+
+	tap.Start("surface-nodisp")
+	displayEventually(t, func() bool {
+		return tap.Err("surface-nodisp") != nil
+	})
+	tapErr := tap.Err("surface-nodisp")
+	var ref *DisplayTapRefusal
+	if !errors.As(tapErr, &ref) || !errors.Is(tapErr, ErrDisplayMissing) || ref.Code != "DISPLAY_MISSING" {
+		t.Fatalf("expected DISPLAY_MISSING typed refusal, got %T (%v)", tapErr, tapErr)
+	}
+	if spawned != 0 {
+		t.Fatalf("missing-display tap spawned %d commands", spawned)
+	}
+	ringPath, err := DisplayRingPath(ringRoot, "surface-nodisp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(ringPath); !os.IsNotExist(err) {
+		t.Fatalf("missing-display tap created ring file: %v", err)
+	}
+
+	// Slow VERIFIED path stays available for the surface.
+	refFrame, err := pub.Publish("surface-nodisp", noDispBinding, native)
+	if err != nil {
+		t.Fatalf("VERIFIED Publish failed after DISPLAY tap refusal: %v", err)
+	}
+	verifiedBytes, err := os.ReadFile(refFrame.RAMWSPath)
+	if err != nil || len(verifiedBytes) != 6 {
+		t.Fatalf("VERIFIED frame unreadable: len=%d err=%v", len(verifiedBytes), err)
+	}
+}
+
+func TestDisplayMultiCapsuleMutants(t *testing.T) {
+	sourcePath, err := filepath.Abs("displaytap.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goTool, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, before, after, test, diagnostic string
+	}{
+		{
+			"MUT-MDISP-GETIMAGE-100",
+			`getimage " + target.Display + " "`,
+			`getimage :100 "`,
+			"TestDisplayTwoCapsulesDistinctDisplaysAndRingsAndRestart$",
+			"capsule 2 wrong display argv",
+		},
+		{
+			"MUT-MDISP-ENV-100",
+			`"DISPLAY="+target.Display`,
+			`"DISPLAY=:100"`,
+			"TestDisplayTwoCapsulesDistinctDisplaysAndRingsAndRestart$",
+			"capsule 2 wrong display argv",
+		},
+		{
+			"MUT-MDISP-BINDING-100",
+			`"display": t.Display`,
+			`"display": ":100"`,
+			"TestDisplayProductionGetimageCommand$",
+			"binding (:101)",
+		},
+		{
+			"MUT-MDISP-DEFAULT-100",
+			`if strings.TrimSpace(b.Surface.Display) == "" {`,
+			`if strings.TrimSpace(b.Surface.Display) == "" { b.Surface.Display = ":100" } else if false {`,
+			"TestDisplayMissingDisplayTypedRefusalKeepsVerifiedAvailable$",
+			"expected DISPLAY_MISSING typed refusal",
+		},
+		{
+			"MUT-MDISP-DROP-DISPLAY",
+			`Display:   b.Surface.Display,`,
+			`Display:   "",`,
+			"TestDisplayResolveNativeWindow$",
+			"DISPLAY_MISSING",
+		},
+		{
+			"MUT-MDISP-SINGLE-GOLDEN",
+			`sleep 0.03; done`,
+			`sleep 0.05; done`,
+			"TestDisplayProductionGetimageCommand$",
+			"production sender (:100)",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if strings.Count(string(source), tc.before) != 1 {
+				t.Fatalf("mutation anchor %q must be unique", tc.before)
+			}
+			dir := t.TempDir()
+			replacement := filepath.Join(dir, "displaytap.go")
+			if err := os.WriteFile(replacement, []byte(strings.Replace(string(source), tc.before, tc.after, 1)), 0600); err != nil {
+				t.Fatal(err)
+			}
+			overlay := filepath.Join(dir, "overlay.json")
+			raw, _ := json.Marshal(map[string]any{"Replace": map[string]string{sourcePath: replacement}})
+			if err := os.WriteFile(overlay, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, goTool, "test", "-count=1", "-overlay", overlay, "-run", "^"+tc.test, ".")
+			output, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(string(output), "--- FAIL:") || !strings.Contains(string(output), tc.diagnostic) {
+				t.Fatalf("mutation %s survived or failed outside assertion: %v\n%s", tc.name, err, output)
+			}
+			t.Logf("KILLED %s: %s", tc.name, strings.TrimSpace(string(output)))
+		})
 	}
 }
 

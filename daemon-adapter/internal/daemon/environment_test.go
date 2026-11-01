@@ -5,11 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
+	"metaviewer/daemon-adapter/internal/cli"
 	"metaviewer/daemon-adapter/internal/frames"
 	"metaviewer/daemon-adapter/internal/ipc"
 )
@@ -130,5 +135,260 @@ func TestPostInputUnknownProfileRefusesWithoutPanic(t *testing.T) {
 	okEvents, err := validHandler(ctx, inputEnv2)
 	if err != nil || len(okEvents) != 3 {
 		t.Fatalf("negative control failed: expected input_applied + frame_ready + action_receipt, got %s (%v)", okEvents, err)
+	}
+}
+
+type multiDisplayRunner struct {
+	mu       sync.Mutex
+	root     string
+	stateDir string
+	pngBytes []byte
+	sha      string
+	runFrame map[string]string
+	seq      uint64
+	runs     int
+}
+
+func (r *multiDisplayRunner) Run(_ context.Context, a []string, _ []byte) ([]byte, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch a[1] {
+	case "start":
+		identity := ""
+		for i := 0; i+1 < len(a); i++ {
+			if a[i] == "--identity" {
+				identity = a[i+1]
+			}
+		}
+		r.runs++
+		container := "srf-id-" + identity
+		runID := "run-" + identity + "-" + strconv.Itoa(r.runs)
+		xid := strconv.Itoa(100 + r.runs)
+		stateRaw, _ := json.Marshal(map[string]any{
+			"Ready":   true,
+			"Capsule": map[string]string{"container": container, "run_id": runID},
+			"XIDs":    map[string]string{"w1": xid},
+		})
+		if err := os.WriteFile(filepath.Join(r.stateDir, container+".json"), stateRaw, 0600); err != nil {
+			return nil, err
+		}
+		frameDir := filepath.Join(r.root, runID, "frames", "w1")
+		if err := os.MkdirAll(frameDir, 0700); err != nil {
+			return nil, err
+		}
+		framePath := filepath.Join(frameDir, "f.png")
+		if err := os.WriteFile(framePath, r.pngBytes, 0600); err != nil {
+			return nil, err
+		}
+		if r.runFrame == nil {
+			r.runFrame = map[string]string{}
+		}
+		r.runFrame[container] = framePath
+		return json.Marshal(map[string]any{
+			"container": container,
+			"run_id":    runID,
+			"windows":   []map[string]any{{"id": "w1", "x": 0, "y": 0, "w": 2, "h": 1}},
+		})
+	case "frame":
+		container := ""
+		for i := 0; i+1 < len(a); i++ {
+			if a[i] == "--container" {
+				container = a[i+1]
+			}
+		}
+		r.seq++
+		return json.Marshal(capsule.NativeFrame{
+			Path:          r.runFrame[container],
+			Seq:           r.seq,
+			SHA256RGB24:   r.sha,
+			Width:         2,
+			Height:        1,
+			CaptureMonoNS: monotonic(),
+			Generation:    container,
+			Window:        &capsule.Window{ID: "w1", W: 2, H: 1},
+		})
+	case "stop":
+		container := ""
+		for i := 0; i+1 < len(a); i++ {
+			if a[i] == "--container" {
+				container = a[i+1]
+			}
+		}
+		return json.Marshal(map[string]any{"stopped": container, "removed_verified": true})
+	}
+	return nil, errors.New("unexpected native operation")
+}
+
+func TestHelloDisplayTapsPerCapsuleDisplayAndRestart(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-mdisp-env-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+
+	displayDir := filepath.Join(root, "display-base")
+	stateDir := filepath.Join(root, "identity-state")
+	admDir := filepath.Join(root, "ram-admission")
+	for _, d := range []string{displayDir, stateDir, admDir} {
+		if err := os.MkdirAll(d, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("MV_DISPLAY_DIR", displayDir)
+	t.Setenv("MV_SRF_STATE_DIR", stateDir)
+	t.Setenv("MV_RAM_ADMISSION_DIR", admDir)
+	t.Setenv("MV_DISPLAY_TAP", "")
+
+	pngPath, sha := writeTestPNG(t, root)
+	pngBytes, err := os.ReadFile(pngPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &multiDisplayRunner{root: root, stateDir: stateDir, pngBytes: pngBytes, sha: sha}
+
+	profiles := map[string]capsule.Profile{
+		"mv-live-1": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":100", Width: 2, Height: 1},
+		"mv-live-2": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":101", Width: 2, Height: 1},
+	}
+	pub, err := frames.NewPublisher(frames.PublishConfig{
+		RAMRoot:       root,
+		MaxFrameBytes: 8192,
+		MaxPixels:     64,
+		MaxSurfaces:   4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pub.Close() })
+
+	var targetMu sync.Mutex
+	seenTargets := map[string][]frames.DisplayTarget{}
+	targetReady := make(chan struct{}, 8)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	session := streamSession{
+		ctx:   ctx,
+		work:  &sync.Mutex{},
+		locks: &surfaceLocks{},
+		emit:  func(context.Context, json.RawMessage) error { return nil },
+	}
+	sessionCtx := context.WithValue(ctx, streamKey{}, session)
+
+	state := helloState{
+		displayCommand: func(cmdCtx context.Context, target frames.DisplayTarget) *exec.Cmd {
+			targetMu.Lock()
+			seenTargets[target.Container] = append(seenTargets[target.Container], target)
+			targetMu.Unlock()
+			select {
+			case targetReady <- struct{}{}:
+			default:
+			}
+			cmd := exec.CommandContext(cmdCtx, "sh", "-c", "cat >/dev/null")
+			return cmd
+		},
+	}
+	t.Cleanup(func() {
+		if state.displayTaps != nil {
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Second)
+			defer stopCancel()
+			_ = state.displayTaps.Close(stopCtx)
+		}
+		for _, s := range state.subscriptions {
+			_ = s.Close(context.Background())
+		}
+	})
+
+	binDir := t.TempDir()
+	newRuntime := func(cfg capsule.Config, clock cli.Clock) (*capsule.Manager, error) {
+		cfg.BinDir = binDir
+		cfg.LivenessInterval = time.Hour
+		return capsule.NewManager(cfg, runner, clock)
+	}
+	authority := &clientAuthority{origin: monotonic()}
+	if err := state.accept(sessionCtx, profiles, map[string]*frames.Publisher{root: pub}, authority, monotonic, newRuntime, frames.NewSubscriptions); err != nil {
+		t.Fatalf("accept failed: %v", err)
+	}
+
+	createCapsule := func(profileID string) string {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{
+			"schema": "surface_request/v0.2",
+			"op":     "create",
+			"params": map[string]any{"kind": "browser", "profile_id": profileID, "geometry": map[string]int{"w": 2, "h": 1}},
+		})
+		evs, err := state.handler(sessionCtx, ipc.Envelope{MsgID: "create-" + profileID, Body: raw})
+		if err != nil || len(evs) == 0 {
+			t.Fatalf("create %s failed: %s (%v)", profileID, evs, err)
+		}
+		var created struct {
+			Event string `json:"event"`
+			Data  struct {
+				Surface capsule.Surface `json:"surface"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(evs[0], &created); err != nil || created.Event != "created" {
+			t.Fatalf("unexpected create reply for %s: %s (%v)", profileID, evs[0], err)
+		}
+		return created.Data.Surface.SurfaceID
+	}
+
+	id1 := createCapsule("mv-live-1")
+	id2 := createCapsule("mv-live-2")
+	if id1 == id2 {
+		t.Fatalf("expected distinct surface IDs, got %q", id1)
+	}
+
+	waitTargets := func(c1Count, c2Count int) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			targetMu.Lock()
+			n1 := len(seenTargets["srf-id-mv-live-1"])
+			n2 := len(seenTargets["srf-id-mv-live-2"])
+			targetMu.Unlock()
+			if n1 >= c1Count && n2 >= c2Count {
+				return
+			}
+			select {
+			case <-targetReady:
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
+		t.Fatalf("timed out waiting for display tap targets (want >=%d, >=%d)", c1Count, c2Count)
+	}
+	waitTargets(1, 1)
+
+	targetMu.Lock()
+	t1 := seenTargets["srf-id-mv-live-1"][0]
+	t2 := seenTargets["srf-id-mv-live-2"][0]
+	targetMu.Unlock()
+	if t1.Display != ":100" {
+		t.Fatalf("mv-live-1 tap display = %q, want :100", t1.Display)
+	}
+	if t2.Display != ":101" {
+		t.Fatalf("mv-live-2 tap display = %q, want :101", t2.Display)
+	}
+
+	// Destroy and restart mv-live-2; verify a new tap starts with :101 and the new run/XID.
+	destroyRaw, _ := json.Marshal(map[string]any{
+		"schema": "surface_request/v0.2",
+		"op":     "destroy",
+		"params": map[string]any{"surface_id": id2},
+	})
+	if evs, err := state.handler(sessionCtx, ipc.Envelope{MsgID: "destroy-2", Body: destroyRaw}); err != nil || len(evs) == 0 {
+		t.Fatalf("destroy mv-live-2 failed: %s (%v)", evs, err)
+	}
+	targetMu.Lock()
+	beforeRestartCount := len(seenTargets["srf-id-mv-live-2"])
+	targetMu.Unlock()
+
+	_ = createCapsule("mv-live-2")
+	waitTargets(1, beforeRestartCount+1)
+	targetMu.Lock()
+	restarted := seenTargets["srf-id-mv-live-2"][len(seenTargets["srf-id-mv-live-2"])-1]
+	targetMu.Unlock()
+	if restarted.Display != ":101" || restarted.Run == t2.Run || restarted.XID == t2.XID {
+		t.Fatalf("restarted mv-live-2 target = %+v, previous = %+v", restarted, t2)
 	}
 }

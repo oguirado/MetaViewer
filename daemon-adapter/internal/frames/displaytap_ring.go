@@ -20,7 +20,21 @@ type displayRing struct {
 	target     DisplayTarget
 }
 
+// DisplayRingPath returns the per-capsule tmpfs ring path for surface id.
+func DisplayRingPath(runtimeDir, id string) (string, error) {
+	if !ringComponent.MatchString(id) {
+		return "", &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY surface id"}
+	}
+	if runtimeDir == "" {
+		runtimeDir = DisplayBaseDir()
+	}
+	return filepath.Join(runtimeDir, "metaviewer", "display", id+".ring"), nil
+}
+
 func (r *displayRing) open(t DisplayTarget) error {
+	if e := validDisplayTarget(t); e != nil {
+		return e
+	}
 	dir := filepath.Dir(r.path)
 	// Traverse without following symlinks, including the existing runtime root.
 	parent, e := openRingDir(filepath.Dir(dir))

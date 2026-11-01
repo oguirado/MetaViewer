@@ -5,6 +5,12 @@ package frames
 // serializes incarnations; EOF, malformed framing and window replacement retire
 // and reap the old child before restart. Bounds: 4096 pixels per dimension,
 // one record plus one converted frame, and a two-slot tmpfs ring [TARGET].
+// [TARGET, unit decision] MDISP-FIX: each capsule's DISPLAY tap resolves and
+// validates its own X display (^:[0-9]+$) from its binding, passing it to the
+// resident srf-fbread getimage sender (-e DISPLAY=<display> and getimage <display>)
+// and W8U binding JSON while writing to its per-surface ring (<surface_id>.ring).
+// Missing or invalid display bindings receive a typed DisplayTapRefusal
+// (DISPLAY_MISSING / DISPLAY_INVALID), leaving VERIFIED capture unaffected.
 import (
 	"bytes"
 	"context"
@@ -17,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +32,42 @@ import (
 	"time"
 
 	"metaviewer/daemon-adapter/internal/capsule"
+	"metaviewer/daemon-adapter/internal/cli"
+)
+
+var displaySpec = regexp.MustCompile(`^:[0-9]+$`)
+
+// DisplayTapRefusal is the typed refusal returned when DISPLAY tap resolution
+// or validation rejects a surface target, leaving VERIFIED capture available
+// [TARGET, unit decision].
+type DisplayTapRefusal struct {
+	Code   string
+	Detail string
+}
+
+func (e *DisplayTapRefusal) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.Code + ": " + e.Detail
+}
+
+func (e *DisplayTapRefusal) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return &cli.Fault{Code: e.Code, Detail: e.Detail}
+}
+
+func (e *DisplayTapRefusal) Is(target error) bool {
+	t, ok := target.(*DisplayTapRefusal)
+	return ok && (t.Code == "" || t.Code == e.Code)
+}
+
+var (
+	ErrDisplayMissing     = &DisplayTapRefusal{Code: "DISPLAY_MISSING", Detail: "invalid DISPLAY target: missing capsule display"}
+	ErrDisplayInvalid     = &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY target"}
+	ErrDisplayUnsupported = &DisplayTapRefusal{Code: "DISPLAY_UNSUPPORTED", Detail: "DISPLAY requires browser window"}
 )
 
 // DisplayBaseDir selects the spec-v1.1 tmpfs base independently of the
@@ -37,9 +80,9 @@ func DisplayBaseDir() string {
 }
 
 type DisplayTarget struct {
-	Container, Run, Window string
-	XID                    uint32
-	Width, Height          int
+	Container, Run, Window, Display string
+	XID                             uint32
+	Width, Height                   int
 }
 type DisplayTapConfig struct {
 	RuntimeDir  string
@@ -58,13 +101,37 @@ type DisplayTaps struct {
 	ctx    context.Context
 	cfg    DisplayTapConfig
 	tasks  map[string]*displayTask
+	errs   map[string]error
 	closed bool
 }
 
 var displayGeneration atomic.Uint64
 
 func NewDisplayTaps(ctx context.Context, cfg DisplayTapConfig) *DisplayTaps {
-	return &DisplayTaps{ctx: ctx, cfg: cfg, tasks: map[string]*displayTask{}}
+	return &DisplayTaps{ctx: ctx, cfg: cfg, tasks: map[string]*displayTask{}, errs: map[string]error{}}
+}
+
+// Err returns the most recent tap refusal or termination error recorded for surface id.
+func (d *DisplayTaps) Err(id string) error {
+	if d == nil {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.errs[id]
+}
+
+func (d *DisplayTaps) setErr(id string, err error) {
+	d.mu.Lock()
+	if d.errs == nil {
+		d.errs = map[string]error{}
+	}
+	if err == nil {
+		delete(d.errs, id)
+	} else {
+		d.errs[id] = err
+	}
+	d.mu.Unlock()
 }
 func (d *DisplayTaps) Start(id string) {
 	if d == nil || os.Getenv("MV_DISPLAY_TAP") == "off" || !ringComponent.MatchString(id) {
@@ -158,7 +225,12 @@ func (d *DisplayTaps) Close(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 func (d *DisplayTaps) run(ctx context.Context, id string) {
-	path := filepath.Join(d.cfg.RuntimeDir, "metaviewer", "display", id+".ring")
+	path, err := DisplayRingPath(d.cfg.RuntimeDir, id)
+	if err != nil {
+		d.setErr(id, err)
+		d.diag("adapter: DISPLAY tap %s: %v", id, err)
+		return
+	}
 	delay := 100 * time.Millisecond
 	warned := false
 	for ctx.Err() == nil {
@@ -166,6 +238,7 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 			return
 		}
 		if err := d.cfg.Admit(); err != nil {
+			d.setErr(id, err)
 			if !warned && d.cfg.Diagnostics != nil {
 				fmt.Fprintln(d.cfg.Diagnostics, "adapter: DISPLAY tap refused by RAM admission")
 				warned = true
@@ -177,14 +250,18 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 		}
 		target, err := d.cfg.Resolve(id)
 		if err != nil {
+			d.setErr(id, err)
 			d.diag("adapter: DISPLAY tap %s: resolve: %v", id, err)
 			return
 		}
 		if err = validDisplayTarget(target); err != nil {
+			d.setErr(id, err)
 			d.diag("adapter: DISPLAY tap %s: %v (%+v)", id, err, target)
 			return
 		}
+		d.setErr(id, nil)
 		if err = d.session(ctx, id, path, target); err != nil && ctx.Err() == nil {
+			d.setErr(id, err)
 			d.diag("adapter: DISPLAY tap %s: session ended: %v", id, err)
 		}
 		if ctx.Err() != nil {
@@ -201,13 +278,22 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 	}
 }
 func validDisplayTarget(t DisplayTarget) error {
+	if strings.TrimSpace(t.Display) == "" {
+		return &DisplayTapRefusal{Code: "DISPLAY_MISSING", Detail: "invalid DISPLAY target: missing capsule display"}
+	}
+	if !displaySpec.MatchString(t.Display) {
+		return &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY target: invalid capsule display"}
+	}
 	if !ringComponent.MatchString(t.Container) || !ringComponent.MatchString(t.Run) || t.XID == 0 || t.Width < 1 || t.Height < 1 || t.Width > 4096 || t.Height > 4096 {
-		return errors.New("invalid DISPLAY target")
+		return &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY target"}
 	}
 	return nil
 }
 func (d *DisplayTaps) session(parent context.Context, id, path string, target DisplayTarget) error {
 	if err := parent.Err(); err != nil {
+		return err
+	}
+	if err := validDisplayTarget(target); err != nil {
 		return err
 	}
 	// Renew below the recorder's documented session cap [CITED: recstream.go].
@@ -318,14 +404,14 @@ loop:
 }
 
 func displayGetimageCommand(ctx context.Context, target DisplayTarget) *exec.Cmd {
-	loop := "while :; do /usr/local/libexec/srf-fbread getimage :100 " + strconv.FormatUint(uint64(target.XID), 10) + " 2>/dev/null || exit 9; sleep 0.03; done"
-	return exec.CommandContext(ctx, "docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY=:100", target.Container, "sh", "-c", loop)
+	loop := "while :; do /usr/local/libexec/srf-fbread getimage " + target.Display + " " + strconv.FormatUint(uint64(target.XID), 10) + " 2>/dev/null || exit 9; sleep 0.03; done"
+	return exec.CommandContext(ctx, "docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY="+target.Display, target.Container, "sh", "-c", loop)
 }
 
 func displayBinding(t DisplayTarget) ([]byte, [32]byte) {
 	// Map encoding sorts keys recursively, matching ramcap.CanonicalJSON.
 	root := "/dev/shm/vqa-ramws"
-	b, _ := json.Marshal(map[string]any{"schema": "w8u-binding/1", "run_id": t.Run, "lease_id": "metaviewer-display", "seat_grant_sha256": "AUSENTE", "container_id": t.Container, "target_handle": map[string]any{"kind": "capsule", "canonical_id": t.Container, "generation": t.Run}, "epoch": 0, "display": ":100", "xid": t.XID, "width": t.Width, "height": t.Height, "frames_root": root, "frame_run_root": root + "/opensuperficies/os-cu-0/" + t.Run, "image_sha256": "AUSENTE", "reader_sha256": "AUSENTE", "exec_allowlist_sha256": "AUSENTE", "max_record_bytes": displayRecordCap(t), "max_inflight_frames": 2, "tick_mode": "unavailable"})
+	b, _ := json.Marshal(map[string]any{"schema": "w8u-binding/1", "run_id": t.Run, "lease_id": "metaviewer-display", "seat_grant_sha256": "AUSENTE", "container_id": t.Container, "target_handle": map[string]any{"kind": "capsule", "canonical_id": t.Container, "generation": t.Run}, "epoch": 0, "display": t.Display, "xid": t.XID, "width": t.Width, "height": t.Height, "frames_root": root, "frame_run_root": root + "/opensuperficies/os-cu-0/" + t.Run, "image_sha256": "AUSENTE", "reader_sha256": "AUSENTE", "exec_allowlist_sha256": "AUSENTE", "max_record_bytes": displayRecordCap(t), "max_inflight_frames": 2, "tick_mode": "unavailable"})
 	return b, sha256.Sum256(b)
 }
 func displayRecordCap(t DisplayTarget) uint64 {
@@ -359,7 +445,13 @@ func displayAck(w io.Writer, digest [32]byte, seq uint64) error {
 func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, error) {
 	var t DisplayTarget
 	if b.NativeKind != "browser" || b.Window == "" {
-		return t, errors.New("DISPLAY requires browser window")
+		return t, &DisplayTapRefusal{Code: "DISPLAY_UNSUPPORTED", Detail: "DISPLAY requires browser window"}
+	}
+	if strings.TrimSpace(b.Surface.Display) == "" {
+		return t, &DisplayTapRefusal{Code: "DISPLAY_MISSING", Detail: "invalid DISPLAY target: missing capsule display"}
+	}
+	if !displaySpec.MatchString(b.Surface.Display) {
+		return t, &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY target: invalid capsule display"}
 	}
 	if stateDir == "" {
 		stateDir = filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(b.FramesRoot))), "identity-state")
@@ -399,7 +491,15 @@ func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, er
 	if e != nil {
 		return t, e
 	}
-	t = DisplayTarget{b.Container, b.RunID, b.Window, uint32(xid), b.Surface.Geometry.W, b.Surface.Geometry.H}
+	t = DisplayTarget{
+		Container: b.Container,
+		Run:       b.RunID,
+		Window:    b.Window,
+		Display:   b.Surface.Display,
+		XID:       uint32(xid),
+		Width:     b.Surface.Geometry.W,
+		Height:    b.Surface.Geometry.H,
+	}
 	return t, validDisplayTarget(t)
 }
 

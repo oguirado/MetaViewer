@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
@@ -1104,17 +1105,18 @@ func openStateDir(path string) (*os.File, error) {
 // helloState owns the state published by an accepted session handshake.
 // Constructor arguments permit deterministic failure testing without global hooks.
 type helloState struct {
-	netModes      []string
-	manager       *capsule.Manager
-	handler       ipc.Handler
-	subscriptions []*frames.Subscriptions
-	displayTaps   *frames.DisplayTaps
-	view          capsule.ViewBackend
-	recorder      *record.Manager
-	newRecorder   func(uint64, cli.Clock) (*record.Manager, error)
-	welcomed      bool
-	closeBudget   time.Duration // zero selects closeManagerBudget; tests inject a short one
-	minStopSlice  time.Duration // zero selects minStopSlice; tests inject a short one
+	netModes       []string
+	manager        *capsule.Manager
+	handler        ipc.Handler
+	subscriptions  []*frames.Subscriptions
+	displayTaps    *frames.DisplayTaps
+	displayCommand func(context.Context, frames.DisplayTarget) *exec.Cmd
+	view           capsule.ViewBackend
+	recorder       *record.Manager
+	newRecorder    func(uint64, cli.Clock) (*record.Manager, error)
+	welcomed       bool
+	closeBudget    time.Duration // zero selects closeManagerBudget; tests inject a short one
+	minStopSlice   time.Duration // zero selects minStopSlice; tests inject a short one
 }
 
 // [TARGET, unit decision] QC-03 shutdown budgets. The host sends SIGTERM and
@@ -1302,7 +1304,7 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 	// [TARGET, unit decision] DISPLAY starts once the admitted create binding
 	// exists. Use the host RAM floor plus all persisted incumbent reservations.
 	displayTaps = frames.NewDisplayTaps(session.ctx, frames.DisplayTapConfig{
-		RuntimeDir: displayBaseDir(), Diagnostics: os.Stderr,
+		RuntimeDir: displayBaseDir(), Diagnostics: os.Stderr, Command: s.displayCommand,
 		Resolve: func(id string) (frames.DisplayTarget, error) {
 			b, err := fresh.SubscriptionBinding(id)
 			if err != nil {
@@ -1329,10 +1331,11 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 			if !ok || owner.Uid != uint32(os.Getuid()) || info.Mode() != os.ModeDir|0700 {
 				return configuration("private RAM admission directory required")
 			}
-			if err := syscall.Flock(int(dir.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			if err := syscall.Flock(int(dir.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err == nil {
+				defer syscall.Flock(int(dir.Fd()), syscall.LOCK_UN)
+			} else if !errors.Is(err, syscall.EWOULDBLOCK) {
 				return err
 			}
-			defer syscall.Flock(int(dir.Fd()), syscall.LOCK_UN)
 			entries, err := os.ReadDir(dir.Name())
 			if err != nil {
 				return err
@@ -1346,7 +1349,7 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		events, err := nextDisplay(ctx, envelope)
 		if err == nil {
 			var request capsule.Request
-			if json.Unmarshal(envelope.Body, &request) == nil && request.Op == "create" {
+			if json.Unmarshal(envelope.Body, &request) == nil && request.Op != "destroy" {
 				displayTaps.StartReplies(events)
 			}
 		}
