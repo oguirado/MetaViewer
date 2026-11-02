@@ -1,0 +1,1 @@
+- Update the e2e suites for the host clipboard facade and the Program Binary name step.

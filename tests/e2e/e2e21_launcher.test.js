@@ -30,7 +30,8 @@ test('New Capsule launcher creates and destroys each offered kind; terminal ids 
     const journey = JSON.parse(readFileSync(report, 'utf8'));
     assert.equal(journey.schema, 'metaviewer.launcher-journey/v1');
     const kinds = ['identity-browser', 'program'];
-    assert.deepEqual(journey.intents, kinds.map(kind => ({ type: 'create-capsule', kind, placement: 'tab' })));
+    assert.deepEqual(journey.intents, kinds.map(kind => ({ type: 'create-capsule', kind, placement: 'tab',
+      ...(kind === 'program' ? { binary: 'gedit' } : {}) })));
     assert.deepEqual(journey.unknown, { errors: ['ERR_CATALOG_UNKNOWN_KIND'], cards: 0, emitted: 0 });
     mkdirSync(join(scratch, 'state_dir'));
     writeFileSync(join(scratch, 'state_dir/launcher-intents.json'), JSON.stringify(journey.intents));

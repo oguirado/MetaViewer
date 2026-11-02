@@ -12,7 +12,7 @@ const app = createApp({ setup: () => () => h('main', [
   h('button', { id: 'open-launcher', onClick: () => { visible.value = true; } }, 'New Capsule'),
   h(CatalogLauncher, { visible: visible.value, kinds: choices.value,
     'onUpdate:visible': value => { visible.value = value; },
-    onCreate: intent => { intents.push(intent); } }),
+    onCreate: (intent, settle) => { intents.push(intent); settle?.({ ok: true }); } }),
 ]) });
 installKitTheme(app);
 app.mount('#metaviewer-app');
@@ -32,6 +32,16 @@ window.runLauncherJourney = async () => {
       await flush();
       requireNode('shell/new-capsule/create').click();
       await flush();
+      if (kind === 'program') {
+        // Program asks for the binary first; Start stays disabled until a name is typed.
+        if (!requireNode('shell/new-capsule/program-start').disabled) throw Error('E2E_LAUNCHER: Start enabled without a binary');
+        const field = requireNode('shell/new-capsule/program-binary');
+        field.value = 'gedit';
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        await flush();
+        requireNode('shell/new-capsule/program-start').click();
+        await flush();
+      }
       if (visible.value) throw Error('E2E_LAUNCHER: create did not close dialog');
     }
     // Unknown kind reaches the product's typed error UI and cannot emit create.
