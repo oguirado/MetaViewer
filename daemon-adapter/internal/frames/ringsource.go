@@ -299,7 +299,7 @@ func (s *RingSource) Capture(ctx context.Context, id string) (capsule.Binding, c
 	if err := ctx.Err(); err != nil {
 		return capsule.Binding{}, capsule.NativeFrame{}, err
 	}
-	if b, err := s.Manager.SubscriptionBinding(id); err == nil && b.NativeKind == "host-window" {
+	if b, err := s.Manager.SubscriptionBinding(id); err == nil && (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") {
 		return s.Manager.Capture(ctx, id)
 	}
 	var raw []byte

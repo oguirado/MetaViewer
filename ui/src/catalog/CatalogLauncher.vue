@@ -51,7 +51,7 @@ function confirmRole() {
 }
 async function confirmProgram() {
   const result = buildCreateIntent({
-    kind: 'program',
+    kind: pendingIntent.value?.kind || 'program',
     placement: pendingIntent.value?.placement,
     binary: programBinary.value,
     ...(typeof programRole !== 'undefined' && programRole?.value ? { role: programRole.value } : {}),
@@ -182,8 +182,8 @@ function forwardVisible(value) {
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
-  if (payload?.type?.id === 'program') {
-    pendingIntent.value = { kind: 'program', placement: payload?.placement };
+  if (payload?.type?.id === 'program' || payload?.type?.id === 'host-program') {
+    pendingIntent.value = { kind: payload.type.id, placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
       programBinary.value = typeof payload?.binary === 'string' ? payload.binary : '';
       if (typeof programRole !== 'undefined') programRole.value = payload?.role === 'agent' ? 'agent' : 'human';
@@ -267,7 +267,8 @@ function onClose() {
     aria-modal="true"
     aria-label="Program capsule"
   >
-    <h2>Program</h2>
+    <h2>{{ pendingIntent?.kind === 'host-program' ? 'Host program' : 'Program' }}</h2>
+    <p v-if="pendingIntent?.kind === 'host-program'">Runs on your computer — not isolated. Browsers use a fresh temporary profile in RAM, never your personal profile.</p>
     <label for="shell/new-capsule/program-role">Role</label>
     <select
       id="shell/new-capsule/program-role"

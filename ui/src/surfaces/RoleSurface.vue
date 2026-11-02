@@ -179,6 +179,7 @@ function reconnectReleased() { resourceReleased.value = false; void sync(); }
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const root = ref(/** @type {HTMLElement|null} */ (null));
 const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
+const hostXpra = ref(false);
 const hostWindow = ref(/** @type {any} */ (null));
 let ended = false, notifiedEnd = false, resync = false;
 let transferring = false;
@@ -202,6 +203,7 @@ async function sync() {
     if (mounted || hostWindow.value) {
       const status = await api.status(props.surfaceId);
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
+      hostXpra.value = status.hostXpra === true;
       if (status.hostWindow !== undefined) {
         hostWindow.value = status.hostWindow || null;
         if (status.hostWindow?.state === 'lost') {
@@ -351,6 +353,7 @@ onMounted(async () => {
     const status = await api.status(props.surfaceId);
     if (!alive) return;
     if (!['human','agent'].includes(status.role)) throw Error(status.code || 'CAPSULE_ROLE_UNPROVEN');
+    hostXpra.value = status.hostXpra === true;
     if (status.hostWindow) {
       hostWindow.value = status.hostWindow;
       if (status.hostWindow.state === 'lost') {
@@ -383,6 +386,7 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
           <button v-for="control in sizeControls" :key="control.action" type="button" :id="`tile-size-${control.action}-${surfaceId}`" :title="control.title" :aria-label="control.title" @pointerdown.stop @click.stop="resizeTile(control.action)">{{ control.label }}</button>
         </div>
         <span class="mv-role-mode-badge">{{ role }}</span>
+        <span v-if="hostXpra" class="mv-host-window-badge">Runs on your computer — not isolated</span>
         <span v-if="hostWindow" :id="`tile-host-indicator-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-indicator`" class="mv-host-window-badge" :title="`${hostWindow.title} — ${hostWindow.program}. This tile is attached to a real window on your desktop, not an isolated container.`">Real desktop — not isolated</span>
         <button v-if="hostWindow" type="button" :id="`tile-host-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-stop`" class="mv-host-window-stop" @click.stop="detachHostWindow">Stop</button>
         <span v-if="recordingPaused" role="status">Recording paused (size limit)</span>

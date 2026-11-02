@@ -744,7 +744,7 @@ async function createProgramCapsule(body) {
   }
   let programReply;
   if (body.role === 'human' || body.role === 'agent') {
-    programReply = await roles.createProgram({ binary: body.binary.trim(), role: body.role });
+    programReply = await roles.createProgram({ binary: body.binary.trim(), role: body.role, ...(body.kind === 'host-program' ? {hostXpra:true} : {}) });
   } else {
     const reply = await roles.createProgram({ binary: body.binary.trim() });
     programReply = reply;
@@ -810,7 +810,7 @@ function onCreateCapsule(intent, settle) {
   }
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
-  if (body?.kind === 'program') {
+  if (body?.kind === 'program' || body?.kind === 'host-program') {
     if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id) {
       const reason = 'Renderer cannot select a profile for a program capsule.';
       settle?.({ ok: false, code: 'PROGRAM_PROFILE_FORBIDDEN', reason });

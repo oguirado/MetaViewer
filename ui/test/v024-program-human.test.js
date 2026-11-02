@@ -828,7 +828,7 @@ test('V024-PROGRAM-HUMAN-MV: mutant suite kills every gate mutation', async (t) 
   // Mutant 7: roleHost.js switchMode does not handle programProfiles.
   {
     const mutated = roleHostSrc.replace(
-      'if (program) {\n        return await createProgram({binary:program.path,role},true,profileId);\n      }',
+      'if (program) {\n        return await createProgram({binary:program.path,role,...(program.hostXpra ? {hostXpra:true} : {})},true,profileId);\n      }',
       'if (false) {}',
     );
     assert.notEqual(mutated, roleHostSrc);

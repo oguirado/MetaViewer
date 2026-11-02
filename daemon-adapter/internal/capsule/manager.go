@@ -105,6 +105,7 @@ type Window struct {
 	URL   string `json:"url"`
 }
 type Binding struct {
+	HostXpra                                                  *hostXpraProcess
 	Role                                                      string
 	Surface                                                   Surface
 	Container, RunID, Window, FramesRoot, NativeKind, Program string
@@ -538,7 +539,7 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 		}
 		return nil, fault("surface", "active surface required")
 	}
-	if b.NativeKind == "holdings" || b.NativeKind == "host-window" {
+	if b.NativeKind == "holdings" || (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") {
 		return nil, fault("usage", "invalid identity capsule")
 	}
 	if r.Op != "view-stop" && m.views[b.Container] {
@@ -617,9 +618,28 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	}
 	_, static := m.cfg.Profiles[q.ProfileID]
 	static = static && !m.dynamicProfiles[q.ProfileID]
+	var hostXpra bool
+	var hostXpraBinary, hostXpraRole string
+	if selector, ok := m.runner.(interface {
+		ConsumeOpeningHostXpra(string) (string, string, error)
+	}); ok && !static && q.Kind == "desktop_capsule" {
+		var e error
+		hostXpraBinary, hostXpraRole, e = selector.ConsumeOpeningHostXpra(q.ProfileID)
+		if e != nil {
+			return nil, e
+		}
+		hostXpra = hostXpraBinary != ""
+	}
 	var hostBinary string
 	var programRole string
-	if progModeSelector, ok := m.runner.(interface {
+	if hostXpra {
+		var e error
+		hostBinary, e = ResolveHostBinary(hostXpraBinary, m.runnerSearchPath())
+		if e != nil {
+			return nil, e
+		}
+		programRole = hostXpraRole
+	} else if progModeSelector, ok := m.runner.(interface {
 		ConsumeOpeningProgramMode(string) (string, string, error)
 	}); ok {
 		if !static && q.Kind == "desktop_capsule" {
@@ -687,6 +707,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	var ok bool
 	if !static && q.Kind == "desktop_capsule" && hostBinary != "" {
 		p, ok = m.programProfileFor(q.ProfileID)
+		if hostXpra {
+			p.NativeKind = "host-xpra"
+		}
 		if programRole != "" {
 			p.Role = programRole
 		}
@@ -706,7 +729,11 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		return nil, fault("nested_depth", "profile nested_depth mismatch")
 	}
 	if p.Kind == "desktop_capsule" {
-		if p.NativeKind == "host-window" {
+		if p.NativeKind == "host-xpra" {
+			if !hostXpra || static || p.NestedDepth != 0 {
+				return nil, fault("profile", "unadmitted host-xpra profile")
+			}
+		} else if p.NativeKind == "host-window" {
 			if static || hostWin == nil || p.NestedDepth != 0 || q.Geometry.W < 1 || q.Geometry.H < 1 || q.Geometry.W > 4096 || q.Geometry.H > 4096 {
 				return nil, fault("profile", "unadmitted profile, kind or geometry")
 			}
@@ -748,7 +775,11 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if active >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
 		return nil, fault("uncertain", detailCapacityOrQuarantine)
 	}
-	if p.NativeKind == "host-window" {
+	if p.NativeKind == "host-xpra" {
+		p.Display = ""
+		m.cfg.Profiles[q.ProfileID] = p
+		m.dynamicProfiles[q.ProfileID] = true
+	} else if p.NativeKind == "host-window" {
 		if err := m.admitHostWindowProfile(q.ProfileID, hostWin, &p); err != nil {
 			return nil, err
 		}
@@ -771,7 +802,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 			}
 		}
 	}
-	if p.Role == "human" && (p.Width != 1280 || p.Height != 900 || (p.Kind != "browser" && (p.Kind != "desktop_capsule" || p.NativeKind != "program" || p.Program != "host-exec" || p.NestedDepth != 0))) {
+	if p.Role == "human" && (p.Width != 1280 || p.Height != 900 || (p.Kind != "browser" && (p.Kind != "desktop_capsule" || (p.NativeKind != "program" && p.NativeKind != "host-xpra") || p.Program != "host-exec" || p.NestedDepth != 0))) {
 		return nil, fault("configuration", "human mode requires 1280x900 browser")
 	}
 	idBytes := make([]byte, 16)
@@ -779,6 +810,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		return nil, e
 	}
 	id := "surface-" + hex.EncodeToString(idBytes)
+	if hostXpra {
+		return m.createHostXpra(ctx, q.ProfileID, id, version, p, hostBinary, q.Geometry)
+	}
 	if p.NativeKind == "host-window" {
 		return m.attachHostWindow(q.ProfileID, id, version, p, hostWin, q.Geometry)
 	}
@@ -1071,7 +1105,13 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 // An unavailable stop settles only previously proven absence; Holdings also
 // requires its independent ownership/removal verifier. Unknown outcomes retain the slot.
 func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
-	if b.NativeKind == "host-window" {
+	if b.NativeKind == "host-xpra" {
+		if err := b.HostXpra.stop(); err != nil {
+			return err
+		}
+		return m.detachHostWindowLocked(b)
+	}
+	if b.NativeKind == "host-window" || b.NativeKind == "host-xpra" {
 		return m.detachHostWindowLocked(b)
 	}
 	defer func() {
@@ -1126,7 +1166,7 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
-	if b.NativeKind == "host-window" {
+	if b.NativeKind == "host-window" || b.NativeKind == "host-xpra" {
 		m.mu.Unlock()
 		return m.captureHostWindow(ctx, id)
 	}
@@ -1303,7 +1343,7 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	if (origin == "agent" && m.refresh[q.SurfaceID]) || m.hasPending(q.SurfaceID) || m.used[q.ProposalID] || len(m.used) >= 100000 {
 		return nil, fault("POLICY", "fresh frame and unused input permit required")
 	}
-	if b.NativeKind == "host-window" {
+	if b.NativeKind == "host-window" || b.NativeKind == "host-xpra" {
 		return m.inputHostWindow(ctx, q.SurfaceID, q.ProposalID, origin, q.Action.Type, q.Action.X, q.Action.Y, q.Action.Button, q.Action.Keys, q.Action.Text, version, evidence)
 	}
 	args := []string{"input", "--container", b.Container}

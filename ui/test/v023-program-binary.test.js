@@ -1527,7 +1527,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
   // Mutant 13 (Fix 6): onCreateCapsule only enters program branch when binary is non-empty string.
   {
     const mutatedApp = appSrc.replace(
-      "if (body?.kind === 'program') {",
+      "if (body?.kind === 'program' || body?.kind === 'host-program') {",
       "if (body?.kind === 'program' && typeof body?.binary === 'string' && body.binary.trim().length > 0) {",
     );
     assert.notEqual(mutatedApp, appSrc);
@@ -1538,7 +1538,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
   // Mutant 14 (V023-HOST-MV2): provisioning skipped in roleHost createProgram.
   {
     const mutatedSrc = roleHostSrc.replace(
-      'const provReply = await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});',
+      'const provReply = choice.hostXpra ? {ok:true} : await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});',
       'const provReply = {ok:true};',
     );
     assert.notEqual(mutatedSrc, roleHostSrc);

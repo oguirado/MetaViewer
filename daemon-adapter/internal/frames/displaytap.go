@@ -530,7 +530,7 @@ func displayAck(w io.Writer, digest [32]byte, seq uint64) error {
 // an empty value keeps the native default <RAM root>/identity-state.
 func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, error) {
 	var t DisplayTarget
-	if b.NativeKind == "host-window" && b.Window != "" {
+	if (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") && b.Window != "" {
 		t = DisplayTarget{
 			Container:      b.Container,
 			Run:            b.RunID,

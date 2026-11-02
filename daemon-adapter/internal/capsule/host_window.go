@@ -387,7 +387,27 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 		}
 		receipt = NativeInputReceipt{}
 		trimmed := bytes.TrimSpace(out)
-		if len(trimmed) > 0 && trimmed[0] == '{' {
+		if b.NativeKind == "host-xpra" {
+			var ack struct {
+				OK            *bool  `json:"ok"`
+				XID           uint32 `json:"xid"`
+				Witness       string `json:"witness"`
+				Kind          string `json:"kind"`
+				FocusVerified *bool  `json:"focus_verified"`
+			}
+			if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &ack); e != nil {
+				return nil, e
+			}
+			expected := nativeAction
+			if expected == "text" {
+				expected = "type"
+			}
+			if ack.OK == nil || !*ack.OK || ack.XID != b.HostXID || ack.Witness != b.HostWitness || ack.Kind != expected || ack.FocusVerified == nil || !*ack.FocusVerified {
+				return nil, fault("input", "unverified private-display input receipt")
+			}
+			receipt.Kind = nativeAction
+			receipt.FocusVerified = ack.FocusVerified
+		} else if len(trimmed) > 0 && trimmed[0] == '{' {
 			if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &receipt); e != nil {
 				return nil, e
 			}
@@ -460,7 +480,7 @@ func (m *Manager) UpdateHostWindowGeometry(id string, w, h int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !ok || b.Surface.State != "active" || m.destroying[id] || b.NativeKind != "host-window" {
+	if !ok || b.Surface.State != "active" || m.destroying[id] || (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 		return false
 	}
 	changed := b.Surface.Geometry.W != w || b.Surface.Geometry.H != h
@@ -481,7 +501,7 @@ func (m *Manager) SetHostWindowMinimized(id string, minimized bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !ok || b.Surface.State != "active" || m.destroying[id] || b.NativeKind != "host-window" {
+	if !ok || b.Surface.State != "active" || m.destroying[id] || (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 		return
 	}
 	b.HostMinimized = minimized
@@ -494,7 +514,7 @@ func (m *Manager) MarkHostWindowLost(id string, reason string) (json.RawMessage,
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !ok || b.NativeKind != "host-window" {
+	if !ok || (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 		return nil, fault("surface", "host-window surface required")
 	}
 	if reason != "" {
