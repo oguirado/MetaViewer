@@ -14,7 +14,9 @@ import {
   CATALOG_KIND_IDS,
   buildCreateIntent,
   createInvokerFocus,
+  filterWindowCandidates,
   normalizeCatalogEntries,
+  normalizeWindowList,
 } from './catalogModel.js';
 
 const props = defineProps({
@@ -29,8 +31,12 @@ const emit = defineEmits(['update:visible', 'create', 'close']);
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
 const choosingProgram = ref(false), programBinary = ref(''), programError = ref(''), programBusy = ref(false);
+const choosingWindow = ref(false), windowSearch = ref(''), windowChoices = ref(/** @type {Array<{xid:number,witness:string,title:string,program:string,width:number,height:number}>} */ ([]));
+const windowChoiceXid = ref(0), windowError = ref(''), windowBusy = ref(false);
+const filteredWindows = computed(() => filterWindowCandidates(windowChoices.value, windowSearch.value));
+const selectedWindow = computed(() => windowChoices.value.find(w => w.xid === windowChoiceXid.value) || null);
 let choiceGeneration = 0;
-watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programError.value='';}});
+watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
@@ -93,6 +99,64 @@ function cancelProgram() {
   programError.value = '';
   emit('update:visible', false);
 }
+function selectWindowRow(/** @type {number} */ xid) {
+  if (typeof windowChoiceXid !== 'undefined') windowChoiceXid.value = Number(xid) || 0;
+  if (typeof windowError !== 'undefined') windowError.value = '';
+}
+async function confirmWindow() {
+  if (typeof choosingWindow === 'undefined') return;
+  const chosen = selectedWindow.value;
+  const result = buildCreateIntent({
+    kind: 'desktop-window',
+    placement: pendingIntent.value?.placement,
+    window: chosen,
+  });
+  if (!result.ok) {
+    windowError.value = result.error.message;
+    return;
+  }
+  windowError.value = '';
+  windowBusy.value = true;
+  let settledByListener = false;
+  /** @type {any} */
+  let outcome = null;
+  const settle = (/** @type {any} */ reply) => {
+    settledByListener = true;
+    outcome = reply;
+  };
+  try {
+    emit('create', result.intent, settle);
+    if (!settledByListener) {
+      windowError.value = 'Desktop window attach was not handled by the host.';
+      return;
+    }
+    if (outcome && typeof outcome.then === 'function') {
+      outcome = await outcome;
+    }
+    if (outcome && outcome.ok === false) {
+      windowError.value = outcome.reason || outcome.message || outcome.code || 'Desktop window could not be attached.';
+      return;
+    }
+    if (!outcome || outcome.ok !== true) {
+      windowError.value = 'Desktop window could not be attached.';
+      return;
+    }
+    choosingWindow.value = false;
+    windowChoiceXid.value = 0;
+    emit('update:visible', false);
+  } catch (err) {
+    const e = /** @type {any} */ (err);
+    windowError.value = e?.reason || e?.message || e?.code || 'Desktop window could not be attached.';
+  } finally {
+    windowBusy.value = false;
+  }
+}
+function cancelWindow() {
+  if (typeof choosingWindow !== 'undefined') choosingWindow.value = false;
+  if (typeof windowChoiceXid !== 'undefined') windowChoiceXid.value = 0;
+  if (typeof windowError !== 'undefined') windowError.value = '';
+  emit('update:visible', false);
+}
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
 const dialogTypes = computed(() => [...normalized.value.types]);
 const catalogErrors = computed(() => normalized.value.errors);
@@ -109,9 +173,9 @@ watch(() => props.visible, (open, previous) => {
 
 /** @param {boolean} value */
 function forwardVisible(value) {
-  // The kit dialog closes itself right after `create`: that close must not end the role or program step.
-  if (!value && (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value))) return;
-  if(!value){choiceGeneration++;choosingRole.value=false;if(typeof choosingProgram!=='undefined')choosingProgram.value=false;}
+  // The kit dialog closes itself right after `create`: that close must not end the role, program or window step.
+  if (!value && (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value) || (typeof choosingWindow !== 'undefined' && choosingWindow.value))) return;
+  if(!value){choiceGeneration++;choosingRole.value=false;if(typeof choosingProgram!=='undefined')choosingProgram.value=false;if(typeof choosingWindow!=='undefined')choosingWindow.value=false;}
   emit('update:visible', value);
 }
 
@@ -123,6 +187,40 @@ async function onCreate(payload) {
       programBinary.value = typeof payload?.binary === 'string' ? payload.binary : '';
       programError.value = '';
       choosingProgram.value = true;
+    }
+    return;
+  }
+  if (payload?.type?.id === 'desktop-window') {
+    const generation = ++choiceGeneration;
+    pendingIntent.value = { kind: 'desktop-window', placement: payload?.placement };
+    if (typeof choosingWindow !== 'undefined') {
+      windowSearch.value = '';
+      windowChoices.value = [];
+      windowChoiceXid.value = 0;
+      windowError.value = '';
+      choosingWindow.value = true;
+      try {
+        const hostApi = (typeof api !== 'undefined' && api) ? api : (/** @type {any} */ (globalThis).metaviewerRoles);
+        if (!hostApi || typeof hostApi.listWindows !== 'function') {
+          throw Error('host_window_unavailable: window listing unavailable');
+        }
+        const rawList = await hostApi.listWindows();
+        if (!props.visible || generation !== choiceGeneration) return;
+        if (rawList && typeof rawList === 'object' && !Array.isArray(rawList) && rawList.ok === false) {
+          throw Error(rawList.reason || rawList.message || 'host_window_unavailable: window listing failed');
+        }
+        const entries = Array.isArray(rawList) ? rawList : (Array.isArray(rawList?.windows) ? rawList.windows : null);
+        const admitted = normalizeWindowList(entries);
+        if (!admitted.ok) {
+          throw Error('host_window_unavailable: invalid or ambiguous window list');
+        }
+        windowChoices.value = [...admitted.windows];
+      } catch (err) {
+        if (!props.visible || generation !== choiceGeneration) return;
+        windowChoices.value = [];
+        const e = /** @type {any} */ (err);
+        windowError.value = e?.reason || e?.message || 'host_window_unavailable: window listing failed';
+      }
     }
     return;
   }
@@ -144,7 +242,7 @@ async function onCreate(payload) {
 }
 
 function onClose() {
-  if (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value)) return;
+  if (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value) || (typeof choosingWindow !== 'undefined' && choosingWindow.value)) return;
   choiceGeneration++;
   emit('close');
 }
@@ -196,6 +294,73 @@ function onClose() {
       data-semantic-anchor="dialog/new-capsule/program-cancel"
       type="button"
       @click="cancelProgram"
+    >Cancel</button>
+  </div>
+  <div
+    v-else-if="choosingWindow"
+    id="shell/new-capsule/window-dialog"
+    data-semantic-anchor="dialog/new-capsule/window-dialog"
+    class="mv-role-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Desktop window capsule"
+  >
+    <h2>Desktop window</h2>
+    <label for="shell/new-capsule/window-search">Search open windows</label>
+    <input
+      id="shell/new-capsule/window-search"
+      data-semantic-anchor="dialog/new-capsule/window-search"
+      v-model="windowSearch"
+      type="search"
+      placeholder="Filter by title or program"
+      autofocus
+    />
+    <ul
+      id="shell/new-capsule/window-list"
+      data-semantic-anchor="dialog/new-capsule/window-list"
+      class="mv-window-list"
+      role="listbox"
+      aria-label="Open desktop windows"
+    >
+      <li
+        v-for="win in filteredWindows"
+        :key="win.xid"
+        :id="`shell/new-capsule/window-row-${win.xid}`"
+        :data-semantic-anchor="`dialog/new-capsule/window-row-${win.xid}`"
+        role="option"
+        :aria-selected="windowChoiceXid === win.xid"
+        class="mv-window-row"
+        :class="{ 'mv-window-row--selected': windowChoiceXid === win.xid }"
+        @click="selectWindowRow(win.xid)"
+      >
+        <span class="mv-window-row__title">{{ win.title }}</span>
+        <span class="mv-window-row__program">{{ win.program }}</span>
+      </li>
+    </ul>
+    <p
+      v-if="!filteredWindows.length && !windowError"
+      id="shell/new-capsule/window-empty"
+      data-semantic-anchor="dialog/new-capsule/window-empty"
+      class="mv-window-empty"
+    >No open desktop windows match this filter.</p>
+    <p
+      v-if="windowError"
+      id="shell/new-capsule/window-error"
+      data-semantic-anchor="dialog/new-capsule/window-error"
+      role="alert"
+    >{{ windowError }}</p>
+    <button
+      id="shell/new-capsule/window-add"
+      data-semantic-anchor="dialog/new-capsule/window-add"
+      type="button"
+      :disabled="windowBusy || !selectedWindow"
+      @click="confirmWindow"
+    >Add</button>
+    <button
+      id="shell/new-capsule/window-cancel"
+      data-semantic-anchor="dialog/new-capsule/window-cancel"
+      type="button"
+      @click="cancelWindow"
     >Cancel</button>
   </div>
   <NewCapsuleDialog v-else

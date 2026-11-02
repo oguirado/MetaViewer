@@ -4,10 +4,30 @@ import { mkdir, lstat, realpath, open, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { constants } from 'node:fs';
 
-/** @param {string} stateDir @param {string} profileId @param {string} mode @param {string} [hostBinary] */
-export async function stageOpeningMode(stateDir, profileId, mode, hostBinary) {
+/** @param {string} stateDir @param {string} profileId @param {string} mode @param {string|{xid:number,witness:string,title:string,program:string,width?:number,height?:number}} [target] */
+export async function stageOpeningMode(stateDir, profileId, mode, target) {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profileId) || !['human','agent'].includes(mode)) throw Error('CAPSULE_MODE_INVALID');
-  if (hostBinary !== undefined && (mode !== 'agent' || typeof hostBinary !== 'string' || !hostBinary.startsWith('/') || hostBinary.length > 256)) throw Error('CAPSULE_MODE_INVALID');
+  /** @type {any} */
+  let payload = {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode};
+  if (target !== undefined) {
+    if (typeof target === 'string') {
+      if (mode !== 'agent' || !target.startsWith('/') || target.length > 256) throw Error('CAPSULE_MODE_INVALID');
+      payload = {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode,host_binary:target};
+    } else if (target && typeof target === 'object' && !Array.isArray(target)) {
+      const width = target.width === undefined ? 1280 : target.width;
+      const height = target.height === undefined ? 900 : target.height;
+      if (mode !== 'agent'
+          || !Number.isSafeInteger(target.xid) || target.xid <= 0 || target.xid > 0xffffffff
+          || typeof target.witness !== 'string' || !target.witness.trim() || target.witness.length > 128 || /[\x00-\x1f\x7f\s]/.test(target.witness.trim())
+          || typeof target.title !== 'string' || !target.title.trim() || target.title.length > 512 || /[\x00-\x1f\x7f]/.test(target.title)
+          || typeof target.program !== 'string' || !target.program.trim() || target.program.length > 256 || /[\x00-\x1f\x7f]/.test(target.program)
+          || !Number.isSafeInteger(width) || width < 1 || width > 4096
+          || !Number.isSafeInteger(height) || height < 1 || height > 4096) throw Error('CAPSULE_MODE_INVALID');
+      payload = {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode,host_window:{xid:target.xid,witness:target.witness.trim(),title:target.title.trim(),program:target.program.trim(),width,height}};
+    } else {
+      throw Error('CAPSULE_MODE_INVALID');
+    }
+  }
   if (isForeignIdentity(profileId)) throw Object.assign(Error('IDENTITY_PROTECTED'), {code:'IDENTITY_PROTECTED'});
   const directory = join(stateDir, 'opening-modes');
   await mkdir(directory, {mode:0o700, recursive:true});
@@ -15,7 +35,6 @@ export async function stageOpeningMode(stateDir, profileId, mode, hostBinary) {
   if (!stat.isDirectory() || stat.uid !== process.getuid?.() || (stat.mode & 0o777) !== 0o700 || await realpath(directory) !== directory) throw Error('CAPSULE_MODE_DIRECTORY');
   const path = join(directory, profileId + '.json');
   const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  const payload = hostBinary ? {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode,host_binary:hostBinary} : {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode};
   try { await handle.writeFile(JSON.stringify(payload)); await handle.sync(); }
   catch(error) {await unlink(path);throw error;}
   finally { await handle.close(); }

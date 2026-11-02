@@ -49,6 +49,7 @@ export function surfaceCreateRefusal(reply) {
   if (code === 'uncertain' && detail === 'surface capacity or unresolved native outcome') return 'SURFACE_CAPACITY_OR_QUARANTINE';
   if (code === 'profile' && ['identity display pool exhausted; stop a capsule first','configured display is in use; stop its capsule first'].includes(detail)) return 'CAPSULE_SLOT_UNAVAILABLE';
   if (code === 'identity_unavailable') return 'IDENTITY_UNAVAILABLE';
+  if (code === 'host_window_unavailable') return 'HOST_WINDOW_UNAVAILABLE';
   return /^[a-z][a-z0-9_]{0,55}$/.test(code) && code !== 'unknown' ? 'ADAPTER_' + code.toUpperCase() : 'SURFACE_CREATE_REFUSED';
 }
 /** @param {any} v @param {string} keys */
@@ -129,11 +130,140 @@ export function runHumanMode({tool, stateDir, container, readonly, env}) {
   });
 }
 
+/** @param {unknown} raw */
+function parseHostWindowXid(raw) {
+  if (typeof raw === 'number' && Number.isSafeInteger(raw) && raw > 0 && raw <= 0xffffffff) return raw;
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim();
+    if (/^0x[0-9a-fA-F]{1,8}$/.test(trimmed)) {
+      const parsed = Number.parseInt(trimmed.slice(2), 16);
+      if (Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 0xffffffff) return parsed;
+    } else if (/^[1-9][0-9]{0,9}$/.test(trimmed)) {
+      const parsed = Number.parseInt(trimmed, 10);
+      if (Number.isSafeInteger(parsed) && parsed > 0 && parsed <= 0xffffffff) return parsed;
+    }
+  }
+  return null;
+}
+
+/** @param {any} row */
+export function validateHostWindowChoice(row) {
+  const fail = (/** @type {string} */ detail, code = 'HOST_WINDOW_UNAVAILABLE') => {
+    const reason = detail.startsWith('host_window_unavailable:') ? detail : `host_window_unavailable: ${detail}`;
+    return Object.assign(refuse(code), {reason});
+  };
+  if (!row || typeof row !== 'object' || Array.isArray(row)) throw fail('window selection is required', 'WINDOW_CHOICE_INVALID');
+  if ('profileId' in row || 'profile_id' in row || 'profile' in row) {
+    throw Object.assign(refuse('WINDOW_PROFILE_FORBIDDEN'), {reason:'Renderer cannot select a profile for a desktop window capsule.'});
+  }
+  const xid = parseHostWindowXid(row.xid);
+  const witness = typeof row.witness === 'string' ? row.witness.trim() : '';
+  const title = typeof row.title === 'string' ? row.title.trim() : '';
+  const program = typeof row.program === 'string' ? row.program.trim() : '';
+  const rawW = row.width ?? row.w;
+  const rawH = row.height ?? row.h;
+  const width = rawW === undefined ? 1280 : rawW;
+  const height = rawH === undefined ? 900 : rawH;
+  if (xid === null) throw fail('window xid is required', 'WINDOW_CHOICE_INVALID');
+  if (!witness || witness.length > 128 || /[\x00-\x1f\x7f\s]/.test(witness)) throw fail('window witness is required', 'WINDOW_CHOICE_INVALID');
+  if (!title || title.length > 512 || /[\x00-\x1f\x7f]/.test(title)) throw fail('window title is required', 'WINDOW_CHOICE_INVALID');
+  if (!program || program.length > 256 || /[\x00-\x1f\x7f]/.test(program)) throw fail('window program is required', 'WINDOW_CHOICE_INVALID');
+  if (!Number.isSafeInteger(width) || width < 1 || width > 4096 || !Number.isSafeInteger(height) || height < 1 || height > 4096) {
+    throw fail('window geometry is out of bounds', 'WINDOW_CHOICE_INVALID');
+  }
+  return Object.freeze({xid, witness, title, program, width, height});
+}
+
+/**
+ * Resolve `srf-host-window` from `MV_SRF_BIN_DIR` and run `list --exclude-pid <pid>` without any shell.
+ * Whole-list fail-closed: any malformed row or duplicate xid/witness rejects the entire list.
+ * @param {{env?:NodeJS.ProcessEnv, excludePid?:number, runTool?:typeof execFile}} [options]
+ * @returns {Promise<ReadonlyArray<{xid:number,witness:string,title:string,program:string,width:number,height:number}>>}
+ */
+export function listHostWindows({env = process.env, excludePid = process.pid, runTool = execFile} = {}) {
+  const fail = (/** @type {string} */ detail) => {
+    const reason = detail.startsWith('host_window_unavailable:') ? detail : `host_window_unavailable: ${detail}`;
+    return Object.assign(refuse('HOST_WINDOW_UNAVAILABLE'), {reason});
+  };
+  const binDir = typeof env?.MV_SRF_BIN_DIR === 'string' ? env.MV_SRF_BIN_DIR.trim().replace(/\/+$/, '') : '';
+  if (!binDir.startsWith('/') || posix.normalize(binDir) !== binDir) {
+    return Promise.reject(fail('MV_SRF_BIN_DIR is not configured'));
+  }
+  const tool = join(binDir, 'srf-host-window');
+  if (runTool === execFile) {
+    try {
+      const st = statSync(tool);
+      if (!st.isFile() || (st.mode & 0o111) === 0) return Promise.reject(fail('srf-host-window is not executable'));
+    } catch {
+      return Promise.reject(fail('srf-host-window is not installed in MV_SRF_BIN_DIR'));
+    }
+  }
+  const safePid = Number.isSafeInteger(excludePid) && excludePid > 0 ? excludePid : process.pid;
+  return new Promise((resolve, reject) => {
+    runTool(tool, ['list', '--exclude-pid', String(safePid)], {env, timeout:10000, maxBuffer:256 * 1024, windowsHide:true}, (error, stdout, stderr) => {
+      if (error) {
+        const combined = `${stderr || ''}\n${stdout || ''}`;
+        const refusalLine = combined.split(/\r?\n/).map(l => l.trim()).find(l => l.startsWith('host_window_unavailable:'));
+        reject(fail(refusalLine || 'window listing failed'));
+        return;
+      }
+      try {
+        const text = typeof stdout === 'string' ? stdout.trim() : '';
+        if (!text) { resolve(Object.freeze([])); return; }
+        /** @type {any[]|null} */
+        let rawRows = null;
+        try {
+          const parsed = JSON.parse(text);
+          if (Array.isArray(parsed)) rawRows = parsed;
+          else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.windows)) rawRows = parsed.windows;
+          else if (parsed && typeof parsed === 'object' && Array.isArray(parsed.rows)) rawRows = parsed.rows;
+        } catch {
+          const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          rawRows = lines.map(l => JSON.parse(l));
+        }
+        if (!Array.isArray(rawRows) || rawRows.length > 256) throw fail('invalid or ambiguous window list');
+        const seenXids = new Set();
+        const seenWitnesses = new Set();
+        const admitted = [];
+        for (const item of rawRows) {
+          if (!item || typeof item !== 'object' || Array.isArray(item)) throw fail('invalid or ambiguous window list');
+          const rowPid = item.pid ?? item.owner_pid;
+          if (rowPid !== undefined && Number(rowPid) === safePid) continue;
+          const validated = validateHostWindowChoice({
+            xid: item.xid,
+            witness: item.witness,
+            title: item.title,
+            program: item.program,
+            width: item.width ?? item.w,
+            height: item.height ?? item.h,
+          });
+          if (seenXids.has(validated.xid) || seenWitnesses.has(validated.witness)) {
+            throw fail('invalid or ambiguous window list');
+          }
+          seenXids.add(validated.xid);
+          seenWitnesses.add(validated.witness);
+          admitted.push(validated);
+        }
+        resolve(Object.freeze(admitted));
+      } catch (err) {
+        if (err && typeof /** @type {any} */ (err).reason === 'string' && String(/** @type {any} */ (err).reason).startsWith('host_window_unavailable:')) {
+          reject(err);
+        } else {
+          reject(fail('invalid or ambiguous window list'));
+        }
+      }
+    });
+  });
+}
+
 /** Renderer gets only role, profile ids, state, and opaque success. */
 /** @param {any} options */
 export function installRoleHost({electron, window, core, env, capsuleStates, admit,
-  listIdentities, provisionProgramIdentity, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
+  listIdentities, provisionProgramIdentity, listWindows: customListWindows, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
   const {ipcMain} = electron;
+  const listHostWindowChoices = typeof customListWindows === 'function'
+    ? customListWindows
+    : () => listHostWindows({env:{...process.env, ...env}, excludePid:process.pid});
   const defaultProvisionProgramIdentity = async (/** @type {{id:string,label:string}} */ {id: profileId, label}) => {
     if (typeof env?.SRF_IDENTITY_STORE_ROOT !== 'string' || !env.SRF_IDENTITY_STORE_ROOT) {
       return {ok:true, rows:[{id:profileId, label, domains:[], logged_in:'unknown', browser:'program'}]};
@@ -162,6 +292,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   });
   const dynamicProfiles = new Map();
   const programProfiles = new Map();
+  const windowProfiles = new Map();
   const browserProfiles = () => [...profiles, ...dynamicProfiles.values()];
   const identityAllowed = (/** @type {string} */ value) => /^[a-z0-9][a-z0-9-]{1,39}$/.test(value) && !isForeignIdentity(value);
   /** @param {string} profile */
@@ -187,10 +318,25 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         }
       }
     }
+    for (const [profId, entry] of windowProfiles.entries()) {
+      const sid = entry.surfaceId;
+      const cs = sid ? capsuleStates.get(sid) : [...capsuleStates.values()].find(s => s?.profile_id === profId);
+      const hs = sid && typeof core.getHumanSurface === 'function' ? core.getHumanSurface(sid) : cs;
+      if (cs?.state === 'destroyed' || hs?.state === 'destroyed') {
+        windowProfiles.delete(profId);
+        if (sid) openingRoles.delete(sid);
+      } else if (cs?.state === 'lost' || hs?.state === 'lost' || !hs) {
+        entry.state = 'lost';
+        entry.lostReason = entry.lostReason || 'Window closed or witness changed — capsule tile ended.';
+        if (sid && cs && cs.state !== 'lost' && cs.state !== 'destroyed') {
+          capsuleStates.set(sid, {...cs, state:'lost'});
+        }
+      }
+    }
   };
   const allProfiles = () => {
     pruneProgramProfiles();
-    return [...profiles, ...dynamicProfiles.values(), ...programProfiles.values()];
+    return [...profiles, ...dynamicProfiles.values(), ...programProfiles.values(), ...windowProfiles.values()];
   };
   const roleFor = (/** @type {any} */ surface) => openingRoles.get(surface.surface_id) ?? roleOf(surface.profile_id);
   const markers = identityMarkers(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'identity-markers'));
@@ -211,6 +357,33 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   };
   /** @param {string} surfaceId */
   const status = surfaceId => {
+    pruneProgramProfiles();
+    if (!id(surfaceId)) throw refuse('SURFACE_UNKNOWN');
+    const winEntry = [...windowProfiles.values()].find(w => w.surfaceId === surfaceId);
+    if (winEntry) {
+      const s = core.getHumanSurface?.(surfaceId) ?? capsuleStates.get(surfaceId);
+      const isLost = winEntry.state === 'lost' || !s || s.state === 'lost';
+      if (isLost) {
+        winEntry.state = 'lost';
+        winEntry.lostReason = winEntry.lostReason || 'Window closed or witness changed — capsule tile ended.';
+      }
+      return {
+        role: 'agent',
+        profileId: winEntry.id,
+        control: s?.control || 'agent',
+        view: viewStates.get(surfaceId) || {state:'closed'},
+        transition: transitions.get(winEntry.id) || null,
+        hostWindow: {
+          xid: winEntry.xid,
+          witness: winEntry.witness,
+          title: winEntry.title,
+          program: winEntry.program,
+          state: isLost ? 'lost' : 'active',
+          minimized: Boolean(winEntry.minimized || s?.minimized),
+          lostReason: isLost ? winEntry.lostReason : null,
+        },
+      };
+    }
     const s = authoritative(surfaceId);
     return {role:roleFor(s), profileId:s.profile_id, control:s.control,
       view:viewStates.get(surfaceId) || {state:'closed'}, transition:transitions.get(s.profile_id) || null};
@@ -320,7 +493,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const {bound} = summarizeSurfaces(capsuleStates);
     const reply = await listIdentities();
     if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
-    const names = new Set(reply.rows.filter((/** @type {any} */ row) => row?.browser !== 'program' && !programProfiles.has(row?.id)).map((/** @type {any} */ row) => row.id));
+    const names = new Set(reply.rows.filter((/** @type {any} */ row) => row?.browser !== 'program' && !programProfiles.has(row?.id) && !windowProfiles.has(row?.id)).map((/** @type {any} */ row) => row.id));
     if (template) {
       for (const name of names) {
         if (!identityAllowed(name) || profiles.some(p => p.id === name)) continue;
@@ -328,12 +501,124 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       }
       for (const name of dynamicProfiles.keys()) if (!names.has(name) && !bound.has(name)) dynamicProfiles.delete(name);
     }
-    return await Promise.all(browserProfiles().filter(p=>!isForeignIdentity(p.id) && !programProfiles.has(p.id)).map(async p => {
+    return await Promise.all(browserProfiles().filter(p=>!isForeignIdentity(p.id) && !programProfiles.has(p.id) && !windowProfiles.has(p.id)).map(async p => {
       const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
       return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
         currentMode:entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
         lastLogin:await markers.read(p.id),busy:bound.has(p.id) && !entry?.surface_id};
     }));
+  }
+
+  /** @param {any} choice */
+  async function createWindow(choice) {
+    const validated = validateHostWindowChoice(choice);
+    if (creating) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:`host_window_unavailable: ${validated.title}: another capsule is currently starting`});
+    creating = true;
+    let key, clearMode;
+    try {
+      pruneProgramProfiles();
+      const {live, bound} = summarizeSurfaces(capsuleStates);
+      if ([...windowProfiles.values()].some(w => w.xid === validated.xid && w.state !== 'lost' && w.state !== 'destroyed')) {
+        throw Object.assign(refuse('PROFILE_ALREADY_BOUND'), {reason:`host_window_unavailable: ${validated.title}: window is already attached to a capsule`});
+      }
+      if (live >= MAX_CAPSULES) {
+        throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:`host_window_unavailable: ${validated.title}: capsule limit reached; stop a capsule first`});
+      }
+      if (disposed) throw refuse('XPRA_HOST_CLOSED');
+      const base = `hw-${validated.xid.toString(16)}`;
+      const canUse = (/** @type {string} */ candidate) => identityAllowed(candidate)
+        && !candidate.startsWith('mv-') && candidate !== env.MV_SRF_LIVE_PROFILE
+        && !raw[candidate] && !profiles.some(p => p.id === candidate)
+        && !dynamicProfiles.has(candidate) && !programProfiles.has(candidate)
+        && !windowProfiles.has(candidate) && !bound.has(candidate);
+      let profileId = canUse(base) ? base : '';
+      for (let n = 2; !profileId && n <= 99; n++) {
+        const candidate = `${base.slice(0, 36)}-${n}`;
+        if (canUse(candidate)) profileId = candidate;
+      }
+      if (!profileId) throw Object.assign(refuse('CAPSULE_SLOT_UNAVAILABLE'), {reason:`host_window_unavailable: ${validated.title}: no free window profile slot available`});
+      key = `pending:${profileId}`;
+      capsuleStates.set(key, {profile_id:profileId, state:'creating'});
+      clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, 'agent', validated);
+      if (disposed) throw refuse('XPRA_HOST_CLOSED');
+      const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:validated.width, h:validated.height}}});
+      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {
+        const code = surfaceCreateRefusal(reply);
+        const rawDetail = typeof reply?.data?.detail === 'string' ? reply.data.detail : '';
+        const baseReason = rawDetail.includes('host_window_unavailable:') ? rawDetail : (rawDetail ? `host_window_unavailable: ${rawDetail}` : `host_window_unavailable: ${code}`);
+        const reason = baseReason.includes(validated.title) ? baseReason : baseReason.replace(/^host_window_unavailable:\s*/, `host_window_unavailable: ${validated.title}: `);
+        throw Object.assign(refuse(code), {reason});
+      }
+      const surface = reply.data.surface;
+      if (disposed || !id(surface?.surface_id) || surface.profile_id !== profileId || surface.state !== 'active') {
+        if (id(surface?.surface_id)) {
+          capsuleStates.set(surface.surface_id, surface);
+          const stopped = await core.stopSurface?.(surface.surface_id);
+          if (stopped?.event !== 'state_changed' || stopped.data?.surface?.surface_id !== surface.surface_id || stopped.data.surface.state !== 'destroyed') throw refuse('CAPSULE_STOP_UNPROVEN');
+          capsuleStates.set(surface.surface_id, stopped.data.surface);
+        }
+        throw refuse(disposed ? 'XPRA_HOST_CLOSED' : 'CAPSULE_MODE_UNPROVEN');
+      }
+      openingRoles.set(surface.surface_id, 'agent');
+      windowProfiles.set(profileId, {
+        id: profileId,
+        surfaceId: surface.surface_id,
+        xid: validated.xid,
+        witness: validated.witness,
+        title: validated.title,
+        program: validated.program,
+        width: validated.width,
+        height: validated.height,
+        state: 'active',
+        minimized: false,
+        lostReason: null,
+      });
+      capsuleStates.set(surface.surface_id, surface);
+      return {
+        ok: true,
+        surfaceId: surface.surface_id,
+        profileId,
+        role: 'agent',
+        xid: validated.xid,
+        witness: validated.witness,
+        title: validated.title,
+        program: validated.program,
+        width: validated.width,
+        height: validated.height,
+      };
+    } finally {
+      if (key) capsuleStates.delete(key);
+      try { await clearMode?.(); } catch { /* keep original window error and always reset creating */ }
+      creating = false;
+    }
+  }
+
+  /**
+   * Detach a host window capsule immediately, outside any AI path, without closing the user's window.
+   * Also cleans up a tile whose underlying desktop window already closed or changed witness (`state === 'lost'`).
+   * @param {string} surfaceId
+   */
+  async function detachWindow(surfaceId) {
+    pruneProgramProfiles();
+    if (!id(surfaceId)) throw refuse('SURFACE_UNKNOWN');
+    const winEntry = [...windowProfiles.values()].find(w => w.surfaceId === surfaceId);
+    if (!winEntry) throw refuse('SURFACE_UNKNOWN');
+    await close(surfaceId);
+    const liveSurface = core.getHumanSurface?.(surfaceId);
+    if (liveSurface && liveSurface.state === 'active') {
+      if (typeof core.stopSurface !== 'function') throw refuse('CAPSULE_STOP_UNAVAILABLE');
+      const reply = await core.stopSurface(surfaceId);
+      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'state_changed' ||
+          reply.data?.surface?.surface_id !== surfaceId || reply.data.surface.state !== 'destroyed') throw refuse('CAPSULE_STOP_UNPROVEN');
+      capsuleStates.set(surfaceId, reply.data.surface);
+    } else {
+      try { await core.stopSurface?.(surfaceId); } catch { /* already lost/departed in core */ }
+      const existing = capsuleStates.get(surfaceId) || {schema:'surface/v0.2', surface_id:surfaceId, profile_id:winEntry.id};
+      capsuleStates.set(surfaceId, {...existing, state:'destroyed'});
+    }
+    openingRoles.delete(surfaceId);
+    windowProfiles.delete(winEntry.id);
+    return {ok:true, profileId:winEntry.id, detached:true};
   }
 
   /** @param {any} choice */
@@ -374,7 +659,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         && !candidate.startsWith('mv-') && candidate !== env.MV_SRF_LIVE_PROFILE
         && !raw[candidate] && !profiles.some(p => p.id === candidate)
         && !dynamicProfiles.has(candidate) && (!knownIdentities.has(candidate) || programIdentities.has(candidate))
-        && !programProfiles.has(candidate) && !bound.has(candidate);
+        && !programProfiles.has(candidate) && !windowProfiles.has(candidate) && !bound.has(candidate);
       let profileId = canUse(base) ? base : '';
       for (let n = 2; !profileId && n <= 99; n++) {
         const candidate = `${base.slice(0, 36)}-${n}`;
@@ -449,7 +734,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (live >= MAX_CAPSULES) throw refuse('CAPSULE_LIMIT_REACHED');
       const available = await choices();
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
-      const profile = browserProfiles().find(p => p.id === choice.profileId && !programProfiles.has(p.id));
+      const profile = browserProfiles().find(p => p.id === choice.profileId && !programProfiles.has(p.id) && !windowProfiles.has(p.id));
       if (!profile || !available.find(p => p.profileId === profile.id)?.available) throw refuse('NO_IDENTITY');
       key = `pending:${profile.id}`;
       capsuleStates.set(key,{profile_id:profile.id,state:'creating'});
@@ -481,6 +766,9 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   /** Only an acknowledged destroy releases a profile for a fresh capsule. */
   /** @param {string} surfaceId */
   async function stop(surfaceId) {
+    if ([...windowProfiles.values()].some(w => w.surfaceId === surfaceId)) {
+      return await detachWindow(surfaceId);
+    }
     const surface = authoritative(surfaceId);
     await close(surfaceId);
     if (typeof core.stopSurface !== 'function') throw refuse('CAPSULE_STOP_UNAVAILABLE');
@@ -490,10 +778,12 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     capsuleStates.set(surfaceId,reply.data.surface);
     openingRoles.delete(surfaceId);
     programProfiles.delete(surface.profile_id);
+    windowProfiles.delete(surface.profile_id);
     return {ok:true,profileId:surface.profile_id};
   }
   /** @param {string} surfaceId */
   async function switchMode(surfaceId) {
+    if ([...windowProfiles.values()].some(w => w.surfaceId === surfaceId)) throw refuse('CAPSULE_ROLE_INVALID');
     if (creating) throw refuse('SURFACE_CREATE_BUSY');
     const surface = authoritative(surfaceId), profileId = surface.profile_id;
     const role = roleFor(surface) === 'human' ? 'agent' : 'human';
@@ -513,7 +803,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (!exact(choice,'profileId,role') || !['human','agent'].includes(choice.role) || !id(choice.profileId)) throw refuse('CAPSULE_ROLE_INVALID');
     if (isForeignIdentity(choice.profileId)) throw refuse('IDENTITY_PROTECTED');
     if (creating) throw refuse('SURFACE_CREATE_BUSY');
-    if (programProfiles.has(choice.profileId)) throw refuse('NO_IDENTITY');
+    if (programProfiles.has(choice.profileId) || windowProfiles.has(choice.profileId)) throw refuse('NO_IDENTITY');
     const surface = [...capsuleStates.values()].find(s => s.profile_id === choice.profileId && s.state !== 'destroyed');
     if (surface) {
       if (!surface.surface_id || surface.state !== 'active') throw refuse('PROFILE_ALREADY_BOUND');
@@ -526,12 +816,13 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const handler = async (event, message) => {
     if (disposed || !admit(event) || !message || message.schema !== 'metaviewer.roles/v0.3') throw refuse('XPRA_SENDER_REFUSED');
     const {op} = message;
-    const keys = ['choices','surfaces'].includes(op) ? 'op,schema' : ['create','open','create-program'].includes(op) ? 'choice,op,schema'
+    const keys = ['choices','surfaces','list-windows'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window'].includes(op) ? 'choice,op,schema'
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
       : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
     try {
       if (op === 'choices') return await choices();
+      if (op === 'list-windows') return await listHostWindowChoices();
       if (op === 'surfaces') {
         pruneProgramProfiles();
         return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active' && roleFor(s) === 'human')
@@ -539,9 +830,14 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       }
       if (op === 'create') return await create(message.choice);
       if (op === 'create-program') return await createProgram(message.choice);
+      if (op === 'create-window') return await createWindow(message.choice);
+      if (op === 'detach-window') return await detachWindow(message.surfaceId);
       if (op === 'open') return await openIdentity(message.choice);
       if (op === 'switch') return await switchMode(message.surfaceId);
       if (op === 'stop') {
+        if ([...windowProfiles.values()].some(w => w.surfaceId === message.surfaceId)) {
+          return await detachWindow(message.surfaceId);
+        }
         if (creating) throw refuse('SURFACE_CREATE_BUSY');
         creating = true; try { return await stop(message.surfaceId); } finally { creating = false; }
       }
@@ -588,7 +884,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     ipcMain.removeHandler(CHANNEL);
     try { parentSession.unregisterPreloadScript(preloadId); } catch { /* closed window */ }
     await Promise.all([...new Set([...sessions.keys(),...failedSessions.keys()])].map(close));
-    epochs.clear(); openingRoles.clear(); programProfiles.clear();
+    epochs.clear(); openingRoles.clear(); programProfiles.clear(); windowProfiles.clear();
   }
   return Object.freeze({dispose});
 }

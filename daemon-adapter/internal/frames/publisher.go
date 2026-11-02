@@ -489,9 +489,20 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	if rawMode {
 		raw = supplied
 	} else if !sameEncoded {
-		raw, sha, stages.Decode, stages.Hash, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
-		if e != nil {
-			return Ref{}, false, stages, e
+		if strings.HasSuffix(f.Path, ".rgb24") {
+			tHash := time.Now()
+			sum := sha256.Sum256(encoded)
+			sha = hex.EncodeToString(sum[:])
+			stages.Hash = time.Since(tHash)
+			if len(encoded) != f.Width*f.Height*3 || sha != f.SHA256RGB24 {
+				return Ref{}, false, stages, frameError()
+			}
+			raw = encoded
+		} else {
+			raw, sha, stages.Decode, stages.Hash, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
+			if e != nil {
+				return Ref{}, false, stages, e
+			}
 		}
 	}
 
@@ -679,12 +690,23 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	}
 	if !linkedUnchanged {
 		if raw == nil {
-			var dDur, hDur time.Duration
-			raw, sha, dDur, hDur, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
-			stages.Decode += dDur
-			stages.Hash += hDur
-			if e != nil {
-				return Ref{}, false, stages, e
+			if strings.HasSuffix(f.Path, ".rgb24") {
+				tHash := time.Now()
+				sum := sha256.Sum256(encoded)
+				sha = hex.EncodeToString(sum[:])
+				stages.Hash += time.Since(tHash)
+				if len(encoded) != f.Width*f.Height*3 || sha != f.SHA256RGB24 {
+					return Ref{}, false, stages, frameError()
+				}
+				raw = encoded
+			} else {
+				var dDur, hDur time.Duration
+				raw, sha, dDur, hDur, e = decodeAndVerifyPNG(encoded, f.Width, f.Height, f.SHA256RGB24)
+				stages.Decode += dDur
+				stages.Hash += hDur
+				if e != nil {
+					return Ref{}, false, stages, e
+				}
 			}
 		}
 		tempName := name + ".tmp"

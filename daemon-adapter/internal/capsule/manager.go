@@ -108,6 +108,10 @@ type Binding struct {
 	Role                                                      string
 	Surface                                                   Surface
 	Container, RunID, Window, FramesRoot, NativeKind, Program string
+	HostXID                                                   uint32
+	HostWitness, HostTitle, HostProgram, HostLostReason       string
+	HostMinimized                                             bool
+	BinDir                                                    string
 	ConfirmedAbsent                                           bool
 	// [TARGET, unit decision] Delivery rollback requires a fresh positive probe.
 	// A distinct token prevents a probe started before rollback from reopening I/O.
@@ -222,6 +226,7 @@ type Manager struct {
 	identityTemplate *Profile
 	identityDisplays []string
 	dynamicProfiles  map[string]bool
+	hostSeq          map[string]uint64
 }
 
 var profileID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -271,6 +276,8 @@ func WireCode(err error) string {
 		return "IDENTITY_UNAVAILABLE"
 	case f.Code == "host_program_unavailable":
 		return "HOST_PROGRAM_UNAVAILABLE"
+	case f.Code == "host_window_unavailable":
+		return "HOST_WINDOW_UNAVAILABLE"
 	}
 	var b strings.Builder
 	b.WriteString("ADAPTER_")
@@ -389,7 +396,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 		copyProfiles[id] = p
 	}
 	cfg.Profiles = copyProfiles
-	m := &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool), lostDone: make(map[string]chan struct{}), dynamicProfiles: make(map[string]bool)}
+	m := &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool), lostDone: make(map[string]chan struct{}), dynamicProfiles: make(map[string]bool), hostSeq: make(map[string]uint64)}
 	m.configureIdentityTemplate()
 	return m, nil
 }
@@ -403,6 +410,8 @@ func (m *Manager) execute(ctx context.Context, p Profile, args []string, in []by
 	name := "srf-identity-surface"
 	if p.NativeKind == "holdings" {
 		name = "srf-holdings-capsule"
+	} else if p.NativeKind == "host-window" {
+		name = "srf-host-window"
 	}
 	ctx, cancel := context.WithTimeout(ctx, m.cfg.Timeout)
 	defer cancel()
@@ -528,7 +537,7 @@ func (m *Manager) view(ctx context.Context, r Request, version string) ([]json.R
 		}
 		return nil, fault("surface", "active surface required")
 	}
-	if b.NativeKind == "holdings" {
+	if b.NativeKind == "holdings" || b.NativeKind == "host-window" {
 		return nil, fault("usage", "invalid identity capsule")
 	}
 	if r.Op != "view-stop" && m.views[b.Container] {
@@ -631,10 +640,30 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 			}
 		}
 	}
+	var hostWin *HostWindowSpec
+	if winSelector, ok := m.runner.(interface {
+		ConsumeOpeningWindow(string) (*HostWindowSpec, error)
+	}); ok && hostBinary == "" {
+		if !static && q.Kind == "desktop_capsule" {
+			spec, winErr := winSelector.ConsumeOpeningWindow(q.ProfileID)
+			if winErr != nil {
+				return nil, winErr
+			}
+			hostWin = spec
+		} else if _, isProc := m.runner.(*ProcessRunner); !isProc {
+			if spec, winErr := winSelector.ConsumeOpeningWindow(q.ProfileID); winErr != nil {
+				return nil, winErr
+			} else if spec != nil {
+				return nil, fault("profile", "host-window requires dynamic window profile")
+			}
+		}
+	}
 	var p Profile
 	var ok bool
 	if !static && q.Kind == "desktop_capsule" && hostBinary != "" {
 		p, ok = m.programProfileFor(q.ProfileID)
+	} else if !static && q.Kind == "desktop_capsule" && hostWin != nil {
+		p, ok = m.hostWindowProfileFor(q.ProfileID, hostWin, q.Geometry.W, q.Geometry.H)
 	} else {
 		p, ok = m.profileFor(q.ProfileID)
 	}
@@ -648,8 +677,14 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if p.NestedDepth < 0 || p.NestedDepth > 1 || effectiveDepth != p.NestedDepth || (p.Kind != "desktop_capsule" && p.NestedDepth != 0) {
 		return nil, fault("nested_depth", "profile nested_depth mismatch")
 	}
-	if p.Kind == "desktop_capsule" && (p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.Program == "host-exec" && (static || hostBinary == "")) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720))) {
-		return nil, fault("profile", "unadmitted profile, kind or geometry")
+	if p.Kind == "desktop_capsule" {
+		if p.NativeKind == "host-window" {
+			if static || hostWin == nil || p.NestedDepth != 0 || q.Geometry.W < 1 || q.Geometry.H < 1 || q.Geometry.W > 4096 || q.Geometry.H > 4096 {
+				return nil, fault("profile", "unadmitted profile, kind or geometry")
+			}
+		} else if p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.Program == "host-exec" && (static || hostBinary == "")) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720)) {
+			return nil, fault("profile", "unadmitted profile, kind or geometry")
+		}
 	}
 	// Refuse protected profile collisions before any create state or native call.
 	var profileContainer string
@@ -658,6 +693,8 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		profileContainer = "srf-id-" + q.ProfileID
 	case "program":
 		profileContainer = "srf-pg-" + q.ProfileID
+	case "host-window":
+		profileContainer = "srf-hw-" + q.ProfileID
 	case "vm":
 		profileContainer = "srf-vm-" + q.ProfileID
 	}
@@ -679,7 +716,11 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if active >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
 		return nil, fault("uncertain", detailCapacityOrQuarantine)
 	}
-	if p.Program == "host-exec" {
+	if p.NativeKind == "host-window" {
+		if err := m.admitHostWindowProfile(q.ProfileID, hostWin, &p); err != nil {
+			return nil, err
+		}
+	} else if p.Program == "host-exec" {
 		if err := m.admitProgramProfile(q.ProfileID, &p); err != nil {
 			return nil, err
 		}
@@ -688,7 +729,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	}
 	defer func() { m.releaseIdleIdentityProfile(q.ProfileID) }()
 	// Mode belongs to this opening. Legacy profile Role is only a default.
-	if p.Program != "host-exec" {
+	if p.Program != "host-exec" && p.NativeKind != "host-window" {
 		if selector, ok := m.runner.(interface {
 			ConsumeOpeningMode(string, string) (string, error)
 		}); ok {
@@ -706,6 +747,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		return nil, e
 	}
 	id := "surface-" + hex.EncodeToString(idBytes)
+	if p.NativeKind == "host-window" {
+		return m.attachHostWindow(q.ProfileID, id, version, p, hostWin, q.Geometry)
+	}
 	args := []string{"start", "--kind", p.NativeKind, "--identity", q.ProfileID, "--windows", "1"}
 	if p.NativeKind == "program" || p.NativeKind == "vm" {
 		args = append(args, "--program", p.Program)
@@ -995,6 +1039,9 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 // An unavailable stop settles only previously proven absence; Holdings also
 // requires its independent ownership/removal verifier. Unknown outcomes retain the slot.
 func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
+	if b.NativeKind == "host-window" {
+		return m.detachHostWindowLocked(b)
+	}
 	defer func() {
 		if err == nil && b.NativeKind == "browser" && m.egressState() != "" {
 			err = removeEgressStarted(m.egressState(), b.Surface.ProfileID)
@@ -1046,6 +1093,10 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[id] {
 		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
+	}
+	if b.NativeKind == "host-window" {
+		m.mu.Unlock()
+		return m.captureHostWindow(ctx, id)
 	}
 	if m.hasPending(id) {
 		m.mu.Unlock()
@@ -1219,6 +1270,9 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	}
 	if (origin == "agent" && m.refresh[q.SurfaceID]) || m.hasPending(q.SurfaceID) || m.used[q.ProposalID] || len(m.used) >= 100000 {
 		return nil, fault("POLICY", "fresh frame and unused input permit required")
+	}
+	if b.NativeKind == "host-window" {
+		return m.inputHostWindow(ctx, q.SurfaceID, q.ProposalID, origin, q.Action.Type, q.Action.X, q.Action.Y, q.Action.Button, q.Action.Keys, q.Action.Text, version, evidence)
 	}
 	args := []string{"input", "--container", b.Container}
 	if b.Window != "" {

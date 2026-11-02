@@ -3,6 +3,7 @@ package capsule
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -59,7 +60,15 @@ func (m *Manager) profileFor(id string) (Profile, bool) {
 	if p, ok := m.cfg.Profiles[id]; ok {
 		return p, true
 	}
-	if m.identityTemplate == nil || !storedIdentityID.MatchString(id) || protectedIdentity(id) {
+	if !storedIdentityID.MatchString(id) || protectedIdentity(id) {
+		return Profile{}, false
+	}
+	if m.identityTemplate == nil {
+		if strings.HasPrefix(id, "hw-") {
+			if ramRoot := m.defaultRAMRoot(); ramRoot != "" {
+				return Profile{Kind: "desktop_capsule", NativeKind: "host-window", Program: "host-window", Role: "agent", RAMRoot: ramRoot, Width: 1280, Height: 900}, true
+			}
+		}
 		return Profile{}, false
 	}
 	return *m.identityTemplate, true
@@ -101,6 +110,76 @@ func (m *Manager) admitProgramProfile(id string, p *Profile) error {
 		}
 	}
 	return fault("profile", "identity display pool exhausted; stop a capsule first")
+}
+
+func (m *Manager) defaultRAMRoot() string {
+	if m.identityTemplate != nil && m.identityTemplate.RAMRoot != "" {
+		return m.identityTemplate.RAMRoot
+	}
+	ids := make([]string, 0, len(m.cfg.Profiles))
+	for id := range m.cfg.Profiles {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if len(ids) > 0 {
+		return m.cfg.Profiles[ids[0]].RAMRoot
+	}
+	return ""
+}
+
+func (m *Manager) hostWindowProfileFor(id string, spec *HostWindowSpec, reqW, reqH int) (Profile, bool) {
+	if existing, ok := m.cfg.Profiles[id]; ok {
+		if !m.dynamicProfiles[id] || existing.Kind != "desktop_capsule" || existing.NativeKind != "host-window" {
+			return Profile{}, false
+		}
+		return existing, true
+	}
+	if !storedIdentityID.MatchString(id) || protectedIdentity(id) || spec == nil {
+		return Profile{}, false
+	}
+	ramRoot := m.defaultRAMRoot()
+	if ramRoot == "" {
+		return Profile{}, false
+	}
+	w, h := spec.Width, spec.Height
+	if w < 1 || h < 1 {
+		w, h = reqW, reqH
+	}
+	if w < 1 || h < 1 {
+		w, h = 1280, 900
+	}
+	return Profile{
+		Kind:        "desktop_capsule",
+		NativeKind:  "host-window",
+		Program:     "host-window",
+		Role:        "agent",
+		RAMRoot:     ramRoot,
+		Display:     fmt.Sprintf(":0.%d", spec.XID),
+		Width:       w,
+		Height:      h,
+		NestedDepth: 0,
+	}, true
+}
+
+func (m *Manager) admitHostWindowProfile(id string, spec *HostWindowSpec, p *Profile) error {
+	if _, static := m.cfg.Profiles[id]; static && !m.dynamicProfiles[id] {
+		return fault("profile", "host-window requires dynamic window profile")
+	}
+	if !storedIdentityID.MatchString(id) || protectedIdentity(id) {
+		return fault("profile", "host-window profile refused")
+	}
+	if err := ValidateHostWindowSpec(spec); err != nil {
+		return err
+	}
+	for _, b := range m.bindings {
+		if b.Surface.State != "destroyed" && b.NativeKind == "host-window" && b.HostXID == spec.XID {
+			return fault("host_window_unavailable", "host_window_unavailable: window already attached")
+		}
+	}
+	p.Display = fmt.Sprintf(":0.%d", spec.XID)
+	m.cfg.Profiles[id] = *p
+	m.dynamicProfiles[id] = true
+	return nil
 }
 
 func (m *Manager) runnerSearchPath() string {

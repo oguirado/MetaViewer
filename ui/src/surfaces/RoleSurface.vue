@@ -179,6 +179,7 @@ function reconnectReleased() { resourceReleased.value = false; void sync(); }
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const root = ref(/** @type {HTMLElement|null} */ (null));
 const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
+const hostWindow = ref(/** @type {any} */ (null));
 let ended = false, notifiedEnd = false, resync = false;
 let transferring = false;
 let alive = true, mounted = false, busy = false, signature = '', shown = true;
@@ -198,13 +199,22 @@ async function sync() {
   if (busy) { resync = true; return; }
   busy = true;
   try {
-    if (mounted) {
+    if (mounted || hostWindow.value) {
       const status = await api.status(props.surfaceId);
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
-      viewState.value = status.view?.state || 'ready';
-      recordingPaused.value = status.view?.recording === 'paused_size_limit';
-      if (viewState.value === 'ready') hasConnected.value = true;
-      if (status.view?.state === 'error') throw Error(status.view.code);
+      if (status.hostWindow !== undefined) {
+        hostWindow.value = status.hostWindow || null;
+        if (status.hostWindow?.state === 'lost') {
+          error.value = status.hostWindow.lostReason || 'Window closed — capsule tile ended.';
+          return;
+        }
+      }
+      if (mounted) {
+        viewState.value = status.view?.state || 'ready';
+        recordingPaused.value = status.view?.recording === 'paused_size_limit';
+        if (viewState.value === 'ready') hasConnected.value = true;
+        if (status.view?.state === 'error') throw Error(status.view.code);
+      }
     }
     const box = root.value?.getBoundingClientRect();
     const {scrollAncestors, wallViewport} = collectClipRects(root.value);
@@ -280,8 +290,32 @@ function bindScrollListeners() {
     } catch { /* non-DOM test body */ }
   }
 }
+async function detachHostWindow() {
+  if (ended) return;
+  menuOpen.value = false;
+  progress.value = 'Detaching window…';
+  error.value = '';
+  try {
+    await revoke();
+    const detachFn = typeof api?.detachWindow === 'function' ? api.detachWindow.bind(api) : api?.stop?.bind(api);
+    const completion = detachFn ? detachFn(props.surfaceId) : Promise.resolve({ok:true});
+    emit('lifecycle', {surfaceId:props.surfaceId,completion});
+    const result = await completion;
+    if (!result?.ok) throw Error(result?.reason || result?.code || 'HOST_WINDOW_DETACH_FAILED');
+    ended = true;
+    emit('stopped', props.surfaceId);
+  } catch (reason) {
+    error.value = /** @type {Error} */(reason).message;
+  } finally {
+    progress.value = '';
+  }
+}
 /** @param {string} operation */
 async function lifecycle(operation) {
+  if (operation === 'stop' && hostWindow.value) {
+    await detachHostWindow();
+    return;
+  }
   if (progress.value) return;
   progress.value = operation === 'switchMode' ? `Switching to ${role.value === 'human' ? 'agent' : 'human'}…` : 'Stopping capsule…';
   error.value = '';
@@ -317,6 +351,12 @@ onMounted(async () => {
     const status = await api.status(props.surfaceId);
     if (!alive) return;
     if (!['human','agent'].includes(status.role)) throw Error(status.code || 'CAPSULE_ROLE_UNPROVEN');
+    if (status.hostWindow) {
+      hostWindow.value = status.hostWindow;
+      if (status.hostWindow.state === 'lost') {
+        error.value = status.hostWindow.lostReason || 'Window closed — capsule tile ended.';
+      }
+    }
     const transfer = tileLayout?.transfers.get(props.surfaceId);
     tileLayout?.transfers.delete(props.surfaceId);
     if (transfer?.watching) watching.value = true;
@@ -343,6 +383,8 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
           <button v-for="control in sizeControls" :key="control.action" type="button" :id="`tile-size-${control.action}-${surfaceId}`" :title="control.title" :aria-label="control.title" @pointerdown.stop @click.stop="resizeTile(control.action)">{{ control.label }}</button>
         </div>
         <span class="mv-role-mode-badge">{{ role }}</span>
+        <span v-if="hostWindow" :id="`tile-host-indicator-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-indicator`" class="mv-host-window-badge" title="This tile is attached to a real window on your desktop, not an isolated container.">Real desktop — not isolated</span>
+        <button v-if="hostWindow" type="button" :id="`tile-host-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-stop`" class="mv-host-window-stop" @click.stop="detachHostWindow">Stop</button>
         <span v-if="recordingPaused" role="status">Recording paused (size limit)</span>
         <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
         <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
@@ -366,11 +408,12 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
     </Teleport>
     <span v-if="progress" role="status">{{ progress }}</span>
     <div ref="root" class="mv-role-viewport">
-      <div v-if="role === 'agent'" :style="{visibility: watching ? 'hidden' : undefined}" :inert="watching" class="mv-role-agent-canvas"><slot /></div>
+      <div v-if="role === 'agent'" :style="{visibility: (watching || hostWindow?.minimized || hostWindow?.state === 'lost') ? 'hidden' : undefined}" :inert="watching || Boolean(hostWindow?.minimized) || hostWindow?.state === 'lost'" class="mv-role-agent-canvas"><slot /></div>
       <button v-if="resourceReleased" :id="`tile-reconnect-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/reconnect`" type="button" @click="reconnectReleased">Disconnected to save resources, click to reconnect</button>
-      <button v-if="error" type="button" @click="error = ''; sync()">Reopen</button>
-      <p v-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' && hasConnected ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
-      <p v-else-if="error" role="alert">{{ error }}</p>
+      <button v-if="error && !hostWindow" type="button" @click="error = ''; sync()">Reopen</button>
+      <p v-if="hostWindow?.minimized && !error && hostWindow?.state !== 'lost'" :id="`tile-host-minimized-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-minimized`" class="mv-role-status" role="status">Window minimized — waiting for window to be restored</p>
+      <p v-else-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' && hasConnected ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
+      <p v-else-if="error" :id="hostWindow ? `tile-host-lost-${surfaceId}` : undefined" role="alert">{{ error }}</p>
     </div>
   </div>
 </template>

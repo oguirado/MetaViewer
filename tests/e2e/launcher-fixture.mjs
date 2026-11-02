@@ -6,7 +6,15 @@ import { installKitTheme } from 'capsule-ui-kit/theme';
 import 'capsule-ui-kit/theme.css';
 import CatalogLauncher from '../../ui/src/catalog/CatalogLauncher.vue';
 
-const kinds = ['identity-browser', 'program'];
+const kinds = ['identity-browser', 'program', 'desktop-window'];
+const fixtureWindow = {
+  xid: 77594627,
+  witness: '0x04a00003:1730541000',
+  title: 'Chromium — Logged In',
+  program: 'chromium',
+  width: 1280,
+  height: 900,
+};
 const visible = ref(false), choices = ref(kinds), intents = [];
 const app = createApp({ setup: () => () => h('main', [
   h('button', { id: 'open-launcher', onClick: () => { visible.value = true; } }, 'New Capsule'),
@@ -18,6 +26,9 @@ installKitTheme(app);
 app.mount('#metaviewer-app');
 
 window.runLauncherJourney = async () => {
+  globalThis.metaviewerRoles = {
+    listWindows: async () => [fixtureWindow],
+  };
   const flush = async () => { await nextTick(); await new Promise(resolve => setTimeout(resolve, 50)); };
   const requireNode = id => {
     const node = document.getElementById(id);
@@ -40,6 +51,14 @@ window.runLauncherJourney = async () => {
         field.dispatchEvent(new Event('input', { bubbles: true }));
         await flush();
         requireNode('shell/new-capsule/program-start').click();
+        await flush();
+      } else if (kind === 'desktop-window') {
+        // Desktop window requires explicit row selection and Add click.
+        if (!requireNode('shell/new-capsule/window-add').disabled) throw Error('E2E_LAUNCHER: Add enabled without a selected window');
+        requireNode(`shell/new-capsule/window-row-${fixtureWindow.xid}`).click();
+        await flush();
+        if (requireNode('shell/new-capsule/window-add').disabled) throw Error('E2E_LAUNCHER: Add disabled after selecting a window');
+        requireNode('shell/new-capsule/window-add').click();
         await flush();
       }
       if (visible.value) throw Error('E2E_LAUNCHER: create did not close dialog');

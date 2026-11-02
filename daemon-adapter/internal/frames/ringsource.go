@@ -299,6 +299,9 @@ func (s *RingSource) Capture(ctx context.Context, id string) (capsule.Binding, c
 	if err := ctx.Err(); err != nil {
 		return capsule.Binding{}, capsule.NativeFrame{}, err
 	}
+	if b, err := s.Manager.SubscriptionBinding(id); err == nil && b.NativeKind == "host-window" {
+		return s.Manager.Capture(ctx, id)
+	}
 	var raw []byte
 	b, f, err := s.Manager.CaptureResident(ctx, id, func(b capsule.Binding) (capsule.NativeFrame, error) { f, p, e := s.read(b); raw = p; return f, e })
 	if err != nil {

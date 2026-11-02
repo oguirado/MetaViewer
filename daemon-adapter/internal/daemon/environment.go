@@ -1322,6 +1322,23 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 			}
 			return frames.ResolveDisplayTarget(b, os.Getenv("MV_SRF_STATE_DIR"))
 		},
+		OnResize: func(id string, w, h int) {
+			fresh.UpdateHostWindowGeometry(id, w, h)
+		},
+		OnMinimized: func(id string, minimized bool) {
+			fresh.SetHostWindowMinimized(id, minimized)
+		},
+		OnTerminal: func(id string, reason string) {
+			ev, err := fresh.MarkHostWindowLost(id, reason)
+			if err == nil && len(ev) > 0 && session.emit != nil {
+				lock := session.surfaceLock(id)
+				if lock != nil {
+					lock.Lock()
+					defer lock.Unlock()
+				}
+				_ = session.emit(session.ctx, ev)
+			}
+		},
 		Admit: func() error {
 			// DISPLAY never waits behind a native create's admission lock.
 			path := os.Getenv("MV_RAM_ADMISSION_DIR")
