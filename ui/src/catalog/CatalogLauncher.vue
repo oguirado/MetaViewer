@@ -109,7 +109,8 @@ watch(() => props.visible, (open, previous) => {
 
 /** @param {boolean} value */
 function forwardVisible(value) {
-  if (!value && typeof choosingProgram !== 'undefined' && choosingProgram.value) return;
+  // The kit dialog closes itself right after `create`: that close must not end the role or program step.
+  if (!value && (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value))) return;
   if(!value){choiceGeneration++;choosingRole.value=false;if(typeof choosingProgram!=='undefined')choosingProgram.value=false;}
   emit('update:visible', value);
 }
@@ -130,6 +131,8 @@ async function onCreate(payload) {
   if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create', result.intent); return; }
   const generation = ++choiceGeneration;
   pendingIntent.value = result.intent; roleChoice.value = 'agent'; roleError.value = '';
+  profileChoices.value = []; profileChoice.value = '';
+  choosingRole.value = true;
   try {
     const choices = await api.choices();
     if (!props.visible || generation !== choiceGeneration) return;
@@ -138,12 +141,11 @@ async function onCreate(payload) {
     profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';
     roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';
   } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
-  choosingRole.value = true;
 }
 
 function onClose() {
-  if (typeof choosingProgram !== 'undefined' && choosingProgram.value) return;
-  choiceGeneration++;choosingRole.value=false;
+  if (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value)) return;
+  choiceGeneration++;
   emit('close');
 }
 </script>
