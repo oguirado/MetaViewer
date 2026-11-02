@@ -14,7 +14,9 @@ configured through `MV_MW_WENDER_ROOT`, run:
 node tests/e2e/packs/builtin-fixtures/META/hosted.mjs
 ```
 
-This command needs no account, browser, display, downloads or network. It runs
+With those prerequisites already installed, this command needs no account,
+browser, display, downloads or network. The locked Wender checkout is an external
+prerequisite, not supplied by a fresh MetaViewer clone. It runs
 the real MemoryWeb runner through the existing hosted RPC path against the
 hosted capsule and core fakes. The reviewed neutral page is
 `tests/e2e/packs/builtin-fixtures/META/pages/meta-chat.html`; its digest is
