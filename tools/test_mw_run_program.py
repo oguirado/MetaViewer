@@ -1660,6 +1660,86 @@ finally:s.close()
                     dict(x=10, y=20, w=25, h=20, ocr_text=observed)]),
                     dict(box=[10, 20, 30, 20]), 'hello', caret=True), 'mismatch')
 
+    def test_pixel_readback_overrides_missing_or_misleading_marks(self):
+        for observed, expected in (('hello', 'exact'), ('wrong', 'mismatch'), ('', 'not_readable')):
+            with self.subTest(observed=observed):
+                self.b.pending = {}
+                planner, submit, settle, _, _ = self.text_fixture('hello')
+                pixels = dict(marks=[dict(x=0, y=0, w=100, h=80, ocr_text=observed)])
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(host.tools, 'propose', side_effect=submit), \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle), \
+                     patch.object(program, 'read_text_pixels', return_value=pixels) as reader:
+                    if expected == 'mismatch':
+                        with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_TEXT_MISMATCH'):
+                            program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+                    else:
+                        program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+                    self.assertEqual(self.b.text_readback, expected)
+                    self.assertEqual(self.b.program_attempts[-1]['readback_source'], 'pixels_tsv')
+                    reader.assert_called_once()
+
+    @unittest.skipUnless(os.environ.get('VQA_VE_ROOT'), 'vision checkout not configured')
+    def test_rendered_text_pixels_without_marks_and_wrong_text_control(self):
+        from PIL import Image, ImageDraw, ImageFont
+        from metaviewer_agents.perception.vcore import _scrubbed_env
+        root = Path(os.environ['VQA_VE_ROOT']).resolve()
+        self.b.vision = SimpleNamespace(ve_root=root, python=sys.executable, timeout=5,
+                                       _child_env=lambda: _scrubbed_env(root))
+        self.b.retain = Mock(side_effect=self.retained_rgb)
+        for text in ('HOLA DESDE METAVIEWER',
+                     'hello world this is a rendered text fixture with more than sixty four bytes of text'):
+            with self.subTest(text=text):
+                image = Image.new('RGB', (1600, 160), 'white')
+                draw = ImageDraw.Draw(image)
+                font = ImageFont.load_default(size=26)
+                draw.text((50, 55), text, font=font, fill='black')
+                draw.text((50, 5), 'File unrelated label', font=font, fill='black')
+                left, top, right, bottom = draw.textbbox((50, 55), text, font=font)
+                target = dict(box=[left, top, right-left, bottom-top])
+                raw = image.tobytes()
+                path = self.root / 'rendered.rgb'
+                path.write_bytes(raw)
+                f = dict(frame(), width=image.width, height=image.height,
+                         ramws_path=str(path), sha256=host.hashlib.sha256(raw).hexdigest())
+                pixels = program.read_text_pixels(self.b, f, target, 5000)
+                self.assertIsNotNone(pixels, 'configured vision OCR must be available')
+                self.assertEqual(program.classify_text_readback(pixels, target, text), 'exact')
+                self.assertEqual(program.classify_text_readback(pixels, target, 'wrong'), 'mismatch')
+                self.assertEqual(program.classify_text_readback(pixels, target, text.upper() + '!'), 'mismatch')
+        blank = Image.new('RGB', image.size, 'white').tobytes()
+        path.write_bytes(blank)
+        f['sha256'] = host.hashlib.sha256(blank).hexdigest()
+        pixels = program.read_text_pixels(self.b, f, target, 5000)
+        self.assertIsNotNone(pixels)
+        self.assertEqual(program.classify_text_readback(pixels, target, text), 'not_readable')
+
+    def test_pixel_reader_bounds_and_unavailable_diagnostics(self):
+        self.b.vision = SimpleNamespace(ve_root=self.root, python=sys.executable,
+                                       timeout=5, _child_env=lambda: {})
+        self.b.retain = Mock(side_effect=self.retained_rgb)
+        self.b.active_attempt = {}
+        f = self.rgb_frame(1)
+        target = dict(box=[10, 20, 30, 20])
+        long_text = 'x' * 80
+        for payload in (dict(ok=True, reason=None, text=long_text),
+                        dict(ok=True, reason=None, text=''),
+                        dict(ok=False, reason='tessdata_absent', text='')):
+            with self.subTest(payload=payload), patch(
+                    'metaviewer_agents.perception.vcore._run_bounded',
+                    return_value=SimpleNamespace(returncode=0, stdout=json.dumps(payload).encode())) as run:
+                pixels = program.read_text_pixels(self.b, f, target, 1000)
+                self.assertEqual(run.call_args.kwargs['timeout'], 1)
+                self.assertEqual(json.loads(run.call_args.args[0][-1])[4], target['box'])
+                if payload['ok']:
+                    self.assertEqual(pixels['marks'][0]['ocr_text'], payload['text'])
+                else:
+                    self.assertIsNone(pixels)
+                    self.assertEqual(self.b.active_attempt['readback_ocr_reason'], 'tessdata_absent')
+        corrupted = dict(f, sha256='0' * 64)
+        with self.assertRaisesRegex(host.OwnerRefused, 'MW_FRAME_BINDING'):
+            program.read_text_pixels(self.b, corrupted, target, 1000)
+
     def test_focused_stale_exhaustion_entry_is_clean_refusal(self):
         self.text_fixture()
         args = SimpleNamespace(identity='alice', goal='focused', text='hello', steps=1,
@@ -1786,6 +1866,11 @@ finally:s.close()
         self.assertEqual(program.classify_text_readback(dict(marks=[outside]),target,'hello'),'not_readable')
         inside=dict(x=10,y=20,w=20,h=20,ocr_text='Hello')
         self.assertEqual(program.classify_text_readback(dict(marks=[inside]),target,'hello'),'mismatch')
+        status_bar=dict(x=0,y=0,w=10,h=10,ocr_text='hello| Ln 1, Col 6')
+        wide=dict(target,box=[0,0,100,100])
+        self.assertEqual(program.classify_text_readback(dict(marks=[status_bar]),wide,'hello',caret=True,focused_area=True),'exact')
+        self.assertEqual(program.classify_text_readback(dict(marks=[status_bar]),wide,'hello',caret=True),'mismatch')
+        self.assertEqual(program.classify_text_readback(dict(marks=[status_bar]),wide,'hell',caret=True,focused_area=True),'mismatch')
 
     def test_focused_entry_constructs_no_planner_even_when_muse_selected(self):
         self.text_fixture()

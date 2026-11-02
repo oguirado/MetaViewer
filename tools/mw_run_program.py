@@ -17,6 +17,7 @@ import re
 import stat
 import selectors
 import signal
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -453,7 +454,7 @@ def require_text_field(target):
     host.need(target.get('role') in ('field', 'textbox', 'entry', 'text_field'), 'MW_PROGRAM_TEXT_FIELD')
 
 
-def classify_text_readback(c2, target, text, *, caret=False):
+def classify_text_readback(c2, target, text, *, caret=False, focused_area=False):
     """Use actual OCR only, never mark-N, model prose or the requested text."""
     x, y, w, h = target['box']
     marks = [m for m in (c2 or {}).get('marks', []) if
@@ -465,11 +466,84 @@ def classify_text_readback(c2, target, text, *, caret=False):
     observed = ' '.join(m['ocr_text'] for m in marks)
     if observed == text:
         return 'exact'
+    if focused_area:
+        # The changed area also holds unrelated updates, such as a status bar. Evidence
+        # is the requested words, contiguous and literal, in what OCR read inside it.
+        words = [w[:-1] if caret and w.endswith('|') and len(w) > 1 else w for w in observed.split()]
+        wanted = text.split()
+        if wanted and any(words[i:i + len(wanted)] == wanted for i in range(len(words))):
+            return 'exact'
     # A terminal vertical caret may be merged with the last word or emitted
     # as its own OCR mark. Never normalize case, words or requested pipes.
     if caret and not text.endswith('|') and observed in (text + '|', text + ' |'):
         return 'exact'
     return 'mismatch'
+
+
+def ocr_env(vision):
+    # The perception child environment is scrubbed; OCR data location is not a secret.
+    env = dict(vision._child_env())
+    if os.environ.get('TESSDATA_PREFIX'):
+        env['TESSDATA_PREFIX'] = os.environ['TESSDATA_PREFIX']
+    return env
+
+
+def read_text_pixels(backend, frame, target, timeout_ms):
+    """[TARGET, unit decision] Read clean pixels independently of C2 mark caps.
+
+    Use the existing engine TSV reader, retaining its process/row bounds. Margin
+    supplies OCR context; only words intersecting the original area are evidence.
+    No expected text is sent to OCR. Unavailable OCR preserves the C2 fallback.
+    """
+    from metaviewer_agents.perception.vcore import _run_bounded
+    vision = backend.vision
+    if not isinstance(getattr(vision, 've_root', None), Path):
+        return None
+    witness = backend.retain(frame)
+    raw = Path(witness['artifact']).read_bytes()
+    host.need(len(raw) == frame['width'] * frame['height'] * 3 and
+              host.hashlib.sha256(raw).hexdigest() == frame['sha256'], 'MW_FRAME_BINDING')
+    script = '''
+import hashlib, json, sys
+import numpy as np
+from vadapt.cu_ocr import run_full_frame_tsv
+path, digest, width, height, box, timeout = json.loads(sys.argv[1])
+raw = open(path, 'rb').read()
+assert hashlib.sha256(raw).hexdigest() == digest
+rgb = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, 3)
+x, y, w, h = box
+margin = 12
+left, top = max(0, x-margin), max(0, y-margin)
+right, bottom = min(width, x+w+margin), min(height, y+h+margin)
+result = run_full_frame_tsv(rgb[top:bottom, left:right].copy(), timeout_s=timeout)
+words = []
+for word in result['words']:
+    wx, wy, ww, wh = word['bbox_px']
+    wx, wy = wx+left, wy+top
+    if wx < x+w and wx+ww > x and wy < y+h and wy+wh > y:
+        words.append(word['raw_text'])
+print(json.dumps(dict(ok=result['ocr_ok'], reason=result['missing_reason'], text=' '.join(words))))
+'''
+    timeout = min(vision.timeout, timeout_ms / 1000)
+    if timeout <= 0:
+        return None
+    try:
+        result = _run_bounded([vision.python, '-c', script, json.dumps([
+            witness['artifact'], frame['sha256'], frame['width'], frame['height'],
+            target['box'], timeout])], cwd=str(vision.ve_root), env=ocr_env(vision),
+            stdin=subprocess.DEVNULL, timeout=timeout)
+        if result.returncode != 0:
+            return None
+        payload = json.loads(result.stdout)
+        attempt = getattr(backend, 'active_attempt', None)
+        if isinstance(attempt, dict):
+            attempt['readback_ocr_reason'] = payload.get('reason')
+        if payload.get('ok') is not True or not isinstance(payload.get('text'), str):
+            return None
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+        return None
+    x, y, w, h = target['box']
+    return dict(marks=[dict(x=x, y=y, w=w, h=h, ocr_text=payload['text'])])
 
 
 def type_after_focus(backend, move, text, timeout_ms):
@@ -533,7 +607,10 @@ def dispatch_text(backend, sensed, target, text, timeout_ms, *, focused=False):
             right, bottom = min(x + w, cx + cw), min(y + h, cy + ch)
             readback_target = dict(target, box=[left, top, max(0, right-left), max(0, bottom-top)])
             attempt['readback_box'] = readback_target['box']
-        readback = classify_text_readback(backend.vision.last_c2_payload, readback_target, text, caret=focused)
+        pixels = read_text_pixels(backend, frame, readback_target, remaining_budget(backend, timeout_ms))
+        attempt['readback_source'] = 'pixels_tsv' if pixels is not None else 'c2_marks'
+        readback = classify_text_readback(pixels if pixels is not None else backend.vision.last_c2_payload,
+                                         readback_target, text, caret=focused, focused_area=focused)
         attempt['text_readback'] = backend.text_readback = readback
         host.need(readback != 'mismatch', 'MW_PROGRAM_TEXT_MISMATCH')
         status = 'verified_text' if readback == 'exact' else 'uncertified_text'
