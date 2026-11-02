@@ -1,0 +1,1 @@
+- Stop listing identities owned by other projects in the Identities dialog; they stay untouched in the store and refused by the host.

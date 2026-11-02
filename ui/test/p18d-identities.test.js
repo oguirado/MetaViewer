@@ -247,3 +247,13 @@ test('H10 invalid auto-filled display names have a visible field error',async t=
  const view=mount(await dialog(),{open:true,host:{identity:{list:async()=>({ok:true,rows:[]})}}});t.after(view.close);await tick();
  field(view.root,'Name').props.onInput({target:{value:'Work$'}});await tick();assert.equal(field(view.root,'Name').props.value,'work');assert.equal(button(view.root,'Add identity').props.disabled,true);assert.match(text(view.root),/Display name contains unsupported characters/);
 });
+
+test('V024 foreign identities are not listed when hidden, and stay refused by the host',async t=>{
+ const rows=[{id:'cuentas-1',label:'Google + ChatGPT'},{id:'perplexity-1',label:'Perplexity'},{id:'prueba1',label:'Prueba1'}];
+ const view=mount(await dialog(),{open:true,hideForeign:true,host:{identity:{list:async()=>({ok:true,rows})}}});
+ t.after(view.close);await tick();
+ const shown=text(view.root);
+ assert(shown.includes('prueba1'));assert(!shown.includes('cuentas-1'));assert(!shown.includes('perplexity-1'));
+ const app=readFileSync(new URL('../src/App.vue',import.meta.url),'utf8');
+ assert.match(app,/<IdentitiesDialog hide-foreign /);
+});
