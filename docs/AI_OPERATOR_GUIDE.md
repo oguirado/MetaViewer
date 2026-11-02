@@ -15,7 +15,7 @@ verified against the repository source code (`scripts/judge/`, `ui/`,
 MetaViewer is a Linux desktop wall of live, isolated capsules. Instead of letting an
 automation script take over your personal browser or desktop session, MetaViewer runs
 each browser session or Linux program inside its own container (`OpenSuperficies`)
-with its own virtual X11 display (`:100`..`:103`) and streams the live surface into
+with its own virtual X11 display and streams the live surface into
 an interactive tiled canvas.
 
 A person and an AI work side by side on the same wall:
@@ -124,11 +124,11 @@ bash scripts/judge/metaviewer-judge.sh stop
 
 ### Default Multi-Capsule Pool Launched by `run`
 
-`metaviewer-judge.sh run` configures four browser profile slots (`judge` on `:100`,
-`mv-live-2` on `:101`, `mv-live-3` on `:102`, and `mv-live-4` on `:103`) sharing
-`$MV_JUDGE_SHM_DIR/vqa-ramws/opensuperficies/os-cu-0` in `MV_SRF_PROFILES`. That
-pool lets you run up to **4 concurrent browser or program capsules** out of the box
-(subject to available RAM).
+`metaviewer-judge.sh run` configures browser profile slots `judge`, `mv-live-2`,
+`mv-live-3` and `mv-live-4` in `MV_SRF_PROFILES`, sharing
+`$MV_JUDGE_SHM_DIR/vqa-ramws/opensuperficies/os-cu-0`. Up to **16 capsules** can run at
+once. Before each container capsule, MetaViewer checks that the host has 6 GiB of free
+memory (4 GiB RAM plus 2 GiB shm) and refuses with a reason naming what to close.
 
 ---
 
@@ -170,7 +170,7 @@ arrangement:
 
 - **Fullscreen a tile**: Click **`⛶`** in the tile header (or press **`Escape`** /
   click **`⊡`** to exit fullscreen).
-- **Move a capsule to another desktop**: Click **`Move to ▾`** in the tile header
+- **Move a capsule to another desktop**: Open the tile's **`⋮`** menu and use **`Move to desktop`**
   and pick the target desktop (`1..N`).
 
 ---
@@ -194,53 +194,61 @@ desktop). The dialog offers three tabs:
    URL input + **`Go`**, and **`Paste`** to send host clipboard text into the
    capsule).
 
-### B. `Program` (`kind: "desktop_capsule"`, `program: "host-exec"`)
+### B. `Program` (`kind: "desktop_capsule"`, program `host-exec`)
 
-Runs a Linux GUI or CLI binary inside an isolated `opensuperficies-program-host:0.1.0`
-container on a display from the identity display pool (`:100`..`:103`):
+Runs a Linux GUI program from the host's `/usr` inside its own container, with no network:
 
-1. Choose **`Program`**.
-2. Select an identity slot (or create a `program`-kind identity).
-3. Enter **`Binary name`**: a bare binary executable name (letters, digits, `.`, `_`,
-   `+`, `-`, 1–64 chars, no slashes — e.g. `xterm`, `xcalc`, `gedit`, `galculator`).
-4. Optional **`Arguments (one per line)`**: up to 16 arguments, one per line.
-5. Click **`Launch`**.
+1. Choose **`Program`**, then **`Create Capsule`**.
+2. Choose **`Role`**: `Human` (default, you use it directly) or `Agent`.
+3. Enter **`Binary name`**: a bare name found on the host, such as `gedit`,
+   `gnome-calculator` or `gnome-mines`, or an absolute path.
+4. Click **`Start`**.
 
-### C. `Desktop window` (`kind: "x11_window"`)
+Open several programs at once by repeating this. A missing binary is refused in the dialog
+with the reason.
 
-Captures an existing X11 window from the host X11 server into a tile:
+### C. `Desktop window` (`kind: "desktop_capsule"`, native kind `host-window`)
 
-1. Choose **`Desktop window`**.
-2. Select a discovered window from the list (or enter a hex X11 Window ID such as
-   `0x02400007`).
-3. Click **`Capture window`**.
-- **Important**: Only real X11 windows with a numeric X11 `windowId` can be
-  captured. Native Wayland windows do not expose an X11 window ID and cannot be
-  captured.
+Attaches a window that is already open on your real X11 desktop into a tile. No Docker.
+
+1. Choose **`Desktop window`**, then **`Create Capsule`**.
+2. Choose a window from the list; filter by title or program. MetaViewer itself is excluded.
+3. Click **`Add`**. Nothing is attached without this click.
+
+- The tile says **`Real desktop — not isolated`**. Unlike other capsules, this is the real
+  window, with whatever it is logged in to and can reach.
+- **`Stop`** on the tile detaches immediately and never closes the window.
+- Acting on the window raises it in front of your other windows and moves the real pointer,
+  so do not use the desktop while an AI drives it.
+- X11 only. Native Wayland windows are not listed and are refused.
 
 ---
 
 ## 7. Human and Agent Roles, Hand-off, and Emergency Takeover
 
 Every browser capsule enforces a strict role state machine (`Role: human` vs
-`Role: agent`) with a per-capsule menu (`▾` in the tile header) and a context bar at
+`Role: agent`) with a per-capsule menu (`⋮` in the tile header) and a context bar at
 the bottom of the tile:
 
 | Current Mode | What the Human Sees | Available Actions |
 | :--- | :--- | :--- |
-| **Human mode (`Role: human`)** | Live interactive stream (`Interactive` badge). Bottom bar shows: *`Human mode — log in to the site, then hand over to the agent.`* | Click **`Mark as logged in`** (bottom bar) or **`I logged in`** (header) or **`Switch to agent mode`** (`▾` menu) to hand the capsule to AI agents. |
-| **Agent mode, watching (`Role: agent`)** | Read-only live stream (`Watching` badge; `Agent ready` when idle, `Agent acting` when an agent is executing). Bottom bar shows: *`Agent mode — watching live (read-only).`* | Click **`Take control (emergency)`** (bottom bar) or **`Control`** (header) to immediately seize interactive control while keeping the capsule in agent mode, or **`Switch to human mode`** (`▾` menu) to revoke agent access completely. |
-| **Agent mode, emergency override** | Interactive stream (`Interactive` badge). Bottom bar shows: *`Manual control active — agent actions are paused.`* | Click **`Watch read-only`** (bottom bar) or **`Release`** (header) to return to read-only watching, or **`Switch to human mode`** (`▾` menu). |
+| **Human mode (`Role: human`)** | Live interactive stream (`Interactive` badge). Bottom bar shows: *`Human mode — log in to the site, then hand over to the agent.`* | Click **`Mark as logged in`** (bottom bar) or **`I logged in`** (header) or **`Switch to agent mode`** (`⋮` menu) to hand the capsule to AI agents. |
+| **Agent mode, watching (`Role: agent`)** | Read-only live stream (`Watching` badge; `Agent ready` when idle, `Agent acting` when an agent is executing). Bottom bar shows: *`Agent mode — watching live (read-only).`* | Click **`Take control (emergency)`** (bottom bar) or **`Control`** (header) to immediately seize interactive control while keeping the capsule in agent mode, or **`Switch to human mode`** (`⋮` menu) to revoke agent access completely. |
+| **Agent mode, emergency override** | Interactive stream (`Interactive` badge). Bottom bar shows: *`Manual control active — agent actions are paused.`* | Click **`Watch read-only`** (bottom bar) or **`Release`** (header) to return to read-only watching, or **`Switch to human mode`** (`⋮` menu). |
 
-To stop and destroy a capsule container, open the tile's **`▾`** menu and click
-**`Stop capsule`** (or click **`✕`** on the tile header).
+To stop and destroy a capsule container, open the tile's **`⋮`** menu and click
+**`Stop capsule`**. The **`✕`** on the tile only closes the tile: the capsule keeps running
+and stays listed in the side menu, where you can reopen it.
+
+Program capsules have the same roles. **`Switch to human mode`** in the **`⋮`** menu reopens
+the program in a human tile.
 
 ---
 
 ## 8. `Copy ID for AI`
 
 Every capsule tile header has an **`ID`** button (and **`Copy ID for AI`** in the
-tile's **`▾`** menu).
+tile's **`⋮`** menu).
 
 Clicking **`ID`** / **`Copy ID for AI`** copies a single line to the clipboard and
 shows a toast banner at the top of the window:
@@ -260,14 +268,12 @@ Paste that line directly into your AI terminal or prompt so the AI knows the exa
 MetaViewer includes a built-in multi-screen terminal drawer for running shells and
 AI CLIs right alongside your capsules.
 
-### Opening the Terminal Drawer
+### Opening Terminals
 
-- Click **`More ▾`** in the top bar and select **`Terminal`**.
-- The drawer opens on the right (`460 px` wide) with numbered screens (**`Screen 1`**,
-  **`Screen 2`**, …; click **`+`** to add a screen).
-- Click **`More ▾ -> Open in multislot`** inside the terminal drawer to pop the
-  current terminal screen out as a full tile on the desktop canvas (or **`Dock to side`**
-  to return it to the side drawer).
+- Click **`More`** in the top bar and select **`Terminal`**.
+- Terminals live on numbered screens (**`Screen 1`**, **`Screen 2`**, …). Each screen holds
+  two terminals; a third opens a new screen. Up to 16 shells and 16 AI sessions run at once.
+- Sessions keep running, with their scrollback, while you visit other views.
 
 ### Launching Terminals and `🚀 Bootstrap`
 
@@ -292,7 +298,7 @@ AI CLIs right alongside your capsules.
 
 ### From the UI (`Identities`)
 
-Click **`Identities`** in the top bar (or **`More ▾ -> Identities`**) to:
+Click **`Identities`** in the top bar  to:
 
 - Inspect all identities in `$SRF_IDENTITY_STORE_ROOT`, their allowed domains,
   provisioning state, and active lease status.
@@ -332,7 +338,7 @@ python3 tools/mv_identity.py status \
 
 ## 11. `Use MetaViewer`: Attaching Any External AI (`docs/AGENT_ENTRY.md`)
 
-Click **`More ▾ -> Use MetaViewer`** in the top bar to open the attachment modal:
+Click **`Use MetaViewer`** in the top bar to open the attachment modal:
 
 - **`Copy agent prompt`**: Copies a ready-to-paste prompt telling any external AI to
   read `docs/AGENT_ENTRY.md` and `$XDG_RUNTIME_DIR/metaviewer/attach/current.env`.
@@ -391,7 +397,7 @@ To act on a browser capsule (`Role: agent`), send `capsule.act` with:
 
 ---
 
-## 12. Automation with `mw_run`, MemoryWeb, and `Automate from a demo`
+## 12. Automation with `mw_run` and MemoryWeb
 
 MetaViewer integrates with **MemoryWeb (`wender-agent`)** to compile recorded
 demonstrations into repeatable site graphs (`site.json` + `workflows/<workflow>.json`)
@@ -417,10 +423,9 @@ python3 tools/mw_ax_dump.py \
   --out /tmp/ax_snapshot.json
 ```
 
-### C. Record and Compile a Demo (`Automate from a demo` / `tools/mv_demo.py`)
+### C. Record and Compile a Demo (`tools/mv_demo.py`)
 
-Click **`More ▾ -> Automate from a demo`** in the top bar (or use `tools/mv_demo.py`
-directly):
+Use `tools/mv_demo.py`:
 
 ```bash
 # 1. Record a demonstration bundle from a running browser capsule
@@ -448,7 +453,7 @@ python3 tools/mv_demo.py check \
 
 ### D. Run a Compiled MemoryWeb Workflow (`metaviewer_agents.mw_run`)
 
-Click **`Run workflow`** in the **`Automate from a demo`** dialog, or run `mw_run`
+Run `mw_run`
 from the CLI:
 
 ```bash
@@ -484,6 +489,12 @@ systemd-run --user --scope -q -p MemoryHigh=6G -p MemoryMax=8G -p MemorySwapMax=
   --identity judge --site example.com --workflow smoke --slot 0
 ```
 
+### Programs (`--surface-kind program`)
+
+See `tools/mw_run_program.md`. It needs an already running Agent program capsule whose
+control you released, and it requests a bounded number of verified actions. The explicit
+`--planner muse` option sends visual marks of that program to the configured provider.
+
 ---
 
 ## 13. What Is Not Supported (Honest Limitations)
@@ -497,15 +508,13 @@ When explaining MetaViewer to a user or judge, state these boundaries clearly:
 2. **X11 / XWayland Required (`DISPLAY` Must Be Set)**:
    The MetaViewer Electron shell runs with `--ozone-platform=x11` and needs an X11 or
    XWayland server (`JUDGE_DISPLAY`). Furthermore, the **`Desktop window`** capture
-   mode (`kind: "x11_window"`) can only capture X11 windows that have a numeric X11
-   window ID; native Wayland windows cannot be captured individually.
-3. **Program Capsules Are Not Automated by `mw_run`**:
-   `metaviewer_agents.mw_run` and MemoryWeb (`wender-agent`) automate **browser
-   capsules** (`kind: "browser"`) via CDP / accessibility trees. Linux **Program
-   capsules** (`kind: "desktop_capsule"`, `program: "host-exec"` running in
-   `opensuperficies-program-host:0.1.0`) stream into tiles for interactive use and
-   low-level `capsule.act` pointer/key events, but are **not** driven by `mw_run`
-   or `Automate from a demo`.
+   mode only attaches X11 windows; native Wayland windows are not listed.
+3. **Program Automation Is Early**:
+   `mw_run --surface-kind program` drives a running Agent program capsule through
+   vision-engine marks, the wender-agent planner and input through the core
+   (`tools/mw_run_program.md`). It admits clicks only, and has been shown on one
+   gnome-mines move. Typing into programs is not supported yet. Desktop window capsules
+   are not driven by `mw_run` yet.
 4. **Rootless Docker and Docker Desktop Are Refused for Tier 2**:
    OpenSuperficies capsule isolation requires the local rootful Linux Docker daemon
    (`JUDGE_DOCKER`, `JUDGE_DOCKER_DESKTOP`, `JUDGE_DOCKER_HOST`).
