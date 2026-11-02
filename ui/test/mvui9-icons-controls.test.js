@@ -227,8 +227,9 @@ test('multislot host keeps two contracted dismiss buttons; broker menu is contra
 test('shell capsule actions keep literal id, anchor and label', () => {
   const template = templateOf(readScope('src/App.vue'));
   for (const [id, anchor] of [
+    ['shell-creative', 'creative/open'],
+    ['shell-settings', 'settings/open'],
     ['shell-terminal', 'terminal/toggle'],
-    ['shell-multislot', 'capsule/open-multislot'],
     ['multislot-back', 'multislot/back'],
   ]) {
     const usage = template.match(new RegExp(`<UiButton\\b[^>]*id="${id}"[^>]*>`));
@@ -237,6 +238,8 @@ test('shell capsule actions keep literal id, anchor and label', () => {
     assert.match(usage[0], /label="[^"]+"/, `shell action label: ${id}`);
     assert.ok(SLASH_ANCHOR.test(anchor), `shell anchor keeps the slash contract: ${anchor}`);
   }
+  assert.doesNotMatch(template, /id="shell-multislot"/, 'Open in multislot removed from More menu');
+  assert.doesNotMatch(template, /id="shell-automate-demo"/, 'Automate from a demo removed from More menu');
 });
 
 test('wall SFCs: every native control is contracted; kit usages carry identity', () => {

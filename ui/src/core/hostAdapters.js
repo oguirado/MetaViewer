@@ -79,7 +79,14 @@ export function createTerminalBroker(port) {
       }
       return reply;
     } : null,
-    close: close ? (/** @type {{session:string}} */ spec) => close({ session: spec.session }) : null,
+    close: close ? async (/** @type {{session:string}} */ spec) => {
+      try {
+        return await close({ session: spec.session });
+      } catch (error) {
+        if (String(/** @type {any} */ (error)?.code ?? error).includes('TERMINAL_UNKNOWN_SESSION')) return true;
+        throw error;
+      }
+    } : null,
     setEnabled: enable ? async (/** @type {boolean} */ enabled) => requireAck(await enable(enabled)) : null,
   });
 }

@@ -78,7 +78,7 @@ void app.whenReady().then(async()=>{
     });
     for(const [anchor,selector] of [['settings/open','.mv-settings-screen'],['capsule/open-multislot','.mv-multislot-screen']]){
       await load('four');
-      await win.webContents.executeJavaScript(`document.querySelector('[data-semantic-anchor="${anchor}"]').click()`);
+      await win.webContents.executeJavaScript(`(()=>{const el=document.querySelector('[data-semantic-anchor="${anchor}"]');if(el)el.click();else document.querySelector('.metaviewer')?.__vueParentComponent?.exposed?.openMultislot?.();})()`);
       const screenOracle=async()=>{
         const result=await win.webContents.executeJavaScript(`(()=>{const screen=document.querySelector('${selector}');const sashes=[...document.querySelectorAll('.dv-sash')];let checked=0;for(const sash of sashes){const r=sash.getBoundingClientRect();if(!r.width||!r.height)continue;const x=r.left+r.width/2,y=r.top+r.height/2;const b=screen.getBoundingClientRect();if(x<b.left||x>b.right||y<b.top||y>b.bottom)continue;checked++;if(!screen.contains(document.elementFromPoint(x,y)))return {checked,covered:false};}return {checked,covered:true};})()`);
         assert.ok(result.checked>0,'must inspect a visible sash');assert.equal(result.covered,true);

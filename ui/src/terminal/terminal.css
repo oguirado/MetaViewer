@@ -217,6 +217,26 @@
   background: var(--cuk-semantic-surface-elevated);
   border-bottom: 1px solid var(--cuk-semantic-border-default);
   font-size: var(--cuk-semantic-typography-font-size-sm);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cuk-semantic-spacing-sm);
+}
+
+.mv-terminal-deck__error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mv-terminal-deck__error-dismiss {
+  flex: 0 0 auto;
+  padding: 2px var(--cuk-semantic-spacing-xs);
+  border: 1px solid var(--cuk-semantic-border-default);
+  border-radius: var(--cuk-semantic-radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
 .mv-terminal-deck__grid {

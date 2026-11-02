@@ -1410,6 +1410,13 @@ const chromeWorkspace = markRaw(defineComponent({
   inheritAttrs: false,
   setup: (_, { attrs }) => () => h(ShellWorkspace, { ...attrs, workspaceComponent: DockWorkspace }),
 }));
+defineExpose({ openMultislot, selectedSurface, demoOpen });
+onMounted(() => {
+  const rootEl = typeof document !== 'undefined' && typeof document.querySelector === 'function' ? document.querySelector('.metaviewer') : null;
+  if (rootEl) {
+    /** @type {any} */ (rootEl).__mvAppApi = { openMultislot, get selectedSurface() { return selectedSurface.value; }, get demoOpen() { return demoOpen.value; }, set demoOpen(v) { demoOpen.value = Boolean(v); } };
+  }
+});
 </script>
 <template>
   <div class="metaviewer mv-shell" :data-wall-settled="String(settled)" :class="{ 'mv-shell--nested': nestedMode.displayOnly }">
@@ -1434,10 +1441,8 @@ const chromeWorkspace = markRaw(defineComponent({
         <div ref="moreMenu" class="mv-more-menu" @keydown.esc="moreOpen = false">
           <UiButton id="shell-more" data-semantic-anchor="shell/menu/more" label="More" aria-haspopup="menu" aria-controls="shell-more-menu" :aria-expanded="moreOpen" @click="moreOpen = !moreOpen" />
           <div :hidden="!moreOpen" id="shell-more-menu" ref="morePopup" popover="manual" class="mv-menu-popover" role="menu" aria-label="More">
-        <UiButton role="menuitem" id="shell-automate-demo" data-semantic-anchor="demo/open" label="Automate from a demo" :aria-expanded="demoOpen" @click="moreOpen = false; demoOpen=true" />
         <UiButton role="menuitem" id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="moreOpen = false; toggleCreative()" />
         <UiButton role="menuitem" id="shell-settings" data-semantic-anchor="settings/open" label="Settings" :aria-expanded="settingsOpen" @click="moreOpen = false; toggleSettings()" />
-        <UiButton role="menuitem" id="shell-multislot" data-semantic-anchor="capsule/open-multislot" label="Open in multislot" :aria-expanded="multislotOpen" :disabled="!selectedSurface" @click="moreOpen = false; openMultislot()" />
         <UiButton role="menuitem" id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal" :aria-expanded="terminalOpen" @click="moreOpen = false; toggleTerminal()" />
           </div>
         </div>

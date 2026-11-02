@@ -43,7 +43,7 @@ export const SIGINT_BYTE = 0x03;
 export const MAX_DECK_SCREENS = 16;
 
 /** Maximum terminal slots per screen in a persisted deck envelope [TARGET]. */
-export const MAX_SLOTS_PER_SCREEN = 16;
+export const MAX_SLOTS_PER_SCREEN = 2;
 
 /**
  * Canonical MetaViewer agent entry prompt from docs/AGENT_ENTRY.md.
@@ -102,6 +102,13 @@ export const TERMINAL_REFUSAL_HINTS = Object.freeze({
   SESSION_LIMIT: 'Close an existing terminal session to free a broker slot, then retry.',
   CLASS_LIMIT: 'Close an existing terminal in this class to free a slot, then retry.',
   SPAWN_BRAKE: 'Wait for the terminal spawn cooldown to expire before opening another session.',
+  DIMS_RANGE: 'Terminal dimensions are out of bounds; resize the view and retry.',
+  RATE_LIMITED: 'Terminal requests are rate-limited; wait a moment and retry.',
+  UNKNOWN_PROVIDER: 'The requested terminal provider is not configured on the host.',
+  COMMAND_MISMATCH: 'The terminal profile command does not match the host provider configuration.',
+  COMMAND_SHAPE: 'The terminal launch command was rejected by the broker contract.',
+  SPAWN_SHAPE: 'The terminal spawn specification was rejected by the broker contract.',
+  SPAWN_FAILED: 'The host failed to spawn the terminal process; check the binary and retry.',
   TERMINAL_IO_REFUSED: 'Close an unused terminal session or wait for the spawn brake to reset, then retry.',
   DISPLAY_ONLY: 'Nested display-only windows cannot open terminal sessions.',
   TERMINAL_SESSION_INVALID: 'The terminal broker returned an invalid session identifier; retry opening the terminal.',
@@ -141,8 +148,14 @@ export function formatTerminalRefusal(reason) {
       ? reason
       : '';
   let code = rawCode;
+  if (!code || code === 'TERMINAL_IO_REFUSED') {
+    const specificAfterIo = /\bTERMINAL_IO_REFUSED:\s*([A-Z][A-Z0-9_]{1,63})\b/.exec(rawMessage);
+    if (specificAfterIo) {
+      code = specificAfterIo[1];
+    }
+  }
   if (!code) {
-    const tokenMatch = /\b(TERMINAL_[A-Z0-9_]+|NATIVE_[A-Z0-9_]+|ERR_[A-Z0-9_]+|COMMAND_NOT_ALLOWED|SESSION_LIMIT|CLASS_LIMIT|SPAWN_BRAKE|DISPLAY_ONLY|OUTCOME|PAYLOAD|ARGS|SENDER|CHANNEL|[A-Z][A-Z0-9_]{2,63})\b/.exec(rawMessage);
+    const tokenMatch = /\b(CLASS_LIMIT|SESSION_LIMIT|SPAWN_BRAKE|DIMS_RANGE|RATE_LIMITED|UNKNOWN_PROVIDER|COMMAND_MISMATCH|COMMAND_SHAPE|SPAWN_SHAPE|SPAWN_FAILED|TERMINAL_[A-Z0-9_]+|NATIVE_[A-Z0-9_]+|ERR_[A-Z0-9_]+|COMMAND_NOT_ALLOWED|DISPLAY_ONLY|OUTCOME|PAYLOAD|ARGS|SENDER|CHANNEL|[A-Z][A-Z0-9_]{2,63})\b/.exec(rawMessage);
     if (tokenMatch) {
       code = tokenMatch[1];
     } else if (/terminal launch unavailable/i.test(rawMessage)) {
@@ -475,8 +488,9 @@ export function deserializeDeckState(raw) {
       : `screen-${i + 1}`;
     const screenMatch = /^screen-(\d+)$/.exec(screenId);
     if (screenMatch) maxScreenNum = Math.max(maxScreenNum, Number(screenMatch[1]));
-    const rawSlots = Array.isArray(rawScreen.slots) ? rawScreen.slots : [];
-    if (rawSlots.length > MAX_SLOTS_PER_SCREEN) return null;
+    const allRawSlots = Array.isArray(rawScreen.slots) ? rawScreen.slots : [];
+    if (allRawSlots.length > 16) return null;
+    const rawSlots = allRawSlots.slice(0, MAX_SLOTS_PER_SCREEN);
     /** @type {DeckSlot[]} */
     const slots = [];
     for (const rawSlot of rawSlots) {
@@ -596,7 +610,10 @@ export function createTerminalDeckController(options = {}) {
   const sessionFacade = options.sessionFacade ?? (() => {
     if (transport?.canAttach) {
       try {
-        ownedPortFacade = createPortSessionFacade({ transport });
+        const portTransport = (brokerFacade || typeof options.broker?.close === 'function') && transport.canClose
+          ? Object.freeze({ ...transport, canClose: false, close: undefined })
+          : transport;
+        ownedPortFacade = createPortSessionFacade({ transport: portTransport });
         return ownedPortFacade;
       } catch {
         return null;
@@ -609,7 +626,13 @@ export function createTerminalDeckController(options = {}) {
   const directPortFacades = new Map();
   /** @type {Set<string>} */
   const closingSessions = new Set();
-  /** @type {Set<ReturnType<typeof setTimeout>>} */
+  /** @type {Set<string>} */
+  const exitedSessions = new Set();
+  /** @type {Set<string>} */
+  const closedBrokerSessions = new Set();
+  /** @type {Map<string, number>} */
+  const ackedBytesBySession = new Map();
+  /** @type {Set<{ timer: ReturnType<typeof setTimeout>, resolve: () => void }>} */
   const pendingTimers = new Set();
   let toastTimer = /** @type {ReturnType<typeof setTimeout>|null} */ (null);
   let disposed = false;
@@ -807,6 +830,58 @@ export function createTerminalDeckController(options = {}) {
   }
 
   /**
+   * Closes a session on the broker and local facades at most once, ignoring
+   * already-gone (`TERMINAL_UNKNOWN_SESSION`) or teardown errors.
+   *
+   * @param {string|null|undefined} sessionId
+   * @param {{ skipBrokerClose?: boolean }} [closeOpts]
+   */
+  async function closeSessionOnBroker(sessionId, closeOpts = {}) {
+    if (typeof sessionId !== 'string' || !sessionId) return;
+    ackedBytesBySession.delete(sessionId);
+    if (!closeOpts.skipBrokerClose && !closedBrokerSessions.has(sessionId)) {
+      closedBrokerSessions.add(sessionId);
+      try {
+        if (brokerFacade) {
+          await brokerFacade.close({ session: sessionId });
+        } else if (options.broker?.close) {
+          await options.broker.close({ session: sessionId });
+        }
+      } catch {
+        // Broker teardown is best-effort; already-gone sessions are not user errors.
+      }
+    }
+    try {
+      await sessionFacade?.close?.({ session: sessionId });
+    } catch {
+      // Facade teardown is best-effort.
+    }
+    const direct = directPortFacades.get(sessionId);
+    if (direct) {
+      directPortFacades.delete(sessionId);
+      try {
+        direct.dispose();
+      } catch {
+        // Direct port teardown is best-effort.
+      }
+    }
+  }
+
+  /**
+   * @param {unknown} reason
+   * @returns {boolean}
+   */
+  function isCleanProcessExitReason(reason) {
+    if (typeof reason === 'string') {
+      return /^Exited \(\d+\)$/i.test(reason) || /^exited:/i.test(reason);
+    }
+    if (reason && typeof reason === 'object' && 'code' in reason) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * @param {{ session?: string, sessionId?: string, reason?: unknown } | null | undefined} event
    */
   function handleSessionExit(event) {
@@ -814,11 +889,25 @@ export function createTerminalDeckController(options = {}) {
     const sessionId = typeof event?.session === 'string'
       ? event.session
       : (typeof event?.sessionId === 'string' ? event.sessionId : '');
-    if (!sessionId || closingSessions.has(sessionId)) return;
+    if (!sessionId) return;
+    const cleanExit = isCleanProcessExitReason(event?.reason);
+    if (cleanExit) {
+      exitedSessions.add(sessionId);
+      ackedBytesBySession.delete(sessionId);
+    }
+    if (closingSessions.has(sessionId)) return;
     const found = findSlotBySession(sessionId);
-    if (!found) return;
+    if (!found) {
+      if (!cleanExit) {
+        void closeSessionOnBroker(sessionId);
+      }
+      return;
+    }
     found.slot.status = 'exited';
     found.slot.busy = false;
+    if (!cleanExit) {
+      void closeSessionOnBroker(sessionId);
+    }
     notify();
   }
 
@@ -828,10 +917,17 @@ export function createTerminalDeckController(options = {}) {
   function handleSessionData(frame) {
     if (disposed) return;
     if (frame && typeof frame.session === 'string' && Number.isInteger(frame.seq) && Number.isInteger(frame.byteLength)) {
+      const prevBytes = ackedBytesBySession.get(frame.session) ?? 0;
+      const cumulative = prevBytes + frame.byteLength;
+      ackedBytesBySession.set(frame.session, cumulative);
       try {
-        sessionFacade?.ack?.({ session: frame.session, seq: frame.seq, bytes: frame.byteLength });
+        sessionFacade?.ack?.({ session: frame.session, seq: frame.seq, bytes: cumulative });
       } catch {
-        // Credit ack is best-effort on custom test doubles.
+        try {
+          sessionFacade?.ack?.({ session: frame.session, seq: frame.seq, bytes: frame.byteLength });
+        } catch {
+          // Credit ack is best-effort on custom test doubles.
+        }
       }
     }
     options.onSessionData?.(frame);
@@ -878,6 +974,7 @@ export function createTerminalDeckController(options = {}) {
    * @param {MessagePort|undefined} directPort
    */
   async function attachSession(sessionId, directPort) {
+    ackedBytesBySession.set(sessionId, 0);
     if (sessionFacade && typeof sessionFacade.attach === 'function') {
       await sessionFacade.attach({ session: sessionId });
       return;
@@ -885,10 +982,17 @@ export function createTerminalDeckController(options = {}) {
     if (directPort && typeof directPort.postMessage === 'function') {
       const direct = createSideTerminalFacade({ session: sessionId, port: directPort });
       direct.onData((frame) => {
+        const prevBytes = ackedBytesBySession.get(frame.session) ?? 0;
+        const cumulative = prevBytes + frame.byteLength;
+        ackedBytesBySession.set(frame.session, cumulative);
         try {
-          direct.ack({ session: frame.session, seq: frame.seq, bytes: frame.byteLength });
+          direct.ack({ session: frame.session, seq: frame.seq, bytes: cumulative });
         } catch {
-          // Best-effort ack.
+          try {
+            direct.ack({ session: frame.session, seq: frame.seq, bytes: frame.byteLength });
+          } catch {
+            // Best-effort ack.
+          }
         }
         options.onSessionData?.(frame);
       });
@@ -975,6 +1079,70 @@ export function createTerminalDeckController(options = {}) {
   }
 
   /**
+   * Checks whether any existing screen has capacity for a new slot or a new
+   * screen can be created under MAX_DECK_SCREENS.
+   *
+   * @returns {boolean}
+   */
+  function hasCapacityForNewSlot() {
+    const current = screens[activeScreenIndex];
+    if (current && current.slots.length < MAX_SLOTS_PER_SCREEN) return true;
+    for (let i = 0; i < screens.length; i += 1) {
+      if (screens[i].slots.length < MAX_SLOTS_PER_SCREEN) return true;
+    }
+    return screens.length < MAX_DECK_SCREENS;
+  }
+
+  /**
+   * Resolves the target screen for a new slot: when the active screen already
+   * holds MAX_SLOTS_PER_SCREEN terminals, uses the next screen with free
+   * capacity or creates a new screen and switches `activeScreenIndex` to it.
+   *
+   * @returns {DeckScreen | null}
+   */
+  function resolveTargetScreenForNewSlot() {
+    const current = screens[activeScreenIndex];
+    if (current && current.slots.length < MAX_SLOTS_PER_SCREEN) {
+      return current;
+    }
+    for (let i = activeScreenIndex + 1; i < screens.length; i += 1) {
+      if (screens[i].slots.length < MAX_SLOTS_PER_SCREEN) {
+        activeScreenIndex = i;
+        pendingCloseSlotId = null;
+        return screens[i];
+      }
+    }
+    if (screens.length < MAX_DECK_SCREENS) {
+      const screen = {
+        id: `screen-${nextScreenSeq++}`,
+        number: screens.length + 1,
+        label: `Screen ${screens.length + 1}`,
+        slots: [],
+      };
+      screens.push(screen);
+      renumberScreens(screens);
+      activeScreenIndex = screens.length - 1;
+      pendingCloseSlotId = null;
+      return screen;
+    }
+    for (let i = 0; i < activeScreenIndex; i += 1) {
+      if (screens[i].slots.length < MAX_SLOTS_PER_SCREEN) {
+        activeScreenIndex = i;
+        pendingCloseSlotId = null;
+        return screens[i];
+      }
+    }
+    return null;
+  }
+
+  function dismissError() {
+    if (!errorCode && !errorMessage) return;
+    errorCode = '';
+    errorMessage = '';
+    notify();
+  }
+
+  /**
    * Launches an admitted profile ('shell', 'claude', 'agy', etc.) on the
    * active screen (or into an existing slot on restart).
    *
@@ -990,6 +1158,19 @@ export function createTerminalDeckController(options = {}) {
       errorMessage = `COMMAND_NOT_ALLOWED: Selected terminal profile is unavailable (${String(profileId)}).`;
       notify();
       throw new Error(`Unknown or unavailable terminal profile: ${String(profileId)}`);
+    }
+    const existingTarget = launchOpts.reuseSlotId ? findSlot(launchOpts.reuseSlotId) : null;
+    if (!existingTarget && !hasCapacityForNewSlot()) {
+      const err = Object.assign(
+        new Error('SESSION_LIMIT: All terminal screens are full. Close a terminal before opening another.'),
+        { code: 'SESSION_LIMIT', remedy: 'Close an existing terminal slot, then retry.' },
+      );
+      const formatted = formatTerminalRefusal(err);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw err;
     }
     const cols = Number.isSafeInteger(launchOpts.cols) && Number(launchOpts.cols) > 0 ? Number(launchOpts.cols) : 80;
     const rows = Number.isSafeInteger(launchOpts.rows) && Number(launchOpts.rows) > 0 ? Number(launchOpts.rows) : 24;
@@ -1011,6 +1192,9 @@ export function createTerminalDeckController(options = {}) {
       }
       await attachSession(sessionId, opened?.port);
     } catch (error) {
+      if (sessionId && TERMINAL_SESSION_ID_RE.test(sessionId)) {
+        void closeSessionOnBroker(sessionId);
+      }
       const formatted = formatTerminalRefusal(error);
       errorCode = formatted.code;
       errorMessage = formatted.message;
@@ -1021,6 +1205,12 @@ export function createTerminalDeckController(options = {}) {
 
     const existing = launchOpts.reuseSlotId ? findSlot(launchOpts.reuseSlotId) : null;
     if (existing) {
+      const prevSessionId = existing.slot.sessionId;
+      if (prevSessionId && prevSessionId !== sessionId) {
+        void closeSessionOnBroker(prevSessionId, {
+          skipBrokerClose: ownedPortFacade !== null && exitedSessions.has(prevSessionId),
+        });
+      }
       existing.slot.kind = profile.id === SHELL_COMMAND ? 'shell' : 'provider';
       existing.slot.profileId = profile.id;
       existing.slot.customCommand = '';
@@ -1035,7 +1225,7 @@ export function createTerminalDeckController(options = {}) {
       return existing.slot;
     }
 
-    const screen = screens[activeScreenIndex];
+    const screen = resolveTargetScreenForNewSlot() ?? screens[activeScreenIndex];
     const slotId = `slot-${nextSlotSeq++}`;
     /** @type {DeckSlot} */
     const slot = {
@@ -1073,6 +1263,19 @@ export function createTerminalDeckController(options = {}) {
       notify();
       throw new Error('Custom command must be a non-empty single line');
     }
+    const existingTarget = launchOpts.reuseSlotId ? findSlot(launchOpts.reuseSlotId) : null;
+    if (!existingTarget && !hasCapacityForNewSlot()) {
+      const err = Object.assign(
+        new Error('SESSION_LIMIT: All terminal screens are full. Close a terminal before opening another.'),
+        { code: 'SESSION_LIMIT', remedy: 'Close an existing terminal slot, then retry.' },
+      );
+      const formatted = formatTerminalRefusal(err);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw err;
+    }
     const cols = Number.isSafeInteger(launchOpts.cols) && Number(launchOpts.cols) > 0 ? Number(launchOpts.cols) : 80;
     const rows = Number.isSafeInteger(launchOpts.rows) && Number(launchOpts.rows) > 0 ? Number(launchOpts.rows) : 24;
 
@@ -1097,6 +1300,7 @@ export function createTerminalDeckController(options = {}) {
     try {
       await attachSession(sessionId, opened?.port);
     } catch (error) {
+      void closeSessionOnBroker(sessionId);
       const formatted = formatTerminalRefusal(error);
       errorCode = formatted.code;
       errorMessage = formatted.message;
@@ -1109,6 +1313,12 @@ export function createTerminalDeckController(options = {}) {
 
     const existing = launchOpts.reuseSlotId ? findSlot(launchOpts.reuseSlotId) : null;
     if (existing) {
+      const prevSessionId = existing.slot.sessionId;
+      if (prevSessionId && prevSessionId !== sessionId) {
+        void closeSessionOnBroker(prevSessionId, {
+          skipBrokerClose: ownedPortFacade !== null && exitedSessions.has(prevSessionId),
+        });
+      }
       existing.slot.kind = 'custom';
       existing.slot.profileId = SHELL_COMMAND;
       existing.slot.customCommand = commandText;
@@ -1124,7 +1334,7 @@ export function createTerminalDeckController(options = {}) {
       return existing.slot;
     }
 
-    const screen = screens[activeScreenIndex];
+    const screen = resolveTargetScreenForNewSlot() ?? screens[activeScreenIndex];
     const slotId = `slot-${nextSlotSeq++}`;
     /** @type {DeckSlot} */
     const slot = {
@@ -1176,7 +1386,8 @@ export function createTerminalDeckController(options = {}) {
     if (!found) return { closed: false };
     const { screen, slot, slotIndex } = found;
     const sessionId = slot.sessionId;
-    const wasRunning = slot.status === 'running' && typeof sessionId === 'string' && sessionId.length > 0;
+    const hasSession = typeof sessionId === 'string' && sessionId.length > 0;
+    const wasRunning = slot.status === 'running' && hasSession;
 
     if (pendingCloseSlotId === slotId) {
       pendingCloseSlotId = null;
@@ -1190,37 +1401,27 @@ export function createTerminalDeckController(options = {}) {
         // Best-effort SIGINT before kill.
       }
       await new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          pendingTimers.delete(timer);
-          resolve(undefined);
-        }, closeGraceMs);
-        pendingTimers.add(timer);
+        const entry = {
+          timer: setTimeout(() => {
+            pendingTimers.delete(entry);
+            resolve(undefined);
+          }, closeGraceMs),
+          resolve: () => resolve(undefined),
+        };
+        pendingTimers.add(entry);
       });
-      try {
-        if (brokerFacade) {
-          await brokerFacade.close({ session: sessionId });
-        } else if (options.broker?.close) {
-          await options.broker.close({ session: sessionId });
-        }
-      } catch {
-        // Broker teardown is best-effort.
-      }
-      try {
-        sessionFacade?.close?.({ session: sessionId });
-      } catch {
-        // Facade teardown is best-effort.
-      }
-      const direct = directPortFacades.get(sessionId);
-      if (direct) {
-        directPortFacades.delete(sessionId);
-        try {
-          direct.dispose();
-        } catch {
-          // Direct port teardown is best-effort.
-        }
-      }
+      await closeSessionOnBroker(sessionId, {
+        skipBrokerClose: ownedPortFacade !== null && exitedSessions.has(sessionId),
+      });
       closingSessions.delete(sessionId);
+    } else if (hasSession && sessionId) {
+      await closeSessionOnBroker(sessionId, {
+        skipBrokerClose: exitedSessions.has(sessionId),
+      });
     }
+
+    errorCode = '';
+    errorMessage = '';
 
     const currentIdx = screen.slots.findIndex((item) => item.id === slotId);
     if (currentIdx !== -1) {
@@ -1419,6 +1620,10 @@ export function createTerminalDeckController(options = {}) {
       }
     }
 
+    if (copied) {
+      errorCode = '';
+      errorMessage = '';
+    }
     toastMessage = copied ? 'Copied' : 'Copy unavailable';
     notify();
     if (toastDurationMs > 0) {
@@ -1468,6 +1673,11 @@ export function createTerminalDeckController(options = {}) {
       return { copied: false, text: '' };
     }
     const ok = await writeClipboardText(text);
+    if (ok) {
+      errorCode = '';
+      errorMessage = '';
+      notify();
+    }
     return { copied: ok, text: ok ? text : '' };
   }
 
@@ -1492,6 +1702,8 @@ export function createTerminalDeckController(options = {}) {
       try {
         const handled = options.onPasteText(slotId, text);
         if (handled === true) {
+          errorCode = '';
+          errorMessage = '';
           lastPastedText = text;
           notify();
           return { pasted: true, text, usedTermPaste: false };
@@ -1542,6 +1754,8 @@ export function createTerminalDeckController(options = {}) {
         notify();
         return { pasted: false, text: '', usedTermPaste: false };
       }
+      errorCode = '';
+      errorMessage = '';
       lastPastedText = text;
       notify();
       return { pasted: true, text, usedTermPaste: true };
@@ -1551,6 +1765,8 @@ export function createTerminalDeckController(options = {}) {
       notify();
       return { pasted: false, text: '', usedTermPaste: false };
     }
+    errorCode = '';
+    errorMessage = '';
     lastPastedText = text;
     notify();
     return { pasted: true, text, usedTermPaste: false };
@@ -1660,15 +1876,23 @@ export function createTerminalDeckController(options = {}) {
   function resizeSession(sessionId, cols, rows) {
     if (typeof sessionId !== 'string' || !TERMINAL_SESSION_ID_RE.test(sessionId)) return;
     if (!Number.isSafeInteger(cols) || !Number.isSafeInteger(rows) || cols <= 0 || rows <= 0) return;
+    const clampedCols = Math.max(2, Math.min(500, cols));
+    const clampedRows = Math.max(2, Math.min(300, rows));
     try {
-      sessionFacade?.resize?.({ session: sessionId, cols, rows });
+      const res = sessionFacade?.resize?.({ session: sessionId, cols: clampedCols, rows: clampedRows });
+      if (res && typeof (/** @type {{ catch?: unknown }} */ (res)).catch === 'function') {
+        /** @type {Promise<unknown>} */ (res).catch(() => {});
+      }
     } catch {
       // Best-effort resize.
     }
     const direct = directPortFacades.get(sessionId);
     if (direct) {
       try {
-        direct.resize({ session: sessionId, cols, rows });
+        const res = direct.resize({ session: sessionId, cols: clampedCols, rows: clampedRows });
+        if (res && typeof (/** @type {{ catch?: unknown }} */ (res)).catch === 'function') {
+          /** @type {Promise<unknown>} */ (res).catch(() => {});
+        }
       } catch {
         // Best-effort resize.
       }
@@ -1684,8 +1908,9 @@ export function createTerminalDeckController(options = {}) {
       clearTimeout(toastTimer);
       toastTimer = null;
     }
-    for (const timer of pendingTimers) {
-      clearTimeout(timer);
+    for (const entry of pendingTimers) {
+      clearTimeout(entry.timer);
+      entry.resolve();
     }
     pendingTimers.clear();
     for (const direct of directPortFacades.values()) {
@@ -1744,6 +1969,7 @@ export function createTerminalDeckController(options = {}) {
     switchScreen,
     focusSlot,
     bootstrap,
+    dismissError,
     handleKeyDown,
     writeSessionBytes,
     resizeSession,

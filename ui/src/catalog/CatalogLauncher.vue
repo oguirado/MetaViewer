@@ -135,12 +135,12 @@ async function onCreate(payload) {
   choosingRole.value = true;
   try {
     const choices = await api.choices();
-    if (!props.visible || generation !== choiceGeneration) return;
+    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }
     profileChoices.value = choices;
     if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');
     profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';
     roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';
-  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
+  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
 }
 
 function onClose() {

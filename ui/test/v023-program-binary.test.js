@@ -808,6 +808,39 @@ async function runProbes({
     }
   });
 
+  // 14. V024-WALL-FIXES: With metaviewerRoles present, kit dialog emits create then closes synchronously, and the role and identity dialog appears with its choices.
+  await check('launcher-role-dialog-survives-sync-kit-close', async () => {
+    const fakeChoices = [
+      { profileId: 'mv-live-1', role: 'human', available: true, currentMode: 'human' },
+      { profileId: 'mv-live-2', role: 'agent', available: false },
+    ];
+    const h = createLauncherHarness(launcherSource, model.buildCreateIntent, {
+      choices: async () => {
+        await new Promise((r) => setTimeout(r, 0));
+        return fakeChoices;
+      },
+    });
+    h.ctx.emit = (event, payload) => {
+      h.events.push([event, payload]);
+      if (event === 'update:visible') {
+        h.ctx.props.visible = Boolean(payload);
+      }
+    };
+    // Kit NewCapsuleDialog emits create, then synchronously emits update:visible(false) and close.
+    const createPromise = h.ctx.onCreate({ type: { id: 'identity-browser' }, placement: 'tab' });
+    h.ctx.forwardVisible(false);
+    h.ctx.onClose();
+    await createPromise;
+    return h.ctx.choosingRole.value === true
+      && h.ctx.props.visible === true
+      && h.ctx.profileChoice.value === 'mv-live-1'
+      && h.ctx.roleChoice.value === 'human'
+      && Array.isArray(h.ctx.profileChoices.value)
+      && h.ctx.profileChoices.value.length === 2
+      && !h.events.some(([ev, val]) => ev === 'update:visible' && val === false)
+      && !h.events.some(([ev]) => ev === 'close');
+  });
+
   return failed;
 }
 
@@ -1445,6 +1478,198 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     const failed = await runProbes({ activityModel: mutatedActivityMod });
     assert.ok(failed.includes('refusal-propagates-to-dialog'), `Mutant 15c survived: ${failed}`);
   }
+
+  // Mutant 16 (V024-WALL-FIXES): restore old forwardVisible and onCreate order in CatalogLauncher.vue.
+  {
+    const mutatedLauncher = launcherSrc
+      .replace(
+        "  // The kit dialog closes itself right after `create`: that close must not end the role or program step.\n  if (!value && (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value))) return;\n",
+        '',
+      )
+      .replace(
+        "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
+        "  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n    choosingRole.value = true;\n  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; profileChoice.value = ''; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; choosingRole.value = true; }",
+      )
+      .replace(
+        "  if (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value)) return;\n",
+        '',
+      );
+    assert.notEqual(mutatedLauncher, launcherSrc);
+    const failed = await runProbes({ launcherSource: mutatedLauncher });
+    assert.ok(failed.includes('launcher-role-dialog-survives-sync-kit-close'), `Mutant 16 survived: ${failed}`);
+  }
+});
+
+test('V024-WALL-FIXES: mounted CatalogLauncher shows role and identity dialog with choices when kit dialog emits create then closes synchronously, and fails under old forwardVisible/onCreate order', async () => {
+  const vue = await import('vue');
+  const { createRequire } = await import('node:module');
+  const require = createRequire(import.meta.url);
+  const vueHref = pathToFileURL(require.resolve('vue')).href;
+  let compileSeq = 0;
+
+  async function mountLauncherSfc(sfcSource, rolesApi) {
+    const prevRoles = globalThis.metaviewerRoles;
+    globalThis.metaviewerRoles = rolesApi;
+    let kitDialogEmits = null;
+    const KitNewCapsuleDialog = vue.defineComponent({
+      props: ['visible', 'types', 'title', 'subtitle', 'emptyText'],
+      emits: ['update:visible', 'create', 'close'],
+      setup(_props, { emit }) {
+        kitDialogEmits = emit;
+        return () => vue.h('div', { id: 'kit-new-capsule-dialog' });
+      },
+    });
+    globalThis.__v024CatalogDeps = {
+      '../../.kit/capsule-ui-kit/src/index-shell.js': { NewCapsuleDialog: KitNewCapsuleDialog },
+      './catalogModel.js': catalogModel,
+    };
+    const { descriptor } = parse(sfcSource);
+    const compiled = compileScript(descriptor, { id: `v024-launcher-${++compileSeq}`, inlineTemplate: true });
+    const code = compiled.content.replace(
+      /import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/g,
+      (line, binding, _q, spec) => (spec === 'vue'
+        ? line.replace(/(['"])vue\1/, JSON.stringify(vueHref))
+        : `const ${binding.trim()} = globalThis.__v024CatalogDeps[${JSON.stringify(spec)}];`),
+    );
+    const LauncherComp = (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${compileSeq}`)).default;
+
+    const createNode = (tag) => {
+      const node = {
+        tag,
+        props: {},
+        children: [],
+        parent: null,
+        text: '',
+        addEventListener() {},
+        removeEventListener() {},
+        get options() {
+          return node.children.filter((c) => c.tag === 'option');
+        },
+        get value() {
+          return node.props.value ?? '';
+        },
+        set value(v) {
+          node.props.value = v;
+        },
+      };
+      return node;
+    };
+    const renderer = vue.createRenderer({
+      createElement: createNode,
+      createText: (t) => ({ ...createNode('#text'), text: String(t) }),
+      createComment: () => createNode('#comment'),
+      setText(n, t) { n.text = String(t); },
+      setElementText(n, t) { n.text = String(t); n.children = []; },
+      patchProp(n, k, _prev, v) { n.props[k] = v; },
+      insert(n, parent, anchor) {
+        if (n.parent) this.remove(n);
+        n.parent = parent;
+        const i = parent.children.indexOf(anchor);
+        parent.children.splice(i < 0 ? parent.children.length : i, 0, n);
+      },
+      remove(n) {
+        if (n.parent) {
+          const idx = n.parent.children.indexOf(n);
+          if (idx >= 0) n.parent.children.splice(idx, 1);
+          n.parent = null;
+        }
+      },
+      parentNode: (n) => n.parent,
+      nextSibling: (n) => n.parent?.children[n.parent.children.indexOf(n) + 1] ?? null,
+      setScopeId() {},
+      querySelector: () => null,
+    });
+
+    const visibleRef = vue.ref(true);
+    const createdEvents = [];
+    const Host = vue.defineComponent({
+      setup() {
+        return () => vue.h(LauncherComp, {
+          visible: visibleRef.value,
+          'onUpdate:visible': (v) => { visibleRef.value = v; },
+          onCreate: (payload) => { createdEvents.push(payload); },
+        });
+      },
+    });
+    const root = createNode('root');
+    const app = renderer.createApp(Host);
+    app.mount(root);
+
+    const allNodes = (n) => [n, ...(n.children || []).flatMap(allNodes)];
+    const nodeText = (n) => [n.text || '', ...(n.children || []).map(nodeText)].join('').trim();
+
+    return {
+      root,
+      visibleRef,
+      createdEvents,
+      triggerSyncKitCreateAndClose(payload) {
+        kitDialogEmits('create', payload);
+        kitDialogEmits('update:visible', false);
+        kitDialogEmits('close');
+      },
+      allNodes: () => allNodes(root),
+      nodeText,
+      unmount() {
+        app.unmount();
+        globalThis.metaviewerRoles = prevRoles;
+        delete globalThis.__v024CatalogDeps;
+      },
+    };
+  }
+
+  async function verifyLauncherRoleDialog(sfcSource) {
+    const choicesList = [
+      { profileId: 'mv-live-1', role: 'human', available: true, currentMode: 'human' },
+      { profileId: 'mv-live-2', role: 'agent', available: false },
+    ];
+    const mounted = await mountLauncherSfc(sfcSource, {
+      choices: async () => {
+        await new Promise((r) => setTimeout(r, 10));
+        return choicesList;
+      },
+    });
+    try {
+      mounted.triggerSyncKitCreateAndClose({ type: { id: 'identity-browser' }, placement: 'tab' });
+      await new Promise((r) => setTimeout(r, 25));
+      await vue.nextTick();
+
+      const dialog = mounted.allNodes().find(
+        (n) => n.props?.role === 'dialog' && n.props?.['aria-label'] === 'Capsule role and identity',
+      );
+      assert.ok(dialog, 'Role and identity dialog must be rendered after synchronous kit create + close');
+      assert.equal(mounted.visibleRef.value, true, 'Launcher must stay visible while choosing role and identity');
+      const options = mounted.allNodes().filter((n) => n.tag === 'option').map((n) => ({
+        value: n.props?.value,
+        disabled: Boolean(n.props?.disabled),
+        label: mounted.nodeText(n),
+      }));
+      assert.ok(options.some((o) => o.value === 'agent' && o.label === 'Agent'));
+      assert.ok(options.some((o) => o.value === 'human' && o.label === 'Human'));
+      assert.ok(options.some((o) => o.value === 'mv-live-1' && !o.disabled && o.label.includes('mv-live-1')));
+      assert.ok(options.some((o) => o.value === 'mv-live-2' && o.disabled && o.label.includes('unavailable')));
+    } finally {
+      mounted.unmount();
+    }
+  }
+
+  const realSource = readFileSync(CATALOG_LAUNCHER_PATH, 'utf8');
+  await verifyLauncherRoleDialog(realSource);
+
+  const revertedSource = realSource
+    .replace(
+      "  // The kit dialog closes itself right after `create`: that close must not end the role or program step.\n  if (!value && (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value))) return;\n",
+      '',
+    )
+    .replace(
+      "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
+      "  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n    choosingRole.value = true;\n  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; profileChoice.value = ''; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; choosingRole.value = true; }",
+    )
+    .replace(
+      "  if (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value)) return;\n",
+      '',
+    );
+  assert.notEqual(revertedSource, realSource);
+  await assert.rejects(() => verifyLauncherRoleDialog(revertedSource), { code: 'ERR_ASSERTION' });
 });
 
 test('a bare binary name is also found in the standard program directories the app PATH omits', async () => {

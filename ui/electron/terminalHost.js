@@ -406,7 +406,14 @@ export function createTerminalHost({
             clearAttachTimer(s);
             sessions.delete(id);
             s.resolveExit();
-            s.reject(new Error('TERMINAL_IO_REFUSED'));
+            const err = new Error('TERMINAL_IO_REFUSED');
+            if (typeof message.code === 'string' && message.code) {
+              /** @type {any} */ (err).code = message.code;
+            }
+            if (typeof message.remedy === 'string' && message.remedy) {
+              /** @type {any} */ (err).remedy = message.remedy;
+            }
+            s.reject(err);
             return;
           }
           const errFrame = { session: id, error: 'TERMINAL_IO_REFUSED' };

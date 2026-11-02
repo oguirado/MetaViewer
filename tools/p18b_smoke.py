@@ -91,7 +91,7 @@ assert connected()['readonly'] is False
 start=stage_counts()
 click_id('shell-more')
 more=wait('(()=>{const e=document.querySelector(".mv-more-menu [role=menu]");return e?.matches(":popover-open")&&{text:e.innerText,flag:document.body.getAttribute("data-mv-modal")}})()')
-assert more['text'].splitlines()==['Automate from a demo','Storyboard','Settings','Open in multislot','Terminal']
+assert more['text'].splitlines()==['Storyboard','Settings','Terminal']
 assert more['flag']=='open' and connected()['readonly'] is False
 click_id('shell-more')
 wait('!document.body.hasAttribute("data-mv-modal")')

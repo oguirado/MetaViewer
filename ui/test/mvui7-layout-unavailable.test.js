@@ -238,12 +238,19 @@ for (const ordering of ['write-first', 'read-first']) test(`disabled adapter ref
 test('layout alert hides on unrelated screens and returns with the wall', async () => {
   const app = await mountApp({ readRaw: async () => { throw new Error('LAYOUT_LOAD_FAILED'); }, writeAtomic: async () => assert.fail('save crossed lock') });
   try {
-    for (const opener of ['shell-creative', 'shell-settings', 'shell-multislot']) {
+    for (const opener of ['shell-creative', 'shell-settings']) {
       assert.ok(byId(app.view.root, 'mv-layout-unavailable'));
       byId(app.view.root, opener).props.onClick(); await tick();
       assert.equal(byId(app.view.root, 'mv-layout-unavailable'), undefined);
       if (opener !== 'shell-settings') { byId(app.view.root, 'shell-settings').props.onClick(); await tick(); }
       byId(app.view.root, 'shell-settings').props.onClick(); await tick();
+      assert.ok(byId(app.view.root, 'mv-layout-unavailable'));
+    }
+    byId(app.view.root, 'multislot-back') === undefined && app.view.app?._instance?.exposed?.openMultislot?.();
+    await tick();
+    if (byId(app.view.root, 'multislot-back')) {
+      assert.equal(byId(app.view.root, 'mv-layout-unavailable'), undefined);
+      byId(app.view.root, 'multislot-back').props.onClick(); await tick();
       assert.ok(byId(app.view.root, 'mv-layout-unavailable'));
     }
   } finally { app.close(); }

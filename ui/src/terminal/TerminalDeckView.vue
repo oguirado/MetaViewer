@@ -647,6 +647,10 @@ function onCancelClose() {
   controller.cancelPendingClose();
 }
 
+function onDismissError() {
+  controller.dismissError();
+}
+
 async function onBootstrap() {
   await controller.bootstrap();
 }
@@ -960,7 +964,7 @@ defineExpose({
       :data-error-code="errorCode || undefined"
       class="mv-terminal-deck__error"
       role="alert"
-    >{{ errorMessage }}</p>
+    ><span id="terminal-deck-error-text" class="mv-terminal-deck__error-text">{{ errorMessage }}</span><button type="button" id="terminal-deck-error-dismiss" data-semantic-anchor="terminal/error/dismiss" class="mv-terminal-deck__error-dismiss" aria-label="Dismiss terminal error" @click="onDismissError">✕</button></p>
 
     <div
       id="terminal-deck-grid"

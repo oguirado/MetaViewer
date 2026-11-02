@@ -961,12 +961,23 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         throw new Error('COMMAND_NOT_ALLOWED');
       }
       if (!terminal || !enabled) throw new Error('TERMINAL_DISABLED');
-      const result = await terminal.open(
-        value.command === 'shell'
-          ? {command:'shell',cols:value.cols,rows:value.rows}
-          : {command:'provider',provider:value.command,cols:value.cols,rows:value.rows},
-        sender
-      );
+      let result;
+      try {
+        result = await terminal.open(
+          value.command === 'shell'
+            ? {command:'shell',cols:value.cols,rows:value.rows}
+            : {command:'provider',provider:value.command,cols:value.cols,rows:value.rows},
+          sender
+        );
+      } catch (error) {
+        const code = typeof (/** @type {{code?:unknown}} */ (error))?.code === 'string'
+          ? /** @type {string} */ ((/** @type {{code?:unknown}} */ (error)).code)
+          : '';
+        if (/** @type {any} */ (error)?.message === 'TERMINAL_IO_REFUSED' && /^[A-Z][A-Z0-9_]{1,63}$/.test(code)) {
+          return {ok:false,code};
+        }
+        throw error;
+      }
       if (result?.ok === false && typeof result.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(result.code)) return {ok:false,code:result.code};
       if (!result || Object.keys(result).join(',') !== 'session' || typeof result.session !== 'string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(result.session)) throw new Error('OUTCOME');

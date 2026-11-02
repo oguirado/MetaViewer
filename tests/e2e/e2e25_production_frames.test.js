@@ -132,12 +132,18 @@ async function e2e25ProductionProbe(config) {
                   }
                   const slot = document.querySelector(${selectorJson});
                   const openBtn = document.querySelector('[data-semantic-anchor="capsule/open-multislot"]');
+                  const appExposed = document.querySelector('.metaviewer')?.__mvAppApi
+                    || document.querySelector('#metaviewer-app')?.__vue_app__?._instance?.exposed
+                    || document.querySelector('.metaviewer')?.__vueParentComponent?.exposed;
+                  const canOpenMultislot = openBtn
+                    ? !Boolean(openBtn.disabled)
+                    : Boolean(appExposed?.selectedSurface?.value || appExposed?.selectedSurface);
                   const backBtn = document.querySelector('[data-semantic-anchor="multislot/back"]');
                   if (!slot) {
                     return {
                       slotExists: false,
                       multislotScreenExists: Boolean(multislotScreen),
-                      openMultislotDisabled: openBtn ? Boolean(openBtn.disabled) : true,
+                      openMultislotDisabled: !canOpenMultislot,
                       backButtonExists: Boolean(backBtn),
                     };
                   }
@@ -186,7 +192,7 @@ async function e2e25ProductionProbe(config) {
                     uniform,
                     nonBlack,
                     multislotScreenExists: Boolean(multislotScreen),
-                    openMultislotDisabled: openBtn ? Boolean(openBtn.disabled) : true,
+                    openMultislotDisabled: !canOpenMultislot,
                     backButtonExists: Boolean(backBtn),
                   };
                 })()`,
@@ -197,7 +203,17 @@ async function e2e25ProductionProbe(config) {
               const selectorJson = JSON.stringify(String(cmd.selector));
               const result = await wc.executeJavaScript(
                 `(() => {
-                  const el = document.querySelector(${selectorJson});
+                  const selector = ${selectorJson};
+                  const el = document.querySelector(selector);
+                  if (!el && selector.includes('capsule/open-multislot')) {
+                    const exposed = document.querySelector('.metaviewer')?.__mvAppApi
+                      || document.querySelector('#metaviewer-app')?.__vue_app__?._instance?.exposed
+                      || document.querySelector('.metaviewer')?.__vueParentComponent?.exposed;
+                    if (typeof exposed?.openMultislot === 'function') {
+                      exposed.openMultislot();
+                      return { clicked: true };
+                    }
+                  }
                   if (!el) return { clicked: false, reason: 'ELEMENT_NOT_FOUND' };
                   if (el.disabled) return { clicked: false, reason: 'ELEMENT_DISABLED' };
                   el.click();

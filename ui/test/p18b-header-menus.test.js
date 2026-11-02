@@ -243,11 +243,11 @@ async function headerOracle(source) {
     const buttons=()=>all(live.root).filter(n=>n.tag==='button'&&visible(n));
     assert.deepEqual(buttons().map(text),['Use MetaViewer','Identities','More']);
     buttons().find(n=>text(n)==='More').props.onClick();await tick();
-    assert.deepEqual(buttons().slice(3).map(text),['Automate from a demo','Storyboard','Settings','Open in multislot','Terminal']);
-    buttons().find(n=>text(n)==='Automate from a demo').props.onClick();await tick();
-    assert.equal(all(live.root).some(n=>n.props?.role==='menu'&&visible(n)),false);
-    for(const label of ['Storyboard','Settings','Open in multislot','Terminal']) {
-      buttons().find(n=>text(n)==='More').props.onClick();await tick();
+    assert.deepEqual(buttons().slice(3).map(text),['Storyboard','Settings','Terminal']);
+    for(const label of ['Storyboard','Settings','Terminal']) {
+      if(!all(live.root).some(n=>n.props?.role==='menu'&&visible(n))) {
+        buttons().find(n=>text(n)==='More').props.onClick();await tick();
+      }
       buttons().find(n=>text(n)===label).props.onClick();await tick();
       assert.equal(calls.at(-1),label,`${label} calls its existing feature handler`);
       assert.equal(all(live.root).some(n=>n.props?.role==='menu'&&visible(n)),false);

@@ -2470,3 +2470,339 @@ test('V023-REVIEW-FIX-9: switching screens closes context menu and Bootstrap foc
     assert.AssertionError,
   );
 });
+
+// ---------------------------------------------------------------------------
+// 11. V024-WALL-FIXES: At most 2 terminals per screen (auto-creates or uses
+//     next screen for Shell and Custom CLI), CLASS_LIMIT real refusal code,
+//     dismissible & auto-cleared error banner, and session leak / close fixes
+// ---------------------------------------------------------------------------
+
+test('V024-WALL-FIXES: at most 2 terminals per screen; opening a 3rd terminal (Shell or Custom CLI) creates or uses the next screen and switches to it (with mutants)', async () => {
+  assert.equal(deckModel.MAX_SLOTS_PER_SCREEN, 2);
+
+  async function screenCapOracle(api) {
+    const harness = createBrokerDouble();
+    const controller = api.createTerminalDeckController({
+      broker: harness.broker,
+      sessionFacade: harness.sessionFacade,
+    });
+
+    try {
+      // 1. Open 2 Shell terminals on Screen 1 -> stays on Screen 1 (slots: 2).
+      const s1 = await controller.launchProfile('shell');
+      const s2 = await controller.launchProfile('shell');
+      assert.equal(controller.state.screens.length, 1);
+      assert.equal(controller.state.activeScreenIndex, 0);
+      assert.deepEqual(controller.state.screens[0].slots.map((s) => s.id), [s1.id, s2.id]);
+
+      // 2. Open a 3rd Shell terminal on full Screen 1 -> creates Screen 2 and switches to it.
+      const s3 = await controller.launchProfile('shell');
+      assert.equal(controller.state.screens.length, 2);
+      assert.equal(controller.state.activeScreenIndex, 1);
+      assert.equal(controller.state.screens[0].slots.length, 2);
+      assert.deepEqual(controller.state.screens[1].slots.map((s) => s.id), [s3.id]);
+      assert.equal(controller.state.focusedSlotId, s3.id);
+
+      // 3. Switch back to full Screen 1 and launch a Custom CLI -> reuses existing Screen 2 (which has 1 slot) and switches to it.
+      controller.selectScreen(0);
+      assert.equal(controller.state.activeScreenIndex, 0);
+      const s4 = await controller.launchCustomCli('echo second-on-screen-2');
+      assert.equal(controller.state.screens.length, 2, 'Must use existing Screen 2 when it has capacity');
+      assert.equal(controller.state.activeScreenIndex, 1);
+      assert.deepEqual(controller.state.screens[1].slots.map((s) => s.id), [s3.id, s4.id]);
+
+      // 4. Screen 2 is now also full (2 slots). Launch another Custom CLI -> creates Screen 3 and switches to it.
+      const s5 = await controller.launchCustomCli('echo first-on-screen-3');
+      assert.equal(controller.state.screens.length, 3);
+      assert.equal(controller.state.activeScreenIndex, 2);
+      assert.deepEqual(controller.state.screens[2].slots.map((s) => s.id), [s5.id]);
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  await screenCapOracle(deckModel);
+
+  // Mutant 1: MAX_SLOTS_PER_SCREEN raised above 2 keeps 3rd terminal on Screen 1.
+  const mutatedCap4 = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    'export const MAX_SLOTS_PER_SCREEN = 2;',
+    'export const MAX_SLOTS_PER_SCREEN = 4;',
+  );
+  await assert.rejects(() => screenCapOracle(mutatedCap4), { code: 'ERR_ASSERTION' });
+
+  // Mutant 2: launchCustomCli bypasses resolveTargetScreenForNewSlot.
+  const mutatedCustomNoOverflow = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    '    const screen = resolveTargetScreenForNewSlot() ?? screens[activeScreenIndex];\n    const slotId = `slot-${nextSlotSeq++}`;\n    /** @type {DeckSlot} */\n    const slot = {\n      id: slotId,\n      title: commandText,',
+    '    const screen = screens[activeScreenIndex];\n    const slotId = `slot-${nextSlotSeq++}`;\n    /** @type {DeckSlot} */\n    const slot = {\n      id: slotId,\n      title: commandText,',
+  );
+  await assert.rejects(() => screenCapOracle(mutatedCustomNoOverflow), { code: 'ERR_ASSERTION' });
+});
+
+test('V024-WALL-FIXES: real broker refusal code (CLASS_LIMIT), dismissible error banner, auto-clear on success, cumulative byte ack, and single clean close without TERMINAL_UNKNOWN_SESSION errors (with mutants)', async (t) => {
+  const { mkdtemp, mkdir, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { MessageChannel } = await import('node:worker_threads');
+  const { createTerminalHost } = await import('../electron/terminalHost.js');
+  const { installAuthorityWire } = await import('../electron/authorityWire.js');
+  const preloadMod = await import('../electron/preload.js');
+  const { createTerminalBroker } = await import('../src/core/hostAdapters.js');
+
+  const root = await mkdtemp(join(tmpdir(), 'v024-wall-fixes-pty-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const resourcesPath = join(root, 'resources');
+  const stagedPtyDir = join(resourcesPath, 'build-native/pty-runtime/node-pty');
+  await mkdir(stagedPtyDir, { recursive: true });
+  await writeFile(
+    join(stagedPtyDir, 'package.json'),
+    JSON.stringify({ name: 'node-pty', version: '1.1.0', main: './index.cjs' }),
+  );
+  await writeFile(
+    join(stagedPtyDir, 'index.cjs'),
+    `module.exports = {
+      spawn(file, args, opts) {
+        let onData = () => {};
+        let onExit = () => {};
+        let killed = false;
+        return {
+          pid: Math.floor(10000 + Math.random() * 80000),
+          file,
+          args,
+          opts,
+          onData(fn) { onData = fn; return { dispose() {} }; },
+          onExit(fn) { onExit = fn; return { dispose() {} }; },
+          write(d) {
+            if (killed) return;
+            const s = String(d);
+            if (s === '\\x03') {
+              killed = true;
+              onExit({ exitCode: 130 });
+              return;
+            }
+            onData(s);
+          },
+          resize() {},
+          kill() {
+            if (!killed) {
+              killed = true;
+              onExit({ exitCode: 0 });
+            }
+          },
+          pause() {},
+          resume() {},
+        };
+      }
+    };\n`,
+  );
+
+  /** @type {Map<string, Function>} */
+  const ipcHandlers = new Map();
+  /** @type {Map<string, Set<Function>>} */
+  const ipcRendererListeners = new Map();
+  /** @type {Set<MessagePort>} */
+  const activePorts = new Set();
+  const closeIpcOutcomes = [];
+
+  const ipcMain = {
+    handle(channel, fn) {
+      ipcHandlers.set(channel, async (event, ...args) => {
+        try {
+          const res = await fn(event, ...args);
+          if (channel === 'metaviewer:side-terminal.close') {
+            closeIpcOutcomes.push({ ok: true, res });
+          }
+          return res;
+        } catch (err) {
+          if (channel === 'metaviewer:side-terminal.close') {
+            closeIpcOutcomes.push({ ok: false, message: err?.message });
+          }
+          throw err;
+        }
+      });
+    },
+    removeHandler(channel) {
+      ipcHandlers.delete(channel);
+    },
+  };
+
+  const mainFrame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+  const contents = {
+    id: 88,
+    mainFrame,
+    isDestroyed: () => false,
+    postMessage(channel, value, transfer) {
+      const listeners = ipcRendererListeners.get(channel);
+      if (!listeners) return;
+      for (const fn of [...listeners]) {
+        fn({ ports: transfer ?? [] }, value);
+      }
+    },
+  };
+  const senderEvent = { sender: contents, senderFrame: mainFrame };
+  const cleanEnv = { PATH: '/usr/bin:/bin', HOME: root, TERM: 'xterm-256color', XDG_CONFIG_HOME: root };
+
+  const terminalHost = createTerminalHost({
+    env: cleanEnv,
+    resourcesPath,
+    createMessageChannel: () => {
+      const { port1, port2 } = new MessageChannel();
+      activePorts.add(port1);
+      activePorts.add(port2);
+      return { port1, port2 };
+    },
+  });
+  const wire = installAuthorityWire({
+    ipcMain,
+    contents,
+    env: cleanEnv,
+    argv: ['--nested-depth=0'],
+    core: {
+      request: async () => ({
+        schema: 'action_verdict/v0.2',
+        proposal_id: 'p1',
+        core_seq: 1,
+        decision: 'admitted',
+      }),
+    },
+    profiles: new Map(),
+    terminal: terminalHost,
+  });
+
+  let rendererWindowMetaviewer = null;
+  preloadMod.installPreload({
+    contextBridge: {
+      exposeInMainWorld(_name, api) {
+        rendererWindowMetaviewer = simulateContextBridgeClone(api);
+      },
+    },
+    ipcRenderer: {
+      async invoke(channel, ...args) {
+        const handler = ipcHandlers.get(channel);
+        if (!handler) throw new Error(`CHANNEL: ${channel}`);
+        const res = await handler(senderEvent, ...args);
+        if (channel === 'metaviewer:side-terminal.attach' && res && typeof res === 'object') {
+          return { session: res.session };
+        }
+        return res;
+      },
+      on(channel, fn) {
+        if (!ipcRendererListeners.has(channel)) ipcRendererListeners.set(channel, new Set());
+        ipcRendererListeners.get(channel).add(fn);
+      },
+      removeListener(channel, fn) {
+        ipcRendererListeners.get(channel)?.delete(fn);
+      },
+    },
+  });
+
+  class StubTerminal {
+    loadAddon() {}
+    attachCustomKeyEventHandler() {}
+    onData() { return { dispose() {} }; }
+    open() {}
+    write() {}
+    focus() {}
+    blur() {}
+    dispose() {}
+  }
+  class StubFitAddon {
+    fit() {}
+  }
+
+  const TerminalDeckView = await compileSfc('../src/terminal/TerminalDeckView.vue', {
+    '@xterm/xterm': { Terminal: StubTerminal },
+    '@xterm/addon-fit': { FitAddon: StubFitAddon },
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) },
+    './terminalDeckModel.js': deckModel,
+  });
+
+  const rendererBroker = createTerminalBroker(rendererWindowMetaviewer.sideTerminal);
+  const mounted = mountTree(TerminalDeckView, {
+    open: true,
+    terminalBroker: rendererBroker,
+    terminalBinding: rendererWindowMetaviewer.sideTerminal,
+    storage: createMemoryStorage(),
+    closeGraceMs: 10,
+  });
+
+  try {
+    await tick();
+    const ctrl = mounted.vm.controller;
+
+    // 1. Open 4 shells (fills Screen 1 with 2 slots and Screen 2 with 2 slots, hitting ptyBroker maxShellSessions = 4).
+    const slot1 = await ctrl.launchProfile('shell');
+    const slot2 = await ctrl.launchProfile('shell');
+    const slot3 = await ctrl.launchProfile('shell');
+    const slot4 = await ctrl.launchProfile('shell');
+    await tick();
+    assert.equal(ctrl.state.screens.length, 2);
+    assert.equal(ctrl.state.screens[0].slots.length, 2);
+    assert.equal(ctrl.state.screens[1].slots.length, 2);
+
+    // 2. Stream > 260 data chunks on slot1 to verify cumulative byte ack prevents 256-frame credit stall.
+    for (let i = 0; i < 265; i += 1) {
+      ctrl.writeSessionBytes(slot1.sessionId, [65]);
+    }
+    await sleep(30);
+    assert.equal(slot1.status, 'running', 'Cumulative credit ack must keep session alive past 256 frames');
+
+    // 3. A 5th shell open hits ptyBroker handleOpen countLiveByClass('shell') >= 4 -> refuses with real code CLASS_LIMIT.
+    await assert.rejects(() => ctrl.launchProfile('shell'));
+    await tick();
+    const errBanner = mounted.findById('terminal-deck-error');
+    assert.notEqual(errBanner, null, 'Error banner must be rendered');
+    assert.equal(errBanner.props['data-error-code'], 'CLASS_LIMIT', 'Must surface real refusal code CLASS_LIMIT');
+    assert.match(mounted.textOf(errBanner), /^CLASS_LIMIT: /);
+
+    // 4. Error banner is dismissible via #terminal-deck-error-dismiss.
+    const dismissBtn = mounted.findById('terminal-deck-error-dismiss');
+    assert.notEqual(dismissBtn, null, 'Dismiss button must be rendered inside #terminal-deck-error');
+    dismissBtn.props.onClick();
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-error'), null, 'Clicking dismiss must clear the error banner');
+    assert.equal(ctrl.state.errorCode, '');
+    assert.equal(ctrl.state.errorMessage, '');
+
+    // 5. Trigger CLASS_LIMIT again, then close slot4 -> closing a slot frees its broker session AND clears the error,
+    //    and does NOT emit TERMINAL_UNKNOWN_SESSION errors on side-terminal.close!
+    await assert.rejects(() => ctrl.launchProfile('shell'));
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-error')?.props['data-error-code'], 'CLASS_LIMIT');
+
+    closeIpcOutcomes.length = 0;
+    const slot4SessionId = slot4.sessionId;
+    await ctrl.requestCloseSlot(slot4.id, { force: true });
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-error'), null, 'Closing a slot clears the error banner');
+    assert.equal(
+      closeIpcOutcomes.filter((c) => !c.ok).length,
+      0,
+      `Closing a slot must not fail with TERMINAL_UNKNOWN_SESSION: ${JSON.stringify(closeIpcOutcomes)}`,
+    );
+
+    // 6. Because closing slot4 freed its broker session, opening a new shell now succeeds!
+    const slot5 = await ctrl.launchProfile('shell');
+    await tick();
+    assert.equal(slot5.status, 'running');
+    assert.equal(ctrl.state.errorCode, '');
+    assert.equal(mounted.findById('terminal-deck-error'), null);
+
+    // 7. Calling rendererBroker.close on an already-gone session is a no-op success (not an error for the user).
+    const goneCloseResult = await rendererBroker.close({ session: slot4SessionId });
+    assert.equal(goneCloseResult, true);
+
+    void slot2;
+    void slot3;
+  } finally {
+    mounted.app.unmount();
+    await wire.dispose();
+    await terminalHost.dispose();
+    for (const p of activePorts) {
+      try { p.close(); } catch {}
+    }
+  }
+});
+
