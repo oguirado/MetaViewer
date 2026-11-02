@@ -329,12 +329,26 @@ step_apparmor() {
         bash -c 'install -m 0644 -o root -g root "$1" "$2" && apparmor_parser -r "$2"' _ "$PROFILE_SRC" "$APPARMOR_DIR/metaviewer-judge"
 }
 
+# The package tool imports @electron/asar. A kit unpacked from source has no ui/node_modules,
+# so install the lockfile's exact versions; --ignore-scripts skips the Electron download and
+# native builds, because the app under test comes from the release tarball.
+ensure_pkg_tool_deps() {
+    local log=$1 ui
+    ui=$KIT/ui
+    [ -f "$ui/package-lock.json" ] || return 0
+    [ ! -d "$ui/node_modules/@electron/asar" ] || return 0
+    if ! PATH="$(dirname "$NODE_BIN"):$PATH" npm --prefix "$ui" ci --ignore-scripts --no-audit --no-fund >"$log" 2>&1; then
+        fail JUDGE_SMOKE "cannot install the package tool dependencies: $(tail -n 3 "$log" | tr '\n' ' ')" "check the network, then run: npm --prefix $ui ci --ignore-scripts"
+    fi
+}
+
 step_verify_smoke() {
     local log=$JUDGE_HOME/logs/smoke.log rc
     mkdir -p "$JUDGE_HOME/logs"
     if [ ! -f "$PKG_TOOL" ]; then
         fail JUDGE_SMOKE "the package verification tool is missing from the kit ($PKG_TOOL)" "extract the full judge kit again"
     fi
+    ensure_pkg_tool_deps "$log"
     if "$NODE_BIN" "$PKG_TOOL" --verify-install "$APP_DIR" >"$log" 2>&1; then
         :
     else
