@@ -317,6 +317,60 @@ class ProgramTests(unittest.TestCase):
         planner.plan_step.assert_called_once()
         client.subscribe_frames.assert_called_once()
 
+    def test_model_group_refuses_reserved_noninteger_self_and_own_group(self):
+        with patch.object(program.os, 'getpid', return_value=100), patch.object(
+                program.os, 'getpgid', return_value=90), patch.object(program.os, 'killpg') as send:
+            for target in (0, 1, -1, True, False, 2.0, '200', None, Mock(), 100, 90):
+                with self.subTest(target=repr(target)):
+                    with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_MODEL_PROCESS_TARGET'):
+                        program.stop_model_group(target)
+            send.assert_not_called()
+
+    def test_model_group_signals_only_recorded_target_and_tolerates_already_gone(self):
+        with patch.object(program.os, 'getpid', return_value=100), patch.object(
+                program.os, 'getpgid', return_value=90), patch.object(program.os, 'killpg') as send:
+            program.stop_model_group(200)
+            send.assert_called_once_with(200, program.signal.SIGKILL)
+            send.reset_mock()
+            send.side_effect = ProcessLookupError
+            program.stop_model_group(200)
+            send.assert_called_once_with(200, program.signal.SIGKILL)
+
+    def test_model_group_is_cleaned_before_reaping_releases_its_identifier(self):
+        events = []
+        owned = [True]
+        streams = [tempfile.TemporaryFile(dir=self.root) for _ in range(3)]
+        for stream in streams:
+            self.addCleanup(stream.close)
+        child = SimpleNamespace(pid=200, stdin=streams[0], stdout=streams[1],
+                                stderr=streams[2], returncode=None)
+        def observe_exit(kind, pid, flags):
+            self.assertEqual((kind, pid), (program.os.P_PID, 200))
+            self.assertTrue(flags & program.os.WNOWAIT)
+            events.append('observe_unreaped_exit')
+            return SimpleNamespace(si_pid=200)
+        def signal_group(pid, sig):
+            self.assertTrue(owned[0], 'reaping would allow an unrelated group to reuse this id')
+            self.assertEqual((pid, sig), (200, program.signal.SIGKILL))
+            events.append('cleanup_owned_group')
+        def reap():
+            events.append('reap')
+            owned[0] = False
+            child.returncode = 0
+        child.wait = reap
+        selector = Mock()
+        selector.get_map.return_value = {}
+        with patch.object(host.subprocess, 'Popen', return_value=child), patch.object(
+                program.selectors, 'DefaultSelector', return_value=contextlib.nullcontext(selector)), patch.object(
+                program.os, 'waitid', side_effect=observe_exit), patch.object(
+                program.os, 'getpid', return_value=100), patch.object(
+                program.os, 'getpgid', return_value=90), patch.object(
+                program.os, 'killpg', side_effect=signal_group):
+            result = program.run_model_with_frames(Mock(), ['synthetic-provider'],
+                cwd=self.root, env={}, request=b'{}', timeout=1)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(events, ['observe_unreaped_exit', 'cleanup_owned_group', 'reap'])
+
     def test_model_pipe_wait_drains_frames_without_input_or_background_reader(self):
         client=Mock()
         client.drain_frames.return_value=False
