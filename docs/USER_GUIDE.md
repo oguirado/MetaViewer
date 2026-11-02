@@ -320,7 +320,7 @@ the notice: it does not resume, retry or authorize agent CAPTCHA solving.
 
 ### Multiple capsules, RAM admission, and private site data
 
-Use **Add capsule** for additional configured profiles (up to `4` `[TARGET]` live capsules, with `MV_SRF_LIVE_PROFILE=mv-live-1`). Create one identity per extra profile in **Identities** (`mv-live-2`..`mv-live-4`), and configure `MV_SRF_PROFILES` with the four browser profiles sharing the canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` and distinct displays (`:100` to `:103`):
+Use **Add capsule** for additional configured profiles (up to `16` [CITED: `../ui/electron/profilePicker.js`, `../daemon-adapter/internal/daemon/environment.go`] live capsules, with `MV_SRF_LIVE_PROFILE=mv-live-1`). Create one identity per extra profile in **Identities** (`mv-live-2`..`mv-live-4`), and configure `MV_SRF_PROFILES`. The following example uses four browser profiles sharing the canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` and distinct displays (`:100` to `:103`):
 
 ```json
 {

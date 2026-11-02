@@ -20,7 +20,7 @@ The live perception and state reader (`default_live_reader`) calls `resolve_lock
 | --- | --- | --- | --- |
 | `VQA_VE_ROOT` | `vision-engine` | `v0.2.0` [CITED: deps.lock] | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED: deps.lock] |
 | `MV_WENDER_ROOT` | `wender-agent` | `v0.3.0` [CITED: deps.lock] | `96120967b435b72fc6d29635f3844dae140388a9` [CITED: deps.lock] |
-| `MV_SRF_BIN_DIR` | `opensuperficies` | `os-cu-w9-mv1` [CITED: deps.lock] | `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] |
+| `MV_SRF_BIN_DIR` | `opensuperficies` | `os-cu-w9-mv1` [CITED: deps.lock] | `3cb86d752f38457b6730eefd235d4da4c4039721` [CITED: deps.lock] |
 
 If a local clone is on a different branch or has tracked modifications, create clean detached worktrees at the `deps.lock` commits (`git worktree add --detach <dir> <commit>`) before running the live script:
 
