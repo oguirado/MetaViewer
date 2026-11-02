@@ -221,14 +221,24 @@ func TestSubscriptionDeliveryFailure(t *testing.T) {
 	if !errors.Is(s.TerminalError("a"), sentinel) {
 		t.Fatal("delivery failure was hidden")
 	}
-	// Completion includes notification delivery: require exactly one attempted
-	// frame and one failure, even when the failure notification is refused too.
-	if len(delivered) != 2 {
-		t.Fatalf("expected one frame attempt and one failure notification, got %d", len(delivered))
+	// The bounded retry uses a fresh capture, never a duplicate reference.
+	// Completion includes exactly two frame attempts and one terminal notice.
+	if len(delivered) != 3 {
+		t.Fatalf("expected two frame attempts and one failure notification, got %d", len(delivered))
 	}
-	var frame struct{ Event string }
-	if msg := <-delivered; json.Unmarshal(msg, &frame) != nil || frame.Event != "frame_ready" {
-		t.Fatalf("missing initial frame attempt: %s", msg)
+	var frame struct {
+		Event string
+		Data  struct {
+			FrameRef Ref `json:"frame_ref"`
+		}
+	}
+	var previous uint64
+	for i := 0; i < 2; i++ {
+		msg := <-delivered
+		if json.Unmarshal(msg, &frame) != nil || frame.Event != "frame_ready" || frame.Data.FrameRef.Generation <= previous {
+			t.Fatalf("missing fresh frame attempt: %s", msg)
+		}
+		previous = frame.Data.FrameRef.Generation
 	}
 	var failure capsule.ErrorEvent
 	if msg := <-delivered; json.Unmarshal(msg, &failure) != nil || failure.Event != "error" || failure.Data.Code != "capture_failed" || failure.Data.SurfaceID != "a" {

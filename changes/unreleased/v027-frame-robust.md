@@ -1,0 +1,3 @@
+- Recover a subscription after an isolated publication or delivery failure by dropping the failed frame and publishing a fresh capture at the next poll deadline; reset unchanged-frame confirmation so an undelivered generation cannot suppress recovery.
+- Bound publication and delivery recovery to two consecutive failures [TARGET, unit decision], retaining terminal diagnostics, capacity reclamation, cancellation drain, and the existing confirmed capture-loss policy.
+- Cover ordered capture, missing source, duplicate native sequence, delivery refusal, and retention eviction before reader open in serial and pipelined subscription tests, without changing frame retention or wire contracts.
