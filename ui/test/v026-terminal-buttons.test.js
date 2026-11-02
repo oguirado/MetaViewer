@@ -58,6 +58,12 @@ test('V026 prompts share Bootstrap coordinates, are bounded and reject secret mu
     assert.ok(prompt.split('\n').length<40);
     assert.match(prompt,/Copy ID for AI line/);
     assert.match(prompt,/Programs support clicks only/);
+    assert.match(prompt,/--planner rules needs no Muse account/);
+    assert.match(prompt,/--planner muse needs authenticated Muse Code/);
+    assert.match(prompt,/one goal per run/);
+    assert.match(prompt,/MW_PROGRAM_CONTROL: press Release control/);
+    assert.match(prompt,/MW_COMPILED_BROWSER_UNAVAILABLE/);
+    assert.match(prompt,/rc 5 means INPUT_UNCERTAIN: never retry/);
     assert.match(prompt,/set -a; \. "<copied-current\.env-path>"; set \+a/);
     assert.match(prompt,/MV_WENDER_ROOT when configured/);
     assert.doesNotMatch(prompt,/Export MV_WENDER_ROOT|mw_run needs a stored workflow for browsers|cannot execute an unstored workflow/);
@@ -67,8 +73,8 @@ test('V026 prompts share Bootstrap coordinates, are bounded and reject secret mu
     }
   }
   const goal = workflowPrompt('no-automation');
-  for (const phrase of ['tools/mw_run_browser_goal.md', '--surface-kind browser', '--goal <exact-visible-control-name>',
-    '[--text <value> --key Enter] --steps N', 'goals must name an exact visible control',
+  for (const phrase of ['tools/mw_run_browser_goal.md', '--surface-kind browser', "--goal 'Exact visible control name' --steps 1",
+    "--text 'Synthetic value' --key Enter --steps 3", 'goals must name an exact visible control',
     '--planner muse sends marks', 'login wall or CAPTCHA stops with rc 4', 'private RAM XDG_STATE_HOME']) {
     assert.ok(goal.includes(phrase), phrase);
   }

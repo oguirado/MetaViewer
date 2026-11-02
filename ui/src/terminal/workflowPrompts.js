@@ -11,6 +11,10 @@ const attachment = [
   'In a subshell: set -a; . "<copied-current.env-path>"; set +a',
   'The file supplies app attachment values and MV_WENDER_ROOT when configured.',
   'If the pinned dependency root is absent, stop and request it from the operator.',
+  'Goal runs: --planner rules needs no Muse account; --planner muse needs authenticated Muse Code.',
+  'Choose one unique exact visible/observed name as the goal, one goal per run.',
+  'MW_PROGRAM_CONTROL: press Release control, verify agent control, then observe again.',
+  'MW_COMPILED_BROWSER_UNAVAILABLE: use the verified pinned checkout or wait for the compiled browser build.',
 ];
 const tasks = {
   automate: [
@@ -38,13 +42,13 @@ const tasks = {
     'Operate without creating or selecting a stored workflow.',
     'Read tools/mw_run_browser_goal.md and tools/mw_run_program.md.',
     'Observe the selected Agent capsule and release human control before running.',
-    'From the agents directory, for browsers run:',
-    'python3 -m metaviewer_agents.mw_run --surface-kind browser --identity <id> --goal <exact-visible-control-name> [--text <value> --key Enter] --steps N',
-    'Browser goals must name an exact visible control.',
-    'For programs use --surface-kind program with --goal <observed-target> --steps N.',
-    'Use private RAM XDG_STATE_HOME under /dev/shm for goal-run evidence.',
-    '--planner muse sends marks to a configured provider; select it explicitly.',
-    'A login wall or CAPTCHA stops with rc 4 for the person.',
+    'From the MetaViewer checkout, for browsers run:',
+    "PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --surface-kind browser --identity '<browser-profile>' --planner rules --goal 'Exact visible control name' --steps 1",
+    "Browser goals must name an exact visible control; for text replace --steps 1 with --text 'Synthetic value' --key Enter --steps 3.",
+    'For programs use --surface-kind program and the copied program identity with one exact observed name; clicks only.',
+    'Use private RAM XDG_STATE_HOME under /dev/shm: export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-goal.XXXXXX)".',
+    '--planner muse sends marks to authenticated Muse Code; without an account keep rules.',
+    'A login wall or CAPTCHA stops with rc 4: person handles it, releases control, then observes a fresh goal.',
     'Inspect fresh observations, receipts and readback; a verified action is not a finished goal.',
   ],
 };
@@ -65,6 +69,7 @@ export function workflowPrompt(kind) {
     'Programs support clicks only; browser goals also support verified text and optional Enter.',
     'A verified action is not a finished goal; check the observed outcome separately.',
     'Keep the operator present. Stop on refusal, uncertain delivery, login or CAPTCHA.',
+    'rc 0 verifies bounded actions; rc 5 means INPUT_UNCERTAIN: never retry; rc 6 means inspect and repair the refusal.',
     'Never retry an uncertain action or change network policy.',
     'Do not include credentials, tokens, personal data or screenshots in this prompt.',
   ].join('\n'));

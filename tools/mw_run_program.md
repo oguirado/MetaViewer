@@ -1,43 +1,70 @@
 # Native program actions
 
-Use the public engine entry against an already running agent-owned program capsule:
+Use the public engine entry from the MetaViewer checkout in the Terminal tab,
+against an already running agent-owned program capsule. Use **Copy ID for AI**
+for its profile. Choose one unique observed element name, ignoring case and
+whitespace, and one goal per run. Replace the example name with a name actually
+visible in the current observation; a general task description is not grounded.
+`--planner rules` is the default and needs no Muse account. It requires the locked
+Wender and vision dependencies; it is not a general game solver.
+
+Copy the running app's **Copy env path** (`METAVIEWER_ATTACH`), replace the
+placeholder below and source it in a subshell. It supplies `MV_CORE_CONFIG`,
+`XDG_RUNTIME_DIR` and `MV_SRF_STATE_DIR`; legacy container programs also need
+`MV_SRF_BIN_DIR` and `SRF_IDENTITY_STORE_ROOT`. Supply the verified roots
+`MV_WENDER_ROOT` and `VQA_VE_ROOT` when using checkout dependencies. Do not guess
+missing paths: obtain the pinned roots from the operator. A verified compiled
+runtime is supported for programs; its browser support is separately gated.
 
 ```sh
-PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
-  --surface-kind program --identity PROGRAM_PROFILE \
-  --goal 'Covered square' --steps 3 --timeout-ms 10000
+(
+  set -a; . "<copied-current.env-path>"; set +a
+  export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-program.XXXXXX)"
+  PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
+    --surface-kind program --identity '<program-profile>' --planner rules \
+    --goal 'Exact observed element name' --steps 1 --timeout-ms 10000
+)
 ```
 
-The example requests three actions [TARGET]. Supply the running app's `MV_CORE_CONFIG`,
-`XDG_RUNTIME_DIR` and `MV_SRF_STATE_DIR`. Legacy container programs also need
-`MV_SRF_BIN_DIR` and `SRF_IDENTITY_STORE_ROOT` from that app.
-Supply the locked dependency roots with `MV_WENDER_ROOT` and `VQA_VE_ROOT`.
-For a host-xpra program, `MV_SRF_STATE_DIR` supplies the adapter's private binding;
-identity-store and native-admin configuration are unnecessary. The legacy
-container-backed host-exec program lane retains its native identity and Docker
-lease checks, and also requires the adapter witness for the same public surface
-and native run. An unrelated active legacy lease never supplies missing custody.
-Program evidence defaults to a private subtree beneath `/dev/shm/vqa-cu`.
-An explicit `XDG_STATE_HOME` must resolve inside `/dev/shm`, with owned mode-0700
-directories and no symlink traversal. Disk evidence refuses before connection or
-capture; there is no disk fallback. The command does not create a capsule.
+This requests one click [TARGET]. For a host-xpra program, `MV_SRF_STATE_DIR`
+supplies the adapter's private binding; identity-store and native-admin
+configuration are unnecessary. The legacy container-backed host-exec lane also
+requires the adapter witness for the same public surface and native run; an
+unrelated active lease cannot provide custody. The command does not create a
+capsule or attach an arbitrary desktop window. Programs admit clicks only:
+`--text` and `--key` refuse. Goal mode cannot use `--site`, `--workflow` or `--slot`.
 
-To explicitly request model-backed visual decisions, add `--planner muse` and
-provide a natural-language goal. For example:
+Evidence defaults to a private subtree beneath `/dev/shm/vqa-cu`. An explicit
+`XDG_STATE_HOME` must resolve inside `/dev/shm`, with owned mode-0700 directories
+[CITED: `tools/mw_run_program.py` (`private_evidence_base`)] and no symlink traversal.
+The example creates a fresh directory. Keep the JSON result's report and receipt
+paths for inspection before shutdown; RAM evidence is temporary. Disk evidence
+refuses before connection or capture, with no disk fallback.
 
-```sh
-PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
-  --surface-kind program --identity PROGRAM_PROFILE --planner muse \
-  --goal 'Start the small Mines game; avoid window controls' --steps 1 \
-  --model-timeout-ms 60000
-```
+`--planner muse` needs Muse Code installed and authenticated (a Muse account).
+Without it use rules. To opt in, replace `--planner rules` with `--planner muse`
+in the same command; optionally add `--model-timeout-ms 60000` [TARGET]. Muse
+sends visual marks and projected observations to the authenticated provider through
+Wender's `ModelClient`/`MuseBackend`. There is no fallback from rules. Only unique
+mark-bound clicks authorized by the same custody gate are admitted.
 
-This example requests one model-planned action [TARGET]. Opting into Muse sends
-the selected program's visual marks and projected observation to the configured
-authenticated provider through Wender's actual `ModelClient`/`MuseBackend`.
-There is no automatic provider selection or fallback from the default rules mode.
-Only mark-bound clicks are admitted. The model's unique current mark must map to
-the real vision table, then Wender's custody CLI builds and validates its click.
+| Result / rc [CITED: `tools/mw_run_program.py` (`run_entry`), `agents/metaviewer_agents/mw_run.py` (`main`)] | Meaning | Next action |
+| --- | --- | --- |
+| `PROGRAM_BOUNDED_ACTIONS_VERIFIED` / `0` | Bounded clicks verified, not task completion. | Check receipts and fresh visible outcome before choosing another goal. |
+| argparse error / `2` | Invalid command; no run. | Correct flags; programs accept no text/key input. |
+| `INPUT_UNCERTAIN` / `5` | Delivery/settlement unknown, possibly after earlier moves. | Stop and inspect report, intent, dispatch and receipts with the operator; never automatically retry. |
+| refusal / `6` | A named precondition or planner gate failed; earlier moves may exist. | Read `verdict_code` and inspect evidence before repairing the cause. |
+
+`MW_PROGRAM_CONTROL`: press **Release control** on the tile, verify
+`control:'agent'`, then inspect the current target before running again.
+`MW_PROGRAM_GOAL_UNGROUNDED`: choose a unique name in the actual fresh observation.
+`MW_RUN_ATTACH`/`MW_RUN_CONFIG`: recopy the running app attachment.
+`MW_PROGRAM_RAM_REQUIRED`/`MW_PRIVATE_OUTPUT`: fix the private RAM setup.
+`MW_PROGRAM_MODEL_FAILED`: inspect the provider diagnostic; without authenticated
+Muse use rules on a freshly observed exact target. The program entry has no
+browser wall detector; a person must handle login/CAPTCHA. Browser
+`HUMAN_HANDOFF` / rc `4` [CITED: `tools/mw_run_browser_goal.py` (`run_entry`)] means
+human takeover, wall resolution, release and fresh observation before another run.
 
 The normal app creation hook is
 `globalThis.metaviewerRoles.createProgram({binary: ABSOLUTE_BINARY, role: 'agent'})`.
