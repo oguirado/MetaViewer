@@ -1,0 +1,1 @@
+- Add browser goal runs without stored workflows, with AX-grounded clicks, mandatory pixel custody, absorbing human handoff, and core-bound journals. Explicit invocation text requires focused native exact readback before optional Enter; model readings never satisfy the text gate.
