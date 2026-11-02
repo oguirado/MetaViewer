@@ -9,6 +9,7 @@ import unittest
 import contextlib
 import io
 import os
+import stat
 import time
 from unittest.mock import Mock, patch
 
@@ -398,6 +399,86 @@ class ProgramTests(unittest.TestCase):
                 program.run_moves(self.b, planner, 'Covered square', 1, 1000)
         self.assertEqual(submit.call_count, 1)
         self.assertEqual(self.b.program_attempts[-1]['status'], 'input_uncertain')
+
+    def verification_fixture(self, status):
+        self.b.surface_id='surface-alice';self.b.wender=self.root
+        self.b.ownership=Mock()
+        self.b.observe=Mock(return_value=dict(frame_ref=frame(2)))
+        self.b.perceive=Mock(return_value=dict(frame=frame(),frame_witness={},observation={},table=element_table()))
+        self.b.retain=Mock(return_value={})
+        planner=Mock(battery_state_sha256='d'*64);reply=planner_reply()
+        planner.plan_step.return_value=tuple(reply[k] for k in ('action','expectation','state','target_node'))
+        payloads=[]
+        def tool_reply(call,expect,**unused):
+            self.assertEqual(call['op'],'wait_verify')
+            body=dict(schema='mv_tool_result/v0.2',request_id=call['request_id'],op='wait_verify',status=status)
+            if status=='error':body.update(code='VERIFICATION_FAILED',detail='Actual receipt frame remained unchanged')
+            else:body.update(proposal_id=call['args']['proposal_id'],verified=False)
+            payloads.append(copy.deepcopy(body));return body
+        self.b.client.request=Mock(side_effect=tool_reply)
+        return planner,payloads
+
+    def test_real_tool_terminal_verification_payload_is_journaled_without_inventing_receipt_fields(self):
+        for status in ('error','timeout'):
+            with self.subTest(status=status):
+                planner,payloads=self.verification_fixture(status)
+                with patch.object(host.tools,'propose',return_value=dict(status='admitted')) as submit:
+                    with self.assertRaises(host.tools.VerificationFailed):
+                        program.run_moves(self.b,planner,'Covered square',2,1000)
+                submit.assert_called_once();planner.plan_step.assert_called_once()
+                attempt=self.b.program_attempts[0]
+                self.assertEqual(attempt['status'],'input_uncertain')
+                retained=json.loads(Path(attempt['verification_failure_artifact']).read_text())
+                self.assertEqual(retained['payload'],payloads[0])
+                dispatch=json.loads(Path(attempt['dispatch_artifact']).read_text())
+                self.assertEqual(retained['proposal_id'],dispatch['proposal']['proposal_id'])
+                self.assertEqual(retained['proposal_id'],attempt['proposal_id'])
+                self.assertEqual(retained['correlation'],'dispatch_wait_call' if status=='error' else 'proposal_id_match')
+                if status=='error':self.assertNotIn('proposal_id',retained['payload'])
+                self.assertEqual(self.b.program_moves,[])
+                self.assertEqual(stat.S_IMODE(Path(attempt['verification_failure_artifact']).stat().st_mode),0o600)
+
+    def test_missing_verification_payload_stays_unknown_and_mismatch_never_retries(self):
+        for payload in (None,dict(status='timeout',proposal_id='foreign',verified=False)):
+            attempt=dict(status='input_uncertain',proposal_id='known',intent_artifact='retained-intent')
+            error=host.tools.VerificationFailed(payload)
+            program.journal_verification_failure(self.b,attempt,error,program.uuid.uuid4().hex)
+            saved=json.loads(Path(attempt['verification_failure_artifact']).read_text())
+            self.assertEqual(saved['status'],'input_uncertain')
+            if payload is None:
+                self.assertNotIn('payload',saved)
+                self.assertEqual(saved['correlation'],'unknown')
+                self.assertEqual(saved['payload_status'],'unavailable')
+            else:
+                self.assertEqual(saved['payload'],payload)
+                self.assertEqual(saved['correlation'],'proposal_id_mismatch')
+
+    def test_diagnostic_journal_failure_keeps_public_rc5_and_payload_in_report(self):
+        planner,payloads=self.verification_fixture('error')
+        args=SimpleNamespace(surface_kind='program',identity='alice',goal='Covered square',steps=2,
+            timeout_ms=1000,planner='rules',model_timeout_ms=120000)
+        write=program.atomic_journal
+        def fail_diagnostic(path,value):
+            if path.name.startswith('verification-failure-'):raise OSError('diagnostic output unavailable')
+            return write(path,value)
+        stdout=io.StringIO()
+        with patch.dict(host.os.environ,{'XDG_STATE_HOME':str(self.root)}), \
+             patch.object(host,'connect',return_value=contextlib.nullcontext(self.b.client)), \
+             patch.object(program,'ProgramBackend',return_value=self.b), \
+             patch.object(program,'VCorePerceptionAdapter'), \
+             patch.object(program,'WenderSubprocessAdapter',return_value=planner), \
+             patch.object(host.tools,'propose',return_value=dict(status='admitted')) as submit, \
+             patch.object(program,'atomic_journal',side_effect=fail_diagnostic), \
+             contextlib.redirect_stdout(stdout),contextlib.redirect_stderr(io.StringIO()):
+            rc=program.run_entry(args)
+        self.assertEqual(rc,5);submit.assert_called_once()
+        result=json.loads(stdout.getvalue());self.assertEqual(result['verdict_code'],'INPUT_UNCERTAIN')
+        report=json.loads(Path(result['report']).read_text())
+        self.assertEqual(report['status'],'input_uncertain')
+        attempt=report['attempts'][0]
+        self.assertEqual(attempt['verification_failure']['payload'],payloads[0])
+        self.assertEqual(attempt['verification_failure_journal_error']['type'],'OSError')
+        self.assertNotIn('verification_failure_artifact',attempt)
 
     def test_only_explicit_stale_nonexecution_replans_after_new_publication(self):
         sensed = dict(frame=frame(), frame_witness={}, observation={}, table=element_table())

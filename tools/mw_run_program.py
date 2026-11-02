@@ -7,6 +7,7 @@ No browser URL, CDP or AX acquisition is required.
 """
 import argparse
 from contextlib import contextmanager
+import copy
 import json
 import os
 import re
@@ -167,6 +168,7 @@ class ProgramBackend(host.HostBackend):
         return super().native_witness(verified)
 
     def before_propose(self, proposal, sensed):
+        self.active_attempt['proposal_id'] = proposal['proposal_id']
         path = self.evidence / ('dispatch-' + proposal['proposal_id'] + '.json')
         artifact = atomic_journal(path, dict(status='pending_dispatch', proposal=proposal,
             frame=sensed['frame'], intent_artifact=self.active_attempt['intent_artifact'],
@@ -455,6 +457,42 @@ def atomic_journal(path, value):
     return str(path)
 
 
+def journal_verification_failure(backend, attempt, error, journal_id):
+    """Retain the actual wait payload; it need not be an action receipt.
+
+    The tool boundary correlates its reply to the wait request. The separately
+    recorded dispatch ID binds that call to this attempt without inventing a
+    proposal_id inside an error body that does not carry one.
+    """
+    failure = dict(error_type=type(error).__name__, correlation='unknown')
+    proposal_id = attempt.get('proposal_id')
+    if isinstance(proposal_id, str) and proposal_id:
+        failure['proposal_id'] = proposal_id
+    else:
+        proposal_id = None
+    payload = getattr(error, 'receipt', None)
+    if isinstance(payload, dict):
+        failure['payload'] = copy.deepcopy(payload)
+        if proposal_id:
+            if 'proposal_id' not in payload:
+                failure['correlation'] = 'dispatch_wait_call'
+            else:
+                failure['correlation'] = ('proposal_id_match' if payload['proposal_id'] == proposal_id
+                                          else 'proposal_id_mismatch')
+    else:
+        failure['payload_status'] = 'unavailable'
+    attempt['verification_failure'] = failure
+    try:
+        attempt['verification_failure_artifact'] = atomic_journal(
+            backend.evidence / ('verification-failure-' + journal_id + '.json'),
+            dict(status='input_uncertain', intent_artifact=attempt['intent_artifact'], **failure))
+    except (OSError, ValueError, TypeError, RuntimeError) as journal_error:
+        # This is best-effort diagnostic retention after an uncertain action.
+        # Preserve both the original exception and the rc5 attempt disposition.
+        attempt['verification_failure_journal_error'] = dict(
+            type=type(journal_error).__name__, message=str(journal_error)[:4096])
+
+
 def run_moves(backend, planner, goal, steps, timeout_ms):
     """Return receipts only after both native input and core settlement verify."""
     validate_request(goal, steps, timeout_ms)
@@ -532,7 +570,10 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                 rows = getattr(backend, 'frame_attempts', [])[start:]
                 nonexecution = (isinstance(error, host.tools.ToolRefusal) and rows and
                                 rows[-1].get('status') == error.reason_code)
-                if nonexecution:
+                if isinstance(error, host.tools.VerificationFailed):
+                    attempt['status'] = 'input_uncertain'
+                    journal_verification_failure(backend, attempt, error, journal_id)
+                elif nonexecution:
                     attempt['status'] = 'refused_before_execution'
                     attempt['reason_code'] = error.reason_code
                     if error.reason_code == 'STALE_FRAME' and retry < 2:

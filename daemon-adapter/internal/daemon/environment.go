@@ -634,11 +634,16 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		var input struct {
 			SurfaceID  string `json:"surface_id"`
 			ProposalID string `json:"proposal_id"`
+			Origin     string `json:"origin"`
+			Action     struct {
+				Type string `json:"type"`
+			} `json:"action"`
 		}
 		_ = json.Unmarshal(q.Params, &input)
 		frameMu.Lock()
 		before := lastFrames[input.SurfaceID]
 		frameMu.Unlock()
+		var currentBaseline json.RawMessage
 		failure := func(err error) ([]json.RawMessage, error) {
 			if q.Op == "input" && input.ProposalID != "" && len(before) != 0 {
 				completed := monotonic()
@@ -664,6 +669,32 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		var evidence capsule.InputEvidence
 		var err error
 		if q.Op == "input" {
+			// Snapshot the actual publication before native input. Subscriptions
+			// can advance independently of this handler's diagnostic lastFrames.
+			if input.Origin != "human" && (input.Action.Type == "click" || input.Action.Type == "type" || input.Action.Type == "key") {
+				current, baselineErr := m.SubscriptionBinding(input.SurfaceID)
+				if baselineErr != nil {
+					return failure(baselineErr)
+				}
+				if current.NativeKind != "holdings" {
+					profile, ok := profiles[current.Surface.ProfileID]
+					if !ok {
+						profile, ok = m.ProfileFor(current.Surface.ProfileID)
+					}
+					if !ok {
+						return failure(configuration("current input frame publisher required"))
+					}
+					ref, baselineErr := pubs[profile.RAMRoot].Current(input.SurfaceID)
+					if baselineErr != nil {
+						return failure(configuration("current published input frame required"))
+					}
+					currentJSON, baselineErr := json.Marshal(ref)
+					if baselineErr != nil {
+						return failure(baselineErr)
+					}
+					currentBaseline = currentJSON
+				}
+			}
 			events, evidence, err = m.HandleInputWithEvidence(ctx, q)
 		} else {
 			events, err = m.Handle(ctx, q)
@@ -810,10 +841,24 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		}
 		capture := func(c context.Context) (capsule.Binding, capsule.NativeFrame, error) { return m.Capture(c, id) }
 		var baseline frames.Ref
-		_ = json.Unmarshal(before, &baseline)
+		baselineSource := before
+		if currentBaseline != nil {
+			baselineSource = currentBaseline
+		}
+		_ = json.Unmarshal(baselineSource, &baseline)
 		var binding capsule.Binding
 		var native capsule.NativeFrame
-		if params.Action.Type == "type" || params.Action.Type == "key" {
+		settle := params.Action.Type == "type" || params.Action.Type == "key"
+		if params.Action.Type == "click" {
+			current, bindingErr := m.SubscriptionBinding(id)
+			if bindingErr != nil {
+				return failure(bindingErr)
+			}
+			// Holdings has its own native semantic before/after observation;
+			// preserve that capture sequence instead of polling for RGB change.
+			settle = current.NativeKind != "holdings"
+		}
+		if settle {
 			binding, native, err = settleInput(ctx, baseline.SHA256, capture, time.Now, waitInputCapture)
 		} else {
 			binding, native, err = capture(ctx)
@@ -1001,8 +1046,9 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 	return []json.RawMessage{b}, nil
 }
 
-// [TARGET, unit decision] Settle only drained agent text/key input. Clicks and
-// human-origin input retain their existing capture policy. Never invent a change.
+// [TARGET, unit decision] Settle drained agent pixel clicks/text/key by capture
+// only. Human input and Holdings semantic clicks keep their existing policy.
+// Never invent a change.
 const postInputSettleBound = 1500 * time.Millisecond
 const postInputCaptureInterval = 50 * time.Millisecond
 
