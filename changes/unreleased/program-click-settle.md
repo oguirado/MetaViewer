@@ -1,0 +1,2 @@
+- Settle drained agent pixel clicks through the existing bounded post-input capture loop so a receipt can observe delayed paint without repeating input or changing core verification. Preserve unchanged, cancellation, human-input and native semantic Holdings behavior.
+- Retain the actual terminal verification or timeout payload with its dispatch proposal correlation in private program journals and reports, preserving uncertain delivery and preventing automatic replay.

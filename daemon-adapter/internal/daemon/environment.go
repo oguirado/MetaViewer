@@ -813,7 +813,17 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		_ = json.Unmarshal(before, &baseline)
 		var binding capsule.Binding
 		var native capsule.NativeFrame
-		if params.Action.Type == "type" || params.Action.Type == "key" {
+		settle := params.Action.Type == "type" || params.Action.Type == "key"
+		if params.Action.Type == "click" {
+			current, bindingErr := m.SubscriptionBinding(id)
+			if bindingErr != nil {
+				return failure(bindingErr)
+			}
+			// Holdings has its own native semantic before/after observation;
+			// preserve that capture sequence instead of polling for RGB change.
+			settle = current.NativeKind != "holdings"
+		}
+		if settle {
 			binding, native, err = settleInput(ctx, baseline.SHA256, capture, time.Now, waitInputCapture)
 		} else {
 			binding, native, err = capture(ctx)
@@ -1001,8 +1011,9 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 	return []json.RawMessage{b}, nil
 }
 
-// [TARGET, unit decision] Settle only drained agent text/key input. Clicks and
-// human-origin input retain their existing capture policy. Never invent a change.
+// [TARGET, unit decision] Settle drained agent pixel clicks/text/key by capture
+// only. Human input and Holdings semantic clicks keep their existing policy.
+// Never invent a change.
 const postInputSettleBound = 1500 * time.Millisecond
 const postInputCaptureInterval = 50 * time.Millisecond
 

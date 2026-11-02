@@ -105,6 +105,21 @@ Private atomic `intent-*.json` and `dispatch-*.json` records are synced before
 core submission, including the exact proposal identifier and rebound frame.
 An atomic `receipt-*.json` follows verified settlement. These survive an interrupted
 final report. An output failure after verified delivery also returns `INPUT_UNCERTAIN`.
+An unverified terminal result or wait timeout additionally retains the actual
+`VerificationFailed.receipt` payload in `verification-failure-*.json` and the
+attempt/report, separately correlated to the dispatched proposal. That payload
+can be a tool error/timeout result rather than an action receipt. Missing payloads
+remain unknown; missing proposal fields are not manufactured inside them. A
+diagnostic-journal failure keeps the in-memory payload and `INPUT_UNCERTAIN`,
+never a successful move or an automatic replay.
+
+Drained agent clicks now use the adapter's existing bounded capture-settling loop,
+as text/key delivery already did: genuine post-input captures only, within the
+existing `1500 ms` bound and `50 ms` spacing [CITED: adapter settle constants].
+This allows delayed GUI paint to reach the receipt without repeating input.
+Human-origin and native semantic Holdings behavior are unchanged. A click with no visible effect returns its
+actual unchanged last capture; core still refuses an unmet changed-region
+expectation. This mechanism does not prove a semantic goal or wait indefinitely.
 
 Human/shared control, missing program custody, an unsupported surface, an unknown
 visual observation, planner refusal, stale pixels, and failed settlement refuse.

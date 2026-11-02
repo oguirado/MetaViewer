@@ -90,12 +90,14 @@ type delayedPaintRunner struct {
 	afterPath, afterSHA string
 	action, mode        string
 	input               bool
+	inputs              int
 	captures            int
 	never               bool
 }
 
 func (r *delayedPaintRunner) Run(ctx context.Context, argv []string, stdin []byte) ([]byte, error) {
 	if argv[1] == "input" {
+		r.inputs++
 		r.input = true
 		r.captures = 0
 		r.mode = "type"
@@ -126,6 +128,7 @@ func TestPostInputDelayedPaint(t *testing.T) {
 	}{
 		{"type-delayed", "type", "type", false}, {"paste", "type", "paste", false},
 		{"key-delayed", "key", "type", false}, {"unchanged-timeout", "type", "type", true},
+		{"click-delayed", "click", "type", false}, {"click-unchanged-timeout", "click", "type", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, err := os.MkdirTemp("/dev/shm", "mv-settle-")
@@ -163,6 +166,9 @@ func TestPostInputDelayedPaint(t *testing.T) {
 			if tc.action == "key" {
 				action = `{"type":"key","keys":["ctrl","l"]}`
 			}
+			if tc.action == "click" {
+				action = `{"type":"click","x":1,"y":0,"button":"left"}`
+			}
 			events, err = handler(context.Background(), ipc.Envelope{MsgID: "input", Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"input","params":{"surface_id":"` + id + `","proposal_id":"p1","action":` + action + `}}`)})
 			if err != nil || len(events) != 3 {
 				t.Fatalf("input: %s %v", events, err)
@@ -177,6 +183,9 @@ func TestPostInputDelayedPaint(t *testing.T) {
 			}
 			if receipt.Error != "" || receipt.Verified {
 				t.Fatalf("receipt bypassed core verification: %s", events[2])
+			}
+			if runner.inputs != 1 {
+				t.Fatalf("post-input settling repeated native input: %d", runner.inputs)
 			}
 			want := afterSHA
 			if tc.never {
@@ -226,6 +235,8 @@ func TestSettleSourceMutants(t *testing.T) {
 	}
 	for _, tc := range []struct{ name, before, after, test, diagnostic string }{
 		{"MUT-NO-SETTLE", "binding, native, err = settleInput(ctx, baseline.SHA256, capture, time.Now, waitInputCapture)", "binding, native, err = capture(ctx)", "TestPostInputDelayedPaint/type-delayed$", "VERIFICATION_FAILED"},
+		{"MUT-CLICK-NO-SETTLE", `settle = current.NativeKind != "holdings"`, `settle = current.NativeKind != "holdings" && false`, "TestPostInputDelayedPaint/click-delayed$", "VERIFICATION_FAILED"},
+		{"MUT-HOLDINGS-SETTLE", `settle = current.NativeKind != "holdings"`, `settle = current.NativeKind != "holdings" || true`, "TestHoldingsAgentInputWireForwardsGroundTruthAndFrameBinding$", "expected native call order"},
 		{"MUT-SETTLE-UNBOUNDED", "postInputSettleBound = 1500 * time.Millisecond", "postInputSettleBound = 1501 * time.Millisecond", "TestSettleInputSequence/never-changes$", "MUT-SETTLE-UNBOUNDED"},
 		{"MUT-SETTLE-PUBLISHES-BEFORE", `"after_frame": ref, "native_evidence": wireEvidence`, `"after_frame": baseline, "native_evidence": wireEvidence`, "TestPostInputDelayedPaint/type-delayed$", "VERIFICATION_FAILED"},
 		{"MUT-PASTE-MODE-INVALID-live", `if !capsule.ValidTextInput(mode) {`, `if false {`, "TestLiveTextInputConfiguration/bad$", "live mode"},
@@ -251,7 +262,7 @@ func TestSettleSourceMutants(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, goTool, "test", "-count=1", "-overlay", overlay, "-run", "^"+tc.test, ".")
+			cmd := exec.CommandContext(ctx, goTool, "test", "-p", "1", "-parallel", "1", "-count=1", "-overlay", overlay, "-run", "^"+tc.test, ".")
 			output, err := cmd.CombinedOutput()
 			var exit *exec.ExitError
 			if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(string(output), "--- FAIL:") || !strings.Contains(string(output), tc.diagnostic) {
