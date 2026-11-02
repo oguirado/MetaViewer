@@ -16,6 +16,79 @@ placeholder below and source it in a subshell. It supplies `MV_CORE_CONFIG`,
 missing paths: obtain the pinned roots from the operator. A verified compiled
 runtime is supported for programs; its browser support is separately gated.
 
+[TARGET, unit decision] Click verification uses a core `changed_region` over
+the complete surface, followed by an independent, hash-checked RGB comparison
+against the actual dispatch frame. The comparison excludes pre-dispatch table
+rows identified as clocks/timers or whose complete name is a clock/time label
+or a time-of-day string. Clock-only changes and unchanged open Mines squares
+fail with `MW_PROGRAM_NO_VISIBLE_EFFECT`; a calculator display change outside
+the clicked button can pass. Unidentified animation is not proof of causality;
+this lane certifies visible effects, not completion of the requested goal.
+OCR marks are requested within the existing perception budget to identify clock
+labels. No mark, transport or action budget is increased.
+
+For a field that already has focus (for example, a just opened editor), use:
+
+```sh
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --identity PROGRAM_PROFILE \
+  --surface-kind program --goal focused --text 'hello' --steps 1
+```
+
+[TARGET, unit decision] `focused` reserves an explicit operator assertion of
+current focus. It makes no planner/model call and submits one `type` action
+through the existing core admission, custody, frame rebind and settlement path.
+It never clicks or manufactures a target mark. Empty visual observations are
+allowed only for this mode. Known password evidence in the observation refuses
+before input; visual data cannot guarantee detection of unlabeled password fields.
+Immediately before each submission, focused mode observes and drains pending
+frame publications to bind the newest frame, including after explicit
+`STALE_FRAME` nonexecution refusals. Pixel changes do not require a target,
+another perception or a model call. Surface, geometry, generation, custody,
+ownership, existing attempt cap and original deadline remain enforced. Click
+modes retain their unchanged-target checks. Exhaustion without any admission
+is a clean refusal, with no input or uncertain-input verdict.
+
+Focused OCR uses the RGB changed-area bounding box between the actual dispatch
+frame and the post-input receipt frame, intersected with the unique focused
+field when available. Unrelated labels outside this box do not affect readback.
+The report retains `changed_box` and `readback_box`. A single terminal OCR `|`
+is treated as a blinking caret when the requested text does not end in `|`;
+all other characters, case and spacing must still match literally.
+This mode requires `--text` and `--steps 1`; `--key`
+remains browser only. The direct program tool accepts the same goal and text.
+
+For a named field requiring a grounded focus click, use:
+
+```sh
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --identity PROGRAM_PROFILE \
+  --surface-kind program --goal 'Message' --text 'hello' --steps 1
+```
+
+The named-field text mode permits a single focus-and-type sequence [TARGET]. It first
+grounds and verifies a click on a field, requires the core's focus witness,
+then submits a separate `type` action through core admission. Both actions
+require a published visible effect. The type action retains its own intent,
+dispatch and settlement evidence. The field is rebound by its box and role in
+the post-click observation; an absent or ambiguous field refuses typing.
+Known password roles, labels and protected/secret/password states refuse before
+the focus click and are checked again before typing. Visual data cannot identify
+every password field; no password detection guarantee is claimed for unlabeled
+fields. Muse remains a click selector; the operator's text is never generated
+by the model.
+
+After typing, the existing OCR perception path reads the receipt's published
+frame. Only actual `ocr_text` from marks centered inside the selected OCR region is
+used, in raster reading order. The report's `text_readback` is `exact`,
+`not_readable`, or `mismatch` when read-back has been reached. Exact requires
+literal equality, including case, subject to the focused caret rule above.
+Missing OCR is `not_readable`, with success
+only under the explicit `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` verdict and an
+`uncertified_text` move. Readable disagreement refuses with a nonzero result,
+`text_readback: mismatch`, and retained partial action evidence. A failure before
+read-back records null, rather than inventing a read-back outcome.
+
+Use the public engine entry against an already running agent-owned program capsule:
+
 ```sh
 (
   set -a; . "<copied-current.env-path>"; set +a

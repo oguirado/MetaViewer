@@ -4,6 +4,9 @@
 it never claims that the requested goal or game has been completed. Program
 capsules use the frozen desktop_capsule wire kind and native program custody.
 No browser URL, CDP or AX acquisition is required.
+[TARGET, unit decision] Click effects use the whole surface, excluding clock
+marks identified before dispatch. Text uses a verified field focus click or
+explicit operator-asserted current focus; OCR absence is explicitly uncertified.
 """
 import argparse
 from contextlib import contextmanager
@@ -189,6 +192,10 @@ class ProgramBackend(host.HostBackend):
 
     def before_propose(self, proposal, sensed):
         self.active_attempt['proposal_id'] = proposal['proposal_id']
+        # Retain the dispatch baseline even if the publisher releases its RAM
+        # allocation while settlement is pending.
+        self.program_dispatch_witnesses = getattr(self, 'program_dispatch_witnesses', {})
+        self.program_dispatch_witnesses[proposal['proposal_id']] = sensed.get('frame_witness', {})
         path = self.evidence / ('dispatch-' + proposal['proposal_id'] + '.json')
         artifact = atomic_journal(path, dict(status='pending_dispatch', proposal=proposal,
             frame=sensed['frame'], intent_artifact=self.active_attempt['intent_artifact'],
@@ -210,7 +217,7 @@ class ProgramBackend(host.HostBackend):
         self.check_program_frame(observed['frame_ref'])
         return observed
 
-    def perceive(self, observed):
+    def perceive(self, observed, *, allow_empty=False):
         frame = observed['frame_ref']
         host.need(frame['surface_id'] == self.surface_id, 'MW_PROGRAM_SURFACE')
         self.check_program_frame(frame)
@@ -228,7 +235,7 @@ class ProgramBackend(host.HostBackend):
             table = project_element_table(frame, vision)
             record['table'] = table
             record['status'] = 'localized' if table['elements'] else 'unknown'
-            host.need(bool(table['elements']), 'MW_PROGRAM_UNKNOWN_OBSERVATION')
+            host.need(allow_empty or bool(table['elements']), 'MW_PROGRAM_UNKNOWN_OBSERVATION')
         except (OSError, ValueError, RuntimeError) as error:
             record['error'] = dict(code=getattr(error, 'code', 'MW_PROGRAM_PERCEPTION'),
                                    message=str(error)[:4096])
@@ -258,7 +265,17 @@ class ProgramBackend(host.HostBackend):
             host.need(remaining > 0, 'MW_STALE_FRAME_EXHAUSTED')
             start = len(getattr(self, 'frame_attempts', []))
             try:
-                return super().propose(sensed, plan, remaining)
+                admitted = super().propose(sensed, plan, remaining)
+                if plan.get('program_effect'):
+                    proposal, before, verified = self.pending[admitted['proposal_id']]
+                    after = verified['after_frame']
+                    self.active_attempt['core_verification'] = copy.deepcopy(verified)
+                    effect = visible_effect(self, before, after, sensed['table'],
+                        before_witness=self.program_dispatch_witnesses.pop(admitted['proposal_id'], None),
+                        return_box=plan.get('focused_text') is True)
+                    if plan.get('focused_text'):
+                        self.active_attempt['changed_box'] = effect
+                return admitted
             except host.tools.ToolRefusal as error:
                 rows = getattr(self, 'frame_attempts', [])[start:]
                 if (error.reason_code != 'STALE_FRAME' or not rows or
@@ -269,7 +286,8 @@ class ProgramBackend(host.HostBackend):
         started = time.monotonic_ns()
         # Wender binds its target to sensed pixels. A moving or replaced target
         # requires a new planning tick, never a coordinate replay or input retry.
-        if isinstance(self.client, host.ToolClient):
+        focused = plan.get('focused_text') is True and plan['action']['type'] == 'type' and plan.get('target') is None
+        if isinstance(self.client, host.ToolClient) and not focused:
             baseline = self.observe(remaining)['frame_ref']
             # Repeat subscribe requests a real same-pixel publication from the
             # existing shared poller. Merely being subscribed does not refresh.
@@ -296,6 +314,14 @@ class ProgramBackend(host.HostBackend):
         host.need(fresh['surface_id'] == sensed['frame']['surface_id'] == self.surface_id and
                   fresh['generation'] >= sensed['frame']['generation'], 'MW_REBIND_PIXELS')
         cheap_started = time.monotonic_ns()
+        if focused:
+            # Operator-asserted focus has no pixel target. Preserve surface,
+            # geometry, generation and custody checks; only pixels may drift.
+            host.need(not (set(mismatches) - {'sha256'}), 'MW_REBIND_PIXELS')
+            host.need(not mismatches or fresh['generation'] > sensed['frame']['generation'], 'MW_REBIND_PIXELS')
+            rebound = dict(sensed, frame=fresh, frame_witness=self.retain(fresh))
+            self.record_rebind_time(started, cheap_started, fresh)
+            return rebound
         if mismatches:
             host.need(fresh['generation'] > sensed['frame']['generation'], 'MW_REBIND_PIXELS')
             if set(mismatches) == {'sha256'}:
@@ -330,7 +356,10 @@ class ProgramBackend(host.HostBackend):
         width, height = fresh['width'], fresh['height']
         if not (0 <= x < x + w <= width and 0 <= y < y + h <= height):
             return None
-        require_click_target(plan['action'], target)
+        if plan['action'].get('type') != 'type':
+            require_click_target(plan['action'], target)
+        else:
+            require_text_field(target)
         require_grounded_goal(sensed['table'], target['name'], target)
         witness = self.retain(fresh)
         old = Path(artifact).read_bytes()
@@ -376,6 +405,155 @@ def require_click_target(action,target):
               type(action.get('y')) is int and isinstance(box,list) and len(box)==4 and
               box[0]<=action['x']<box[0]+box[2] and box[1]<=action['y']<box[1]+box[3],
               'MW_PROGRAM_CLICK_TARGET')
+
+
+def effect_expectation(frame):
+    return dict(type='changed_region', bbox=dict(x=0, y=0, w=frame['width'], h=frame['height']))
+
+
+def visible_effect(backend, before, after, table, *, before_witness=None, return_box=False):
+    """Independent RGB check prevents a known clock from proving an action."""
+    host.need(all(before[k] == after[k] for k in ('surface_id', 'width', 'height')) and
+              after['generation'] > before['generation'], 'MW_FRAME_BINDING')
+    pixels = []
+    for frame, witness in ((before, before_witness), (after, None)):
+        witness = witness if witness and witness.get('artifact') else backend.retain(frame)
+        raw = Path(witness['artifact']).read_bytes()
+        host.need(len(raw) == frame['width'] * frame['height'] * 3 and
+                  host.hashlib.sha256(raw).hexdigest() == frame['sha256'], 'MW_FRAME_BINDING')
+        pixels.append(raw)
+    clocks = [r['bbox'] for r in table['elements'] if
+              r['role'].casefold() in ('clock', 'timer') or
+              re.fullmatch(r'(?:clock|time|\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?)',
+                           r['name'].strip(), re.I)]
+    width = before['width']
+    left, top, right, bottom = width, before['height'], -1, -1
+    for offset in range(0, len(pixels[0]), 3):
+        if pixels[0][offset:offset+3] == pixels[1][offset:offset+3]:
+            continue
+        x, y = (offset // 3) % width, (offset // 3) // width
+        if not any(b['x'] <= x < b['x'] + b['w'] and b['y'] <= y < b['y'] + b['h'] for b in clocks):
+            if not return_box:
+                return
+            left, top, right, bottom = min(left, x), min(top, y), max(right, x), max(bottom, y)
+    host.need(right >= left, 'MW_PROGRAM_NO_VISIBLE_EFFECT')
+    return [left, top, right - left + 1, bottom - top + 1]
+
+
+def refuse_known_password(target):
+    states = target.get('states', {})
+    label = (target.get('role', '') + ' ' + target.get('name', '')).casefold()
+    host.need(not any(word in label for word in ('password', 'passwd', 'passphrase', 'contraseña')) and
+              not any(states.get(key) for key in ('password', 'protected', 'secret')) and
+              states.get('type') != 'password', 'MW_PROGRAM_PASSWORD')
+
+
+def require_text_field(target):
+    refuse_known_password(target)
+    host.need(target.get('role') in ('field', 'textbox', 'entry', 'text_field'), 'MW_PROGRAM_TEXT_FIELD')
+
+
+def classify_text_readback(c2, target, text, *, caret=False):
+    """Use actual OCR only, never mark-N, model prose or the requested text."""
+    x, y, w, h = target['box']
+    marks = [m for m in (c2 or {}).get('marks', []) if
+             x <= m['x'] + m['w'] / 2 < x + w and
+             y <= m['y'] + m['h'] / 2 < y + h and m.get('ocr_text')]
+    marks.sort(key=lambda m: (m['y'], m['x']))
+    if not marks:
+        return 'not_readable'
+    observed = ' '.join(m['ocr_text'] for m in marks)
+    if observed == text:
+        return 'exact'
+    # A terminal vertical caret may be merged with the last word or emitted
+    # as its own OCR mark. Never normalize case, words or requested pipes.
+    if caret and not text.endswith('|') and observed in (text + '|', text + ' |'):
+        return 'exact'
+    return 'mismatch'
+
+
+def type_after_focus(backend, move, text, timeout_ms):
+    target = move['target']
+    require_text_field(target)
+    host.need(move['verification'].get('focus_verified') is True, 'MW_PROGRAM_FOCUS_UNVERIFIED')
+    after = move['verification']['receipt']['after_frame']
+    sensed = backend.perceive(dict(frame_ref=after))
+    # Bind the same field in the post-click observation; names may have changed.
+    rows = [r for r in sensed['table']['elements'] if
+            [r['bbox'][k] for k in ('x', 'y', 'w', 'h')] == target['box'] and r['role'] == target['role']]
+    host.need(len(rows) == 1, 'MW_PROGRAM_TEXT_FIELD')
+    target = dict(target, name=rows[0]['name'], states=rows[0].get('states', {}))
+    require_text_field(target)
+    dispatch_text(backend, sensed, target, text, timeout_ms)
+
+
+def type_focused(backend, text, timeout_ms):
+    # [TARGET, unit decision] The operator asserts current focus. No visual
+    # target/focus witness is fabricated; OCR uses the post-input changed area.
+    sensed = backend.perceive(backend.observe(remaining_budget(backend, timeout_ms)), allow_empty=True)
+    rows = sensed['table']['elements']
+    for row in rows:
+        refuse_known_password(row)
+    focused = [r for r in rows if r.get('focused') is True or
+               r.get('states', {}).get('focused') in (True, 'true')]
+    host.need(len(focused) <= 1, 'MW_PROGRAM_FOCUS_AMBIGUOUS')
+    if focused:
+        row = focused[0]
+        require_text_field(row)
+        box = [row['bbox'][k] for k in ('x', 'y', 'w', 'h')]
+    else:
+        box = [0, 0, sensed['frame']['width'], sensed['frame']['height']]
+    target = dict(box=box, source='operator_asserted_focus')
+    dispatch_text(backend, sensed, target, text, timeout_ms, focused=True)
+
+
+def dispatch_text(backend, sensed, target, text, timeout_ms, *, focused=False):
+    action = dict(type='type', text=text)
+    expectation = effect_expectation(sensed['frame'])
+    attempt = dict(status='dispatch_or_settlement_pending', action=action, expectation=expectation, target=target)
+    backend.program_attempts.append(attempt)
+    backend.active_attempt = attempt
+    journal_id = uuid.uuid4().hex
+    start = len(getattr(backend, 'frame_attempts', []))
+    admitted = None
+    try:
+        attempt['intent_artifact'] = atomic_journal(backend.evidence / ('intent-' + journal_id + '.json'),
+            dict(status='pending_dispatch', frame=sensed['frame'], action=action, expectation=expectation, target=target))
+        admitted = backend.propose(sensed, dict(action=action, expectation=expectation,
+            target=None if focused else target, program_effect=True, focused_text=focused), remaining_budget(backend, timeout_ms))
+        verified = backend.wait_verify(admitted, remaining_budget(backend, timeout_ms))
+        attempt['verification'] = verified
+        frame = verified['receipt']['after_frame']
+        backend.vision.perceive(frame)
+        readback_target = target
+        if focused:
+            x, y, w, h = target['box']
+            cx, cy, cw, ch = attempt['changed_box']
+            left, top = max(x, cx), max(y, cy)
+            right, bottom = min(x + w, cx + cw), min(y + h, cy + ch)
+            readback_target = dict(target, box=[left, top, max(0, right-left), max(0, bottom-top)])
+            attempt['readback_box'] = readback_target['box']
+        readback = classify_text_readback(backend.vision.last_c2_payload, readback_target, text, caret=focused)
+        attempt['text_readback'] = backend.text_readback = readback
+        host.need(readback != 'mismatch', 'MW_PROGRAM_TEXT_MISMATCH')
+        status = 'verified_text' if readback == 'exact' else 'uncertified_text'
+        record = dict(status=status, action=action, target=target, verification=verified, text_readback=readback)
+        attempt.update(status=status, receipt_artifact=atomic_journal(
+            backend.evidence / ('receipt-' + journal_id + '.json'), record))
+        backend.program_moves.append(record)
+    except Exception as error:
+        rows = getattr(backend, 'frame_attempts', [])[start:]
+        nonexecution = all(r.get('status') in ('STALE_FRAME', 'MW_REBIND_PIXELS', 'intent_pending') or
+                           isinstance(error, host.tools.ToolRefusal) and r.get('status') == error.reason_code
+                           for r in rows)
+        # A returned admission or a pending/uncorrelated dispatch remains uncertain.
+        if admitted is None and nonexecution:
+            attempt.update(status='refused_before_execution' if rows else 'refused_before_dispatch',
+                           reason_code=getattr(error, 'reason_code', getattr(error, 'code', 'MW_PROGRAM_TEXT_REFUSED')))
+            backend.program_clean_refusal = True
+        else:
+            attempt['status'] = 'input_uncertain'
+        raise
 
 
 class MuseProgramPlanner:
@@ -646,14 +824,21 @@ def journal_verification_failure(backend, attempt, error, journal_id):
             type=type(journal_error).__name__, message=str(journal_error)[:4096])
 
 
-def run_moves(backend, planner, goal, steps, timeout_ms):
+def run_moves(backend, planner, goal, steps, timeout_ms, text=None):
     """Return receipts only after both native input and core settlement verify."""
     validate_request(goal, steps, timeout_ms)
+    if text is not None:
+        host.tools._check_action(dict(type='type', text=text))
+        host.need(steps == 1, 'MW_PROGRAM_TEXT_STEPS')
     moves = []
     # Preserve partial evidence on refusal; a delivered action is not undone.
     backend.program_moves = moves
     backend.program_attempts = []
     backend.program_clean_refusal = False
+    if goal == 'focused':
+        host.need(text is not None, 'MW_PROGRAM_FOCUSED_TEXT_REQUIRED')
+        type_focused(backend, text, timeout_ms)
+        return moves
     settled_frame = None
     for _ in range(steps):
         next_observation = None
@@ -702,6 +887,12 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
             selected_goal = planner.grounded_goal if isinstance(planner, MuseProgramPlanner) else goal
             require_grounded_goal(sensed['table'], selected_goal, target)
             require_click_target(action,target)
+            if text is not None:
+                require_text_field(target)
+            # Wender's validated target remains authoritative. Its on-target
+            # effect predicate does not describe program display updates.
+            expectation = effect_expectation(sensed['frame'])
+            attempt['expectation'] = expectation
             budget = remaining_budget(backend, timeout_ms)
             journal_id = uuid.uuid4().hex
             attempt['status'] = 'intent_recording'
@@ -715,7 +906,7 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
             backend.active_attempt = attempt
             try:
                 admitted = backend.propose(sensed, dict(action=action, expectation=expectation, target=target,
-                    frame_attempt_limit=3 - retry), budget)
+                    frame_attempt_limit=3 - retry, program_effect=True), budget)
                 attempt['status'] = 'settlement_pending'
                 verified = backend.wait_verify(admitted, remaining_budget(backend, timeout_ms))
                 attempt['status'] = 'verified_move'
@@ -730,6 +921,8 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                                   battery_state_sha256=planner.battery_state_sha256,
                                   verification=verified))
                 settled_frame = dict(verified['receipt']['after_frame'])
+                if text is not None:
+                    type_after_focus(backend, moves[-1], text, timeout_ms)
                 break
             except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError, host.ClientError,
                     host.tools.ToolRefusal, host.tools.VerificationFailed) as error:
@@ -779,6 +972,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument('--identity', required=True)
     parser.add_argument('--goal', required=True)
+    parser.add_argument('--text', help='Type at current focus with --goal focused, otherwise click a field; OCR readback follows')
     parser.add_argument('--steps', type=int, default=1)
     parser.add_argument('--timeout-ms', type=int, default=10000)
     parser.add_argument('--planner', choices=('rules', 'muse'), default='rules')
@@ -791,8 +985,14 @@ def run_entry(args):
     result = dict(schema='metaviewer.mw_run/v1', rc=6, verdict_code='MW_PROGRAM_CONFIG',
                   receipt=None, report=None)
     backend, evidence, message = None, None, None
+    text = getattr(args, 'text', None)
     try:
         validate_request(args.goal, args.steps, args.timeout_ms)
+        text = getattr(args, 'text', None)
+        if text is not None:
+            host.tools._check_action(dict(type='type', text=text))
+            host.need(args.steps == 1, 'MW_PROGRAM_TEXT_STEPS')
+        host.need(args.goal != 'focused' or text is not None, 'MW_PROGRAM_FOCUSED_TEXT_REQUIRED')
         host.need(getattr(args, 'planner', 'rules') in ('rules', 'muse') and
                   1 <= getattr(args, 'model_timeout_ms', 120000) <= 240000, 'MW_PROGRAM_PLANNER')
         base = private_evidence_base()
@@ -825,13 +1025,16 @@ def run_entry(args):
             # Its output must stay in private RAM, never in the source tree.
                 with marks_workspace() as marks:
                     backend.vision = VCorePerceptionAdapter(timeout=args.timeout_ms / 1000,
-                        verify_lock=True, marks_out=marks)
+                        verify_lock=True, marks_out=marks, ocr_marks=True)
                     try:
-                        planner = WenderSubprocessAdapter(wender_root=backend.wender,
-                            timeout=args.timeout_ms / 1000, verify_lock=True)
-                        if getattr(args, 'planner', 'rules') == 'muse':
-                            planner = MuseProgramPlanner(backend, planner, args.model_timeout_ms)
-                        moves = run_moves(backend, planner, args.goal, args.steps, args.timeout_ms)
+                        planner = None
+                        if args.goal != 'focused':
+                            planner = WenderSubprocessAdapter(wender_root=backend.wender,
+                                timeout=args.timeout_ms / 1000, verify_lock=True)
+                            if getattr(args, 'planner', 'rules') == 'muse':
+                                planner = MuseProgramPlanner(backend, planner, args.model_timeout_ms)
+                        moves = run_moves(backend, planner, args.goal, args.steps, args.timeout_ms,
+                                          **({'text': text} if text is not None else {}))
                     finally:
                         backend.vision.close()
             finally:
@@ -840,6 +1043,8 @@ def run_entry(args):
                 backend.subscription['status'] = 'retained_for_surface_lifecycle'
         result.update(rc=0, verdict_code='PROGRAM_BOUNDED_ACTIONS_VERIFIED',
                       receipt=str(evidence / 'moves.json'))
+        if getattr(backend, 'text_readback', None) == 'not_readable':
+            result['verdict_code'] = 'PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE'
         host.ReplayOwner.write(Path(result['receipt']), (json.dumps(moves) + '\n').encode())
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
             host.ClientError, host.tools.ToolRefusal, host.tools.VerificationFailed,
@@ -872,6 +1077,8 @@ def run_entry(args):
                       subscription=getattr(backend, 'subscription', None),
                       program_binding=getattr(backend, 'program_binding', None),
                       frame_attempts=getattr(backend, 'frame_attempts', []))
+        if text is not None:
+            report['text_readback'] = getattr(backend, 'text_readback', None)
         try:
             host.ReplayOwner.write(evidence / 'report.json', (json.dumps(report) + '\n').encode())
         except OSError:
