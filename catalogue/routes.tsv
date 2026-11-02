@@ -131,6 +131,7 @@ testws3-5a6f7cc82936	agents/tests/test_ws3_wheel_record.py
 protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
 adapter-cbafcbab0a3b	changes/unreleased/adapter-epoch-handoff.md
+agentpr-f8d684f8c4df	changes/unreleased/agent-program-starts-agent-controlled.md
 boot-flake.md	changes/unreleased/boot-flake.md
 boot-pending-clr.md	changes/unreleased/boot-pending-clr.md
 browser-e67161649fc2	changes/unreleased/browser-goal-model-keepalive.md
@@ -155,6 +156,7 @@ handoff-state-home.md	changes/unreleased/handoff-state-home.md
 identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
 judgeki-2abc0a3eae20	changes/unreleased/judge-kit-capsule-net.md
 judgeki-16dad1d0cde7	changes/unreleased/judge-kit-package-tool-deps.md
+judgest-1257a8a92a8d	changes/unreleased/judge-stop-capsule-ram.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 launcher-role-step.md	changes/unreleased/launcher-role-step.md
 launcher-two-kinds.md	changes/unreleased/launcher-two-kinds.md
@@ -213,6 +215,9 @@ v026-ci-assets.md	changes/unreleased/v026-ci-assets.md
 v026-host-polish.md	changes/unreleased/v026-host-polish.md
 v026-host-xpra.md	changes/unreleased/v026-host-xpra.md
 v026kit-286e58a540a9	changes/unreleased/v026-kit-sidecars-2.md
+v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
+v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
+v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
 witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
@@ -1029,6 +1034,7 @@ subscri-389c0b86d2cf	daemon-adapter/internal/frames/subscriptions.go
 subscri-c7aa812bfc6a	daemon-adapter/internal/frames/subscriptions_cadence_test.go
 subscri-45e158044ffa	daemon-adapter/internal/frames/subscriptions_lock_timeout_test.go
 subscri-258b9e5e0942	daemon-adapter/internal/frames/subscriptions_reap_test.go
+subscri-84a98cfe9a77	daemon-adapter/internal/frames/subscriptions_robust_test.go
 subscri-c23a6160df7a	daemon-adapter/internal/frames/subscriptions_test.go
 ipc-bounds_test.go	daemon-adapter/internal/ipc/bounds_test.go
 client.go	daemon-adapter/internal/ipc/client.go
@@ -1198,8 +1204,10 @@ vocabulary.json	router/kit/v1_frozen/vocabulary.json
 vendor_manifest.json	router/kit/vendor_manifest.json
 bootstrap.sh	scripts/bootstrap.sh
 metaviewer	scripts/judge/apparmor/metaviewer
+fetch_assets.py	scripts/judge/fetch_assets.py
 metaviewer-judge.sh	scripts/judge/metaviewer-judge.sh
 preflight.sh	scripts/judge/preflight.sh
+unpack_node.py	scripts/judge/unpack_node.py
 volume_e2e.py	scripts/volume_e2e.py
 install-dcff74b4a1e8	tests/ci/install_electron.test.cjs
 install-d80e15635c74	tests/ci/install_electron_mutation.test.cjs
@@ -1379,6 +1387,7 @@ judge-__init__.py	tests/judge/__init__.py
 judge_sandbox.py	tests/judge/judge_sandbox.py
 judge_scenarios.py	tests/judge/judge_scenarios.py
 test_capsule_net.py	tests/judge/test_capsule_net.py
+test_first_run.py	tests/judge/test_first_run.py
 test_flow.py	tests/judge/test_flow.py
 test_mutants.py	tests/judge/test_mutants.py
 test_preflight.py	tests/judge/test_preflight.py
@@ -2070,6 +2079,7 @@ v026hos-e5825ac19a7e	ui/test/v026-host-polish.test.js
 v026hos-0989adc7fb8b	ui/test/v026-host-xpra.test.js
 v026kit-ed2db276dbdb	ui/test/v026-kit-sidecars.test.js
 v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
+v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
