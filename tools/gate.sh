@@ -186,7 +186,8 @@ class GateTests(unittest.TestCase):
             original = (self.fixture / name).read_text()
             self.write(name, original.replace('name = "metaviewer-core"\nversion = "' + version + '"',
                                               'name = "metaviewer-core"\nversion = "9.9.9"')
-                       if name == 'Cargo.lock' else original.replace(version, '9.9.9'))
+                       if name == 'Cargo.lock' else original.replace('"version": "' + version + '"', '"version": "9.9.9"', 2)
+                       if name == 'ui/package-lock.json' else original.replace(version, '9.9.9'))
         self.assertIn('PASS manifests', self.call('--leg', 'manifests'))
 
     def test_dependency_admission(self):
