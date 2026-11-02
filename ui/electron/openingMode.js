@@ -23,7 +23,7 @@ export async function stageOpeningMode(stateDir, profileId, mode, target) {
           || typeof target.program !== 'string' || !target.program.trim() || target.program.length > 256 || /[\x00-\x1f\x7f]/.test(target.program)
           || !Number.isSafeInteger(width) || width < 1 || width > 4096
           || !Number.isSafeInteger(height) || height < 1 || height > 4096) throw Error('CAPSULE_MODE_INVALID');
-      payload = {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode,host_window:{xid:target.xid,witness:target.witness.trim(),title:target.title.trim(),program:target.program.trim(),width,height}};
+      payload = {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode,host_window:{xid:target.xid,witness:target.witness.trim(),title:target.title.trim(),program:target.program.trim(),width,height,...(typeof target.display === 'string' && target.display ? {display:target.display} : {}),...(typeof target.xauthority === 'string' && target.xauthority.startsWith('/') ? {xauthority:target.xauthority} : {})}};
     } else {
       throw Error('CAPSULE_MODE_INVALID');
     }

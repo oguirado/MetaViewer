@@ -761,8 +761,8 @@ test('V024-PROGRAM-HUMAN-MV: mutant suite kills every gate mutation', async (t) 
   // Mutant 1: openingMode.js still refuses human mode when hostBinary is present.
   {
     const mutated = openingModeSrc.replace(
-      "if (hostBinary !== undefined && (typeof hostBinary !== 'string'",
-      "if (hostBinary !== undefined && (mode !== 'agent' || typeof hostBinary !== 'string'",
+      "if ((mode !== 'agent' && mode !== 'human') || !target.startsWith('/')",
+      "if (mode !== 'agent' || !target.startsWith('/')",
     );
     assert.notEqual(mutated, openingModeSrc);
     const mod = await importMutated(mutated, 'm1-opening');

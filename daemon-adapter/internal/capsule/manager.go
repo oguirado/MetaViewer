@@ -110,6 +110,7 @@ type Binding struct {
 	Container, RunID, Window, FramesRoot, NativeKind, Program string
 	HostXID                                                   uint32
 	HostWitness, HostTitle, HostProgram, HostLostReason       string
+	HostDisplay, HostXauthority                               string
 	HostMinimized                                             bool
 	BinDir                                                    string
 	ConfirmedAbsent                                           bool

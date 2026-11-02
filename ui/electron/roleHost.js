@@ -242,14 +242,22 @@ export function listHostWindows({env = process.env, excludePid = process.pid, ru
           if (!item || typeof item !== 'object' || Array.isArray(item)) throw fail('invalid or ambiguous window list');
           const rowPid = item.pid ?? item.owner_pid;
           if (rowPid !== undefined && Number(rowPid) === safePid) continue;
-          const validated = validateHostWindowChoice({
-            xid: item.xid,
-            witness: item.witness,
-            title: item.title,
-            program: item.program,
-            width: item.width ?? item.w,
-            height: item.height ?? item.h,
-          });
+          if (item.minimized === true || item.visible === false) continue;
+          /** @type {ReturnType<typeof validateHostWindowChoice>} */
+          let validated;
+          try {
+            // srf-host-window reports exe, class and rect; one untitled window must not blank the list.
+            validated = validateHostWindowChoice({
+              xid: item.xid,
+              witness: item.witness,
+              title: item.title,
+              program: item.program ?? (item.exe || item.class),
+              width: item.width ?? item.w ?? item.rect?.width,
+              height: item.height ?? item.h ?? item.rect?.height,
+            });
+          } catch {
+            continue;
+          }
           if (seenXids.has(validated.xid) || seenWitnesses.has(validated.witness)) {
             throw fail('invalid or ambiguous window list');
           }
@@ -568,7 +576,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (!profileId) throw Object.assign(refuse('CAPSULE_SLOT_UNAVAILABLE'), {reason:`host_window_unavailable: ${validated.title}: no free window profile slot available`});
       key = `pending:${profileId}`;
       capsuleStates.set(key, {profile_id:profileId, state:'creating'});
-      clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, 'agent', validated);
+      clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, 'agent', {...validated, display: env.DISPLAY ?? process.env.DISPLAY, xauthority: env.XAUTHORITY ?? process.env.XAUTHORITY});
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:validated.width, h:validated.height}}});
       if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {

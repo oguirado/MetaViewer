@@ -666,3 +666,22 @@ test('V025-WINDOW-MV: mutant suite kills every required mutant', async () => {
     await rm(tmp, { recursive: true, force: true });
   }
 });
+
+test('listHostWindows reads the real srf-host-window row and skips unusable windows', async () => {
+  const roleHostForRealRow = await import('../electron/roleHost.js');
+  const realRow = { xid: 4194311, witness: '8aa4aec9bab6b0a7', pid: 3500288, pid_missing: false, exe: 'gnome-mines', class: 'Gnome-mines', class_missing: false, title: 'Minas', rect: { x: 289, y: 72, width: 821, height: 855 }, visible: true, minimized: false, window_type: 'normal' };
+  const stdout = JSON.stringify({ ok: true, windows: [
+    realRow,
+    { ...realRow, xid: 5, witness: 'untitled', title: '' },
+    { ...realRow, xid: 6, witness: 'hidden', minimized: true },
+  ] });
+  const rows = await roleHostForRealRow.listHostWindows({
+    env: { MV_SRF_BIN_DIR: '/fake/bin' },
+    excludePid: 1,
+    runTool: (_tool, _args, _opts, cb) => cb(null, stdout, ''),
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].program, 'gnome-mines');
+  assert.equal(rows[0].width, 821);
+  assert.equal(rows[0].height, 855);
+});

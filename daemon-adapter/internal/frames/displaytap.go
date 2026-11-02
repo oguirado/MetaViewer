@@ -87,6 +87,7 @@ type DisplayTarget struct {
 	Width, Height                   int
 	HostWindow                      bool
 	Witness, BinDir                 string
+	HostDisplay, HostXauthority     string
 }
 type DisplayTapConfig struct {
 	RuntimeDir  string
@@ -485,7 +486,7 @@ const capsuleXDisplay = ":100"
 
 func displayGetimageCommand(ctx context.Context, target DisplayTarget) *exec.Cmd {
 	if target.HostWindow {
-		return exec.CommandContext(ctx, filepath.Join(target.BinDir, "srf-host-window"), "capture", "--xid", strconv.FormatUint(uint64(target.XID), 10), "--witness", target.Witness)
+		return exec.CommandContext(ctx, filepath.Join(target.BinDir, "srf-host-window"), append([]string{"capture", "--xid", strconv.FormatUint(uint64(target.XID), 10), "--witness", target.Witness}, capsule.HostWindowSessionArgs(target.HostDisplay, target.HostXauthority)...)...)
 	}
 	// Every capsule runs its own Xvfb on :100 and srf-fbread admits only that value; target.Display
 	// is the adapter's logical pool slot, which differs from :100 for every capsule but the first.
@@ -531,16 +532,18 @@ func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, er
 	var t DisplayTarget
 	if b.NativeKind == "host-window" && b.Window != "" {
 		t = DisplayTarget{
-			Container:  b.Container,
-			Run:        b.RunID,
-			Window:     b.Window,
-			Display:    b.Surface.Display,
-			XID:        b.HostXID,
-			Width:      b.Surface.Geometry.W,
-			Height:     b.Surface.Geometry.H,
-			HostWindow: true,
-			Witness:    b.HostWitness,
-			BinDir:     b.BinDir,
+			Container:      b.Container,
+			Run:            b.RunID,
+			Window:         b.Window,
+			Display:        b.Surface.Display,
+			XID:            b.HostXID,
+			Width:          b.Surface.Geometry.W,
+			Height:         b.Surface.Geometry.H,
+			HostWindow:     true,
+			Witness:        b.HostWitness,
+			BinDir:         b.BinDir,
+			HostDisplay:    b.HostDisplay,
+			HostXauthority: b.HostXauthority,
 		}
 		return t, validDisplayTarget(t)
 	}

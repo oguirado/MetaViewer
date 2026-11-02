@@ -15,6 +15,21 @@ type HostWindowSpec struct {
 	Program string `json:"program,omitempty"`
 	Width   int    `json:"width,omitempty"`
 	Height  int    `json:"height,omitempty"`
+	// The adapter's environment carries no X11 session, so the host passes it per window.
+	Display    string `json:"display,omitempty"`
+	Xauthority string `json:"xauthority,omitempty"`
+}
+
+// HostWindowSessionArgs returns the srf-host-window flags naming the person's X11 session.
+func HostWindowSessionArgs(display, xauthority string) []string {
+	var args []string
+	if display != "" {
+		args = append(args, "--display", display)
+	}
+	if xauthority != "" {
+		args = append(args, "--xauthority", xauthority)
+	}
+	return args
 }
 
 func validHostWitness(w string) bool {
@@ -156,6 +171,10 @@ func ValidateHostWindowSpec(spec *HostWindowSpec) error {
 	}
 	if len(spec.Title) > 512 || strings.ContainsRune(spec.Title, 0) || len(spec.Program) > 256 || strings.ContainsRune(spec.Program, 0) {
 		return fault("host_window_unavailable", "host_window_unavailable: invalid window metadata")
+	}
+	if len(spec.Display) > 128 || strings.ContainsAny(spec.Display, " \t\r\n\x00") ||
+		len(spec.Xauthority) > 512 || strings.ContainsAny(spec.Xauthority, "\r\n\x00") || (spec.Xauthority != "" && !strings.HasPrefix(spec.Xauthority, "/")) {
+		return fault("host_window_unavailable", "host_window_unavailable: invalid X11 session")
 	}
 	if (spec.Width != 0 && (spec.Width < 1 || spec.Width > 4096)) || (spec.Height != 0 && (spec.Height < 1 || spec.Height > 4096)) {
 		return fault("host_window_unavailable", "host_window_unavailable: invalid window geometry")

@@ -107,17 +107,19 @@ func (m *Manager) attachHostWindow(qProfileID, id, version string, p Profile, sp
 			Control:    "agent",
 			ProfileID:  qProfileID,
 		},
-		Container:   container,
-		RunID:       runIDStr,
-		Window:      "w1",
-		FramesRoot:  framesRoot,
-		NativeKind:  "host-window",
-		Program:     "host-window",
-		HostXID:     spec.XID,
-		HostWitness: spec.Witness,
-		HostTitle:   spec.Title,
-		HostProgram: spec.Program,
-		BinDir:      m.cfg.BinDir,
+		Container:      container,
+		RunID:          runIDStr,
+		Window:         "w1",
+		FramesRoot:     framesRoot,
+		NativeKind:     "host-window",
+		Program:        "host-window",
+		HostXID:        spec.XID,
+		HostWitness:    spec.Witness,
+		HostTitle:      spec.Title,
+		HostProgram:    spec.Program,
+		HostDisplay:    spec.Display,
+		HostXauthority: spec.Xauthority,
+		BinDir:         m.cfg.BinDir,
 	}
 	m.bindings[id] = b
 	delete(m.quarantined, qProfileID)
@@ -171,7 +173,7 @@ func (m *Manager) captureHostWindow(ctx context.Context, id string) (Binding, Na
 	}
 	epoch := m.beginCapture(id)
 	profile := m.cfg.Profiles[b.Surface.ProfileID]
-	args := []string{"capture", "--xid", strconv.FormatUint(uint64(b.HostXID), 10), "--witness", b.HostWitness}
+	args := append([]string{"capture", "--xid", strconv.FormatUint(uint64(b.HostXID), 10), "--witness", b.HostWitness, "--max-frames", "1"}, HostWindowSessionArgs(b.HostDisplay, b.HostXauthority)...)
 	before := m.clock()
 	m.mu.Unlock()
 
@@ -280,7 +282,7 @@ func (m *Manager) executeRawHostWindow(ctx context.Context, p Profile, args []st
 func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, origin, actionType string, x, y *int, button string, keys []string, text string, version string, evidence *InputEvidence) ([]json.RawMessage, error) {
 	b := m.bindings[surfaceID]
 	xidStr := strconv.FormatUint(uint64(b.HostXID), 10)
-	baseArgs := []string{"input", "--xid", xidStr, "--witness", b.HostWitness}
+	baseArgs := append([]string{"input", "--xid", xidStr, "--witness", b.HostWitness}, HostWindowSessionArgs(b.HostDisplay, b.HostXauthority)...)
 	var callArgvs [][]string
 	var textChunks [][]byte
 	nativeAction := actionType
