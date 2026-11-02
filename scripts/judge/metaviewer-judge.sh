@@ -454,16 +454,26 @@ step_firewall() { # returns 1 when the install falls back to the legacy network
 
 net_mode_now() { pf --facts --tier "$TIER" | sed -n 's/^network=//p'; }
 
-ensure_capsule_net() { # scoped Docker bridge + proxy when open firewall is absent; needs docker group only
-    [ -x "$SRF_BIN/srf-identity-surface" ] && "$SRF_BIN/srf-identity-surface" capabilities >/dev/null 2>&1 || true
-    command -v docker >/dev/null 2>&1 || return 0
-    docker network inspect srf-idnet >/dev/null 2>&1 ||
-        docker network create --internal --subnet 172.30.80.0/24 srf-idnet >/dev/null 2>&1 ||
-        note "docker network create srf-idnet failed; JUDGE_NET will say what is missing"
-    if [ "$(docker inspect --format '{{.State.Running}}' srf-egress-proxy 2>/dev/null || printf '')" != true ]; then
-        docker start srf-egress-proxy >/dev/null 2>&1 ||
-            docker run -d --name srf-egress-proxy --network srf-idnet "opensuperficies-desktop-$ARCHN:1.1.0" >/dev/null 2>&1 ||
-            note "starting srf-egress-proxy failed; JUDGE_NET will say what is missing"
+ensure_capsule_net() { # supported launcher; all private metadata belongs to the CLI principal
+    local netroot=$JUDGE_HOME/network statedir
+    statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
+    [ -x "$SRF_BIN/srf-identity-surface" ] && [ -x "$SRF_BIN/srf-egress-proxy" ] ||
+        fail JUDGE_NET "kit surface or proxy executable is absent" "restore opensuperficies/bin from the verified kit"
+    (
+        umask 077
+        mkdir -p "$netroot/policy" "$netroot/registry" "$netroot/audit" "$statedir" &&
+            chmod 0700 "$netroot" "$netroot/policy" "$netroot/registry" "$netroot/audit" "$statedir" || exit 1
+        # [TARGET, unit decision] Exact-host approvals require operator input.
+        # The upstream schema has no wildcard: never invent an open-policy API.
+        if [ ! -e "$netroot/policy/policy.json" ]; then
+            printf '%s\n' '{"schema":"browserid.proxy-policy/v1","approved":{},"denied":[],"connect_ports":{}}' >"$netroot/policy/policy.json" || exit 1
+        fi
+        chmod 0600 "$netroot/policy/policy.json"
+    ) || fail JUDGE_NET "cannot provision private proxy metadata" "check ownership and permissions under $netroot"
+    if "$SRF_BIN/srf-identity-surface" net up --proxy-bin "$SRF_BIN/srf-egress-proxy" --policy "$netroot/policy/policy.json" --registry "$netroot/registry/registry.json" --audit-dir "$netroot/audit" --state-dir "$statedir"; then # MUT:JUDGE_PROXY_UP
+        :
+    else
+        fail JUDGE_NET "supported proxy net up failed" "check kit binaries and $netroot metadata; an existing mismatched proxy requires explicit operator recovery"
     fi
 }
 
@@ -565,7 +575,6 @@ cmd_run() {
         statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
         ramroot=$SHM/vqa-ramws/opensuperficies/os-cu-0
         mkdir -p "$statedir" "$ramroot" "$STORE" && chmod 0700 "$statedir" "$ramroot"
-        [ -f "$STORE/proxies.json" ] || printf '{"proxies":{}}\n' >"$STORE/proxies.json" 2>/dev/null || true
         if [ -n "${MV_SRF_PROFILES:-}" ]; then
             profiles_json=$MV_SRF_PROFILES
         else
@@ -578,7 +587,7 @@ cmd_run() {
         fi
         envv+=("MV_SRF_BIN_DIR=$SRF_BIN" "MV_SRF_STATE_DIR=$statedir" "MV_SRF_LIVE_PROFILE=$PROFILE_ID"
             "MV_SRF_LIVE_RAM_ROOT=$ramroot" "MV_SRF_LIVE_TEXT_INPUT=paste" "MV_SRF_PROFILES=$profiles_json"
-            "SRF_IDENTITY_STORE_ROOT=$STORE" "SRF_PROXY_REGISTRY=${SRF_PROXY_REGISTRY:-$STORE/proxies.json}")
+            "SRF_IDENTITY_STORE_ROOT=$STORE" "SRF_PROXY_REGISTRY=$JUDGE_HOME/network/registry/registry.json")
         if [ -d "$JUDGE_HOME/deps/vision-engine" ]; then
             if [ -x "$JUDGE_HOME/deps/vision-engine/vision-runtime" ]; then
                 envv+=("MV_VISION_EXECUTABLE=$JUDGE_HOME/deps/vision-engine/vision-runtime")

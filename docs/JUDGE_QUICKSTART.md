@@ -222,3 +222,28 @@ installs this optional host package automatically.
 
 Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_admission.go`,
 `daemon-adapter/internal/capsule/egress_policy.go`, `ui/electron/terminalHost.js`].
+
+### Legacy kit proxy setup
+
+The sudo-free fallback calls the kit's `srf-identity-surface net up` with
+`--proxy-bin` pointing to the kit's `srf-egress-proxy`. The launcher selects the
+proxy entrypoint, internal network and bridge attachment and verifies
+`EGRESS_PROXY_READY`; it refuses an existing incompatible proxy without replacing it.
+Private metadata lives under `$MV_JUDGE_HOME/network`: separate `policy/`,
+`registry/` and `audit/` directories (mode `0700`), with policy and registry files
+at `0600`. The x64 source runs the proxy with the CLI caller's UID/GID, so these
+files stay owned by the judge user. Profile directories still use Docker to
+provision the browser UID separately. Run passes this same registry to capsules.
+
+The initial `policy/policy.json` uses `browserid.proxy-policy/v1` with empty
+`approved`, `denied` and `connect_ports` collections. It grants no destinations.
+Existing policy files are retained. This upstream schema supports exact capsule
+IDs and normalized hosts only: public browsing requires explicit `approved`
+entries and HTTPS `connect_ports` entries for each capsule and host. Leave
+`private_targets` absent to retain LAN/host blocking. Arbitrary public browsing
+is not available through this policy schema; no wildcard policy is implied.
+
+The x64 kit supplies browser image `0.1.1`. If a binary advertises Open and the
+firewall witness is present, preflight requires `0.2.0` and refuses that image set.
+Retagging `0.1.1` would not establish Open support; the upstream source disables
+Open for its default image. Use `--no-firewall` with that kit.
