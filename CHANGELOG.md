@@ -4,13 +4,18 @@
 
 - Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
 
+## 0.2.2 (2026-11-02) [CITED: `VERSION`]
+
+- Make terminals work in the packaged app: the terminal wall under More opens Shell and custom CLI terminals, node-pty ships pinned outside the ASAR under `resources/build-native`, and refusals keep their real code.
+- Make hosted CI follow the interface: the e2e suites use the Humans and Agents views and role menus, packaging stages Electron modules with the checked-out kit, and the node-pty runtime verifies on x64 and arm64.
+
 ## 0.2.1 (2026-11-02) [CITED: `VERSION`]
 
 - Add the two-capsule human and agent role model with native xpra human tiles, opening modes (`hidden`, `watch`, `human`), stop and reveal actions, reconnect recovery on dropped connections, stage and quit/child-loss diagnostic log lines, and bounded ancestor walks (`9ccd712d3`, `b08def87b`, `3909004b7`, `b2a082c06`, `0e0c05092`, `6bdce50e5`, `2f67a6133`, `d44f4fc1b`, `f0634615b`, `13e84c8ac`, `44db62f7c`, `ace7652b8`, `5bcc92d54`) [CITED: git history].
 - Group secondary header actions under More and give each role tile a mode-specific menu above retained native views, bound hidden live connections with a configurable least-recently-shown cap, and preserve minimized agent shells across layout changes (`aa39e62ff`) [CITED: git history].
 - Add Humans and Agents views with numbered desktops (`1`–`9`), restore desktop layouts without getting stuck in quarantine, and support moving tiles between desktops (`248913733`, `3e6379b9e`, `f5348881b`, `099ab20f2`) [CITED: git history].
 - Add dynamic identity management with sudo-free profile setup, normalised identity names, and packaged vite quarantine-reason plugin staging (`ccb2d3997`, `f936e5bac`, `e6b12c42e`) [CITED: git history].
-- Add tile size controls (`S`, `M`, `L`, `Full`), working layout presets (`Focus`, `Split`, `Grid`, `Stack`), and desktop moves (`099ab20f2`) [CITED: git history].
+- Add tile size controls (wider, narrower, taller, shorter, Fit), working layout presets (1 tile, 2 side by side, 2×2, Focus + strip, Floating), and desktop moves (`099ab20f2`) [CITED: git history].
 - Require an explicit matching holder for identity release, refuse reserved ids and protected capsules, allow live identity login attachment, serialize stale view reservation reclaim with conservative process evidence, surface `PROFILE_NOT_PROVISIONED` and `PROFILE_MISSING` across the operator bridge and preload allowlist to the Identities dialog with the one-time host provisioning command (`sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/<id>"`), and require explicit profile provisioning between `create` and `login` in the hosted persistence fixture.
 - Harden the operator identity tool: name missing profile provisioning before login, tear down and reclaim killed login views, refuse reserved live-profile ids, and add `status` and `release` verbs.
 - Align every documented `MV_SRF_PROFILES` example (`docs/MULTI_CAPSULE.md`, `docs/INSTALL.md`, `docs/USER_GUIDE.md`) with the closed adapter decoder (`"text_input": "paste"`, four browser profiles `mv-live-1`..`mv-live-4` sharing `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` on displays `:100`..`:103` at `1280x900`) and guard them with a Go doc-extraction and mutation test.
