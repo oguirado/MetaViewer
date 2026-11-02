@@ -14,7 +14,9 @@ The example requests three actions [TARGET]. Supply the running app's `MV_CORE_C
 Supply the locked dependency roots with `MV_WENDER_ROOT` and `VQA_VE_ROOT`.
 For a host-xpra program, `MV_SRF_STATE_DIR` supplies the adapter's private binding;
 identity-store and native-admin configuration are unnecessary. The legacy
-container-backed program lane retains its native identity and Docker lease checks.
+container-backed host-exec program lane retains its native identity and Docker
+lease checks, and also requires the adapter witness for the same public surface
+and native run. An unrelated active legacy lease never supplies missing custody.
 Program evidence defaults to a private subtree beneath `/dev/shm/vqa-cu`.
 An explicit `XDG_STATE_HOME` must resolve inside `/dev/shm`, with owned mode-0700
 directories and no symlink traversal. Disk evidence refuses before connection or
@@ -108,15 +110,24 @@ Human/shared control, missing program custody, an unsupported surface, an unknow
 visual observation, planner refusal, stale pixels, and failed settlement refuse.
 The program lane does not use browser URLs, browser AX, or browser egress witnesses.
 
-Host-xpra admission uses the existing private
+Supported host-xpra and legacy host-exec admission uses the existing private
 `human-bindings/SURFACE_ID.json` witness with schema
 `metaviewer.human_binding/v0.3`. Despite its historical name, the producer exports
-it for agent programs. The exact profile, public surface, agent role, ready state,
-host flag, private-display container and derived run identifier must agree. A
+it for these agent programs. The exact profile, public surface, agent role, ready
+state, native container and run identifier must agree. Host-xpra additionally
+requires the true host flag and its derived private-display run identifier. A
 foreign, browser, malformed or missing witness refuses; loss of an admitted host
-witness cannot select a legacy container. This path never consults Docker.
-Observed and retained raw frames must use that exact run's `frames/w1` allocation
-in canonical RAM paths. Binding dimensions describe initial allocation; current
+witness cannot select a legacy container. Host-xpra never consults Docker;
+legacy host-exec also matches the native receipt's run before using its existing
+identity/container checks.
+
+Public observed and retained frames use the real publisher's private
+`frames-<random>/<random-hex>.rgb` RAM allocations. These are different from the
+native run/window capture paths: the publisher validates the native container,
+run and window before producing the authenticated surface-bound `FrameRef`.
+The command checks that public surface binding, canonical private publisher path,
+owner/modes and retained RGB digest; it does not infer native custody from a raw
+filename. Binding dimensions describe initial allocation; current
 actions use the genuine frame geometry and require unchanged geometry while
 rebinding a decision. Core owns the actual native XID/witness checks. The agent
 requires the validated core tool-result projection for host input settlement;
@@ -128,6 +139,14 @@ does not export a host-window witness. A profile name, display, active surface o
 unrelated container is insufficient proof. A reviewed producer route is needed
 before this lane can admit an arbitrary host window. Browser, VM and interface
 integration remain outside this change.
+
+Builtin legacy programs without an exported adapter witness are also unsupported
+by this candidate. This intentionally narrows the older profile-plus-lease-only
+admission: that broader proof cannot distinguish another public native transport
+when an unrelated old lease coexists. The previously accepted legacy Mines
+baseline remains historical evidence; it is not a new acceptance claim for these
+unexported builtins. The existing producer is unchanged. Only host-xpra and legacy
+host-exec programs with actual exported custody are candidates for new live checks.
 
 The existing Wender bridge only admits custody-bound clicks. It cannot currently
 plan and deliver a text-editing step in gedit. Wender's model client can emit text

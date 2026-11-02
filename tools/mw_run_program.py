@@ -84,67 +84,82 @@ class ProgramBackend(host.HostBackend):
         host.need(isinstance(surface_id, str) and
                   re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', surface_id),
                   'MW_PROGRAM_BINDING')
+        host.need(self.surface_id in (None, surface_id), 'MW_RUN_OWNERSHIP')
         path = self.state / 'human-bindings' / (surface_id + '.json')
         prior = getattr(self, 'program_binding', None)
-        if os.path.lexists(path):
-            binding = host.private_json(path, self.state)
-            # The existing producer omits host_xpra for legacy program/browser
-            # bindings. Presence is never an excuse to downgrade a bad witness.
-            if 'host_xpra' in binding:
-                host.need(set(binding) == {'schema', 'surface_id', 'container', 'run_id',
-                          'control_ready', 'input_epoch', 'width', 'height', 'role',
-                          'profile_id', 'host_xpra'} and binding['host_xpra'] is True,
-                          'MW_PROGRAM_BINDING')
-                expected_run = 'run-hw-' + surface_id.removeprefix('surface-')[:16]
-                host.need(binding['schema'] == 'metaviewer.human_binding/v0.3' and
-                          binding['surface_id'] == surface_id and binding['profile_id'] == self.identity and
-                          binding['container'] == 'srf-pg-hx-' + self.identity and
-                          binding['run_id'] == expected_run and binding['role'] == 'agent' and
-                          binding['control_ready'] is True and type(binding['input_epoch']) is int and
-                          0 <= binding['input_epoch'] < 2**64 and
-                          all(type(binding[k]) is int and 1 <= binding[k] <= 16384
-                              for k in ('width', 'height')), 'MW_PROGRAM_BINDING')
-                immutable = ('schema', 'surface_id', 'profile_id', 'container', 'run_id', 'role', 'host_xpra')
-                host.need(prior is None or all(prior[k] == binding[k] for k in immutable),
-                          'MW_RUN_OWNERSHIP')
-                host.need(self.surface_id in (None, surface_id) and
-                          self.capsule in (None, binding['container']), 'MW_RUN_OWNERSHIP')
-                # Host programs deliberately bypass identity-store provisioning
-                # in roleHost and the manager. The authenticated surface and its
-                # matching private adapter witness bind this program identity.
-                self.surface_id, self.capsule = surface_id, binding['container']
-                self.program_binding = dict(binding)
-                return dict(profile='host-xpra', identity=self.identity, surface_id=surface_id,
-                            capsules=[], native_binding=dict(binding))
-            host.need(prior is None and binding.get('container') == 'srf-pg-' + self.identity and
-                      binding.get('profile_id') == self.identity and binding.get('surface_id') == surface_id and
-                      binding.get('role') == 'agent', 'MW_PROGRAM_BINDING')
-        # A host receipt disappearing cannot turn a host window into a Docker
-        # target. Unexported host-window custody remains unsupported at this pin.
-        host.need(prior is None, 'MW_PROGRAM_BINDING')
-        host.need(all(getattr(self, key, None) is not None for key in ('binary', 'admin', 'store')),
-                  'MW_RUN_CONFIG')
-        return super().ownership()
+        # Even a valid old native lease cannot identify the native transport of
+        # another public desktop surface. Require the adapter-selected witness
+        # before either lane; no profile/display prefix grants custody.
+        if not os.path.lexists(path):
+            raise host.refuse('MW_PROGRAM_BINDING',
+                'program requires an exported adapter custody witness; unexported host-window '
+                'and builtin program transports are unsupported')
+        binding = host.private_json(path, self.state)
+        fields = {'schema', 'surface_id', 'container', 'run_id', 'control_ready',
+                  'input_epoch', 'width', 'height', 'role', 'profile_id'}
+        host_xpra = 'host_xpra' in binding
+        host.need(set(binding) == fields | ({'host_xpra'} if host_xpra else set()) and
+                  (not host_xpra or binding['host_xpra'] is True), 'MW_PROGRAM_BINDING')
+        container = ('srf-pg-hx-' if host_xpra else 'srf-pg-') + self.identity
+        host.need(binding['schema'] == 'metaviewer.human_binding/v0.3' and
+                  binding['surface_id'] == surface_id and binding['profile_id'] == self.identity and
+                  binding['container'] == container and binding['role'] == 'agent' and
+                  binding['control_ready'] is True and type(binding['input_epoch']) is int and
+                  0 <= binding['input_epoch'] < 2**64 and isinstance(binding['run_id'], str) and
+                  re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,127}', binding['run_id']) and
+                  all(type(binding[k]) is int and 1 <= binding[k] <= 16384
+                      for k in ('width', 'height')), 'MW_PROGRAM_BINDING')
+        if host_xpra:
+            host.need(binding['run_id'] == 'run-hw-' + surface_id.removeprefix('surface-')[:16],
+                      'MW_PROGRAM_BINDING')
+        immutable = ('schema', 'surface_id', 'profile_id', 'container', 'run_id', 'role', 'host_xpra')
+        host.need(prior is None or all(prior.get(k) == binding.get(k) for k in immutable),
+                  'MW_RUN_OWNERSHIP')
+        host.need(self.capsule in (None, container), 'MW_RUN_OWNERSHIP')
+        if host_xpra:
+            # This setup deliberately omits stored-identity provisioning.
+            self.surface_id, self.capsule = surface_id, container
+            witness = dict(profile='host-xpra', identity=self.identity, surface_id=surface_id, capsules=[])
+        else:
+            host.need(all(getattr(self, key, None) is not None for key in ('binary', 'admin', 'store')),
+                      'MW_RUN_CONFIG')
+            # The native control receipt and the manager-selected witness must
+            # name the same admitted run, not merely reuse a container name.
+            for receipt_path in self.state.glob('*.json'):
+                receipt=host.private_json(receipt_path,self.state)
+                if host.live.program_capsule_from_receipt(receipt,self.identity)==container:
+                    native=receipt.get('Capsule',receipt)
+                    host.need(native.get('run_id')==binding['run_id'],'MW_PROGRAM_BINDING')
+            witness = super().ownership()
+            host.need(self.capsule == binding['container'], 'MW_PROGRAM_BINDING')
+        self.program_binding = dict(binding)
+        return dict(witness, native_binding=dict(binding))
 
     def check_program_frame(self, frame):
         binding = getattr(self, 'program_binding', None)
-        if binding is None:
-            return
+        host.need(isinstance(binding, dict), 'MW_PROGRAM_BINDING')
         host.tools._check_frame(frame)
         path = Path(frame['ramws_path'])
         host.need(frame['surface_id'] == binding['surface_id'] and path.is_absolute() and
                   path.is_relative_to('/dev/shm') and
-                  path.parts[-4:-1] == (binding['run_id'], 'frames', 'w1') and
-                  re.fullmatch(r'frame-[1-9][0-9]*\.rgb24', path.name) and
+                  path.parent.name.startswith('frames-') and len(path.parent.name) > len('frames-') and
+                  re.fullmatch(r'[0-9a-f]{32}\.rgb', path.name) and
                   path == path.resolve(strict=True) and
                   not any(p.is_symlink() for p in (path, *path.parents)), 'MW_PROGRAM_FRAME_CUSTODY')
+        # Publisher.publish checks native run/window/container before producing
+        # this authenticated surface-bound Ref. Public raw allocations deliberately
+        # have random names; their paths do not disclose the native run/window.
+        for candidate,kind,mode in ((path,stat.S_ISREG,0o600),(path.parent,stat.S_ISDIR,0o700)):
+            metadata=candidate.lstat()
+            host.need(kind(metadata.st_mode) and metadata.st_uid==os.getuid() and
+                      stat.S_IMODE(metadata.st_mode)==mode,'MW_PROGRAM_FRAME_CUSTODY')
 
     def retain(self, frame):
         self.check_program_frame(frame)
         return super().retain(frame)
 
     def native_witness(self, verified):
-        if getattr(self, 'program_binding', None) is not None:
+        if (getattr(self, 'program_binding', None) or {}).get('host_xpra') is True:
             # Core validates the private-display XID and witness before exposing
             # the frozen verified-result projection. It strips the native ID;
             # do not manufacture an XID or accept an ordinary lookalike dict.

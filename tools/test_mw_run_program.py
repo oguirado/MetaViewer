@@ -58,8 +58,10 @@ class ProgramTests(unittest.TestCase):
                             surface_id='surface-alice', control='agent')
         self.lease = self.root / 'capsule.json'
         self.lease.write_text(json.dumps(dict(Lease=dict(ProfileID='alice'),
-                                              Capsule=dict(container='srf-pg-alice'))))
+            Capsule=dict(kind='program',container='srf-pg-alice',run_id='alice-run',
+                         windows=[dict(id='w1',x=0,y=0,w=100,h=80,title='',url='')]))))
         self.lease.chmod(0o600)
+        self.legacy_binding()
 
     def custody(self):
         return patch.multiple(self.b, native=Mock(return_value=dict(profile_id='alice')))
@@ -70,6 +72,21 @@ class ProgramTests(unittest.TestCase):
                     host, 'command', return_value=SimpleNamespace(returncode=0, stdout=active)):
             return self.b.ownership()
 
+    def legacy_binding(self, **changes):
+        value=dict(schema='metaviewer.human_binding/v0.3',surface_id='surface-alice',
+            profile_id='alice',container='srf-pg-alice',run_id='alice-run',
+            control_ready=True,input_epoch=0,width=100,height=80,role='agent')
+        value.update(changes)
+        directory=self.root/'human-bindings';directory.mkdir(mode=0o700,exist_ok=True)
+        path=directory/'surface-alice.json';path.write_text(json.dumps(value));path.chmod(0o600)
+        return path
+
+    def publication(self):
+        # Public immutable RGB projection, not the native run/frames/w1 source.
+        directory=self.root/'frames-synthetic';directory.mkdir(mode=0o700,exist_ok=True)
+        path=directory/('a'*32+'.rgb');path.write_bytes(b'x');path.chmod(0o600)
+        return dict(frame(),ramws_path=str(path))
+
     def test_program_custody_and_browser_filter_remain_distinct(self):
         self.assertEqual(self.own()['capsules'], ['srf-pg-alice'])
         with self.assertRaisesRegex(host.OwnerRefused, 'MW_RUN_NO_SURFACE'):
@@ -79,6 +96,26 @@ class ProgramTests(unittest.TestCase):
         with patch.object(host.tools, 'list_surfaces', return_value=dict(
                 surfaces=[self.surface, dict(self.surface, kind='browser')], next_cursor=None)):
             self.assertEqual([s['kind'] for s in browser.surfaces()], ['browser'])
+
+    def test_legacy_program_requires_matching_adapter_surface_and_native_run(self):
+        self.assertEqual(self.own()['native_binding']['run_id'],'alice-run')
+        for change in (dict(run_id='foreign-run'),dict(surface_id='foreign'),dict(container='srf-id-alice'),
+                       dict(role='human'),dict(control_ready=False)):
+            with self.subTest(change=change):
+                self.legacy_binding(**change)
+                with self.assertRaises(host.OwnerRefused):self.own()
+        self.legacy_binding()
+        receipt=json.loads(self.lease.read_text());receipt['Capsule']['run_id']='different-run'
+        self.lease.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_BINDING'):self.own()
+        del receipt['Capsule']['run_id'];self.lease.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_BINDING'):self.own()
+
+    def test_legacy_program_without_adapter_witness_is_explicitly_unsupported(self):
+        (self.root/'human-bindings/surface-alice.json').unlink()
+        with self.assertRaisesRegex(host.OwnerRefused,'builtin program transports are unsupported'):
+            self.own()
+        self.assertTrue(self.lease.is_file())
 
     def test_human_unsupported_wrong_identity_and_stopped_program_refuse(self):
         for mutation, code in ((dict(control='human'), 'MW_PROGRAM_CONTROL'),
@@ -138,6 +175,19 @@ class ProgramTests(unittest.TestCase):
         self.assertEqual(backend.program_binding['profile_id'],'alice')
         self.assertIsNone(backend.store)
 
+    def test_host_xpra_observation_retains_the_actual_public_rgb_projection(self):
+        self.host_binding()
+        published=self.publication();pixels=b'\xff'*(100*80*3)
+        Path(published['ramws_path']).write_bytes(pixels)
+        published['sha256']=host.hashlib.sha256(pixels).hexdigest()
+        with patch.object(host.tools,'list_surfaces',return_value=dict(surfaces=[self.surface],next_cursor=None)), \
+             patch.object(host.tools,'observe',return_value=dict(frame_ref=published)), \
+             patch.object(host,'command',side_effect=AssertionError('host program used Docker/native lookup')):
+            observed=self.b.observe(1000)
+            retained=self.b.retain(observed['frame_ref'])
+        self.assertEqual(Path(retained['artifact']).read_bytes(),pixels)
+        self.assertEqual(retained['surface_id'],'surface-alice')
+
     def test_host_xpra_foreign_browser_human_unready_and_replaced_bindings_refuse(self):
         for change in (dict(profile_id='bob'),dict(surface_id='other'),dict(container='srf-id-alice'),
                        dict(container='srf-pg-alice'),dict(run_id='run-hw-foreign'),dict(host_xpra=False),
@@ -158,32 +208,45 @@ class ProgramTests(unittest.TestCase):
         for change,code in ((dict(control='human'),'MW_PROGRAM_CONTROL'),
                             (dict(kind='browser'),'MW_RUN_NO_SURFACE'),
                             (dict(kind='vm'),'MW_RUN_NO_SURFACE'),
-                            (dict(surface_id='replacement'),'MW_PROGRAM_BINDING')):
+                            (dict(surface_id='replacement'),'MW_RUN_OWNERSHIP')):
             with self.subTest(change=change),patch.object(host.tools,'propose') as submit:
                 with self.assertRaisesRegex(host.OwnerRefused,code):self.own(dict(self.surface,**change))
                 submit.assert_not_called()
 
     def test_host_window_without_exported_custody_does_not_become_a_host_xpra_program(self):
-        self.lease.unlink()
-        with self.assertRaisesRegex(host.OwnerRefused,'MW_RUN_NO_SURFACE'):
-            self.own(active=b'srf-hw-alice-123\n')
+        # Keep a valid old native lease AND active srf-pg container. Neither
+        # proves this separately admitted public host window's native transport.
+        (self.root/'human-bindings/surface-alice.json').unlink()
+        wire=dict(schema='surface/v0.2',profile_id='alice',state='active',kind='desktop_capsule',
+            surface_id='surface-alice',control='agent',display=':0.123',
+            geometry=dict(w=100,h=80),visibility='unfolded')
+        host.tools._check_surface(wire)
+        with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_BINDING'):
+            self.own(surface=wire,active=b'srf-pg-alice\nsrf-hw-alice-123\n')
         self.assertIsNone(getattr(self.b,'program_binding',None))
+        self.assertEqual(json.loads(self.lease.read_text())['Capsule']['container'],'srf-pg-alice')
+        with patch.object(self.b,'native'),patch.object(host.tools,'list_surfaces',return_value=dict(
+                surfaces=[wire],next_cursor=None)),patch.object(host.tools,'observe') as observe, \
+             patch.object(host,'command') as command,patch.object(host.tools,'propose') as submit:
+            with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_BINDING'):self.b.observe(1000)
+        observe.assert_not_called();command.assert_not_called();submit.assert_not_called()
 
-    def test_host_xpra_frames_bind_exact_run_window_and_canonical_ram_file(self):
+    def test_host_xpra_frames_require_the_public_publisher_layout_and_current_binding(self):
+        valid=self.publication()
+        with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_BINDING'):self.b.check_program_frame(valid)
         self.host_binding();self.own()
-        directory=self.root/'run-hw-alice/frames/w1'
-        directory.mkdir(mode=0o700,parents=True)
-        path=directory/'frame-1.rgb24';path.write_bytes(b'x');path.chmod(0o600)
-        valid=dict(frame(),ramws_path=str(path))
+        path=Path(valid['ramws_path']);directory=path.parent
         self.b.check_program_frame(valid)
-        for mutation in (dict(surface_id='foreign'),dict(ramws_path=str(path).replace('run-hw-alice','foreign')),
-                         dict(ramws_path=str(path).replace('/w1/','/w2/')),
-                         dict(ramws_path=str(path.parent/'../w1/frame-1.rgb24')),
+        for mutation in (dict(surface_id='foreign'),dict(ramws_path=str(self.root/'run-hw-alice/frames/w1/frame-1.rgb24')),
+                         dict(ramws_path=str(path.with_suffix('.rgb24'))),
+                         dict(ramws_path=str(path.parent/'..'/directory.name/path.name)),
                          dict(ramws_path='/tmp/frame-1.rgb24')):
             with self.subTest(mutation=mutation),self.assertRaises((host.OwnerRefused,host.tools.ToolValidationError)):
                 self.b.check_program_frame(dict(valid,**mutation))
-        alias=directory/'frame-2.rgb24';alias.symlink_to(path)
+        alias=directory/('b'*32+'.rgb');alias.symlink_to(path)
         with self.assertRaises(host.OwnerRefused):self.b.check_program_frame(dict(valid,ramws_path=str(alias)))
+        path.chmod(0o644)
+        with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_FRAME_CUSTODY'):self.b.check_program_frame(valid)
 
     def test_host_xpra_requires_the_actual_verified_result_projection(self):
         self.host_binding();self.own()
@@ -206,12 +269,13 @@ class ProgramTests(unittest.TestCase):
 
     def test_unknown_visual_evidence_and_wrong_frame_never_plan(self):
         self.b.surface_id = 'surface-alice'
+        self.own()
         self.b.vision = Mock()
         self.b.vision.diagnostics = dict(last_transport='vserve')
         with patch.object(self.b, 'retain', return_value={}), patch.object(
                 program, 'project_element_table', return_value=dict(elements=[])):
             with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_UNKNOWN_OBSERVATION'):
-                self.b.perceive(dict(frame_ref=frame()))
+                self.b.perceive(dict(frame_ref=self.publication()))
         failed = self.b.program_observations[-1]
         self.assertEqual(failed['status'], 'unknown')
         self.assertEqual(failed['table']['elements'], [])
@@ -222,7 +286,7 @@ class ProgramTests(unittest.TestCase):
 
     def test_moving_pixels_do_not_submit_old_coordinates(self):
         self.b.surface_id = 'surface-alice'
-        with patch.object(self.b, 'ownership'), patch.object(host.tools, 'observe', return_value=dict(
+        with patch.object(self.b, 'ownership'), patch.object(self.b, 'observe', return_value=dict(
                 frame_ref=dict(frame(2), sha256='b' * 64))), patch.object(host.tools, 'propose') as submit:
             with self.assertRaisesRegex(host.OwnerRefused, 'MW_STALE_FRAME_EXHAUSTED'):
                 self.b.propose(dict(frame=frame()), planner_reply(), 1000)
