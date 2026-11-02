@@ -14,7 +14,7 @@
  * projected to host preferences; its limits do not change UI preference caps.
  */
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
-import { constants, realpathSync, statSync } from 'node:fs';
+import { constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -698,7 +698,7 @@ export function nestedIdentity(argv,env) {
   return {depth:flags.length ? Number(flags[0].slice(-1)) : null,self};
 }
 /** @param {any} options */
-export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,clipboard=null,profiles=new Map(),capsuleStates=new Map(),listIdentities=null,frames=null,frameDiag=null,now:clock=Date.now}) {
+export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,clipboard=null,profiles=new Map(),capsuleStates=new Map(),listIdentities=null,readFreeMemoryBytes=null,frames=null,frameDiag=null,now:clock=Date.now}) {
   if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
   const store = createSettingsStore(env);
   const destination = recordingDestination(env);
@@ -751,18 +751,18 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   };
   /** @type {Record<string, string>} */
   const createReasons = {
-    CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
-    NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
+    CAPSULE_LIMIT_REACHED: 'At most 16 capsules run at once (16 of 16 open). Close a capsule to open another.',
+    NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 16 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
     IDENTITY_LIST_UNAVAILABLE: 'The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.',
     PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
     SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
     PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
-    CAPSULE_SLOT_UNAVAILABLE: 'No free capsule slot. Stop another capsule first (up to 4 run at once).',
+    CAPSULE_SLOT_UNAVAILABLE: 'No free capsule slot. Stop another capsule first (up to 16 run at once).',
     SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
     SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
     IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
     IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
-    RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+    RAM_ADMISSION_REFUSED: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
     SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
     SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
     SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
@@ -839,8 +839,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       try {
         /** @type {any} */ let request;
         if (typeof listIdentities === 'function') {
-          const { pickCreateRequest } = await (profilePickerModulePromise ??= import('./profilePicker.js'));
-          const pick = await pickCreateRequest({env, surfaces:capsuleStates, listIdentities});
+          const { pickCreateRequest, parseMemAvailableBytes } = await (profilePickerModulePromise ??= import('./profilePicker.js'));
+          const readHostFreeMemory = typeof readFreeMemoryBytes === 'function'
+            ? readFreeMemoryBytes
+            : () => parseMemAvailableBytes(readFileSync('/proc/meminfo', 'utf8'));
+          const pick = await pickCreateRequest({env, surfaces:capsuleStates, listIdentities, readFreeMemoryBytes: readHostFreeMemory});
           // Preload currently admits only {ok,code}; renderer copy is a conductor hook.
           if (!pick.ok) return refuse(pick.code, pick.missing?.[0] ?? 'mv-live-2');
           request = pick.request;
@@ -848,6 +851,20 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
           // Keep uncertain creates reserved until a native state reconciles them.
           capsuleStates.set(key, {profile_id:pick.profile_id,state:'creating'});
         } else {
+          const { MAX_CAPSULES, CAPSULE_MEMORY_LIMIT_BYTES, parseMemAvailableBytes } = await (profilePickerModulePromise ??= import('./profilePicker.js'));
+          let liveCount = 0;
+          for (const s of capsuleStates.values()) {
+            if (s && s.state !== 'destroyed' && s.state !== 'lost') liveCount += 1;
+          }
+          if (liveCount >= MAX_CAPSULES) return refuse('CAPSULE_LIMIT_REACHED');
+          const readHostFreeMemory = typeof readFreeMemoryBytes === 'function'
+            ? readFreeMemoryBytes
+            : () => parseMemAvailableBytes(readFileSync('/proc/meminfo', 'utf8'));
+          let freeBytes = null;
+          try { freeBytes = await readHostFreeMemory(); } catch { freeBytes = null; }
+          if (typeof freeBytes !== 'number' || !Number.isFinite(freeBytes) || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {
+            return refuse('RAM_ADMISSION_REFUSED');
+          }
           request = buildFirstSurfaceCreateRequest(env);
           if (request.params.kind !== 'browser') return refuse('SURFACE_CREATE_KIND_UNAVAILABLE');
         }

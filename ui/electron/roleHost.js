@@ -10,7 +10,18 @@ import { join, isAbsolute, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
-import { configuredProfiles, summarizeSurfaces, MAX_CAPSULES } from './profilePicker.js';
+import {
+  CAPSULE_MEMORY_LIMIT_BYTES,
+  CREATE_REFUSAL_REASONS,
+  MAX_CAPSULES,
+  configuredProfiles,
+  createRefusalReason,
+  formatCapsuleLimitReason,
+  formatCapsuleSlotReason,
+  formatMemoryRefusalReason,
+  parseMemAvailableBytes,
+  summarizeSurfaces,
+} from './profilePicker.js';
 import { recordingDestination } from './authorityWire.js';
 import { createXpraHumanSession } from './xpraHumanSession.js';
 import { openXpraHumanBridge } from './xpraHumanBridge.js';
@@ -134,8 +145,24 @@ export function runHumanMode({tool, stateDir, container, readonly, env}) {
 /** Renderer gets only role, profile ids, state, and opaque success. */
 /** @param {any} options */
 export function installRoleHost({electron, window, core, env, capsuleStates, admit,
-  listIdentities, provisionProgramIdentity, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
+  listIdentities, provisionProgramIdentity, readFreeMemoryBytes, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
   const {ipcMain} = electron;
+  const defaultReadFreeMemoryBytes = async () => {
+    try {
+      return parseMemAvailableBytes(await readFile('/proc/meminfo', 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+  const readHostFreeMemory = async () => {
+    const reader = typeof readFreeMemoryBytes === 'function' ? readFreeMemoryBytes : defaultReadFreeMemoryBytes;
+    try {
+      const measured = await reader();
+      return Number.isSafeInteger(measured) && measured >= 0 ? measured : null;
+    } catch {
+      return null;
+    }
+  };
   const defaultProvisionProgramIdentity = async (/** @type {{id:string,label:string}} */ {id: profileId, label}) => {
     if (typeof env?.SRF_IDENTITY_STORE_ROOT !== 'string' || !env.SRF_IDENTITY_STORE_ROOT) {
       return {ok:true, rows:[{id:profileId, label, domains:[], logged_in:'unknown', browser:'program'}]};
@@ -351,13 +378,17 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     }
     const role = choice.role ?? 'agent';
     const resolved = resolveHostBinary(choice.binary, {...process.env, ...env});
-    if (creating && !held) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:`host_program_unavailable: ${resolved.name}: another capsule is currently starting`});
+    if (creating && !held) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:CREATE_REFUSAL_REASONS.SURFACE_CREATE_BUSY});
     creating = true;
     let key, clearMode;
     try {
       pruneProgramProfiles();
       const {live,bound} = summarizeSurfaces(capsuleStates);
-      if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:`host_program_unavailable: ${resolved.name}: capsule limit reached; stop a capsule first`});
+      if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:formatCapsuleLimitReason(live)});
+      const freeBytes = await readHostFreeMemory();
+      if (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {
+        throw Object.assign(refuse('RAM_ADMISSION_REFUSED'), {reason:formatMemoryRefusalReason(freeBytes, live)});
+      }
       let idReply;
       try {
         idReply = typeof listIdentities === 'function' ? await listIdentities() : null;
@@ -365,7 +396,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         idReply = null;
       }
       if (idReply?.ok !== true || !Array.isArray(idReply.rows) || !idReply.rows.every((/** @type {any} */ r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id.length > 0)) {
-        throw Object.assign(refuse('IDENTITY_LIST_UNAVAILABLE'), {reason:`host_program_unavailable: ${resolved.name}: identity list is unavailable; cannot verify profile collisions`});
+        throw Object.assign(refuse('IDENTITY_LIST_UNAVAILABLE'), {reason:CREATE_REFUSAL_REASONS.IDENTITY_LIST_UNAVAILABLE});
       }
       const knownIdentities = new Set(idReply.rows.map((/** @type {any} */ r) => r.id));
       const programIdentities = new Set(Array.isArray(idReply?.rows) ? idReply.rows.filter((/** @type {any} */ r) => r?.browser === 'program').map((/** @type {any} */ r) => r.id) : []);
@@ -374,7 +405,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (base.length < 2) base = ('pg-' + (base || 'app')).slice(0, 30);
       const forbidden = new Set(['notepad-1','metaviewer-1','srf-egress-proxy','n8n','distil-box']);
       if (isForeignIdentity(base) || forbidden.has(base) || base.startsWith('mv-') || base === env.MV_SRF_LIVE_PROFILE) {
-        throw Object.assign(refuse('IDENTITY_PROTECTED'), {reason:`host_program_unavailable: ${resolved.name}: protected identity name refused`});
+        throw Object.assign(refuse('IDENTITY_PROTECTED'), {reason:`${resolved.name}: protected identity name refused`});
       }
       const canUse = (/** @type {string} */ candidate) => identityAllowed(candidate) && !forbidden.has(candidate)
         && !candidate.startsWith('mv-') && candidate !== env.MV_SRF_LIVE_PROFILE
@@ -386,7 +417,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         const candidate = `${base.slice(0, 36)}-${n}`;
         if (canUse(candidate)) profileId = candidate;
       }
-      if (!profileId) throw Object.assign(refuse('CAPSULE_SLOT_UNAVAILABLE'), {reason:`host_program_unavailable: ${resolved.name}: no free program profile slot available`});
+      if (!profileId) throw Object.assign(refuse('CAPSULE_SLOT_UNAVAILABLE'), {reason:formatCapsuleSlotReason(live)});
       key = `pending:${profileId}`;
       capsuleStates.set(key, {profile_id:profileId, state:'creating'});
       try {
@@ -394,7 +425,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         if (provReply && provReply.ok === false) {
           const pCode = typeof provReply.code === 'string' && provReply.code ? provReply.code : 'PROFILE_NOT_PROVISIONED';
           const pReason = typeof provReply.reason === 'string' && provReply.reason ? provReply.reason : pCode;
-          throw Object.assign(refuse(pCode), {reason:pReason.includes(resolved.name) ? pReason : `host_program_unavailable: ${resolved.name}: ${pReason}`});
+          throw Object.assign(refuse(pCode), {reason:pReason.includes(resolved.name) ? pReason : `${resolved.name}: ${pReason}`});
         }
       } catch (provErr) {
         const rawCode = typeof /** @type {any} */ (provErr)?.code === 'string' && /** @type {any} */ (provErr).code
@@ -407,7 +438,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
           : (typeof /** @type {any} */ (provErr)?.message === 'string' && /** @type {any} */ (provErr).message
             ? /** @type {any} */ (provErr).message
             : rawCode);
-        const reason = rawReason.includes(resolved.name) ? rawReason : `host_program_unavailable: ${resolved.name}: ${rawReason}`;
+        const reason = rawReason.includes(resolved.name) ? rawReason : `${resolved.name}: ${rawReason}`;
         throw Object.assign(refuse(rawCode), {reason});
       }
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, role, resolved.path);
@@ -415,9 +446,19 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:1280, h:900}}});
       if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {
         const code = surfaceCreateRefusal(reply);
-        const rawDetail = typeof reply?.data?.detail === 'string' ? reply.data.detail : '';
-        const baseReason = rawDetail.includes('host_program_unavailable:') ? rawDetail : (rawDetail ? `host_program_unavailable: ${rawDetail}` : `host_program_unavailable: ${code}`);
-        const reason = baseReason.includes(resolved.name) ? baseReason : baseReason.replace(/^host_program_unavailable:\s*/, `host_program_unavailable: ${resolved.name}: `);
+        if (code === 'HOST_PROGRAM_UNAVAILABLE') {
+          const rawDetail = typeof reply?.data?.detail === 'string' ? reply.data.detail : '';
+          const baseReason = rawDetail.includes('host_program_unavailable:') ? rawDetail : (rawDetail ? `host_program_unavailable: ${rawDetail}` : `host_program_unavailable: ${code}`);
+          const reason = baseReason.includes(resolved.name) ? baseReason : baseReason.replace(/^host_program_unavailable:\s*/, `host_program_unavailable: ${resolved.name}: `);
+          throw Object.assign(refuse(code), {reason});
+        }
+        const reason = code === 'CAPSULE_LIMIT_REACHED'
+          ? formatCapsuleLimitReason(live)
+          : code === 'CAPSULE_SLOT_UNAVAILABLE' || code === 'SURFACE_CAPACITY_OR_QUARANTINE'
+            ? formatCapsuleSlotReason(live)
+            : code === 'RAM_ADMISSION_REFUSED'
+              ? formatMemoryRefusalReason(freeBytes, live)
+              : createRefusalReason(code);
         throw Object.assign(refuse(code), {reason});
       }
       const surface = reply.data.surface;
@@ -452,7 +493,11 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       pruneProgramProfiles();
       const {live,bound} = summarizeSurfaces(capsuleStates);
       if (bound.has(choice.profileId)) throw refuse('PROFILE_ALREADY_BOUND');
-      if (live >= MAX_CAPSULES) throw refuse('CAPSULE_LIMIT_REACHED');
+      if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:formatCapsuleLimitReason(live)});
+      const freeBytes = await readHostFreeMemory();
+      if (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {
+        throw Object.assign(refuse('RAM_ADMISSION_REFUSED'), {reason:formatMemoryRefusalReason(freeBytes, live)});
+      }
       const available = await choices();
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       const profile = browserProfiles().find(p => p.id === choice.profileId && !programProfiles.has(p.id));

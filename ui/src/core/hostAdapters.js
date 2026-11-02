@@ -204,8 +204,8 @@ export function hostOutcomeFor(row) {
     return { code: row.code, message, tone: 'refusal' };
   }
   const createReasons = {
-    CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
-    NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
+    CAPSULE_LIMIT_REACHED: 'At most 16 capsules run at once (16 of 16 open). Close a capsule to open another.',
+    NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 16 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
     NO_IDENTITY: 'No free capsule profile has an identity yet. Create an identity (mv-live-2) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.',
     IDENTITY_LIST_UNAVAILABLE: 'The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.',
     PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
@@ -215,7 +215,7 @@ export function hostOutcomeFor(row) {
     SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
     IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
     IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
-    RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+    RAM_ADMISSION_REFUSED: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
     SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
     SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
     SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',

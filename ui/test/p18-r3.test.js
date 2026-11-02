@@ -539,8 +539,8 @@ test('P18-R3 items 3 and 4: handled refusals create no error rows, unexpected fa
     nextOpenReply = {ok:false,code:'CAPSULE_SLOT_UNAVAILABLE'};
     captured.identities.emit('open-identity',{profileId:'mv-live-1',role:'agent'});
     await tick();await tick();
-    assert.equal(captured.outcome()?.message,'No free capsule slot. Stop another capsule first (up to 4 run at once).');
-    assert.equal(normalizeActivityEntry(captured.stripEntries().at(-1)).text,'No free capsule slot. Stop another capsule first (up to 4 run at once).');
+    assert.equal(captured.outcome()?.message,'No free capsule slot. Stop another capsule first (up to 16 run at once).');
+    assert.equal(normalizeActivityEntry(captured.stripEntries().at(-1)).text,'No free capsule slot. Stop another capsule first (up to 16 run at once).');
     nextOpenReply = {ok:false,code:'ADAPTER_PROFILE'};
     captured.identities.emit('open-identity',{profileId:'mv-live-1',role:'agent'});
     await tick();await tick();

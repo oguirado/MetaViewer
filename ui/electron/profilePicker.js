@@ -15,15 +15,30 @@
  * - A profile bound to a live surface is never offered again.
  * - A profile is offered only when its identity already exists (names only, from
  *   the product's identity list). Nothing here creates or touches identities.
- * - At most MAX_CAPSULES (4) surfaces are live at once [TARGET]: each capsule
- *   shares cpuset 10-14 and takes up to 4 GiB + 2 GiB shm.
- * - Typed refusals: CAPSULE_LIMIT_REACHED, NO_FREE_PROFILE, NO_IDENTITY,
- *   IDENTITY_LIST_UNAVAILABLE, PICKER_INPUT_INVALID. Every refusal fails closed.
+ * - At most MAX_CAPSULES (16) surfaces are live at once, matching the adapter
+ *   MaxSurfaces ceiling [MEASURED]; each capsule's Docker limit is 4 GiB memory
+ *   plus 2 GiB /dev/shm (6 GiB total) with no default CPU pinning unless the
+ *   operator sets SRF_CPUSET [MEASURED: OpenSuperficies launch.go / surface.go].
+ * - Before each create, host free memory is checked against one capsule's 6 GiB
+ *   limit; below it, admission refuses with RAM_ADMISSION_REFUSED and a reason
+ *   saying what to close.
+ * - Typed refusals: CAPSULE_LIMIT_REACHED, RAM_ADMISSION_REFUSED,
+ *   NO_FREE_PROFILE, NO_IDENTITY, IDENTITY_LIST_UNAVAILABLE,
+ *   PICKER_INPUT_INVALID. Every refusal fails closed.
  * - The boot create keeps using buildFirstSurfaceCreateRequest (first profile).
  */
 
-/** Concurrent capsule ceiling [TARGET]. */
-export const MAX_CAPSULES = 4;
+/** Concurrent capsule ceiling matching the daemon-adapter MaxSurfaces limit [MEASURED]. */
+export const MAX_CAPSULES = 16;
+
+/** Per-capsule Docker memory limit (4 GiB) [MEASURED]. */
+export const CAPSULE_DOCKER_MEMORY_BYTES = 4 * 1024 * 1024 * 1024;
+
+/** Per-capsule Docker shared-memory (/dev/shm) limit (2 GiB) [MEASURED]. */
+export const CAPSULE_DOCKER_SHM_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** Host free memory required before admitting one capsule create (4 GiB RAM + 2 GiB shm = 6 GiB) [MEASURED]. */
+export const CAPSULE_MEMORY_LIMIT_BYTES = CAPSULE_DOCKER_MEMORY_BYTES + CAPSULE_DOCKER_SHM_BYTES;
 
 /** Same pattern the host request validator and the adapter admit. */
 const PROFILE_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -39,10 +54,11 @@ const KINDS = Object.freeze(['desktop_capsule', 'browser', 'game_capsule', 'vm']
  * @typedef {Readonly<{id: string, request: CreateRequest}>} ProfileEntry
  * @typedef {Readonly<{
  *   ok: false,
- *   code: 'CAPSULE_LIMIT_REACHED' | 'NO_FREE_PROFILE' | 'NO_IDENTITY' | 'IDENTITY_LIST_UNAVAILABLE' | 'PICKER_INPUT_INVALID',
+ *   code: 'CAPSULE_LIMIT_REACHED' | 'RAM_ADMISSION_REFUSED' | 'NO_FREE_PROFILE' | 'NO_IDENTITY' | 'IDENTITY_LIST_UNAVAILABLE' | 'PICKER_INPUT_INVALID',
  *   configured: number,
  *   live: number,
  *   missing: ReadonlyArray<string>,
+ *   freeMemoryBytes?: number | null,
  * }>} Refusal
  * @typedef {Readonly<{ok: true, profile_id: string, request: CreateRequest, configured: number}>} Pick
  */
@@ -52,6 +68,57 @@ const validId = (v) => typeof v === 'string' && PROFILE_ID.test(v);
 
 /** @param {unknown} v @returns {v is Record<string, unknown>} */
 const plain = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * Parse `MemAvailable:` from `/proc/meminfo` text into bytes.
+ * Pure helper: performs no filesystem or process access.
+ * @param {unknown} meminfoText
+ * @returns {number | null}
+ */
+export function parseMemAvailableBytes(meminfoText) {
+  if (typeof meminfoText !== 'string' || meminfoText.length === 0) return null;
+  const match = /^MemAvailable:\s*(\d+)\s*kB\s*$/m.exec(meminfoText);
+  if (!match) return null;
+  const kb = Number(match[1]);
+  if (!Number.isSafeInteger(kb) || kb < 0) return null;
+  const bytes = kb * 1024;
+  return Number.isSafeInteger(bytes) ? bytes : null;
+}
+
+/**
+ * Format the operator refusal sentence when the concurrent capsule ceiling is reached.
+ * @param {number} [live]
+ * @returns {string}
+ */
+export function formatCapsuleLimitReason(live = MAX_CAPSULES) {
+  const openCount = Number.isSafeInteger(live) && live >= 0 ? live : MAX_CAPSULES;
+  return `At most ${MAX_CAPSULES} capsules run at once (${openCount} of ${MAX_CAPSULES} open). Close a capsule to open another.`;
+}
+
+/**
+ * Format the operator refusal sentence when no logical capsule slot is free.
+ * @param {number} [live]
+ * @returns {string}
+ */
+export function formatCapsuleSlotReason(live = MAX_CAPSULES) {
+  const openCount = Number.isSafeInteger(live) && live >= 0 ? live : MAX_CAPSULES;
+  return `No free capsule slot (${openCount} of ${MAX_CAPSULES} open; limit is ${MAX_CAPSULES}). Stop another capsule first.`;
+}
+
+/**
+ * Format the operator refusal sentence when host free memory is below one capsule's 6 GiB limit.
+ * @param {number | null | undefined} freeMemoryBytes
+ * @param {number} [live]
+ * @returns {string}
+ */
+export function formatMemoryRefusalReason(freeMemoryBytes, live = 0) {
+  const openCount = Number.isSafeInteger(live) && live >= 0 ? live : 0;
+  if (typeof freeMemoryBytes === 'number' && Number.isSafeInteger(freeMemoryBytes) && freeMemoryBytes >= 0) {
+    const gib = (freeMemoryBytes / (1024 ** 3)).toFixed(1);
+    return `Not enough free host memory (${gib} GiB available; one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm; ${openCount} of ${MAX_CAPSULES} open). Close an open capsule or other applications and try again.`;
+  }
+  return 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.';
+}
 
 /**
  * @param {string} id
@@ -159,6 +226,7 @@ function refuse(code, extra = {}) {
     configured: extra.configured ?? 0,
     live: extra.live ?? 0,
     missing: Object.freeze([...(extra.missing ?? [])]),
+    ...(extra.freeMemoryBytes !== undefined ? { freeMemoryBytes: extra.freeMemoryBytes } : {}),
   });
 }
 
@@ -169,18 +237,23 @@ function refuse(code, extra = {}) {
  *   live: number,
  *   bound: ReadonlySet<string>,
  *   identities: ReadonlySet<string> | null,
+ *   freeMemoryBytes?: number | null,
  * }} input
  * @returns {Pick | Refusal}
  */
 export function pickProfile(input) {
-  const { env, live, bound, identities } = input ?? /** @type {any} */ ({});
+  const { env, live, bound, identities, freeMemoryBytes } = input ?? /** @type {any} */ ({});
   if (!plain(env) || !Number.isSafeInteger(live) || live < 0 || !(bound instanceof Set)
-      || (identities !== null && !(identities instanceof Set))) {
+      || (identities !== null && !(identities instanceof Set))
+      || (freeMemoryBytes !== undefined && freeMemoryBytes !== null && (!Number.isSafeInteger(freeMemoryBytes) || freeMemoryBytes < 0))) {
     return refuse('PICKER_INPUT_INVALID');
   }
   const profiles = configuredProfiles(env);
   const configured = profiles.length;
   if (live >= MAX_CAPSULES) return refuse('CAPSULE_LIMIT_REACHED', { configured, live });
+  if (freeMemoryBytes !== undefined && (freeMemoryBytes === null || freeMemoryBytes < CAPSULE_MEMORY_LIMIT_BYTES)) {
+    return refuse('RAM_ADMISSION_REFUSED', { configured, live, freeMemoryBytes });
+  }
   const free = profiles.filter((p) => !bound.has(p.id));
   if (free.length === 0) return refuse('NO_FREE_PROFILE', { configured, live });
   if (identities === null) return refuse('IDENTITY_LIST_UNAVAILABLE', { configured, live });
@@ -190,20 +263,33 @@ export function pickProfile(input) {
 }
 
 /**
- * Hook for authorityWire createSurface: summarize the live surfaces, ask for the
- * identity names, then pick. A failing identity list is a typed refusal, never a
- * silent fallback to an unchecked profile.
+ * Hook for authorityWire createSurface: summarize the live surfaces, check host
+ * free memory when supplied, ask for the identity names, then pick. A failing
+ * identity list or memory probe is a typed refusal, never a silent fallback.
  * @param {{
  *   env: Record<string, unknown>,
  *   surfaces: Iterable<unknown> | Map<string, unknown> | null | undefined,
  *   listIdentities: () => Promise<{ok?: unknown, rows?: unknown} | null | undefined>,
+ *   freeMemoryBytes?: number | null,
+ *   readFreeMemoryBytes?: () => number | null | Promise<number | null>,
  * }} input
  * @returns {Promise<Pick | Refusal>}
  */
 export async function pickCreateRequest(input) {
-  const { env, surfaces, listIdentities } = input ?? /** @type {any} */ ({});
+  const { env, surfaces, listIdentities, freeMemoryBytes, readFreeMemoryBytes } = input ?? /** @type {any} */ ({});
   if (typeof listIdentities !== 'function') return refuse('PICKER_INPUT_INVALID');
+  if (readFreeMemoryBytes !== undefined && typeof readFreeMemoryBytes !== 'function') return refuse('PICKER_INPUT_INVALID');
   const { live, bound } = summarizeSurfaces(surfaces);
+  /** @type {number | null | undefined} */
+  let resolvedFreeBytes = freeMemoryBytes;
+  if (typeof readFreeMemoryBytes === 'function') {
+    try {
+      const measured = await readFreeMemoryBytes();
+      resolvedFreeBytes = Number.isSafeInteger(measured) && /** @type {number} */ (measured) >= 0 ? /** @type {number} */ (measured) : null;
+    } catch {
+      resolvedFreeBytes = null;
+    }
+  }
   /** @type {Set<string> | null} */
   let identities = null;
   try {
@@ -212,7 +298,13 @@ export async function pickCreateRequest(input) {
   } catch {
     identities = null;
   }
-  return pickProfile({ env, live, bound, identities });
+  return pickProfile({
+    env,
+    live,
+    bound,
+    identities,
+    ...(resolvedFreeBytes !== undefined ? { freeMemoryBytes: resolvedFreeBytes } : {}),
+  });
 }
 
 /**
@@ -222,11 +314,15 @@ export async function pickCreateRequest(input) {
  */
 export const REFUSAL_COPY = Object.freeze({
   CAPSULE_LIMIT_REACHED: Object.freeze({
-    message: `At most ${MAX_CAPSULES} capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.`,
+    message: `At most ${MAX_CAPSULES} capsules run at once (${MAX_CAPSULES} of ${MAX_CAPSULES} open). Close a capsule to open another.`,
+    action: null,
+  }),
+  RAM_ADMISSION_REFUSED: Object.freeze({
+    message: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
     action: null,
   }),
   NO_FREE_PROFILE: Object.freeze({
-    message: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
+    message: `Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to ${MAX_CAPSULES} in total) and restart MetaViewer; see "More than one capsule" in the User Guide.`,
     action: null,
     count: true,
   }),
@@ -253,12 +349,19 @@ export const REFUSAL_COPY = Object.freeze({
  */
 export function refusalReply(refusal) {
   const copy = REFUSAL_COPY[refusal.code] ?? REFUSAL_COPY.PICKER_INPUT_INVALID;
+  /** @type {string} */
+  let message = copy.message;
+  if ('count' in copy && copy.count === true && Number.isSafeInteger(refusal.configured)) {
+    message = `${refusal.configured} configured capsule profile${refusal.configured === 1 ? ' is' : 's are'} all in use. ${copy.message.replace(/^Every configured capsule profile is already in use\. /, '')}`;
+  } else if (refusal.code === 'CAPSULE_LIMIT_REACHED' && Number.isSafeInteger(refusal.live)) {
+    message = formatCapsuleLimitReason(refusal.live);
+  } else if (refusal.code === 'RAM_ADMISSION_REFUSED' && 'freeMemoryBytes' in refusal && refusal.freeMemoryBytes !== undefined) {
+    message = formatMemoryRefusalReason(refusal.freeMemoryBytes, refusal.live);
+  }
   return Object.freeze({
     ok: /** @type {const} */ (false),
     code: Object.hasOwn(REFUSAL_COPY, refusal.code) ? refusal.code : 'PICKER_INPUT_INVALID',
-    message: 'count' in copy && copy.count === true && Number.isSafeInteger(refusal.configured)
-      ? `${refusal.configured} configured capsule profile${refusal.configured === 1 ? ' is' : 's are'} all in use. ${copy.message.replace(/^Every configured capsule profile is already in use\. /, '')}`
-      : copy.message,
+    message,
     action: copy.action,
   });
 }
@@ -282,7 +385,7 @@ export const CREATE_REFUSAL_REASONS = Object.freeze({
   SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
   IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
   IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
-  RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+  RAM_ADMISSION_REFUSED: REFUSAL_COPY.RAM_ADMISSION_REFUSED.message,
   SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
   SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
   SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',

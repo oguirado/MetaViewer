@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -17,9 +18,21 @@ func protectedIdentity(id string) bool {
 	return strings.HasPrefix(id, "srf-id-cuentas-") || strings.HasPrefix(id, "srf-id-perplexity-") || strings.HasPrefix(id, "srf-pg-")
 }
 
-// The template and finite display pool come exclusively from trusted startup
-// profiles. Sorted selection is stable across map iteration and renderer calls.
-// Static profiles retain their configuration and fixed display assignments.
+func displayBaseNumber(display string) int {
+	rest := strings.TrimPrefix(display, ":")
+	if dot := strings.IndexByte(rest, '.'); dot >= 0 {
+		rest = rest[:dot]
+	}
+	if n, err := strconv.Atoi(rest); err == nil && n >= 0 {
+		return n
+	}
+	return 100
+}
+
+// The template comes exclusively from trusted startup profiles; logical display
+// slots expand up to MaxSurfaces so the display pool never caps admission below
+// the adapter ceiling. Sorted selection is stable across map iteration and
+// renderer calls. Static profiles retain their configuration and fixed displays.
 func (m *Manager) configureIdentityTemplate() {
 	ids := make([]string, 0, len(m.cfg.Profiles))
 	for id, p := range m.cfg.Profiles {
@@ -33,12 +46,49 @@ func (m *Manager) configureIdentityTemplate() {
 	}
 	p := m.cfg.Profiles[ids[0]]
 	m.identityTemplate = &p
+	seen := make(map[string]bool, m.cfg.MaxSurfaces)
+	for _, existing := range m.cfg.Profiles {
+		if existing.RAMRoot == p.RAMRoot && existing.Display != "" {
+			seen[existing.Display] = true
+		}
+	}
 	for _, id := range ids {
 		candidate := m.cfg.Profiles[id]
 		if candidate.RAMRoot == p.RAMRoot {
 			m.identityDisplays = append(m.identityDisplays, candidate.Display)
 		}
 	}
+	for next := displayBaseNumber(p.Display); len(m.identityDisplays) < m.cfg.MaxSurfaces; next++ {
+		candidate := ":" + strconv.Itoa(next)
+		if seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		m.identityDisplays = append(m.identityDisplays, candidate)
+	}
+}
+
+func (m *Manager) staticDisplayReserved(root, display string) bool {
+	for id, p := range m.cfg.Profiles {
+		if !m.dynamicProfiles[id] && p.RAMRoot == root && p.Display == display {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Manager) allocateIdentityDisplay(root, except string) (string, bool) {
+	for _, display := range m.identityDisplays {
+		if !m.staticDisplayReserved(root, display) && !m.displayOccupied(root, display, except) {
+			return display, true
+		}
+	}
+	for _, display := range m.identityDisplays {
+		if !m.displayOccupied(root, display, except) {
+			return display, true
+		}
+	}
+	return "", false
 }
 
 // ProfileFor supplies publisher routing information, never admission authority.
@@ -91,13 +141,11 @@ func (m *Manager) admitProgramProfile(id string, p *Profile) error {
 	if !storedIdentityID.MatchString(id) || protectedIdentity(id) {
 		return fault("profile", "program profile refused")
 	}
-	for _, display := range m.identityDisplays {
-		if !m.displayOccupied(p.RAMRoot, display, id) {
-			p.Display = display
-			m.cfg.Profiles[id] = *p
-			m.dynamicProfiles[id] = true
-			return nil
-		}
+	if display, ok := m.allocateIdentityDisplay(p.RAMRoot, id); ok {
+		p.Display = display
+		m.cfg.Profiles[id] = *p
+		m.dynamicProfiles[id] = true
+		return nil
 	}
 	return fault("profile", "identity display pool exhausted; stop a capsule first")
 }
@@ -149,13 +197,11 @@ func (m *Manager) admitIdentityProfile(ctx context.Context, id string, p *Profil
 	if !ok || checker.IdentityExists(ctx, id) != nil {
 		return fault("identity_unavailable", "identity must exist in the configured store")
 	}
-	for _, display := range m.identityDisplays {
-		if !m.displayOccupied(p.RAMRoot, display, id) {
-			p.Display = display
-			m.cfg.Profiles[id] = *p
-			m.dynamicProfiles[id] = true
-			return nil
-		}
+	if display, ok := m.allocateIdentityDisplay(p.RAMRoot, id); ok {
+		p.Display = display
+		m.cfg.Profiles[id] = *p
+		m.dynamicProfiles[id] = true
+		return nil
 	}
 	return fault("profile", "identity display pool exhausted; stop a capsule first")
 }
