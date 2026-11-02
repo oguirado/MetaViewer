@@ -184,6 +184,19 @@ evidence or uncertain settlement prevents this recovery and retains the
 `INPUT_UNCERTAIN` outcome. The existing explicit core `STALE_FRAME` nonexecution
 path remains separate. No rejected coordinates are replayed.
 
+While the external model runs, the same actor maintains the authenticated session
+with an existing read-only observe call. The internal interval is shorter than
+the pinned core idle deadline; each RPC is capped by the remaining model budget.
+The first observation is due immediately, before delivering the provider request,
+because prior perception and preparation may already have consumed idle time.
+The timer is serviced inside frame-drain batches as well as provider waits, with
+no background reader. This narrow maintenance path validates the bound surface
+and frame but performs no surface discovery or native commands. Its latest frame
+and any failure are diagnostic only: the original model observation/table remains
+unchanged, and full ownership plus rebind still gate every proposal. A failed
+heartbeat aborts and cleans up the recorded provider group; it does not reconnect,
+restart a decision, retry input or extend the absolute deadline.
+
 Focused checks:
 
 ```sh

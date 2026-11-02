@@ -192,6 +192,14 @@ class ProgramBackend(host.HostBackend):
         self.check_program_frame(observed['frame_ref'])
         return observed
 
+    def keepalive_observe(self, timeout_ms):
+        # Session maintenance only: do not run discovery/native commands here.
+        # Full ownership and rebind remain mandatory before any proposal.
+        observed = host.tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
+        host.need(observed['frame_ref']['surface_id'] == self.surface_id, 'MW_PROGRAM_SURFACE')
+        self.check_program_frame(observed['frame_ref'])
+        return observed
+
     def perceive(self, observed):
         frame = observed['frame_ref']
         host.need(frame['surface_id'] == self.surface_id, 'MW_PROGRAM_SURFACE')
@@ -334,10 +342,21 @@ class MuseProgramPlanner:
             'XDG_RUNTIME_DIR') if k in os.environ}
         env.update(PYTHONPATH=str(self.backend.wender), PYTHONDONTWRITEBYTECODE='1',
                    MV_HOSTED='1', TMPDIR=str(marks.parent))
+        def keepalive(timeout_ms):
+            try:
+                observed = self.backend.keepalive_observe(timeout_ms)
+                record['keepalive_frame'] = copy.deepcopy(observed['frame_ref'])
+                return observed
+            except (OSError, ValueError, RuntimeError, host.ClientError,
+                    host.tools.ToolRefusal) as error:
+                record['keepalive_error'] = dict(type=type(error).__name__,
+                    code=getattr(error, 'code', 'MW_PROGRAM_KEEPALIVE'), message=str(error)[:4096])
+                raise
         try:
             result = run_model_with_frames(self.backend.client,
                 [sys.executable, str(ROOT / 'tools/mw_program_muse.py')],
-                cwd=self.backend.wender, env=env, request=json.dumps(request).encode(), timeout=budget / 1000)
+                cwd=self.backend.wender, env=env, request=json.dumps(request).encode(), timeout=budget / 1000,
+                keepalive=keepalive)
         except host.subprocess.TimeoutExpired as error:
             raise host.refuse('MW_PROGRAM_MODEL_TIMEOUT', 'model planning budget expired before dispatch') from error
         decision = json.loads(result.stdout)
@@ -365,10 +384,26 @@ def stop_model_group(recorded_pid):
         pass
 
 
-def run_model_with_frames(client, command, *, cwd, env, request, timeout):
+MODEL_KEEPALIVE_INTERVAL_S = 10.0
+MODEL_KEEPALIVE_RPC_MS = 1000
+
+
+def run_model_with_frames(client, command, *, cwd, env, request, timeout, keepalive=None):
     """One actor drains authenticated frames and bounded provider pipes together."""
     host.need(len(request) <= 1024 * 1024 and timeout > 0, 'MW_PROGRAM_MODEL_BUDGET')
+    host.need(keepalive is None or callable(keepalive), 'MW_PROGRAM_KEEPALIVE')
     deadline = time.monotonic() + timeout
+    next_keepalive = time.monotonic()
+    def service_keepalive():
+        nonlocal next_keepalive
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise host.subprocess.TimeoutExpired(command, timeout)
+        if keepalive is not None and time.monotonic() >= next_keepalive:
+            keepalive(max(1, min(MODEL_KEEPALIVE_RPC_MS, int(remaining * 1000))))
+            if time.monotonic() >= deadline:
+                raise host.subprocess.TimeoutExpired(command, timeout)
+            next_keepalive = time.monotonic() + MODEL_KEEPALIVE_INTERVAL_S
     process = host.subprocess.Popen(command, cwd=cwd, env=env, stdin=host.subprocess.PIPE,
         stdout=host.subprocess.PIPE, stderr=host.subprocess.PIPE, start_new_session=True, close_fds=True)
     recorded_pid = process.pid
@@ -381,16 +416,23 @@ def run_model_with_frames(client, command, *, cwd, env, request, timeout):
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, selectors.EVENT_WRITE if stream is process.stdin else selectors.EVENT_READ)
             while selector.get_map():
+                service_keepalive()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise host.subprocess.TimeoutExpired(command, timeout)
                 for _ in range(16):
+                    service_keepalive()
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise host.subprocess.TimeoutExpired(command, timeout)
                     if not client.drain_frames(timeout_ms=max(1, min(1000, int(remaining * 1000)))):
                         break
-                for key, _ in selector.select(min(0.05, remaining)):
+                service_keepalive()
+                remaining = deadline - time.monotonic()
+                pause = min(0.05, remaining)
+                if keepalive is not None:
+                    pause = min(pause, max(0, next_keepalive - time.monotonic()))
+                for key, _ in selector.select(pause):
                     stream = key.fileobj
                     if stream is process.stdin:
                         try:
@@ -417,6 +459,7 @@ def run_model_with_frames(client, command, *, cwd, env, request, timeout):
         # Keep the exited leader unreaped so its recorded id cannot be reused
         # before the separate provider group has been cleaned up.
         while True:
+            service_keepalive()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise host.subprocess.TimeoutExpired(command, timeout)
