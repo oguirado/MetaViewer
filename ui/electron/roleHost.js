@@ -106,7 +106,8 @@ export async function readRoleBinding(stateDir, surface, role) {
     const b = JSON.parse(await handle.readFile('utf8'));
     if (b.schema !== 'metaviewer.human_binding/v0.3' || b.surface_id !== surface.surface_id ||
         b.role !== role || !b.control_ready || b.width !== 1280 || b.height !== 900 ||
-        !/^srf-id-[a-z0-9-]+$/.test(b.container) || !id(b.run_id) ||
+        (b.kind !== undefined && !['browser','program'].includes(b.kind)) ||
+        !/^srf-(id|pg)-[a-z0-9-]+$/.test(b.container) || !id(b.run_id) ||
         b.profile_id !== surface.profile_id) throw refuse('XPRA_BINDING_REFUSED');
     return b;
   } finally { await handle.close(); }
@@ -121,7 +122,8 @@ export function runHumanMode({tool, stateDir, container, readonly, env}) {
       try {
         if (stdout.trim().split('\n').length !== 1) throw Error();
         const ack = JSON.parse(stdout);
-        if (!exact(ack,'container,ready,schema,writable') || ack.schema !== 'srf.human-xpra/v1' ||
+        if ((!exact(ack,'container,ready,schema,writable') && !(exact(ack,'container,kind,ready,schema,writable') && ['browser','program'].includes(ack.kind))) ||
+            ack.schema !== 'srf.human-xpra/v1' ||
             ack.container !== container || ack.ready !== true || ack.writable !== !readonly) throw Error();
         resolve(true);
       } catch { reject(refuse('XPRA_MODE_UNPROVEN')); }
@@ -336,16 +338,20 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     }));
   }
 
-  /** @param {any} choice */
-  async function createProgram(choice) {
+  /** @param {any} choice @param {boolean} [held] @param {string} [preferredProfileId] */
+  async function createProgram(choice, held = false, preferredProfileId = '') {
     if (choice && typeof choice === 'object' && ('profileId' in choice || 'profile_id' in choice || 'profile' in choice)) {
       throw Object.assign(refuse('PROGRAM_PROFILE_FORBIDDEN'), {reason:'Renderer cannot select a profile for a program capsule.'});
     }
-    if (!exact(choice, 'binary')) {
+    if (!exact(choice, 'binary') && !exact(choice, 'binary,role')) {
       throw Object.assign(refuse('PROGRAM_BINARY_REQUIRED'), {reason:'Binary name is required.'});
     }
+    if (choice.role !== undefined && !['human','agent'].includes(choice.role)) {
+      throw Object.assign(refuse('CAPSULE_ROLE_INVALID'), {reason:'Invalid capsule role.'});
+    }
+    const role = choice.role ?? 'agent';
     const resolved = resolveHostBinary(choice.binary, {...process.env, ...env});
-    if (creating) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:`host_program_unavailable: ${resolved.name}: another capsule is currently starting`});
+    if (creating && !held) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:`host_program_unavailable: ${resolved.name}: another capsule is currently starting`});
     creating = true;
     let key, clearMode;
     try {
@@ -375,7 +381,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         && !raw[candidate] && !profiles.some(p => p.id === candidate)
         && !dynamicProfiles.has(candidate) && (!knownIdentities.has(candidate) || programIdentities.has(candidate))
         && !programProfiles.has(candidate) && !bound.has(candidate);
-      let profileId = canUse(base) ? base : '';
+      let profileId = (preferredProfileId && canUse(preferredProfileId)) ? preferredProfileId : (canUse(base) ? base : '');
       for (let n = 2; !profileId && n <= 99; n++) {
         const candidate = `${base.slice(0, 36)}-${n}`;
         if (canUse(candidate)) profileId = candidate;
@@ -404,7 +410,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         const reason = rawReason.includes(resolved.name) ? rawReason : `host_program_unavailable: ${resolved.name}: ${rawReason}`;
         throw Object.assign(refuse(rawCode), {reason});
       }
-      clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, 'agent', resolved.path);
+      clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, role, resolved.path);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:1280, h:900}}});
       if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {
@@ -415,7 +421,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         throw Object.assign(refuse(code), {reason});
       }
       const surface = reply.data.surface;
-      if (disposed || !id(surface?.surface_id) || surface.profile_id !== profileId || surface.state !== 'active') {
+      if (disposed || !id(surface?.surface_id) || surface.profile_id !== profileId || surface.state !== 'active' || (choice.role !== undefined && surface.control !== undefined && surface.control !== role)) {
         if (id(surface?.surface_id)) {
           capsuleStates.set(surface.surface_id, surface);
           const stopped = await core.stopSurface?.(surface.surface_id);
@@ -424,10 +430,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         }
         throw refuse(disposed ? 'XPRA_HOST_CLOSED' : 'CAPSULE_MODE_UNPROVEN');
       }
-      openingRoles.set(surface.surface_id, 'agent');
-      programProfiles.set(profileId, {id:profileId, surfaceId:surface.surface_id, binary:resolved.name, path:resolved.path});
+      openingRoles.set(surface.surface_id, role);
+      programProfiles.set(profileId, {id:profileId, surfaceId:surface.surface_id, binary:resolved.name, path:resolved.path, role});
       capsuleStates.set(surface.surface_id, surface);
-      return {ok:true, surfaceId:surface.surface_id, profileId, role:'agent', binary:resolved.name, path:resolved.path};
+      return {ok:true, surfaceId:surface.surface_id, profileId, role, binary:resolved.name, path:resolved.path};
     } finally {
       if (key) capsuleStates.delete(key);
       try { await clearMode?.(); } catch { /* keep original error and always reset creating */ }
@@ -497,11 +503,15 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (creating) throw refuse('SURFACE_CREATE_BUSY');
     const surface = authoritative(surfaceId), profileId = surface.profile_id;
     const role = roleFor(surface) === 'human' ? 'agent' : 'human';
+    const program = programProfiles.get(profileId);
     creating = true;
     transitions.set(profileId,'stopping');
     try {
       await stop(surfaceId);
       transitions.set(profileId,'starting');
+      if (program) {
+        return await createProgram({binary:program.path,role},true,profileId);
+      }
       // A new surface identity has no VERIFIED frame. Existing core/P14 fences
       // require its first fresh capture before any proposal can be admitted.
       return await create({profileId,role},true);

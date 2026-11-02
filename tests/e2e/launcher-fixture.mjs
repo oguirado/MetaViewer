@@ -34,6 +34,7 @@ window.runLauncherJourney = async () => {
       await flush();
       if (kind === 'program') {
         // Program asks for the binary first; Start stays disabled until a name is typed.
+        if (requireNode('shell/new-capsule/program-role').value !== 'human') throw Error('E2E_LAUNCHER: Program role must default to human');
         if (!requireNode('shell/new-capsule/program-start').disabled) throw Error('E2E_LAUNCHER: Start enabled without a binary');
         const field = requireNode('shell/new-capsule/program-binary');
         field.value = 'gedit';

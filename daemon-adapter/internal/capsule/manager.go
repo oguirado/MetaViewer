@@ -608,7 +608,31 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	_, static := m.cfg.Profiles[q.ProfileID]
 	static = static && !m.dynamicProfiles[q.ProfileID]
 	var hostBinary string
-	if progSelector, ok := m.runner.(interface {
+	var programRole string
+	if progModeSelector, ok := m.runner.(interface {
+		ConsumeOpeningProgramMode(string) (string, string, error)
+	}); ok {
+		if !static && q.Kind == "desktop_capsule" {
+			rawBinary, mode, progErr := progModeSelector.ConsumeOpeningProgramMode(q.ProfileID)
+			if progErr != nil {
+				return nil, progErr
+			}
+			if rawBinary != "" {
+				resolved, resErr := ResolveHostBinary(rawBinary, m.runnerSearchPath())
+				if resErr != nil {
+					return nil, resErr
+				}
+				hostBinary = resolved
+				programRole = mode
+			}
+		} else if _, isProc := m.runner.(*ProcessRunner); !isProc {
+			if rawBinary, _, progErr := progModeSelector.ConsumeOpeningProgramMode(q.ProfileID); progErr != nil {
+				return nil, progErr
+			} else if rawBinary != "" {
+				return nil, fault("profile", "host-exec requires dynamic program profile")
+			}
+		}
+	} else if progSelector, ok := m.runner.(interface {
 		ConsumeOpeningProgram(string) (string, error)
 	}); ok {
 		if !static && q.Kind == "desktop_capsule" {
@@ -635,6 +659,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	var ok bool
 	if !static && q.Kind == "desktop_capsule" && hostBinary != "" {
 		p, ok = m.programProfileFor(q.ProfileID)
+		if programRole != "" {
+			p.Role = programRole
+		}
 	} else {
 		p, ok = m.profileFor(q.ProfileID)
 	}
@@ -702,7 +729,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 			}
 		}
 	}
-	if p.Role == "human" && (p.Kind != "browser" || p.Width != 1280 || p.Height != 900) {
+	if p.Role == "human" && (p.Width != 1280 || p.Height != 900 || (p.Kind != "browser" && (p.Kind != "desktop_capsule" || p.NativeKind != "program" || p.Program != "host-exec" || p.NestedDepth != 0))) {
 		return nil, fault("configuration", "human mode requires 1280x900 browser")
 	}
 	idBytes := make([]byte, 16)

@@ -742,18 +742,26 @@ async function createProgramCapsule(body) {
       reason: 'host_program_unavailable: program launching is not available on this host',
     };
   }
-  const reply = await roles.createProgram({ binary: body.binary.trim() });
+  let programReply;
+  if (body.role === 'human' || body.role === 'agent') {
+    programReply = await roles.createProgram({ binary: body.binary.trim(), role: body.role });
+  } else {
+    const reply = await roles.createProgram({ binary: body.binary.trim() });
+    programReply = reply;
+  }
+  const reply = programReply;
   if (!reply?.ok) {
     const code = typeof reply?.code === 'string' && reply.code.length > 0 ? reply.code : 'HOST_PROGRAM_UNAVAILABLE';
     const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
     return { ok: false, code, reason };
   }
+  const openedRole = reply.role === 'human' || (reply.role === undefined && body.role === 'human') ? 'human' : 'agent';
   try {
-    selectGlobalView('agent');
+    selectGlobalView(openedRole);
     await nextTick();
     if (reply.surfaceId) {
-      await revealOpenedIdentity(reply.surfaceId, 'agent');
-      if (props.runtime?.intentBuilders) {
+      await revealOpenedIdentity(reply.surfaceId, openedRole);
+      if (openedRole === 'agent' && props.runtime?.intentBuilders) {
         wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
         applyWallControl(reply.surfaceId, 'take_control');
       }
@@ -795,6 +803,13 @@ function onCreateCapsule(intent, settle) {
         ? { code: outcomeCode, message: 'NO_BROWSER_CAPSULE', tone: 'refusal' }
         : /** @type {any} */ ({ code: outcomeCode, reason, message: reason, tone: 'refusal' });
       recordActivity(legacyNoBrowser ? { code: outcomeCode } : { code: outcomeCode, reason });
+      return;
+    }
+    if (body.role !== undefined && body.role !== 'human' && body.role !== 'agent') {
+      const reason = 'Invalid capsule role.';
+      settle?.({ ok: false, code: 'CAPSULE_ROLE_INVALID', reason });
+      hostOutcome.value = /** @type {any} */ ({ code: 'CAPSULE_ROLE_INVALID', reason, message: reason, tone: 'refusal' });
+      recordActivity({ code: 'CAPSULE_ROLE_INVALID', reason });
       return;
     }
     const promise = createProgramCapsule(body);

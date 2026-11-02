@@ -7,7 +7,7 @@ import { constants } from 'node:fs';
 /** @param {string} stateDir @param {string} profileId @param {string} mode @param {string} [hostBinary] */
 export async function stageOpeningMode(stateDir, profileId, mode, hostBinary) {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profileId) || !['human','agent'].includes(mode)) throw Error('CAPSULE_MODE_INVALID');
-  if (hostBinary !== undefined && (mode !== 'agent' || typeof hostBinary !== 'string' || !hostBinary.startsWith('/') || hostBinary.length > 256)) throw Error('CAPSULE_MODE_INVALID');
+  if (hostBinary !== undefined && (typeof hostBinary !== 'string' || !hostBinary.startsWith('/') || hostBinary.length > 256)) throw Error('CAPSULE_MODE_INVALID');
   if (isForeignIdentity(profileId)) throw Object.assign(Error('IDENTITY_PROTECTED'), {code:'IDENTITY_PROTECTED'});
   const directory = join(stateDir, 'opening-modes');
   await mkdir(directory, {mode:0o700, recursive:true});

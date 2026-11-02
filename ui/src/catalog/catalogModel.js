@@ -299,6 +299,9 @@ export function buildCreateIntent(input) {
     if (binary.length === 0) {
       return Object.freeze({ ok: false, error: invalidIntentRow() });
     }
+    if (record.role !== undefined && record.role !== 'human' && record.role !== 'agent') {
+      return Object.freeze({ ok: false, error: invalidIntentRow() });
+    }
     return Object.freeze({
       ok: true,
       intent: Object.freeze({
@@ -306,6 +309,7 @@ export function buildCreateIntent(input) {
         kind: 'program',
         placement,
         binary,
+        ...(record.role !== undefined ? { role: record.role } : {}),
       }),
     });
   }

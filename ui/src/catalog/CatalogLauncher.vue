@@ -28,9 +28,9 @@ const emit = defineEmits(['update:visible', 'create', 'close']);
 
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
-const choosingProgram = ref(false), programBinary = ref(''), programError = ref(''), programBusy = ref(false);
+const choosingProgram = ref(false), programBinary = ref(''), programRole = ref('human'), programError = ref(''), programBusy = ref(false);
 let choiceGeneration = 0;
-watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programError.value='';}});
+watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';}});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
@@ -48,6 +48,7 @@ async function confirmProgram() {
     kind: 'program',
     placement: pendingIntent.value?.placement,
     binary: programBinary.value,
+    ...(typeof programRole !== 'undefined' && programRole?.value ? { role: programRole.value } : {}),
   });
   if (!result.ok) {
     programError.value = result.error.message;
@@ -115,12 +116,13 @@ function forwardVisible(value) {
   emit('update:visible', value);
 }
 
-/** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown } | null} payload */
+/** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
   if (payload?.type?.id === 'program') {
     pendingIntent.value = { kind: 'program', placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
       programBinary.value = typeof payload?.binary === 'string' ? payload.binary : '';
+      if (typeof programRole !== 'undefined') programRole.value = payload?.role === 'agent' ? 'agent' : 'human';
       programError.value = '';
       choosingProgram.value = true;
     }
@@ -168,6 +170,15 @@ function onClose() {
     aria-label="Program capsule"
   >
     <h2>Program</h2>
+    <label for="shell/new-capsule/program-role">Role</label>
+    <select
+      id="shell/new-capsule/program-role"
+      data-semantic-anchor="dialog/new-capsule/program-role"
+      v-model="programRole"
+    >
+      <option value="human">Human</option>
+      <option value="agent">Agent</option>
+    </select>
     <label for="shell/new-capsule/program-binary">Binary name</label>
     <input
       id="shell/new-capsule/program-binary"

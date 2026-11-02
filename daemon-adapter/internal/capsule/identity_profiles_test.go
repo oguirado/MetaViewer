@@ -240,6 +240,7 @@ func TestIdentityProcessWitnessUsesOnlyConfiguredAdminShow(t *testing.T) {
 
 type hostExecRunner struct {
 	binaries     map[string]string
+	modes        map[string]string
 	searchPath   string
 	starts       int
 	lastStart    []string
@@ -249,9 +250,19 @@ type hostExecRunner struct {
 func (r *hostExecRunner) SearchPath() string { return r.searchPath }
 
 func (r *hostExecRunner) ConsumeOpeningProgram(id string) (string, error) {
+	bin, _, err := r.ConsumeOpeningProgramMode(id)
+	return bin, err
+}
+
+func (r *hostExecRunner) ConsumeOpeningProgramMode(id string) (string, string, error) {
 	bin := r.binaries[id]
+	mode := ""
+	if r.modes != nil {
+		mode = r.modes[id]
+		delete(r.modes, id)
+	}
 	delete(r.binaries, id)
-	return bin, nil
+	return bin, mode, nil
 }
 
 func (r *hostExecRunner) Run(_ context.Context, argv []string, _ []byte) ([]byte, error) {
@@ -587,5 +598,131 @@ func TestCuentasAndPerplexityOpenNormallyWithoutTouchingProtectedContainer(t *te
 	}
 	if err := RefuseProtectedContainer([]string{"--container", "srf-id-perplexity-1"}); err == nil {
 		t.Fatal("holder guard removed: srf-id-perplexity-1 must stay refused by RefuseProtectedContainer")
+	}
+}
+
+func TestHostExecProgramHumanModeAndBinding(t *testing.T) {
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	if err := os.Chmod(stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	surfaceBin := filepath.Join(binDir, "srf-identity-surface")
+	if err := os.WriteFile(surfaceBin, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	geditPath := filepath.Join(binDir, "gedit")
+	if err := os.WriteFile(geditPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	pr, err := NewProcessRunner(binDir, []string{"PATH=" + binDir, "MV_SRF_STATE_DIR=" + stateDir}, 4096, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modesDir := filepath.Join(stateDir, "opening-modes")
+	if err := os.Mkdir(modesDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modesDir, "gedit.json"), []byte(`{"schema":"metaviewer.opening_mode/v0.3","profile_id":"gedit","mode":"human","host_binary":"`+geditPath+`"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	gotBin, gotMode, err := pr.ConsumeOpeningProgramMode("gedit")
+	if err != nil || gotBin != geditPath || gotMode != "human" {
+		t.Fatalf("expected (%q, \"human\", nil), got (%q, %q, %v)", geditPath, gotBin, gotMode, err)
+	}
+	if err := os.WriteFile(filepath.Join(modesDir, "gedit.json"), []byte(`{"schema":"metaviewer.opening_mode/v0.3","profile_id":"gedit","mode":"invalid","host_binary":"`+geditPath+`"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := pr.ConsumeOpeningProgramMode("gedit"); err == nil {
+		t.Fatal("expected invalid mode to be refused by ConsumeOpeningProgramMode")
+	}
+
+	r := &hostExecRunner{
+		binaries:     map[string]string{"gedit": geditPath},
+		modes:        map[string]string{"gedit": "human"},
+		searchPath:   binDir,
+		stopVerified: true,
+	}
+	profiles := map[string]Profile{
+		"mv-live-1": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":111", TextInput: "paste"},
+		"mv-live-2": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":112", TextInput: "paste"},
+	}
+	m, err := NewManager(Config{BinDir: binDir, Profiles: profiles, MaxSurfaces: 2, MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100}, r, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events1, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"gedit","geometry":{"w":1280,"h":900}}`))
+	if err != nil {
+		t.Fatalf("human host-exec program create failed: %v", err)
+	}
+	var created struct {
+		Data struct {
+			Surface Surface `json:"surface"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(events1[0], &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Data.Surface.Control != "human" || created.Data.Surface.ProfileID != "gedit" {
+		t.Fatalf("expected human control on gedit surface, got %+v", created.Data.Surface)
+	}
+
+	binding, ok := m.bindings[created.Data.Surface.SurfaceID]
+	if !ok || binding.Role != "human" || binding.NativeKind != "program" || binding.Program != "host-exec" || binding.Container != "srf-pg-gedit" {
+		t.Fatalf("unexpected Binding for host-exec program: ok=%t binding=%+v", ok, binding)
+	}
+	if err := os.Mkdir(filepath.Join(stateDir, "human-bindings"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := pr.PublishHumanBinding(binding, true, 0); err != nil {
+		t.Fatalf("PublishHumanBinding failed for host-exec program: %v", err)
+	}
+	rawBinding, err := os.ReadFile(filepath.Join(stateDir, "human-bindings", created.Data.Surface.SurfaceID+".json"))
+	if err != nil {
+		t.Fatalf("expected human binding file on disk: %v", err)
+	}
+	if !strings.Contains(string(rawBinding), `"container":"srf-pg-gedit"`) || !strings.Contains(string(rawBinding), `"role":"human"`) {
+		t.Fatalf("unexpected binding JSON: %s", string(rawBinding))
+	}
+
+	// Non-host-exec programs (notepad, metaviewer-nested) stay refused for human mode and ignored by PublishHumanBinding.
+	if err := pr.PublishHumanBinding(Binding{
+		Role:       "human",
+		Surface:    Surface{SurfaceID: "surface_notepad", ProfileID: "notepad-1", Geometry: Geometry{W: 1280, H: 900}},
+		NativeKind: "program", Program: "notepad", Container: "srf-pg-notepad-1", RunID: "run-1",
+	}, true, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, "human-bindings", "surface_notepad.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected non-host-exec program binding to be skipped, stat err=%v", err)
+	}
+
+	// Stop frees dynamic profile and display so a subsequent create reuses the profile and display.
+	firstDisplay := created.Data.Surface.Display
+	if err := identityStop(t, m, created.Data.Surface.SurfaceID); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.dynamicProfiles) != 0 {
+		t.Fatalf("dynamic profile leaked after stop: %v", m.dynamicProfiles)
+	}
+	r.binaries["gedit"] = geditPath
+	r.modes["gedit"] = "human"
+	events2, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"gedit","geometry":{"w":1280,"h":900}}`))
+	if err != nil {
+		t.Fatalf("re-create gedit after stop failed: %v", err)
+	}
+	var created2 struct {
+		Data struct {
+			Surface Surface `json:"surface"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(events2[0], &created2)
+	if created2.Data.Surface.Display != firstDisplay || created2.Data.Surface.Control != "human" {
+		t.Fatalf("expected reused display %s and human control, got %+v", firstDisplay, created2.Data.Surface)
+	}
+	if err := identityStop(t, m, created2.Data.Surface.SurfaceID); err != nil {
+		t.Fatal(err)
 	}
 }
