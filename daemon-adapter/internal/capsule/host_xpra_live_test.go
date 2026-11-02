@@ -21,7 +21,7 @@ func TestLiveHostXpraPrivateDisplay(t *testing.T) {
 	if bin == "" {
 		t.Fatal("MV_HOST_XPRA_BIN_DIR is required")
 	}
-	state, err := os.MkdirTemp("", "hx-")
+	state, err := os.MkdirTemp("/dev/shm", "hx-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +121,10 @@ func TestLiveHostXpraPrivateDisplay(t *testing.T) {
 		}
 	}
 	w := rows.Windows[0]
+	if err = fitHostXpraWindow(ctx, r, p, w.XID); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("private app fitted to display; session startup disabled")
 	if strings.Contains(strings.ToLower(filepath.Base(app)), "chrome") || strings.Contains(strings.ToLower(filepath.Base(app)), "chromium") {
 		cmdline, e := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", w.PID))
 		if e != nil {
@@ -159,6 +163,22 @@ func TestLiveHostXpraPrivateDisplay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Replay an actual wall click through the Desktop window adapter path.
+	started := time.Now()
+	m, e := NewManager(Config{BinDir: bin, MaxSurfaces: 2, MaxOutputBytes: 1 << 20, Timeout: 5 * time.Second, OriginNS: 1, Profiles: map[string]Profile{"live": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: state, Display: p.display}}}, r, func() uint64 { return uint64(time.Since(started).Nanoseconds()) + 1 })
+	if e != nil {
+		t.Fatal(e)
+	}
+	profile := m.cfg.Profiles["live"]
+	_, e = m.attachHostWindow("live", "surface-live", "v0.2", profile, &HostWindowSpec{XID: w.XID, Witness: w.Witness, Title: "Mines", Program: app, Display: p.display, Xauthority: p.authority}, Geometry{W: width, H: height})
+	if e != nil {
+		t.Fatal(e)
+	}
+	params, _ := jsonParams("surface-live", "live-click", "agent", map[string]any{"type": "click", "x": 100, "y": 100, "button": "left"})
+	if _, e = m.Handle(ctx, req("input", params)); e != nil {
+		t.Fatal("real wall click acknowledgement", e)
+	}
+	t.Log("real wall click accepted through host-window adapter")
 	if electron := os.Getenv("MV_HOST_XPRA_ELECTRON"); electron != "" {
 		sleep, e := exec.LookPath("sleep")
 		if e != nil {

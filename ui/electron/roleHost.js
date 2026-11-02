@@ -553,15 +553,18 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   async function programs() {
     const reply = await listIdentities();
     if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
-    return await Promise.all(reply.rows.filter((/** @type {any} */ row) => row.browser === 'program' && !isForeignIdentity(row.id)).map(async (/** @type {any} */ row) => {
+    const hostRows = await savedPrograms.hostProfiles();
+    const rows = [...reply.rows, ...hostRows.filter(row => !reply.rows.some((/** @type {any} */ r) => r.id === row.id))];
+    return await Promise.all(rows.filter((/** @type {any} */ row) => row.browser === 'program' && !isForeignIdentity(row.id)).map(async (/** @type {any} */ row) => {
       // Older program identities have no saved binary: their id is the binary's name.
-      let binary = await savedPrograms.read(row.id);
+      const launch = await savedPrograms.readLaunch(row.id);
+      let binary = launch?.binary;
       if (!binary) {
         try { binary = resolveHostBinary(row.id, {...process.env, ...env}).path; }
         catch { /* not on this host: stays unavailable, and other rows still list */ }
       }
       const entry = [...capsuleStates.values()].find(s => s.profile_id === row.id && !['destroyed','closed'].includes(s.state));
-      return {profileId:row.id,kind:'program',binary,available:!!binary,
+      return {profileId:row.id,kind:'program',binary,hostXpra:launch?.hostXpra === true,available:!!binary,
         currentMode:entry?.surface_id ? roleFor(entry) : 'closed',surfaceId:entry?.surface_id || null,
         busy:creating || transitions.has(row.id)};
     }));
@@ -756,7 +759,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         const reason = rawReason.includes(resolved.name) ? rawReason : `${resolved.name}: ${rawReason}`;
         throw Object.assign(refuse(rawCode), {reason});
       }
-      await savedPrograms.remember(profileId, resolved.path);
+      await savedPrograms.remember(profileId, resolved.path, choice.hostXpra === true);
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, role, resolved.path, choice.hostXpra === true);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:1280, h:900}}});

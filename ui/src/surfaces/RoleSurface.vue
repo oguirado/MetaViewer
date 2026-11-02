@@ -158,7 +158,7 @@ const menuPopup = ref(/** @type {HTMLElement|null} */ (null));
 watch(menuOpen, async open => {
   if (!open) { if (menuPopup.value?.matches?.(':popover-open')) menuPopup.value.hidePopover(); return; }
   await nextTick();
-  if (menuOpen.value) /** @type {any} */ (menuPopup.value)?.showPopover?.({source:menuHost.value?.querySelector?.('button')});
+  if (menuOpen.value) /** @type {any} */ (menuPopup.value)?.showPopover?.({source:menuHost.value?.querySelector?.('.mv-role-menu-button')});
 });
 watch(menuOpen, open => overlays?.set(menuOwner, open), {flush:'sync'});
 /** @param {Event} event */
@@ -385,7 +385,7 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
         <div v-if="tileLayout" class="mv-tile-size-controls" aria-label="Tile size">
           <button v-for="control in sizeControls" :key="control.action" type="button" :id="`tile-size-${control.action}-${surfaceId}`" :title="control.title" :aria-label="control.title" @pointerdown.stop @click.stop="resizeTile(control.action)">{{ control.label }}</button>
         </div>
-        <span class="mv-role-mode-badge">{{ role }}</span>
+        <span class="mv-role-mode-badge">{{ hostWindow ? (control === 'human' ? 'You control this window' : 'Agent controls this window') : role }}</span>
         <span v-if="hostXpra" class="mv-host-window-badge">Runs on your computer — not isolated</span>
         <span v-if="hostWindow" :id="`tile-host-indicator-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-indicator`" class="mv-host-window-badge" :title="`${hostWindow.title} — ${hostWindow.program}. This tile is attached to a real window on your desktop, not an isolated container.`">Real desktop — not isolated</span>
         <button v-if="hostWindow" type="button" :id="`tile-host-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-stop`" class="mv-host-window-stop" @click.stop="detachHostWindow">Stop</button>
@@ -422,14 +422,16 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
   </div>
 </template>
 <style scoped>
-.mv-role-menu-host { position:relative; display:flex; align-items:center; gap:6px; }
+.mv-role-menu-host { position:relative; display:flex; flex-wrap:wrap; min-width:0; max-width:100%; align-items:center; gap:6px; }
+.mv-role-menu-host > span { min-width:0; overflow-wrap:anywhere; }
+.mv-tile-size-controls { flex-wrap:wrap; min-width:0; }
 .mv-tile-size-controls { display:flex; gap:2px; }
 .mv-tile-size-controls button { padding:2px 4px; min-height:26px; white-space:nowrap; }
 .mv-desktop-menu-title { padding:4px 8px; font-weight:600; }
 .mv-desktop-menu-row { display:flex; align-items:center; gap:6px; padding:2px 8px; }
 .mv-desktop-menu-row > span { flex:1; white-space:nowrap; }
 .mv-role-mode-badge { font-size:11px; text-transform:capitalize; }
-.mv-role-menu-button { min-width:28px; min-height:28px; }
+.mv-role-menu-button { flex:0 0 28px; min-width:28px; min-height:28px; }
 .mv-role-menu-host hr { width:100%; }
 :global(.mv-tile:has([data-capsule-role="human"]) [data-semantic-anchor$="/control"]) { display:none; }
 .mv-role-surface { flex:1 1 auto; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; }

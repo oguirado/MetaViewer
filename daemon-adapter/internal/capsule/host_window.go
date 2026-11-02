@@ -283,6 +283,10 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 	b := m.bindings[surfaceID]
 	xidStr := strconv.FormatUint(uint64(b.HostXID), 10)
 	baseArgs := append([]string{"input", "--xid", xidStr, "--witness", b.HostWitness}, HostWindowSessionArgs(b.HostDisplay, b.HostXauthority)...)
+	// Opt-in diagnostics pair with the wall validator without logging input data.
+	if os.Getenv("MV_INPUT_DIAGNOSTICS") == "1" {
+		fmt.Fprintf(os.Stderr, "METAVIEWER_HOST_INPUT stage=dispatch action=%s\n", actionType)
+	}
 	var callArgvs [][]string
 	var textChunks [][]byte
 	nativeAction := actionType
@@ -387,7 +391,7 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 		}
 		receipt = NativeInputReceipt{}
 		trimmed := bytes.TrimSpace(out)
-		if b.NativeKind == "host-xpra" {
+		if b.NativeKind == "host-xpra" || b.NativeKind == "host-window" {
 			var ack struct {
 				OK            *bool  `json:"ok"`
 				XID           uint32 `json:"xid"`
@@ -403,7 +407,10 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 				expected = "type"
 			}
 			if ack.OK == nil || !*ack.OK || ack.XID != b.HostXID || ack.Witness != b.HostWitness || ack.Kind != expected || ack.FocusVerified == nil || !*ack.FocusVerified {
-				return nil, fault("input", "unverified private-display input receipt")
+				return nil, fault("input", "unverified host-window input receipt")
+			}
+			if os.Getenv("MV_INPUT_DIAGNOSTICS") == "1" {
+				fmt.Fprintln(os.Stderr, "METAVIEWER_HOST_INPUT stage=ack verified=true")
 			}
 			receipt.Kind = nativeAction
 			receipt.FocusVerified = ack.FocusVerified

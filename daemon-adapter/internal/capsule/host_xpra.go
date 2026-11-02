@@ -186,7 +186,7 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 	}
 	// No fixed display pool; Xvfb's atomic X lock refuses any random collision.
 	p.display = ":" + strconv.Itoa(10000+int(binary.BigEndian.Uint32(entropy[:4])%50000))
-	env := []string{"PATH=" + r.SearchPath(), "HOME=" + root, "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "XDG_CACHE_HOME=" + filepath.Join(root, "cache"), "XDG_DATA_HOME=" + filepath.Join(root, "data"), "XDG_RUNTIME_DIR=" + filepath.Join(root, "runtime"), "XAUTHORITY=" + p.authority, "DISPLAY=" + p.display, "LANG=C.UTF-8", "GDK_BACKEND=x11", "QT_QPA_PLATFORM=xcb"}
+	env := []string{"PATH=" + r.SearchPath(), "HOME=" + root, "XDG_CONFIG_HOME=" + filepath.Join(root, "config"), "XDG_CACHE_HOME=" + filepath.Join(root, "cache"), "XDG_DATA_HOME=" + filepath.Join(root, "data"), "XDG_RUNTIME_DIR=" + filepath.Join(root, "runtime"), "XAUTHORITY=" + p.authority, "DISPLAY=" + p.display, "LANG=C.UTF-8", "XPRA_DEFAULT_CONF_DIRS=" + filepath.Join(root, "config"), "XPRA_SYSTEM_CONF_DIRS=" + filepath.Join(root, "config"), "XPRA_USER_CONF_DIRS=" + filepath.Join(root, "config"), "GDK_BACKEND=x11", "QT_QPA_PLATFORM=xcb"}
 	auth := exec.CommandContext(ctx, tools["xauth"], "-f", p.authority, "add", p.display, "MIT-MAGIC-COOKIE-1", hex.EncodeToString(entropy[:]))
 	auth.Env = env
 	if err = auth.Run(); err != nil {
@@ -215,7 +215,7 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 	}
 	p.port = l.Addr().(*net.TCPAddr).Port
 	l.Close()
-	args := []string{"start-desktop", p.display, "--readonly=" + strconv.FormatBool(role == "agent"), "--use-display=yes", "--daemon=no", "--bind=" + filepath.Join(p.view, "s", "xpra.sock"), "--socket-dir=" + filepath.Join(root, "runtime"), "--socket-dirs=" + filepath.Join(root, "runtime"), "--socket-permissions=600", "--bind-tcp=127.0.0.1:" + strconv.Itoa(p.port), "--html=on", "--mdns=no", "--notifications=no", "--pulseaudio=no", "--printing=no", "--webcam=no", "--dbus-proxy=no", "--dbus-launch=", "--clipboard=no", "--start-new-commands=no", "--exit-with-client=no", "--exit-with-children=yes", "--start-child=" + xpraChild(path, root)}
+	args := []string{"start-desktop", p.display, "--readonly=" + strconv.FormatBool(role == "agent"), "--use-display=yes", "--start=", "--daemon=no", "--bind=" + filepath.Join(p.view, "s", "xpra.sock"), "--socket-dir=" + filepath.Join(root, "runtime"), "--socket-dirs=" + filepath.Join(root, "runtime"), "--socket-permissions=600", "--bind-tcp=127.0.0.1:" + strconv.Itoa(p.port), "--html=on", "--mdns=no", "--notifications=no", "--pulseaudio=no", "--printing=no", "--webcam=no", "--dbus-proxy=no", "--dbus-launch=", "--clipboard=no", "--start-new-commands=no", "--exit-with-client=no", "--exit-with-children=yes", "--start-child=" + xpraChild(path, root)}
 	p.server = exec.Command(tools["xpra"], args...)
 	p.server.Env = env
 	p.server.Stdout = p.log
@@ -278,6 +278,11 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 	if spec == nil {
 		return nil, fault("host_program_unavailable", "host_program_unavailable: program did not publish an X11 window on its private display")
 	}
+	// [TARGET, unit decision] Fit only the witnessed app on its owned private
+	// display. XConfigureWindow via xdotool needs no window manager.
+	if err = fitHostXpraWindow(ctx, r, process, spec.XID); err != nil {
+		return nil, err
+	}
 	p.Display = process.display
 	m.cfg.Profiles[profile] = p
 	if _, err = m.attachHostWindow(profile, id, version, p, spec, geom); err != nil {
@@ -299,4 +304,17 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 	}
 	success = true
 	return []json.RawMessage{surfaceEvent(version, "created", b.Surface)}, nil
+}
+
+func fitHostXpraWindow(ctx context.Context, r *ProcessRunner, p *hostXpraProcess, xid uint32) error {
+	tool, err := ResolveHostBinary("xdotool", r.SearchPath())
+	if err != nil {
+		return fault("host_program_unavailable", "host_program_unavailable: xdotool missing")
+	}
+	cmd := exec.CommandContext(ctx, tool, "windowsize", strconv.FormatUint(uint64(xid), 10), "1280", "900", "windowmove", strconv.FormatUint(uint64(xid), 10), "0", "0")
+	cmd.Env = append(os.Environ(), "DISPLAY="+p.display, "XAUTHORITY="+p.authority)
+	if err = cmd.Run(); err != nil {
+		return fault("host_program_unavailable", "host_program_unavailable: private window layout failed")
+	}
+	return nil
 }

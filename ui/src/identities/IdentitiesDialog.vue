@@ -53,6 +53,7 @@ async function invoke(method,request) {
     if (roleApi) {try {const result = await roleApi.choices(); if (Array.isArray(result)) {
       const programs = typeof roleApi.programs === 'function' ? await roleApi.programs() : [];
       modes.value = [...result, ...(Array.isArray(programs) ? programs : [])];
+      for (const program of (Array.isArray(programs) ? programs : [])) if (program.hostXpra && !rows.value.some(row => row.id === program.profileId)) rows.value.push({id:program.profileId,label:program.profileId,browser:'program'});
     }} catch {modes.value = [];} }
     if(method==='create'){id.value='';typedName.value='';labelEdited.value=false;label.value='';domains.value='';}
     pendingDelete.value='';
@@ -71,6 +72,7 @@ async function openIdentity(profileId,role){
     busy.value=true;error.value='';
     try {
       const choice={binary:mode.binary,role};
+      if (mode.hostXpra) Object.assign(choice,{hostXpra:true});
       const reply=await (props.openProgram ? props.openProgram(choice) : roleApi.createProgram(choice));
       if(reply?.ok!==true)throw Error(reply?.code || 'PROGRAM_OPEN_FAILED');
       emit('close');

@@ -324,6 +324,8 @@ export function validateSurfaceInputBatch(raw) {
   if (hasOverlongTypeText) {
     return { ok: false, code: 'SCHEMA' };
   }
+  // Opt-in diagnostics expose event kinds only, never typed text or key data.
+  if (process.env.MV_INPUT_DIAGNOSTICS === '1') console.debug(`METAVIEWER_INPUT_VALIDATED events=${events.map(event => event.kind).join(',')}`);
   return { ok: true, batch };
 }
 /** @param {unknown} value @returns {any} */
