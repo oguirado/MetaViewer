@@ -42,6 +42,8 @@ mw_run.py	agents/metaviewer_agents/mw_run.py
 observe.py	agents/metaviewer_agents/observe.py
 init-844197da0d1b	agents/metaviewer_agents/perception/__init__.py
 base.py	agents/metaviewer_agents/perception/base.py
+compiled.lock.json	agents/metaviewer_agents/perception/compiled.lock.json
+compiled.py	agents/metaviewer_agents/perception/compiled.py
 deps_lock.py	agents/metaviewer_agents/perception/deps_lock.py
 meta_muse.py	agents/metaviewer_agents/perception/meta_muse.py
 vcore.py	agents/metaviewer_agents/perception/vcore.py
@@ -57,6 +59,7 @@ test_ailoop.py	agents/tests/test_ailoop.py
 testbou-9c41687e5027	agents/tests/test_boundary_sweep.py
 test_client.py	agents/tests/test_client.py
 testcli-3ace4ec56b6f	agents/tests/test_client_statemachine.py
+testcom-0d0238f46370	agents/tests/test_compiled_runtime.py
 test_deps_lock.py	agents/tests/test_deps_lock.py
 test_depth_32.py	agents/tests/test_depth_32.py
 test_envelope.py	agents/tests/test_envelope.py
@@ -130,12 +133,14 @@ changes-README.md	changes/README.md
 adapter-cbafcbab0a3b	changes/unreleased/adapter-epoch-handoff.md
 boot-flake.md	changes/unreleased/boot-flake.md
 boot-pending-clr.md	changes/unreleased/boot-pending-clr.md
+browser-goal.md	changes/unreleased/browser-goal.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 cipacka-468d8ecfdb15	changes/unreleased/ci-packaged-display-arm64.md
 cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
 desktop-hidden.md	changes/unreleased/desktop-hidden.md
 display-polish.md	changes/unreleased/display-polish.md
 display-pool-slot.md	changes/unreleased/display-pool-slot.md
+e1paste-5ee0ef75509c	changes/unreleased/e1-paste-verify-30s.md
 e1-refusal-trace.md	changes/unreleased/e1-refusal-trace.md
 e1-rehearsal.md	changes/unreleased/e1-rehearsal.md
 e2eprog-35fc358d18bd	changes/unreleased/e2e-program-clipboard.md
@@ -164,11 +169,15 @@ p18b-header-menus.md	changes/unreleased/p18b-header-menus.md
 p18cr2d-0ee9a63466b2	changes/unreleased/p18c-r2-desktop-restore.md
 p18h-packaged-pty.md	changes/unreleased/p18h-packaged-pty.md
 pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
+program-61837f6b5cd8	changes/unreleased/program-click-settle.md
+program-5f5847f0f976	changes/unreleased/program-current-baseline.md
 program-display.md	changes/unreleased/program-display.md
+program-9c236b0bad7f	changes/unreleased/program-host-fresh-frames.md
 program-037135db5049	changes/unreleased/program-provider-kill-guard.md
 program-53a257f2b164	changes/unreleased/program-standard-dirs.md
 routed-map.md	changes/unreleased/routed-map.md
 termina-ea00cc828bad	changes/unreleased/terminal-persist-copy-paste.md
+termina-c004f7723c0f	changes/unreleased/terminal-workflow-program-identities.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
@@ -194,6 +203,11 @@ v025des-18ddbd48a271	changes/unreleased/v025-desktop-window.md
 v025-judge-kit.md	changes/unreleased/v025-judge-kit.md
 v025win-0859d5e8a148	changes/unreleased/v025-window-live-fixes.md
 v025win-5f18719d7db2	changes/unreleased/v025-window-polish-2.md
+v026-automation-ux.md	changes/unreleased/v026-automation-ux.md
+v026-ci-assets.md	changes/unreleased/v026-ci-assets.md
+v026-host-polish.md	changes/unreleased/v026-host-polish.md
+v026-host-xpra.md	changes/unreleased/v026-host-xpra.md
+v026kit-286e58a540a9	changes/unreleased/v026-kit-sidecars-2.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
 witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
@@ -882,6 +896,9 @@ holdings_mut_test.go	daemon-adapter/internal/capsule/holdings_mut_test.go
 holding-ccd017c9f1a2	daemon-adapter/internal/capsule/holdings_witness_test.go
 host_window.go	daemon-adapter/internal/capsule/host_window.go
 host_window_test.go	daemon-adapter/internal/capsule/host_window_test.go
+host_xpra.go	daemon-adapter/internal/capsule/host_xpra.go
+hostxpr-552d85d5ab4e	daemon-adapter/internal/capsule/host_xpra_live_test.go
+host_xpra_test.go	daemon-adapter/internal/capsule/host_xpra_test.go
 human_binding.go	daemon-adapter/internal/capsule/human_binding.go
 identity_profiles.go	daemon-adapter/internal/capsule/identity_profiles.go
 identit-49e2d12602b4	daemon-adapter/internal/capsule/identity_profiles_test.go
@@ -922,6 +939,9 @@ shared_roots_test.go	daemon-adapter/internal/capsule/shared_roots_test.go
 statedir.go	daemon-adapter/internal/capsule/statedir.go
 statedir_test.go	daemon-adapter/internal/capsule/statedir_test.go
 stress_test.go	daemon-adapter/internal/capsule/stress_test.go
+capture.xwd	daemon-adapter/internal/capsule/testdata/host-xpra/capture.xwd
+input.json	daemon-adapter/internal/capsule/testdata/host-xpra/input.json
+list.json	daemon-adapter/internal/capsule/testdata/host-xpra/list.json
 srf-identity-surface	daemon-adapter/internal/capsule/testdata/srf-identity-surface
 text_input_test.go	daemon-adapter/internal/capsule/text_input_test.go
 textcap_test.go	daemon-adapter/internal/capsule/textcap_test.go
@@ -987,6 +1007,8 @@ mutlost-6ca700362f9b	daemon-adapter/internal/frames/mut_lost_test.go
 pacing_test.go	daemon-adapter/internal/frames/pacing_test.go
 pipeline_test.go	daemon-adapter/internal/frames/pipeline_test.go
 publisher.go	daemon-adapter/internal/frames/publisher.go
+publisher_current.go	daemon-adapter/internal/frames/publisher_current.go
+publish-cfd8544df421	daemon-adapter/internal/frames/publisher_current_test.go
 publish-dae6dc777e52	daemon-adapter/internal/frames/publisher_release_test.go
 publisher_test.go	daemon-adapter/internal/frames/publisher_test.go
 release_test.go	daemon-adapter/internal/frames/release_test.go
@@ -1424,6 +1446,7 @@ test_mv_demo_flow.py	tests/test_mv_demo_flow.py
 test_mv_identity.py	tests/test_mv_identity.py
 testmvr-a9d3d841457c	tests/test_mv_ram_admission.py
 test_mw_ax_dump.py	tests/test_mw_ax_dump.py
+testmwb-48efa78bdfbf	tests/test_mw_browser_goal.py
 test_mw_e1_receipt.py	tests/test_mw_e1_receipt.py
 test_mw_focus_skip.py	tests/test_mw_focus_skip.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
@@ -1449,6 +1472,7 @@ testt7r-a955c08eecc9	tests/test_t7r2c_exit_codes.py
 testt7r-688a9d320512	tests/test_t7r2c_gate_admission.py
 testt7r-5a9023bea873	tests/test_t7r2c_reproducibility.py
 test_theme.py	tests/test_theme.py
+testv02-bfa3520ba0b7	tests/test_v026_sidecar_assets.py
 test_video_seal.py	tests/test_video_seal.py
 assembly_smoke.py	tools/assembly_smoke.py
 budget_gate.py	tools/budget_gate.py
@@ -1466,6 +1490,8 @@ mw_ax_dump.py	tools/mw_ax_dump.py
 mw_home_check.py	tools/mw_home_check.py
 mw_program_muse.py	tools/mw_program_muse.py
 mw_run_backend.py	tools/mw_run_backend.py
+mwrunbr-2e029ecd2e4f	tools/mw_run_browser_goal.md
+mwrunbr-abd8c7795776	tools/mw_run_browser_goal.py
 mw_run_program.md	tools/mw_run_program.md
 mw_run_program.py	tools/mw_run_program.py
 p18_dev.cjs	tools/p18_dev.cjs
@@ -1512,6 +1538,7 @@ openingMode.js	ui/electron/openingMode.js
 operatorBridge.js	ui/electron/operatorBridge.js
 preload.js	ui/electron/preload.js
 profilePicker.js	ui/electron/profilePicker.js
+programBinaries.js	ui/electron/programBinaries.js
 ptyBroker.js	ui/electron/ptyBroker.js
 ptySession.js	ui/electron/ptySession.js
 ptyUtility.js	ui/electron/ptyUtility.js
@@ -1610,6 +1637,7 @@ sideTerminalFacade.js	ui/src/terminal/sideTerminalFacade.js
 terminal.css	ui/src/terminal/terminal.css
 terminalClient.js	ui/src/terminal/terminalClient.js
 terminalDeckModel.js	ui/src/terminal/terminalDeckModel.js
+workflowPrompts.js	ui/src/terminal/workflowPrompts.js
 AiMultiSlot.d.ts	ui/src/types/AiMultiSlot.d.ts
 AiSlotControlBar.d.ts	ui/src/types/AiSlotControlBar.d.ts
 SideTer-12ef8e211f74	ui/src/types/SideTerminalPanel.d.ts
@@ -1678,6 +1706,7 @@ inputu3-harness.mjs	ui/test/inputu3-harness.mjs
 inputu3-9651b47c7e57	ui/test/inputu3-pointer-echo.test.js
 intents.test.js	ui/test/intents.test.js
 layout-load.test.js	ui/test/layout-load.test.js
+live-host-xpra.mjs	ui/test/live-host-xpra.mjs
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
 multica-199756b14b9b	ui/test/multicap-profile-picker.test.js
 multisl-cc0b2c69edc0	ui/test/multislot-u5a-ui.test.js
@@ -2027,6 +2056,12 @@ v024des-5ffbe69fc1c9	ui/test/v024-desktop-hidden.test.js
 v024pro-b9b58a6e123d	ui/test/v024-program-human.test.js
 v025des-1357da532627	ui/test/v025-desktop-window.test.js
 v025win-70c302dc80d4	ui/test/v025-window-polish.test.js
+v026hos-3d9275d42730	ui/test/v026-host-polish-visual.js
+v026-host-polish.html	ui/test/v026-host-polish.html
+v026hos-e5825ac19a7e	ui/test/v026-host-polish.test.js
+v026hos-0989adc7fb8b	ui/test/v026-host-xpra.test.js
+v026kit-ed2db276dbdb	ui/test/v026-kit-sidecars.test.js
+v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
