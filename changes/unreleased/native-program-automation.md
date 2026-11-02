@@ -1,0 +1,2 @@
+- Add bounded native program clicks through visual target custody, core admission and verified settlement, with optional model planning and exact observed targets in rules mode.
+- Resolve dynamic program frame publishers and refresh unchanged pixels through the existing capture task before rebinding slow decisions; stop uncertain delivery for reconciliation. Program text entry and general task completion remain unsupported.

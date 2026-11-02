@@ -409,8 +409,15 @@ func (s *Subscriptions) Subscribe(ctx context.Context, id string) error {
 	if s.closed || s.ctx.Err() != nil || id == "" || len(id) > 128 {
 		return errors.New("inactive session or invalid surface identity")
 	}
-	if _, ok := s.tasks[id]; ok {
-		return errors.New("surface already subscribed")
+	if current, ok := s.tasks[id]; ok {
+		if current.cancelled.Load() {
+			return errors.New("surface subscription is stopping")
+		}
+		// A new reader may arrive after a human-release freshness fence.
+		// Keep the shared poller; its next real capture must be published even
+		// when pixels are unchanged. No frame, timestamp or generation is minted.
+		s.confirmed[id] = 0
+		return nil
 	}
 	if len(s.tasks) >= s.cfg.MaxSubscriptions {
 		return errors.New("subscription capacity reached")

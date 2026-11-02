@@ -1,0 +1,495 @@
+"""Bounded visual program actions through the existing core admission pipeline.
+
+[TARGET, unit decision] A successful invocation proves verified moves only;
+it never claims that the requested goal or game has been completed. Program
+capsules use the frozen desktop_capsule wire kind and native srf-pg custody.
+No browser URL, CDP or AX acquisition is required.
+"""
+import argparse
+from contextlib import contextmanager
+import json
+import os
+import stat
+import selectors
+import signal
+from pathlib import Path
+import sys
+import tempfile
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'agents'))
+sys.path.insert(0, str(ROOT / 'tools'))
+import mw_run_backend as host
+from metaviewer_agents.observe import build_observation
+from metaviewer_agents.perception.vcore import VCorePerceptionAdapter, project_element_table
+from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
+
+
+@contextmanager
+def marks_workspace():
+    # Both frozen adapters admit marks only beneath this RAM namespace.
+    root = Path('/dev/shm/vqa-cu')
+    root.mkdir(mode=0o700, exist_ok=True)
+    host.need(not root.is_symlink() and root.resolve() == root and root.is_dir() and
+              root.stat().st_uid == os.getuid(), 'MW_PRIVATE_OUTPUT')
+    with tempfile.TemporaryDirectory(prefix='mv-program-', dir=root) as directory:
+        yield Path(directory) / 'marks.png'
+
+
+def private_evidence_base():
+    default = Path('/dev/shm/vqa-cu') / ('metaviewer-program-' + str(os.getuid()))
+    base = Path(os.environ.get('XDG_STATE_HOME', str(default)))
+    host.need(base.is_absolute() and base == base.resolve() and
+              base.is_relative_to('/dev/shm'), 'MW_PROGRAM_RAM_REQUIRED')
+    host.need(not any(p.is_symlink() for p in (base, *base.parents)), 'MW_PRIVATE_OUTPUT')
+    base.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metadata = base.lstat()
+    host.need(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == os.getuid() and
+              stat.S_IMODE(metadata.st_mode) == 0o700, 'MW_PRIVATE_OUTPUT')
+    return base
+
+
+class ProgramBackend(host.HostBackend):
+    surface_kind = 'desktop_capsule'
+
+    def before_propose(self, proposal, sensed):
+        path = self.evidence / ('dispatch-' + proposal['proposal_id'] + '.json')
+        artifact = atomic_journal(path, dict(status='pending_dispatch', proposal=proposal,
+            frame=sensed['frame'], intent_artifact=self.active_attempt['intent_artifact']))
+        self.active_attempt['dispatch_artifact'] = artifact
+
+    def observe(self, timeout_ms):
+        self.ownership()
+        observed = host.tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
+        host.need(observed['frame_ref']['surface_id'] == self.surface_id, 'MW_PROGRAM_SURFACE')
+        return observed
+
+    def perceive(self, observed):
+        frame = observed['frame_ref']
+        host.need(frame['surface_id'] == self.surface_id, 'MW_PROGRAM_SURFACE')
+        witness = self.retain(frame)
+        record = dict(frame=dict(frame), frame_witness=witness, status='retained')
+        if not hasattr(self, 'program_observations'):
+            self.program_observations = []
+        self.program_observations.append(record)
+        try:
+            vision = self.vision.perceive(frame)
+            record['vision'] = vision
+            c2 = self.vision.last_c2_payload
+            if isinstance(c2, dict):
+                record['c2'] = c2
+            table = project_element_table(frame, vision)
+            record['table'] = table
+            record['status'] = 'localized' if table['elements'] else 'unknown'
+            host.need(bool(table['elements']), 'MW_PROGRAM_UNKNOWN_OBSERVATION')
+        except (OSError, ValueError, RuntimeError) as error:
+            record['error'] = dict(code=getattr(error, 'code', 'MW_PROGRAM_PERCEPTION'),
+                                   message=str(error)[:4096])
+            raise
+        finally:
+            diagnostics = getattr(self.vision, 'diagnostics', None)
+            if isinstance(diagnostics, dict):
+                record['diagnostics'] = dict(diagnostics)
+            for name in ('last_vserve_error', 'last_fallback_error'):
+                error = getattr(self.vision, name, None)
+                if isinstance(error, Exception):
+                    record[name] = dict(code=getattr(error, 'code', 'MW_PROGRAM_PERCEPTION'),
+                                        message=str(error)[:4096])
+        return dict(frame=frame, table=table, frame_witness=witness,
+                    c2=record.get('c2'),
+                    perception_transport=self.vision.last_transport,
+                    observation=build_observation(frame, surface_id=self.surface_id,
+                        generation=frame['generation'], vision=vision))
+
+    def rebind(self, sensed, plan, remaining):
+        # Wender binds its target to sensed pixels. A moving or replaced target
+        # requires a new planning tick, never a coordinate replay or input retry.
+        if isinstance(self.client, host.ToolClient):
+            baseline = self.observe(remaining)['frame_ref']
+            # Repeat subscribe requests a real same-pixel publication from the
+            # existing shared poller. Merely being subscribed does not refresh.
+            self.client.subscribe_frames(self.surface_id, timeout_ms=remaining)
+            self.subscription['status'] = 'subscribed'
+            fresh = wait_for_publication(self, baseline['generation'], remaining)['frame_ref']
+        else:
+            fresh = self.observe(remaining)['frame_ref']
+        host.need(all(fresh[k] == sensed['frame'][k] for k in
+                      ('surface_id', 'sha256', 'width', 'height')) and
+                  fresh['generation'] >= sensed['frame']['generation'], 'MW_REBIND_PIXELS')
+        return dict(sensed, frame=fresh, frame_witness=self.retain(fresh))
+
+    def network_context(self):
+        raise host.OwnerRefused('MW_PROGRAM_OPERATION')
+
+    def ax(self):
+        raise host.OwnerRefused('MW_PROGRAM_OPERATION')
+
+
+def validate_request(goal, steps, timeout_ms):
+    host.need(isinstance(goal, str) and bool(goal.strip()) and len(goal) <= 4096,
+              'MW_PROGRAM_GOAL')
+    host.need(type(steps) is int and 1 <= steps <= 16, 'MW_PROGRAM_STEPS')
+    host.need(type(timeout_ms) is int and 1 <= timeout_ms <= 30000, 'MW_PROGRAM_BUDGET')
+
+
+def require_grounded_goal(table, goal, target):
+    """Do not turn Wender's score fallback into authority for an arbitrary click."""
+    needle = host.normalized(goal)
+    matches = [row for row in table['elements'] if host.normalized(row.get('name')) == needle]
+    host.need(len(matches) == 1, 'MW_PROGRAM_GOAL_UNGROUNDED')
+    row = matches[0]
+    box = row['bbox']
+    host.need(target.get('name') == row['name'] and target.get('role') == row['role'] and
+              target.get('box') == [box[k] for k in ('x', 'y', 'w', 'h')],
+              'MW_PROGRAM_GOAL_UNGROUNDED')
+
+
+def require_click_target(action,target):
+    box=target.get('box')
+    host.need(action.get('type')=='click' and type(action.get('x')) is int and
+              type(action.get('y')) is int and isinstance(box,list) and len(box)==4 and
+              box[0]<=action['x']<box[0]+box[2] and box[1]<=action['y']<box[1]+box[3],
+              'MW_PROGRAM_CLICK_TARGET')
+
+
+class MuseProgramPlanner:
+    """Opt-in model selects a real mark; Wender's custody CLI plans its click."""
+    def __init__(self, backend, custody, timeout_ms):
+        self.backend, self.custody, self.timeout_ms = backend, custody, timeout_ms
+        self.grounded_goal = None
+        self.battery_state_sha256 = None
+        self.last_decision = None
+
+    @staticmethod
+    def selected_name(c3, c2, table):
+        action = c3.get('action', {})
+        host.need(c3.get('schema') == 'cu.action/v1' and action.get('kind') == 'click' and
+                  type(action.get('mark_id')) is int, 'MW_PROGRAM_MODEL_TARGET')
+        marks = [m for m in c2['marks'] if m.get('id') == action['mark_id']]
+        host.need(len(marks) == 1, 'MW_PROGRAM_MODEL_TARGET')
+        mark = marks[0]
+        box = {k: mark[k] for k in ('x', 'y', 'w', 'h')}
+        rows = [r for r in table['elements'] if r['bbox'] == box and r['role'] == mark['kind'] and
+                r['name'] == (mark.get('ocr_text') or 'mark-' + str(mark['id']))]
+        host.need(len(rows) == 1, 'MW_PROGRAM_MODEL_TARGET')
+        host.need(action.get('x') == box['x'] + box['w'] // 2 and
+                  action.get('y') == box['y'] + box['h'] // 2, 'MW_PROGRAM_MODEL_TARGET')
+        return rows[0]['name']
+
+    def plan_step(self, observation, table, goal):
+        from metaviewer_agents.perception.base import Frame
+        from metaviewer_agents.perception.vcore import _png_bytes
+        self.grounded_goal = self.battery_state_sha256 = self.last_decision = None
+        record = self.backend.program_observations[-1]
+        c2, frame = record.get('c2'), observation['frame_ref']
+        host.need(isinstance(c2, dict) and c2.get('frame_sha256') == frame['sha256'] ==
+                  record['frame']['sha256'] == table['frame_sha256'], 'MW_PROGRAM_MODEL_FRAME')
+        from mw_program_muse import private_ram_path
+        marks=private_ram_path(c2['marks_png'])
+        private_ram_path(marks.parent,directory=True)
+        raw = Path(record['frame_witness']['artifact']).read_bytes()
+        host.need(host.hashlib.sha256(raw).hexdigest() == frame['sha256'], 'MW_PROGRAM_MODEL_FRAME')
+        png = marks.parent / 'frame.png'
+        png.write_bytes(_png_bytes(Frame(frame['width'], frame['height'], raw)))
+        png.chmod(0o600)
+        workspace = marks.parent / 'workspace'
+        workspace.mkdir(mode=0o700, exist_ok=True)
+        budget = remaining_budget(self.backend, self.timeout_ms)
+        request = dict(goal=goal, c2=c2, frame_png=str(png), workspace=str(workspace), timeout_s=budget / 1000)
+        env = {k: os.environ[k] for k in ('PATH','HOME','LANG','XDG_CONFIG_HOME','XDG_DATA_HOME',
+            'XDG_RUNTIME_DIR') if k in os.environ}
+        env.update(PYTHONPATH=str(self.backend.wender), PYTHONDONTWRITEBYTECODE='1',
+                   MV_HOSTED='1', TMPDIR=str(marks.parent))
+        try:
+            result = run_model_with_frames(self.backend.client,
+                [sys.executable, str(ROOT / 'tools/mw_program_muse.py')],
+                cwd=self.backend.wender, env=env, request=json.dumps(request).encode(), timeout=budget / 1000)
+        except host.subprocess.TimeoutExpired as error:
+            raise host.refuse('MW_PROGRAM_MODEL_TIMEOUT', 'model planning budget expired before dispatch') from error
+        decision = json.loads(result.stdout)
+        if result.returncode != 0:
+            record['model_error'] = decision.get('error')
+            raise host.refuse('MW_PROGRAM_MODEL_FAILED', str(decision.get('error', 'model helper refused')))
+        host.need(set(decision) == {'c3','model_metadata'}, 'MW_PROGRAM_MODEL_TARGET')
+        name = self.selected_name(decision['c3'], c2, table)
+        self.last_decision = decision
+        planned = self.custody.plan_step(observation, table, name)
+        require_grounded_goal(table, name, planned[3])
+        self.grounded_goal, self.battery_state_sha256 = name, self.custody.battery_state_sha256
+        return planned
+
+
+def run_model_with_frames(client, command, *, cwd, env, request, timeout):
+    """One actor drains authenticated frames and bounded provider pipes together."""
+    host.need(len(request) <= 1024 * 1024 and timeout > 0, 'MW_PROGRAM_MODEL_BUDGET')
+    deadline = time.monotonic() + timeout
+    process = host.subprocess.Popen(command, cwd=cwd, env=env, stdin=host.subprocess.PIPE,
+        stdout=host.subprocess.PIPE, stderr=host.subprocess.PIPE, start_new_session=True, close_fds=True)
+    outputs = {process.stdout: bytearray(), process.stderr: bytearray()}
+    limits = {process.stdout: 1024 * 1024, process.stderr: 65536}
+    pending = memoryview(request)
+    try:
+        with selectors.DefaultSelector() as selector:
+            for stream in (process.stdin, process.stdout, process.stderr):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_WRITE if stream is process.stdin else selectors.EVENT_READ)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise host.subprocess.TimeoutExpired(command, timeout)
+                for _ in range(16):
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise host.subprocess.TimeoutExpired(command, timeout)
+                    if not client.drain_frames(timeout_ms=max(1, min(1000, int(remaining * 1000)))):
+                        break
+                for key, _ in selector.select(min(0.05, remaining)):
+                    stream = key.fileobj
+                    if stream is process.stdin:
+                        try:
+                            written = os.write(stream.fileno(), pending[:4096])
+                            pending = pending[written:]
+                        except BlockingIOError:
+                            continue
+                        except BrokenPipeError:
+                            pending = pending[:0]
+                        if not pending:
+                            selector.unregister(stream)
+                            stream.close()
+                    else:
+                        buffer = outputs[stream]
+                        try:
+                            chunk = os.read(stream.fileno(), min(65536, limits[stream] - len(buffer) + 1))
+                        except BlockingIOError:
+                            continue
+                        if not chunk:
+                            selector.unregister(stream)
+                        else:
+                            buffer.extend(chunk)
+                            host.need(len(buffer) <= limits[stream], 'MW_PROGRAM_MODEL_OUTPUT_LIMIT')
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise host.subprocess.TimeoutExpired(command, timeout)
+        process.wait(timeout=remaining)
+        return host.subprocess.CompletedProcess(command, process.returncode,
+            bytes(outputs[process.stdout]), bytes(outputs[process.stderr]))
+    finally:
+        # Only this recorded new process group belongs to the provider attempt.
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        for stream in (process.stdin, process.stdout, process.stderr):
+            stream.close()
+
+
+def remaining_budget(backend, maximum):
+    deadline = getattr(backend, 'run_deadline_ns', None)
+    remaining = maximum if deadline is None else min(maximum, (deadline - time.monotonic_ns()) // 1000000)
+    host.need(remaining > 0, 'MW_PROGRAM_DEADLINE')
+    return remaining
+
+
+def wait_for_publication(backend, after_generation, timeout_ms):
+    """Poll real core observations only after an explicit non-execution refusal."""
+    deadline = time.monotonic_ns() + timeout_ms * 1000000
+    for _ in range(512):
+        left = min(remaining_budget(backend, timeout_ms), (deadline - time.monotonic_ns()) // 1000000)
+        host.need(left > 0, 'MW_PROGRAM_NO_NEW_PUBLICATION')
+        observed = backend.observe(left)
+        if observed['frame_ref']['generation'] > after_generation:
+            return observed
+        time.sleep(min(0.05, left / 1000))
+    raise host.OwnerRefused('MW_PROGRAM_NO_NEW_PUBLICATION')
+
+
+def atomic_journal(path, value):
+    """Publish a new private record only after its complete contents are synced."""
+    temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex)
+    try:
+        host.ReplayOwner.write(temporary, (json.dumps(value) + '\n').encode())
+        os.link(temporary, path, follow_symlinks=False)
+        fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return str(path)
+
+
+def run_moves(backend, planner, goal, steps, timeout_ms):
+    """Return receipts only after both native input and core settlement verify."""
+    validate_request(goal, steps, timeout_ms)
+    moves = []
+    # Preserve partial evidence on refusal; a delivered action is not undone.
+    backend.program_moves = moves
+    backend.program_attempts = []
+    for _ in range(steps):
+        for retry in range(3):
+            sensed = backend.perceive(backend.observe(remaining_budget(backend, timeout_ms)))
+            action, expectation, state, target = planner.plan_step(
+                sensed['observation'], sensed['table'], goal)
+            attempt = dict(status='planned', observation=sensed['observation'], table=sensed['table'],
+                           perception_transport=sensed.get('perception_transport'),
+                           action=action, expectation=expectation, target=target,
+                           battery_state_sha256=planner.battery_state_sha256)
+            if isinstance(planner, MuseProgramPlanner):
+                attempt['model_decision'] = planner.last_decision
+            backend.program_attempts.append(attempt)
+            attempt['status'] = 'goal_not_grounded'
+            selected_goal = planner.grounded_goal if isinstance(planner, MuseProgramPlanner) else goal
+            require_grounded_goal(sensed['table'], selected_goal, target)
+            require_click_target(action,target)
+            budget = remaining_budget(backend, timeout_ms)
+            journal_id = uuid.uuid4().hex
+            attempt['status'] = 'intent_recording'
+            attempt['intent_artifact'] = atomic_journal(backend.evidence / ('intent-' + journal_id + '.json'),
+                dict(status='pending_dispatch', journal_id=journal_id, goal=goal,
+                     frame=sensed['frame'], action=action, expectation=expectation,
+                     target=target, battery_state_sha256=planner.battery_state_sha256))
+            budget = remaining_budget(backend, timeout_ms)
+            attempt['status'] = 'dispatch_or_settlement_pending'
+            start = len(getattr(backend, 'frame_attempts', []))
+            backend.active_attempt = attempt
+            try:
+                admitted = backend.propose(sensed, dict(action=action, expectation=expectation), budget)
+                attempt['status'] = 'settlement_pending'
+                verified = backend.wait_verify(admitted, remaining_budget(backend, timeout_ms))
+                attempt['status'] = 'verified_move'
+                attempt['receipt_artifact'] = atomic_journal(
+                    backend.evidence / ('receipt-' + journal_id + '.json'),
+                    dict(status='verified_move', journal_id=journal_id,
+                         intent_artifact=attempt['intent_artifact'], verification=verified,
+                         frame_attempts=getattr(backend, 'frame_attempts', [])[start:]))
+                moves.append(dict(status='verified_move', before=sensed['frame_witness'],
+                                  after=backend.retain(verified['receipt']['after_frame']),
+                                  action=action, expectation=expectation, target=target,
+                                  battery_state_sha256=planner.battery_state_sha256,
+                                  verification=verified))
+                break
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError, host.ClientError,
+                    host.tools.ToolRefusal, host.tools.VerificationFailed) as error:
+                rows = getattr(backend, 'frame_attempts', [])[start:]
+                nonexecution = (isinstance(error, host.tools.ToolRefusal) and rows and
+                                rows[-1].get('status') == error.reason_code)
+                if nonexecution:
+                    attempt['status'] = 'refused_before_execution'
+                    attempt['reason_code'] = error.reason_code
+                    if error.reason_code == 'STALE_FRAME' and retry < 2:
+                        baseline = backend.observe(remaining_budget(backend, timeout_ms))['frame_ref']
+                        backend.client.subscribe_frames(backend.surface_id,
+                            timeout_ms=remaining_budget(backend, timeout_ms))
+                        wait_for_publication(backend, baseline['generation'],
+                                             remaining_budget(backend, timeout_ms))
+                        continue
+                elif ((rows and rows[-1].get('status') != 'intent_pending') or
+                      attempt['status'] in ('settlement_pending', 'verified_move')):
+                    attempt['status'] = 'input_uncertain'
+                else:
+                    attempt['status'] = 'refused_before_dispatch'
+                raise
+    return moves
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument('--identity', required=True)
+    parser.add_argument('--goal', required=True)
+    parser.add_argument('--steps', type=int, default=1)
+    parser.add_argument('--timeout-ms', type=int, default=10000)
+    parser.add_argument('--planner', choices=('rules', 'muse'), default='rules')
+    parser.add_argument('--model-timeout-ms', type=int, default=120000)
+    args = parser.parse_args(argv)
+    return run_entry(args)
+
+
+def run_entry(args):
+    result = dict(schema='metaviewer.mw_run/v1', rc=6, verdict_code='MW_PROGRAM_CONFIG',
+                  receipt=None, report=None)
+    backend, evidence, message = None, None, None
+    try:
+        validate_request(args.goal, args.steps, args.timeout_ms)
+        host.need(getattr(args, 'planner', 'rules') in ('rules', 'muse') and
+                  1 <= getattr(args, 'model_timeout_ms', 120000) <= 240000, 'MW_PROGRAM_PLANNER')
+        base = private_evidence_base()
+        evidence = base / 'metaviewer/runs' / uuid.uuid4().hex
+        host.need(not evidence.is_relative_to(ROOT) and
+                  not any(p.is_symlink() for p in (evidence, *evidence.parents)), 'MW_PRIVATE_OUTPUT')
+        for path in (evidence.parent.parent, evidence.parent, evidence):
+            path.mkdir(mode=0o700, exist_ok=True)
+            metadata = path.lstat()
+            host.need(not path.is_symlink() and stat.S_ISDIR(metadata.st_mode) and
+                      metadata.st_uid == os.getuid() and stat.S_IMODE(metadata.st_mode) == 0o700,
+                      'MW_PRIVATE_OUTPUT')
+        result['report'] = str(evidence / 'report.json')
+        with host.connect(os.environ) as client:
+            backend = ProgramBackend(client, args.identity, evidence, os.environ)
+            from metaviewer_agents.mw_run import resolve_wall_deadline_s
+            budget_s = resolve_wall_deadline_s(args)
+            host.need(budget_s > 5, 'MW_PROGRAM_DEADLINE')
+            backend.run_deadline_ns = min(getattr(args, 'wall_deadline_mono_ns',
+                time.monotonic_ns() + int(budget_s * 1e9)),
+                time.monotonic_ns() + int(budget_s * 1e9)) - 5_000_000_000
+            initial = backend.observe(remaining_budget(backend, args.timeout_ms))['frame_ref']
+            client.subscribe_frames(backend.surface_id, timeout_ms=remaining_budget(backend, args.timeout_ms))
+            backend.subscription = dict(status='subscribed', initial_generation=initial['generation'])
+            try:
+                backend.subscription['observation'] = backend.observe(
+                    remaining_budget(backend, args.timeout_ms))['frame_ref']
+                backend.subscription['freshness_authority'] = 'core_proposal_admission'
+            # C2 localizes static first frames only when marks are requested.
+            # Its output must stay in private RAM, never in the source tree.
+                with marks_workspace() as marks:
+                    backend.vision = VCorePerceptionAdapter(timeout=args.timeout_ms / 1000,
+                        verify_lock=True, marks_out=marks)
+                    try:
+                        planner = WenderSubprocessAdapter(wender_root=backend.wender,
+                            timeout=args.timeout_ms / 1000, verify_lock=True)
+                        if getattr(args, 'planner', 'rules') == 'muse':
+                            planner = MuseProgramPlanner(backend, planner, args.model_timeout_ms)
+                        moves = run_moves(backend, planner, args.goal, args.steps, args.timeout_ms)
+                    finally:
+                        backend.vision.close()
+            finally:
+                # The adapter's poller belongs to the surface, not this peer.
+                # Its unsubscribe is global and must not stop parallel readers.
+                backend.subscription['status'] = 'retained_for_surface_lifecycle'
+        result.update(rc=0, verdict_code='PROGRAM_BOUNDED_ACTIONS_VERIFIED',
+                      receipt=str(evidence / 'moves.json'))
+        host.ReplayOwner.write(Path(result['receipt']), (json.dumps(moves) + '\n').encode())
+    except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
+            host.ClientError, host.tools.ToolRefusal, host.tools.VerificationFailed,
+            host.subprocess.SubprocessError) as error:
+        result.update(rc=6, receipt=None,
+                      verdict_code=getattr(error, 'code', getattr(error, 'reason_code', 'MW_PROGRAM_CONFIG')))
+        if (getattr(backend, 'program_moves', []) or any(a.get('status') in
+                ('input_uncertain','dispatch_or_settlement_pending','settlement_pending')
+                for a in getattr(backend, 'program_attempts', []))):
+            result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
+        message = str(error)[:4096]
+        print('mw_run_program: ' + str(error), file=sys.stderr)
+    if evidence is not None and evidence.is_dir():
+        report = dict(result, status=('bounded_actions' if result['rc'] == 0 else
+                                    'input_uncertain' if result['rc'] == 5 else 'refused'),
+                      goal_completed=None, moves=getattr(backend, 'program_moves', []),
+                      attempts=getattr(backend, 'program_attempts', []),
+                      observations=getattr(backend, 'program_observations', []), message=message,
+                      subscription=getattr(backend, 'subscription', None),
+                      frame_attempts=getattr(backend, 'frame_attempts', []))
+        try:
+            host.ReplayOwner.write(evidence / 'report.json', (json.dumps(report) + '\n').encode())
+        except OSError:
+            uncertain = bool(getattr(backend, 'program_moves', [])) or result['rc'] == 5
+            result.update(rc=5 if uncertain else 6,
+                          verdict_code='INPUT_UNCERTAIN' if uncertain else 'MW_PRIVATE_OUTPUT', receipt=None)
+    print(json.dumps(result))
+    return result['rc']
+
+
+if __name__ == '__main__':
+    sys.exit(main())

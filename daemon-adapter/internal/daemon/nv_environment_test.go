@@ -110,20 +110,44 @@ func TestNVSecondHelloPreservesSurface(t *testing.T) {
 	if events, e := r.Handler(ctx, subscribe); e != nil || len(events) != 0 {
 		t.Fatalf("subscribe: %s %v", events, e)
 	}
+	var first frames.Ref
 	select {
 	case msg := <-emitted:
-		if !strings.Contains(string(msg), `"frame_ready"`) {
+		var event struct {
+			Event string `json:"event"`
+			Data  struct {
+				FrameRef frames.Ref `json:"frame_ref"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(msg, &event) != nil || event.Event != "frame_ready" {
 			t.Fatalf("subscription failed: %s", msg)
 		}
+		first = event.Data.FrameRef
 	case <-time.After(time.Second):
 		t.Fatal("no subscribed frame")
 	}
 	if _, err = r.Handler(ctx, hello); err == nil {
 		t.Error("second hello accepted")
 	}
-	// The same task must remain registered: a second subscribe must still fail.
-	if events, e := r.Handler(ctx, subscribe); e != nil || len(events) != 1 || !strings.Contains(string(events[0]), "already subscribed") {
-		t.Errorf("subscription replaced: %s %v", events, e)
+	// Repeated subscribe now refreshes the same poller (pointer identity is
+	// separately asserted in frames.TestRepeatedSubscribePublishesSamePixelsFromExistingCaptureTask).
+	// Rejected second hello must preserve the original surface and publication lane.
+	if events, e := r.Handler(ctx, subscribe); e != nil || len(events) != 0 {
+		t.Fatalf("existing subscription refresh refused: %s %v", events, e)
+	}
+	select {
+	case msg := <-emitted:
+		var event struct {
+			Event string `json:"event"`
+			Data  struct {
+				FrameRef frames.Ref `json:"frame_ref"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(msg, &event) != nil || event.Event != "frame_ready" || event.Data.FrameRef.SurfaceID != id || event.Data.FrameRef.Generation <= first.Generation || event.Data.FrameRef.SHA256 != first.SHA256 {
+			t.Fatalf("second hello changed the original surface or stalled real refresh: %s", msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("original surface lost its capture lane after second hello")
 	}
 	unsubscribe := ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"frame_unsubscribe","params":{"surface_id":"` + id + `"}}`)}
 	if events, e := r.Handler(ctx, unsubscribe); e != nil || len(events) != 0 {

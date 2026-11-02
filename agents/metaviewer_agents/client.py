@@ -18,10 +18,12 @@ import copy
 import math
 import os
 import re
+import select
 import socket
 import stat
 import struct
 import time
+import uuid
 
 from .envelope import (
     EnvelopeError,
@@ -375,6 +377,107 @@ class ToolClient:
         self._sequence_fd = None
         self._ready = False
         self._receipts = {}
+        self._frame_surfaces = set()
+        self._frame_subscriptions = set()
+        self._frames = {}
+
+    def _accept_frame_event(self, body):
+        """Retain only validated frames/lifecycle notices for registered surfaces."""
+        from .tools import ToolValidationError, _check_frame, _check_surface
+        if not isinstance(body,dict):
+            raise ToolValidationError('asynchronous body must be an object')
+        schema = body.get('schema')
+        if schema == 'frame_ref/v0.2':
+            frame = body
+        elif schema == 'surface_event/v0.2':
+            if set(body) != {'schema', 'event', 'data'} or not isinstance(body['data'], dict):
+                raise ToolValidationError('invalid asynchronous surface event')
+            data = body['data']
+            if body['event'] == 'frame_ready' and set(data) == {'frame_ref'}:
+                frame = data['frame_ref']
+            elif body['event'] in ('created', 'state_changed', 'destroyed') and set(data) == {'surface'}:
+                _check_surface(data['surface'])
+                if data['surface']['surface_id'] not in self._frame_surfaces:
+                    raise ToolValidationError('uncorrelated asynchronous surface')
+                return True
+            else:
+                raise ToolValidationError('invalid asynchronous surface event')
+        else:
+            return False
+        _check_frame(frame)
+        sid = frame['surface_id']
+        if sid not in self._frame_surfaces:
+            raise ToolValidationError('uncorrelated asynchronous frame')
+        old = self._frames.get(sid)
+        if old is None or frame['generation'] > old['generation']:
+            self._frames[sid] = copy.deepcopy(frame)
+        elif frame['generation'] == old['generation'] and frame != old:
+            raise ToolValidationError('conflicting asynchronous frame')
+        return True
+
+    def subscribe_frames(self, surface_id, *, timeout_ms):
+        return self._frame_subscription(surface_id, True, timeout_ms)
+
+    def unsubscribe_frames(self, surface_id, *, timeout_ms):
+        return self._frame_subscription(surface_id, False, timeout_ms)
+
+    def drain_frames(self, *, timeout_ms):
+        """Consume at most one ready authenticated frame, with no pending tool call.
+
+        The same owner calls this while waiting for an external planner. There
+        is no background reader and an unexpected tool result is never discarded.
+        """
+        from .tools import _check_timeout, ToolValidationError
+        _check_timeout(timeout_ms, 'timeout_ms')
+        if not self._ready:
+            raise ClientError('socket', 'tool client requires hello')
+        if b'\n' not in self.active._rx and not select.select([self.active._sock], [], [], 0)[0]:
+            return False
+        previous = self.active._timeout_s
+        try:
+            self.active._timeout_s = min(previous, timeout_ms / 1000)
+            reply = self.active.recv()
+            if (reply['from'] != self.core['endpoint'] or reply['to'] != self.local['endpoint']
+                    or reply['session_id'] != self.session_id):
+                raise ToolValidationError('uncorrelated asynchronous envelope')
+            if not self._accept_frame_event(reply['body']):
+                raise ToolValidationError('unexpected response while draining frames')
+            return True
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            self.active._timeout_s = previous
+
+    def _frame_subscription(self, surface_id, subscribe, timeout_ms):
+        from .tools import _check_id, _check_timeout, ToolValidationError
+        _check_id(surface_id, 'surface_id')
+        _check_timeout(timeout_ms, 'timeout_ms')
+        if not self._ready:
+            raise ClientError('socket', 'tool client requires hello')
+        if surface_id not in self._frame_surfaces and len(self._frame_surfaces) >= 128:
+            raise ToolValidationError('frame surface capacity exceeded')
+        if not subscribe and surface_id not in self._frame_subscriptions:
+            raise ToolValidationError('frame subscription is not owned by this client')
+        body = dict(schema='surface_request/v0.2',
+                    op='frame_subscribe' if subscribe else 'frame_unsubscribe',
+                    params=dict(surface_id=surface_id))
+        envelope = self._envelope(body, 'agent-frames-' + uuid.uuid4().hex)
+        previous = self.active._timeout_s
+        try:
+            self.active._timeout_s = min(previous, timeout_ms / 1000)
+            self._reserve()
+            self.active.send(envelope)
+            self._frame_surfaces.add(surface_id)
+            if subscribe:
+                self._frame_subscriptions.add(surface_id)
+            else:
+                self._frame_subscriptions.remove(surface_id)
+        except BaseException:
+            self.close()
+            raise
+        finally:
+            self.active._timeout_s = previous
 
     def _envelope(self, body, msg_id):
         from .envelope import make_envelope
@@ -490,6 +593,7 @@ class ToolClient:
             self.active._timeout_s = max(0.000001, deadline - time.monotonic())
             self._reserve()
             self.active.send(envelope)
+            async_count = 0
             while True:
                 left = deadline - time.monotonic()
                 if left <= 0:
@@ -501,6 +605,11 @@ class ToolClient:
                         or reply["session_id"] != self.session_id):
                     raise ToolValidationError("uncorrelated envelope")
                 result = reply["body"]
+                if self._accept_frame_event(result):
+                    async_count += 1
+                    if async_count > 512:
+                        raise ToolValidationError('frame event capacity exceeded')
+                    continue
                 # Core forwards settled receipts asynchronously before tool replies.
                 # Retain bounded evidence, never turn it into missing focus proof.
                 if result.get("schema") == "action_receipt/v0.2":
