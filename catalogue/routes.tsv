@@ -144,6 +144,7 @@ flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 handoff-state-home.md	changes/unreleased/handoff-state-home.md
+identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 launcher-two-kinds.md	changes/unreleased/launcher-two-kinds.md
 main-rss-headroom.md	changes/unreleased/main-rss-headroom.md
@@ -160,6 +161,7 @@ p18cr2d-0ee9a63466b2	changes/unreleased/p18c-r2-desktop-restore.md
 p18h-packaged-pty.md	changes/unreleased/p18h-packaged-pty.md
 pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
 program-display.md	changes/unreleased/program-display.md
+program-53a257f2b164	changes/unreleased/program-standard-dirs.md
 termina-ea00cc828bad	changes/unreleased/terminal-persist-copy-paste.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
@@ -173,6 +175,7 @@ v022-release.md	changes/unreleased/v022-release.md
 v022ter-b72b94728c48	changes/unreleased/v022-terminal-wiring.md
 v023hos-67f0c406510c	changes/unreleased/v023-host-mv2-program-provisioning.md
 v023pro-3d698875b1ce	changes/unreleased/v023-program-binary.md
+v023-release.md	changes/unreleased/v023-release.md
 v023-review-fixes.md	changes/unreleased/v023-review-fixes.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
 witness-bind.md	changes/unreleased/witness-bind.md
