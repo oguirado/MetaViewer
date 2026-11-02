@@ -5,14 +5,14 @@ use metaviewer_core::wire::payload::{ActionProposalAction, SurfaceRequestCase5};
 use metaviewer_core::{decode_envelope, Command, Component, Endpoint, Refusal};
 use serde_json::json;
 
-fn unframed_human_surface() -> Surface {
+fn unframed_agent_surface() -> Surface {
     Surface {
         display: ":99".into(),
         owner: Endpoint {
             component: Component::Ui,
             instance: "ui-1".into(),
         },
-        agent_controlled: false,
+        agent_controlled: true,
         live: true,
         frame: None,
         refresh_after: None,
@@ -55,7 +55,12 @@ fn human_scroll_requires_frame_bounds_deltas_and_admits_contract_shape() {
     state
         .apply(&Input::Lifecycle {
             surface_id: "s-1".into(),
-            update: LifecycleUpdate::Created(unframed_human_surface()),
+            update: LifecycleUpdate::Created(unframed_agent_surface()),
+        })
+        .unwrap();
+    state
+        .apply(&Input::TakeControl {
+            surface_id: "s-1".into(),
         })
         .unwrap();
 

@@ -28,7 +28,7 @@ SEMVER = re.compile(r'(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*
 # once in-flight units have landed to refuse direct CHANGELOG.md edits on code commits.
 ENFORCE_CHANGELOG_FRAGMENTS = True
 ALLOW_DIRECT_CHANGELOG = True
-CHANGELOG_ENFORCEMENT_BASE = '455c6a71c3f82a58b72be630aff8e96c6a9ebc9d'
+CHANGELOG_ENFORCEMENT_BASE = '8c08e60f21b14d3d363a863604f4605609964ec6'
 MAX_FRAGMENT_LINE_LENGTH = 1000
 FRAGMENT_PATH_RE = re.compile(r'^changes/unreleased/[a-z0-9][a-z0-9-]*\.md$')
 NON_PRODUCT_PREFIXES = ('docs/', 'changes/', 'catalogue/', 'router/index/',

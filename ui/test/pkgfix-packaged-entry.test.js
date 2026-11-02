@@ -160,7 +160,7 @@ test('PKG-FIX ID-01/L-04 operator resources stage the identity and reclaim tools
   // The identity tool runs from resources/operator/tools: standard library only.
   const tool = await readFile(new URL('../../tools/mv_identity.py', import.meta.url), 'utf8');
   for (const line of tool.split('\n').filter(l => /^(import|from) /.test(l))) {
-    assert.match(line, /^(import (argparse|fcntl|json|os|re|shutil|signal|subprocess|sys)|from (pathlib|urllib\.parse) import )/, line);
+    assert.match(line, /^(import (argparse|fcntl|json|os|re|shutil|signal|stat|subprocess|sys|uuid)|from (pathlib|urllib\.parse) import )/, line);
   }
 });
 

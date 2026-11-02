@@ -62,7 +62,7 @@ DEV_DEPENDENCIES = {'@vitejs/plugin-vue': '6.0.9', 'typescript': '5.9.3',
                     'vite': '8.3.4', 'vue-tsc': '3.3.12',
                     '@electron/packager': '20.3.0', '@electron/asar': '4.3.1'}
 RUST_DEPENDENCIES = {'serde', 'serde_json', 'sha2', 'libc', 'tokio'}
-SCRIPTS = {'test': 'node --test --test-timeout=120000 test/*.test.js',
+SCRIPTS = {'test': 'node --max-old-space-size=1024 --test --test-timeout=120000 test/*.test.js',
            'check': 'vue-tsc --noEmit -p tsconfig.json', 'build': 'vite build'}
 
 
@@ -172,7 +172,10 @@ class GateTests(unittest.TestCase):
             with self.subTest(name=name):
                 original = (self.fixture / name).read_text()
                 self.assertIn(version, original)
-                self.refused_manifest(name, original.replace(version, '9.9.9', 1))
+                mutated = (original.replace('name = "metaviewer-core"\nversion = "' + version + '"',
+                                            'name = "metaviewer-core"\nversion = "9.9.9"')
+                           if name == 'Cargo.lock' else original.replace(version, '9.9.9', 1))
+                self.refused_manifest(name, mutated)
         core = (self.fixture / 'core/Cargo.toml').read_text()
         self.assertIn('version.workspace = true', core)
         self.refused_manifest('core/Cargo.toml', core.replace(
@@ -181,7 +184,9 @@ class GateTests(unittest.TestCase):
         for name in ('VERSION', 'Cargo.toml', 'agents/pyproject.toml',
                      'ui/package.json', 'Cargo.lock', 'ui/package-lock.json'):
             original = (self.fixture / name).read_text()
-            self.write(name, original.replace(version, '9.9.9'))
+            self.write(name, original.replace('name = "metaviewer-core"\nversion = "' + version + '"',
+                                              'name = "metaviewer-core"\nversion = "9.9.9"')
+                       if name == 'Cargo.lock' else original.replace(version, '9.9.9'))
         self.assertIn('PASS manifests', self.call('--leg', 'manifests'))
 
     def test_dependency_admission(self):

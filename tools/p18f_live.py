@@ -71,7 +71,9 @@ def stop(state):
     descendants(state)
     for key in reversed(state.get('seen',[])):
         pid,start=key.split(':');pid=int(pid)
+        if type(pid) is not int or pid <= 1:continue
         try:
+            if os.getpgid(pid) == os.getpgrp():continue
             current=Path(f'/proc/{pid}/stat').read_text().rsplit(') ',1)[1].split()[19]
             if current==start:os.kill(pid,signal.SIGTERM)
         except (FileNotFoundError,ProcessLookupError):pass

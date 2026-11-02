@@ -11,9 +11,9 @@ export function installSurfacePresentation(application, doc, preferences) {
   const hiddenSessionPool = createHiddenSessionPool(hiddenLimit);
   const overlays = createOverlayCoordinator(doc);
   const stopOverlays = observeOverlays(overlays, doc);
-  application.provide('overlayCoordinator', overlays);
-  application.provide('hiddenSessionPool', hiddenSessionPool);
-  application.provide('hiddenSessionSettings', {
+  application.provide?.('overlayCoordinator', overlays);
+  application.provide?.('hiddenSessionPool', hiddenSessionPool);
+  application.provide?.('hiddenSessionSettings', {
     get: () => hiddenSessionPool.limit,
     set: (/** @type {number} */ value) => {
       if (!Number.isSafeInteger(value) || value < 0) throw Error('HIDDEN_SESSION_LIMIT_INVALID');

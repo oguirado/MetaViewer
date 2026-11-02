@@ -1325,11 +1325,11 @@ const chromeWorkspace = markRaw(defineComponent({
       <template #context>
         <div class="mv-views" role="group" aria-label="Capsule views">
           <div v-for="view in ['human','agent']" :key="view" class="mv-view-column">
-            <button :id="`view-${view}`" class="mv-view-button" :aria-pressed="desktopState.activeView === view" @click="selectGlobalView(view)">{{ view === 'human' ? 'Humans' : 'Agents' }}</button>
+            <UiButton :id="`view-${view}`" :data-semantic-anchor="`wall/view/${view}`" class="mv-view-button" :label="view === 'human' ? 'Humans' : 'Agents'" :aria-pressed="desktopState.activeView === view" @click="selectGlobalView(view)" />
             <div v-if="desktopState.activeView === view" class="mv-desktop-numbers" :aria-label="`${view === 'human' ? 'Humans' : 'Agents'} desktops`">
-              <button v-for="desktop in desktopState.views[view].desktops" :key="desktop.id" :id="`desktop-${view}-${desktop.id}`" :aria-label="`Desktop ${desktop.id}`" :aria-pressed="desktopState.views[view].active === desktop.id" @click="selectGlobalView(view); wall?.selectDesktop(desktop.id)">{{ desktop.id }}</button>
-              <button id="desktop-add" aria-label="Add desktop" :disabled="!desktopStateLoaded" @click="selectGlobalView(desktopState.activeView); wall?.addDesktop()">+</button>
-              <button v-if="desktopState.views[view].active !== 1" id="desktop-remove" aria-label="Remove empty desktop" :disabled="Object.values(desktopState.assignments).some(home => home.view === view && home.desktop === desktopState.views[view].active)" @click="wall?.removeDesktop(desktopState.views[view].active)">−</button>
+              <UiButton v-for="desktop in desktopState.views[view].desktops" :key="desktop.id" :id="`desktop-${view}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view}/${desktop.id}`" :label="String(desktop.id)" :aria-label="`Desktop ${desktop.id}`" :aria-pressed="desktopState.views[view].active === desktop.id" @click="selectGlobalView(view); wall?.selectDesktop(desktop.id)" />
+              <UiButton id="desktop-add" data-semantic-anchor="wall/desktop/add" label="+" aria-label="Add desktop" :disabled="!desktopStateLoaded" @click="selectGlobalView(desktopState.activeView); wall?.addDesktop()" />
+              <UiButton v-if="desktopState.views[view].active !== 1" id="desktop-remove" data-semantic-anchor="wall/desktop/remove" label="−" aria-label="Remove empty desktop" :disabled="Object.values(desktopState.assignments).some(home => home.view === view && home.desktop === desktopState.views[view].active)" @click="wall?.removeDesktop(desktopState.views[view].active)" />
             </div>
           </div>
         </div>

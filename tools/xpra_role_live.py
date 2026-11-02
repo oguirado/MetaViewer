@@ -6,6 +6,16 @@ EVIDENCE=ROOT/'.xpra-evidence'
 STATE=EVIDENCE/'role-live-processes.json'
 PIDS=pathlib.Path('/home/admin/Música/TeamWork_Antigravity2/campaigns/metaviewer-0/out/pids.log')
 OSROOT=pathlib.Path('/home/admin/Documentos/OpenSuperficies-wt-xverb')
+def proc_starttime(pid):
+ try:return pathlib.Path(f'/proc/{pid}/stat').read_text().rsplit(') ',1)[1].split()[19]
+ except (FileNotFoundError,ProcessLookupError):return None
+def kill_recorded(pid,start=None,sig=signal.SIGTERM):
+ if type(pid) is not int or pid <= 1:return
+ try:
+  if os.getpgid(pid) == os.getpgrp():return
+  if start is not None and proc_starttime(pid) != start:return
+  os.kill(pid,sig)
+ except (FileNotFoundError,ProcessLookupError):pass
 def record(pid,label):
  with PIDS.open('a') as f:f.write(f'XPRA-ROLE-TILES PID {pid} {label}\n')
 def spawn(argv,env,label):
@@ -46,16 +56,16 @@ if sys.argv[1]=='start':
   p=spawn([OSROOT/'bin/srf-identity-admin','create','--store-root',root/'store','--id','mv-live-4','--label','Isolated role spike','--domains','example.com'],env,'role-live-provision')
   if p.wait()!=0:raise SystemExit('own identity provision failed')
   core=spawn(['/home/admin/.cache/cargo-target/mv-wt-xtile/debug/metaviewer-core'],env,'role-live-core')
-  state={'root':str(root),'ram':str(ram),'pids':[core.pid],'containers':[],'config':str(cfg)};STATE.write_text(json.dumps(state))
+  state={'root':str(root),'ram':str(ram),'pids':[core.pid],'starts':{str(core.pid):proc_starttime(core.pid)},'containers':[],'config':str(cfg)};STATE.write_text(json.dumps(state))
  if not pathlib.Path('/tmp/.X11-unix/X97').exists() or subprocess.run(['xdpyinfo','-display',':97'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode:
   xvfb=spawn(['/usr/bin/Xvfb',':97','-nolock','-screen','0','1600x1100x24','-nolisten','tcp','-ac'],env,'role-live-xvfb')
-  state['xvfb_pid']=xvfb.pid;state['pids'].append(xvfb.pid);STATE.write_text(json.dumps(state));time.sleep(1)
+  state['xvfb_pid']=xvfb.pid;state['pids'].append(xvfb.pid);state.setdefault('starts',{})[str(xvfb.pid)]=proc_starttime(xvfb.pid);STATE.write_text(json.dumps(state));time.sleep(1)
  for _ in range(100):
   if (root/'runtime/metaviewer/core.sock').exists():break
   if core and core.poll() is not None:raise SystemExit('own core failed')
   time.sleep(.1)
  app=spawn(['/home/admin/Documentos/Games/Holdings-int/app/shell/node_modules/electron/dist/electron','--no-sandbox',EVIDENCE/'role-live-entry.mjs'],env,'role-live-app')
- state['app_pid']=app.pid;state['pids'].append(app.pid);STATE.write_text(json.dumps(state))
+ state['app_pid']=app.pid;state['pids'].append(app.pid);state.setdefault('starts',{})[str(app.pid)]=proc_starttime(app.pid);STATE.write_text(json.dumps(state))
  print(json.dumps({'core_pid':state['pids'][0],'app_pid':app.pid,'root':str(root)}))
 elif sys.argv[1]=='status':
  state=json.loads(STATE.read_text());root=pathlib.Path(state['root'])
@@ -67,18 +77,18 @@ elif sys.argv[1]=='status':
    with PIDS.open('a') as f:f.write('XPRA-ROLE-TILES CONTAINER '+container+' profile mv-live-3\n')
  STATE.write_text(json.dumps(state));print(json.dumps(state))
 elif sys.argv[1]=='stop':
- state=json.loads(STATE.read_text());root=pathlib.Path(state['root'])
+ state=json.loads(STATE.read_text());root=pathlib.Path(state['root']);starts=state.get('starts',{})
  # Ask only the recorded own app to quit; its adapter performs native teardown.
  if len(state['pids'])>1:
-  try:os.kill(state.get('app_pid',state['pids'][1]),signal.SIGTERM)
-  except ProcessLookupError:pass
+  app_pid=state.get('app_pid',state['pids'][1])
+  kill_recorded(app_pid,starts.get(str(app_pid)))
   time.sleep(2)
  for pid in reversed(state['pids']):
   try:
    command=pathlib.Path(f'/proc/{pid}/cmdline').read_bytes().replace(b'\x00',b' ').decode()
    if ('/home/admin/.cache/cargo-target/mv-wt-xtile/debug/metaviewer-core' in command or
        str(ROOT) in command or command.startswith('/usr/bin/Xvfb :97 ')):
-    os.kill(pid,signal.SIGTERM)
+    kill_recorded(pid,starts.get(str(pid)))
   except (FileNotFoundError,ProcessLookupError):pass
  # Native stop is allowed only for explicitly recorded own containers.
  env=dict(os.environ,SRF_IDENTITY_STORE_ROOT=str(root/'store'),SRF_PROXY_REGISTRY=str(root/'registry.json'))

@@ -5,14 +5,14 @@ use metaviewer_core::wire::payload::SurfaceRequestCase5;
 use metaviewer_core::{Component, Endpoint, Refusal};
 use serde_json::json;
 
-fn human_surface() -> Surface {
+fn agent_surface() -> Surface {
     Surface {
         display: ":99".into(),
         owner: Endpoint {
             component: Component::Ui,
             instance: "ui-1".into(),
         },
-        agent_controlled: false,
+        agent_controlled: true,
         live: true,
         frame: None,
         refresh_after: None,
@@ -56,10 +56,16 @@ fn human_click_without_frame_refuses_out_of_bounds_without_side_effects() {
     let create = state
         .apply(&Input::Lifecycle {
             surface_id: "s-unframed".into(),
-            update: LifecycleUpdate::Created(human_surface()),
+            update: LifecycleUpdate::Created(agent_surface()),
         })
         .unwrap();
     assert_eq!(create.reason, None);
+    let takeover = state
+        .apply(&Input::TakeControl {
+            surface_id: "s-unframed".into(),
+        })
+        .unwrap();
+    assert_eq!(takeover.reason, None);
     assert_eq!(state.surfaces["s-unframed"].frame, None);
 
     // Click when s.frame is None must fail closed with OutOfBounds, no dispatch,

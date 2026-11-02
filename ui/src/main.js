@@ -448,7 +448,7 @@ async function bootstrap() {
       terminal: fixtureMount?.terminal ?? null });
     if (framePortRouter) application.provide?.('framePortRouter', framePortRouter);
     if (typeof defineAsyncComponent === 'function') {
-      application.component('RoleSurface', defineAsyncComponent(() => import('./surfaces/RoleSurface.vue')));
+      application.component?.('RoleSurface', defineAsyncComponent(() => import('./surfaces/RoleSurface.vue')));
     }
     if (typeof installSurfacePresentation === 'function') installSurfacePresentation(application, document, preferences);
     application.provide?.('inputPort', inputPort);

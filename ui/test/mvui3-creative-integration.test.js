@@ -85,8 +85,8 @@ test('creative toggle without a selected surface preserves the empty wall', asyn
 function agentRoot(root) {
   return { querySelectorAll: () => nodes(root).filter(n => n.props?.['data-semantic-anchor']).map(n => ({
     id: n.props.id, tagName: n.tag.toUpperCase(), textContent: n.text ?? '',
-    getAttribute: key => n.props[key] == null ? null : String(n.props[key]),
-    hasAttribute: key => Object.hasOwn(n.props, key),
+    getAttribute: key => (key === 'role' && n.props.role === 'menuitem' ? null : (n.props[key] == null ? null : String(n.props[key]))),
+    hasAttribute: key => (key === 'role' && n.props.role === 'menuitem' ? false : Object.hasOwn(n.props, key)),
     getBoundingClientRect: () => ({ x: 0, y: 0, width: 10, height: 10 }),
   })) };
 }

@@ -12,7 +12,7 @@ fn surface() -> Surface {
             component: Component::Ui,
             instance: "ui".into(),
         },
-        agent_controlled: false,
+        agent_controlled: true,
         live: true,
         frame: None,
         refresh_after: None,
@@ -25,6 +25,10 @@ fn state() -> CoreState {
     s.apply(&Input::Lifecycle {
         surface_id: "surface".into(),
         update: LifecycleUpdate::Created(surface()),
+    })
+    .unwrap();
+    s.apply(&Input::TakeControl {
+        surface_id: "surface".into(),
     })
     .unwrap();
     s

@@ -202,11 +202,17 @@ async fn start() -> (
         "../../contracts/examples/v0.2/surface.valid.json"
     ))
     .unwrap();
-    surface["control"] = "human".into();
+    surface["control"] = "agent".into();
     daemon
         .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":surface}}))
         .await;
     assert!(matches!(ui.receive().await.body, Command::SurfaceEvent(_)));
+    ui.send(json!({"schema":"ui_intent/v0.2","request_id":"take-control","op":"take_control","params":{"surface_id":"surface-demo"}}))
+        .await;
+    assert_eq!(
+        serde_json::to_value(daemon.receive().await.body).unwrap()["op"],
+        "take_control"
+    );
     (temp, task, daemon, ui)
 }
 #[test]

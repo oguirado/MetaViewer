@@ -63,7 +63,7 @@ function forwardVisible(value) {
 async function onCreate(payload) {
   const result = buildCreateIntent({ kind: payload?.type?.id, placement: payload?.placement });
   if (!result.ok) return;
-  if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create',result.intent); return; }
+  if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create', result.intent); return; }
   pendingIntent.value = result.intent; roleChoice.value = 'agent'; roleError.value = '';
   try {
     profileChoices.value = await api.choices();
@@ -78,7 +78,15 @@ function onClose() {
 }
 </script>
 <template>
-  <NewCapsuleDialog v-if="!choosingRole"
+  <div v-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity">
+    <h2>Capsule role and identity</h2>
+    <label>Role <select v-model="roleChoice" autofocus><option value="agent">Agent</option><option value="human">Human</option></select></label>
+    <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? (profile.currentMode && profile.currentMode !== 'closed' ? ' — ' + profile.currentMode : '') : ' — unavailable' }}</option></select></label>
+    <p v-if="roleError" role="alert">{{ roleError }}</p>
+    <button type="button" @click="confirmRole">Open capsule</button>
+    <button type="button" @click="choosingRole = false; emit('update:visible', false)">Cancel</button>
+  </div>
+  <NewCapsuleDialog v-else
     :visible="visible"
     :types="dialogTypes"
     :title="title"
@@ -103,14 +111,6 @@ function onClose() {
       </ul>
     </template>
   </NewCapsuleDialog>
-  <div v-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity" @keydown.esc="choosingRole = false; emit('update:visible', false)">
-    <h2>Capsule role and identity</h2>
-    <label>Role <select v-model="roleChoice" autofocus><option value="agent">Agent</option><option value="human">Human</option></select></label>
-    <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? (profile.currentMode && profile.currentMode !== 'closed' ? ' — ' + profile.currentMode : '') : ' — unavailable' }}</option></select></label>
-    <p v-if="roleError" role="alert">{{ roleError }}</p>
-    <button type="button" @click="confirmRole">Open capsule</button>
-    <button type="button" @click="choosingRole = false; emit('update:visible', false)">Cancel</button>
-  </div>
 </template>
 <style src="./catalog.css" scoped></style>
 

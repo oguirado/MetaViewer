@@ -50,7 +50,9 @@ def reap(state):
  for pid,starttime in owned.items():record(pid=pid,starttime=starttime,kind='owned cleanup descendant',root=state['root'])
  def send(sig):
   for pid,starttime in reversed(list(owned.items())):
+   if type(pid) is not int or pid <= 1:continue
    try:
+    if os.getpgid(pid) == os.getpgrp():continue
     current=(Path('/proc')/str(pid)/'stat').read_text().rsplit(') ',1)[1].split()
     if current[19]==starttime:os.kill(pid,sig)
    except (FileNotFoundError,ProcessLookupError):pass

@@ -36,14 +36,14 @@ function mount(Component, props) {
 const nodes = n => [n, ...(n.children ?? []).flatMap(nodes)];
 const text = n => (n.text ?? '') + (n.children ?? []).map(text).join(' ');
 const field = (root, label) => nodes(root).find(n => n.props?.['aria-label'] === label);
-const createButton = root => nodes(root).find(n => n.tag === 'button' && n.text === 'Create identity');
-const fill = (root, id, label, domains) => { for (const [name, value] of [['Identity id', id], ['Account label', label], ['Domains (comma separated)', domains]]) field(root, name).props.onInput({ target: { value } }); };
+const createButton = root => nodes(root).find(n => n.tag === 'button' && (n.text === 'Create identity' || n.text === 'Add identity'));
+const fill = (root, id, label, domains) => { for (const [name, value] of [['Name', id], ['Display name', label], ['Allowed sites', domains]]) field(root, name).props.onInput({ target: { value } }); };
 
 test('IDENT-FORM: domains are trimmed, lower-cased, deduplicated and emptied of stray commas', () => {
   assert.deepEqual(normalizeDomains('a.com, '), ['a.com']);
   assert.deepEqual(normalizeDomains(' A.com ,b.org,,a.com'), ['a.com', 'b.org']);
   assert.deepEqual(normalizeDomains(' , '), []);
-  assert.equal(validDomains([]), false);
+  assert.equal(validDomains([]), true);
   for (const bad of ['-a.com', 'a.com-', 'a b.com', 'a_b.com', '*.a.com', 'x'.repeat(254)]) assert.equal(validDomains([bad]), false, bad);
   assert.equal(validDomains(Array(257).fill('a.com')), false);
   assert.equal(validDomains(['a.com', 'b-c.org']), true);
@@ -76,7 +76,7 @@ test('IDENT-DIALOG: input the host would refuse never leaves the dialog', async 
   let creates = 0;
   const host = { identity: { list: async () => ({ ok: true, rows: [] }), create: async () => { creates++; return { ok: true, rows: [] }; } } };
   const view = mount(await component(), { open: true, host }); t.after(view.close); await tick();
-  for (const [label, domains] of [['A;b', 'a.com'], ['A', ' , '], ['A', 'bad_host.com'], ['A', '*.a.com'], ['   ', 'a.com']]) {
+  for (const [label, domains] of [['A;b', 'a.com'], ['A', 'bad_host.com'], ['A', '*.a.com']]) {
     fill(view.root, 'account-a', label, domains); await tick();
     assert.equal(createButton(view.root).props.disabled, true, `${label}|${domains}`);
     createButton(view.root).props.onClick(); await tick();

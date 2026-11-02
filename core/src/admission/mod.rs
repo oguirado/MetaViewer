@@ -232,9 +232,10 @@ impl CoreState {
     pub fn domain_snapshot(&self) -> Result<Vec<u8>, AdmissionError> {
         let mut value = serde_json::json!({"surfaces":self.surfaces,"leases":self.leases,"pending":self.pending,"draining":self.draining,"destroyed":self.destroyed,"budget":self.remaining_budget,"epoch":self.epoch});
         if !self.human_roles.is_empty() {
-            value["human_roles"] = serde_json::to_value(&self.human_roles).map_err(|_|AdmissionError::InvalidInput)?;
+            value["human_roles"] = serde_json::to_value(&self.human_roles)
+                .map_err(|_| AdmissionError::InvalidInput)?;
         }
-        crate::journal::canonical_bytes(&value).map_err(|_|AdmissionError::InvalidInput)
+        crate::journal::canonical_bytes(&value).map_err(|_| AdmissionError::InvalidInput)
     }
     pub fn is_destroyed(&self, id: &str) -> bool {
         self.destroyed.contains(id)
@@ -592,7 +593,8 @@ impl CoreState {
             }
             Input::ReleaseControl { surface_id } => {
                 if self.human_roles.contains(surface_id)
-                    || self.draining.values().any(|sid| sid == surface_id) {
+                    || self.draining.values().any(|sid| sid == surface_id)
+                {
                     out.reason = Some(Refusal::Policy);
                 } else {
                     let s = self
