@@ -5,6 +5,18 @@
 - Replace the fixed 4-capsule limit with admission up to the 16-capsule adapter ceiling, check host free memory against one capsule's 6 GiB Docker budget (4 GiB memory + 2 GiB shm) before each create, expand the logical display pool in the adapter to `MaxSurfaces` (`16`) without launcher changes, and report the limit, open count, and what to close on refusal instead of `host_program_unavailable`.
 - Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
 
+## 0.2.4 (2026-11-02) [CITED: `VERSION`]
+
+Pre-release. Program and desktop window capsules need OpenSuperficies binaries that are not published yet; without them those capsule kinds are refused with a reason.
+
+- Fix Add capsule for browsers, which dropped the role step, and inactive desktops staying visible.
+- Open programs in human or agent mode from Add capsule, several at once, and switch from agent to human.
+- Allow up to 16 capsules, with a free memory check, and 16 shell and 16 AI terminal sessions, two per screen.
+- Add desktop window capsules: attach an open X11 window to a tile, with no container and an explicit Add. The tile says it is the real desktop, not isolated, and Stop detaches without closing the window.
+- Add early program automation: `mw_run --surface-kind program` drives a program capsule through vision-engine, wender-agent and core-verified input. Clicks only.
+- Treat cuentas and perplexity identities like any other capsule, and remove Open in multislot and Automate from a demo from the More menu.
+- Add the AI operator guide and update the judge kit for machines without pinned cores. x64 is not yet tested end to end.
+
 ## 0.2.3 (2026-11-02) [CITED: `VERSION`]
 
 - Add Program capsules with a Binary name field: Add capsule opens a host program in a tile you can type into and click, through the OpenSuperficies `host-exec` capsule (OpenSuperficies branch not yet in the pinned release), with exact refusal reasons in the dialog.
