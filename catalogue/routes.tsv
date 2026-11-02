@@ -167,6 +167,7 @@ pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
 program-display.md	changes/unreleased/program-display.md
 program-037135db5049	changes/unreleased/program-provider-kill-guard.md
 program-53a257f2b164	changes/unreleased/program-standard-dirs.md
+routed-map.md	changes/unreleased/routed-map.md
 termina-ea00cc828bad	changes/unreleased/terminal-persist-copy-paste.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
@@ -185,6 +186,7 @@ v023-review-fixes.md	changes/unreleased/v023-review-fixes.md
 v024ide-195be31d6a3c	changes/unreleased/v024-identity-normal.md
 v024pro-e798911014f0	changes/unreleased/v024-program-human-mv.md
 v024-release.md	changes/unreleased/v024-release.md
+v024-route-note.md	changes/unreleased/v024-route-note.md
 v024ter-e4f8c49cd521	changes/unreleased/v024-terminal-limits.md
 v024-w1-test-fixes.md	changes/unreleased/v024-w1-test-fixes.md
 v024-wall-fixes.md	changes/unreleased/v024-wall-fixes.md
@@ -1087,6 +1089,11 @@ run.v1.json	memoryweb-builtin/standards/schemas/run.v1.json
 site.v1.json	memoryweb-builtin/standards/schemas/site.v1.json
 step.v1.json	memoryweb-builtin/standards/schemas/step.v1.json
 workflow.v1.json	memoryweb-builtin/standards/schemas/workflow.v1.json
+route-README.md	route/README.md
+manifest.json	route/manifest.json
+nodes.jsonl	route/nodes.jsonl
+route_query.py	route/route_query.py
+symbols.jsonl	route/symbols.jsonl
 DEVIATIONS.md	router/kit/DEVIATIONS.md
 bootstr-2d9d88d48c6a	router/kit/bootstrap_receipt.json
 bootstrap_ui.md	router/kit/docs/bootstrap_ui.md
@@ -1110,7 +1117,7 @@ float.json	router/kit/tests/fixtures/gates/float.json
 privacy_path.txt	router/kit/tests/fixtures/gates/privacy_path.txt
 thesaurus_pm.json	router/kit/tests/fixtures/gates/thesaurus_pm.json
 gen.py	router/kit/tests/fixtures/mounts/gen.py
-nodes.jsonl	router/kit/tests/fixtures/mounts/sw/nodes.jsonl
+sw-nodes.jsonl	router/kit/tests/fixtures/mounts/sw/nodes.jsonl
 vg-nodes.jsonl	router/kit/tests/fixtures/mounts/vg/nodes.jsonl
 cases.json	router/kit/tests/fixtures/precedence/cases.json
 PM-001.json	router/kit/tests/fixtures/repo3/catalogue/families/PM-001.json
@@ -1360,7 +1367,7 @@ empty.json	tests/perf/empty.json
 leak-main.json	tests/perf/leak-main.json
 leak-renderer.json	tests/perf/leak-renderer.json
 leak-tree.json	tests/perf/leak-tree.json
-manifest.json	tests/perf/manifest.json
+perf-manifest.json	tests/perf/manifest.json
 proc_fields.mjs	tests/perf/proc_fields.mjs
 proc_fields.test.mjs	tests/perf/proc_fields.test.mjs
 rss_probe.mjs	tests/perf/rss_probe.mjs
@@ -1434,6 +1441,7 @@ test_p18e_identity.py	tests/test_p18e_identity.py
 test_p18g_identity.py	tests/test_p18g_identity.py
 testpac-f8254faf9cfe	tests/test_package_receipt_binding.py
 testpyt-2879eeaf233d	tests/test_python_contract_mirror.py
+test_route_map.py	tests/test_route_map.py
 test_router_docs.py	tests/test_router_docs.py
 test_router_index.py	tests/test_router_index.py
 testrou-b1523da28137	tests/test_router_queries.py
