@@ -2180,3 +2180,13 @@ test('V023-T2: right-click context menu renders Copy/Paste above deck, disables 
 
 
 
+
+test('the wall gets the host clipboard so Copy ID for AI never depends on the ambient one', () => {
+  const app = readText('../src/App.vue');
+  const mount = /<DesktopWorkspace\b[^>]*>/.exec(app);
+  assert.ok(mount, 'App.vue mounts DesktopWorkspace');
+  assert.match(mount[0], /:clipboard="props\.clipboard"/);
+  // DesktopWorkspace forwards attrs to each wall, which hands the clipboard to the tile panel.
+  assert.match(readText('../src/wall/DesktopWorkspace.vue'), /v-bind="\$attrs"/);
+  assert.match(readText('../src/wall/WallWorkspace.vue'), /clipboard: props\.clipboard/);
+});
