@@ -88,6 +88,7 @@ jobs:
           command -v strace
           command -v zip
       - name: Execute gate and publish receipt
+        id: package-verify
         if: always()
         env:
           JOB_ID: linux-package
@@ -218,3 +219,45 @@ jobs:
           [ "$rc" -eq 0 ] || outcome=FAIL
           finish_gate linux-package "$rc" "$outcome" "executed hosted reference" "$LOG" .github/workflows/package.yml "unparsed:node-tap-or-build" 1 -- bash scripts/bootstrap.sh and package verification || exit 2
           exit "$rc"
+      # [TARGET, unit decision] Only verified public app/runtime assets leave CI.
+      - name: Build public judge assets
+        if: success() && steps.package-verify.outcome == 'success'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          MV_PKG_OUT: ${{ runner.temp }}/metaviewer-package
+          ASSET_OUT: ${{ runner.temp }}/metaviewer-judge-assets
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import os
+          from pathlib import Path
+          import shutil
+          from tools.build_release_assets import build_app_asset, build_node_asset, sha256_file
+
+          arch = os.environ['PLATFORM']
+          assert arch in ('x64', 'arm64'), 'unsupported asset architecture'
+          out = Path(os.environ['ASSET_OUT'])
+          out.mkdir(parents=True, exist_ok=False)
+          app = Path(os.environ['MV_PKG_OUT']) / f'MetaViewer-linux-{arch}'
+          node = shutil.which('node')
+          assert node, 'setup-node binary missing'
+          assets = (build_app_asset(app, out, arch),
+                    build_node_asset(out, arch, node_bin=Path(node)))
+          for asset in assets:
+              asset.with_name(asset.name + '.sha256').write_text(
+                  f'{sha256_file(asset)}  {asset.name}\n', encoding='utf-8')
+          PYEOF
+      - name: Upload public judge assets
+        if: success() && steps.package-verify.outcome == 'success'
+        # actions/upload-artifact v4.6.2 release commit (full immutable pin).
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: metaviewer-judge-linux-${{ matrix.platform }}
+          path: |
+            ${{ runner.temp }}/metaviewer-judge-assets/metaviewer-linux-${{ matrix.platform }}.tar.gz
+            ${{ runner.temp }}/metaviewer-judge-assets/metaviewer-linux-${{ matrix.platform }}.tar.gz.sha256
+            ${{ runner.temp }}/metaviewer-judge-assets/node-linux-${{ matrix.platform }}.tar.xz
+            ${{ runner.temp }}/metaviewer-judge-assets/node-linux-${{ matrix.platform }}.tar.xz.sha256
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
