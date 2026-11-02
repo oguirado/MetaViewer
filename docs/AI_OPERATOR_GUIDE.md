@@ -489,11 +489,53 @@ systemd-run --user --scope -q -p MemoryHigh=6G -p MemoryMax=8G -p MemorySwapMax=
   --identity judge --site example.com --workflow smoke --slot 0
 ```
 
-### Programs (`--surface-kind program`)
+### E. Browser Goal Runs (No Stored Workflow)
 
-See `tools/mw_run_program.md`. It needs an already running Agent program capsule whose
-control you released, and it requests a bounded number of verified actions. The explicit
-`--planner muse` option sends visual marks of that program to the configured provider.
+Read `tools/mw_run_browser_goal.md`. Use the running app's **Copy env path**
+(or its `METAVIEWER_ATTACH` terminal line). The pointer lives at
+`$XDG_RUNTIME_DIR/metaviewer/attach/current.env` in the host runtime. Source the
+copied absolute path in a subshell before running, because it changes
+`XDG_RUNTIME_DIR` to the app's private runtime. In that subshell use
+`set -a; . "<copied-current.env-path>"; set +a`. Set `XDG_STATE_HOME` to an
+owned private RAM directory under `/dev/shm`, then run from the checkout:
+
+```sh
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
+  --surface-kind browser --identity <id> --goal 'Exact visible control name' \
+  --text 'Synthetic value' --key Enter --steps 3
+```
+
+The example bounds input actions at three [TARGET]; omit `--text` and `--key`
+for a click. Goals must name an exact visible control with a unique normalized
+accessibility name. Text requires focus, typing and exact native readback before
+optional Enter. The attachment includes `MV_WENDER_ROOT` when the app was started
+with it; if absent, obtain the pinned dependency root from the operator.
+`--planner muse` explicitly sends marks to the configured provider. A login wall
+or CAPTCHA stops with `HUMAN_HANDOFF`, rc `4` [CITED: tools/mw_run_browser_goal.md],
+for the person. Inspect receipts and the observed result: a verified action is
+not a finished goal. Vision-engine cross-checking is not implemented for this lane.
+
+### F. Programs and Host program (`--surface-kind program`)
+
+See `tools/mw_run_program.md`. Start an Agent program capsule in the UI, including
+**Host program** for the host-xpra lane, and use its returned profile identity.
+Release human control and verify that the current core surface is agent-controlled.
+`mw_run` attaches to that running capsule; it does not launch a program or attach
+an arbitrary desktop window. Source the app attachment as above and supply the
+locked dependency roots required by the program guide, including `VQA_VE_ROOT`.
+Host program uses the adapter binding in `MV_SRF_STATE_DIR` without identity-store
+provisioning; legacy container programs still require their native identity checks.
+
+```sh
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
+  --surface-kind program --identity <program-profile> \
+  --goal 'Covered square' --steps 1
+```
+
+This requests one action [TARGET]. Programs admit mark-bound clicks only, with
+private RAM evidence. `--planner muse` sends visual marks to the configured
+provider. Verify receipts and the observed outcome separately; bounded verified
+actions do not establish completion of a natural-language goal.
 
 ---
 
@@ -509,12 +551,16 @@ When explaining MetaViewer to a user or judge, state these boundaries clearly:
    The MetaViewer Electron shell runs with `--ozone-platform=x11` and needs an X11 or
    XWayland server (`JUDGE_DISPLAY`). Furthermore, the **`Desktop window`** capture
    mode only attaches X11 windows; native Wayland windows are not listed.
-3. **Program Automation Is Early**:
-   `mw_run --surface-kind program` drives a running Agent program capsule through
-   vision-engine marks, the wender-agent planner and input through the core
-   (`tools/mw_run_program.md`). It admits clicks only, and has been shown on one
-   gnome-mines move. Typing into programs is not supported yet. Desktop window capsules
-   are not driven by `mw_run` yet.
+3. **Goal Automation Is Bounded**:
+   Browser goal runs need no stored workflow, but require an exact visible control
+   name and grounded input; they support clicks, verified text and optional Enter.
+   Login walls and CAPTCHA require the person (rc `4` [CITED: tools/mw_run_browser_goal.md]).
+   Program and Host program runs admit clicks only; typing into programs and
+   automation of Desktop window capsules are unsupported. The program lane has
+   been demonstrated on a Mines move, not arbitrary applications. Explicit
+   `--planner muse` sends marks to a provider. A verified action is not a finished
+   goal. Browser role switches currently recreate the capsule and can lose the
+   open page; preserved profile login state does not prove page continuity.
 4. **Rootless Docker and Docker Desktop Are Refused for Tier 2**:
    OpenSuperficies capsule isolation requires the local rootful Linux Docker daemon
    (`JUDGE_DOCKER`, `JUDGE_DOCKER_DESKTOP`, `JUDGE_DOCKER_HOST`).

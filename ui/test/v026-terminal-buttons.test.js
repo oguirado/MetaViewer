@@ -54,15 +54,23 @@ import { stageOpeningMode } from '../electron/openingMode.js';
 test('V026 prompts share Bootstrap coordinates, are bounded and reject secret mutants', () => {
   for (const kind of WORKFLOW_PROMPT_KINDS) {
     const prompt=workflowPrompt(kind);
-    assert.ok(prompt.startsWith(AGENT_ENTRY_PROMPT.split('\n').slice(0,7).join('\n')));
+    assert.ok(prompt.startsWith(AGENT_ENTRY_PROMPT.split('\n').slice(0,5).join('\n')));
     assert.ok(prompt.split('\n').length<40);
     assert.match(prompt,/Copy ID for AI line/);
     assert.match(prompt,/Programs support clicks only/);
-    assert.match(prompt,/stored workflow for browsers/);
+    assert.match(prompt,/set -a; \. "<copied-current\.env-path>"; set \+a/);
+    assert.match(prompt,/MV_WENDER_ROOT when configured/);
+    assert.doesNotMatch(prompt,/Export MV_WENDER_ROOT|mw_run needs a stored workflow for browsers|cannot execute an unstored workflow/);
     assert.match(prompt,/verified action is not a finished goal/);
     for(const secret of ['token=private-value', 'Authorization: Bearer private-value', 'sk-privatevalue123', 'data:image/png;base64,AAAA']) {
       assert.throws(()=>assertSafeWorkflowPrompt(prompt+'\n'+secret),/UNSAFE/);
     }
+  }
+  const goal = workflowPrompt('no-automation');
+  for (const phrase of ['tools/mw_run_browser_goal.md', '--surface-kind browser', '--goal <exact-visible-control-name>',
+    '[--text <value> --key Enter] --steps N', 'goals must name an exact visible control',
+    '--planner muse sends marks', 'login wall or CAPTCHA stops with rc 4', 'private RAM XDG_STATE_HOME']) {
+    assert.ok(goal.includes(phrase), phrase);
   }
   assert.throws(()=>workflowPrompt('constructor'),/KIND/);
 });
