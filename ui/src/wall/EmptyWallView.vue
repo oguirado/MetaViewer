@@ -10,7 +10,7 @@ import './wall.css';
 
 defineProps({
   title: { type: String, default: 'A clear view of your work.' },
-  hint: { type: String, default: 'Add a capsule to bring your surfaces together in one wall.' },
+  hint: { type: String, default: 'No capsules are visible on this desktop. Check the Humans and Agents views for existing capsules, or choose Add capsule to open one.' },
 });
 
 defineEmits(['add-capsule']);

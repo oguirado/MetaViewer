@@ -98,7 +98,7 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
 <template>
   <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Keep a separate browser session for each account." confirm-label="Add identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
     <p v-if="login" role="status">Operator login view is open. Agent input stays refused until it closes.</p>
-    <p v-if="!rows.length && !busy">No identities yet. Add your first identity below.</p>
+    <p v-if="!rows.length && !busy">No identities yet. Add your first identity below. No MetaViewer account is needed. For a browser identity, choose Log in to sign in to your site, then Open as human or Open as agent. If login reports a missing profile, ask the host operator to provision it using the reported instructions.</p>
     <ul class="identity-list" aria-label="Saved identities">
       <li v-for="row in rows" :key="row.id" class="identity-row">
         <div class="identity-summary"><code>{{ row.id }}</code><strong>{{ row.label }}</strong>

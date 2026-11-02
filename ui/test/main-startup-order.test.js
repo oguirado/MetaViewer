@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import {
   bootProductionMain,
+  showStartupFailure,
   CHANNELS,
   ELECTRON_PIN,
   MainError,
@@ -178,7 +179,9 @@ async function createStubBootFixture(baseDir, options = {}) {
     getStatus: () => (options.adapterStatus ? options.adapterStatus() : latestAdapterStatus),
   };
 
+  const dialogs = [];
   const handles = {
+    dialog: { showErrorBox: (title, content) => dialogs.push({title, content}) },
     app: {
       requestSingleInstanceLock: () => true,
       whenReady: async () => {
@@ -229,6 +232,7 @@ async function createStubBootFixture(baseDir, options = {}) {
   };
   return {
     handles,
+    dialogs,
     calls,
     coreRequests,
     ipcSent,
@@ -339,6 +343,7 @@ test(
       });
       const boot = await bootProductionMain(liveFixture.handles);
       try {
+        assert.deepEqual(liveFixture.dialogs, [], 'successful startup must not show an error dialog');
         assert.equal(liveFixture.getWindowsConstructed(), 1);
         assert.equal(liveFixture.calls.includes('new-BrowserWindow'), true);
         assert.equal(liveFixture.calls.includes('core.dispose'), false);
@@ -392,6 +397,9 @@ test(
         });
         const bootCreateErr = await bootProductionMain(createErrFixture.handles);
         try {
+          assert.equal(createErrFixture.dialogs.length, 1);
+          assert.match(createErrFixture.dialogs[0].title, /first capsule/);
+          assert.match(createErrFixture.dialogs[0].content, /Add capsule/);
           assert.equal(createErrFixture.coreRequests.length, 1);
           assert.equal(createErrFixture.getWindowsConstructed(), 1);
           assert.equal(createErrFixture.calls.includes('new-BrowserWindow'), true);
@@ -805,7 +813,7 @@ test('packaged entry sees the typed adapter refusal before its PKG failure marke
     createRequire:()=>()=>({protocol:{},app:{exit(){events.push('exit');}}}),
     process:{argv:['electron','/app/main.js'],env:{},versions:{electron:ELECTRON_PIN}},
     console:{error:message=>events.push(message),log(){}},
-    MainError,ELECTRON_PIN,registerPrivilegedScheme:()=>{},
+    MainError,ELECTRON_PIN,showStartupFailure,registerPrivilegedScheme:()=>{},
     validateRetailLaunch:()=>({ok:true}),loadMainBindings:async()=>({core:{},wire:{}}),
     bootProductionMain:async()=>{throw error;},
     fileURLToPath:()=>'/app/ui',DEFAULT_GEOMETRY:{},createLayoutBridge:()=>({}),
