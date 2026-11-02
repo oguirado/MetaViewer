@@ -24,7 +24,7 @@ func (m *Manager) publishHumanBinding(b Binding) error {
 var humanSurfaceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 func (r *ProcessRunner) PublishHumanBinding(b Binding, ready bool, epoch uint64) error {
-	if b.NativeKind != "" && b.NativeKind != "browser" {
+	if b.NativeKind != "" && b.NativeKind != "browser" && (b.NativeKind != "program" || b.Program != "host-exec") {
 		return nil
 	}
 	if !humanSurfaceID.MatchString(b.Surface.SurfaceID) || !identityContainer.MatchString(b.Container) {

@@ -22,7 +22,7 @@ export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid
   if (keyboard) patchKeyboard?.(keyboard); // Validate before opening any listener.
   if (!Number.isInteger(expectedSocketUid) || expectedSocketUid < 0 ||
       typeof viewRoot !== 'string' || resolve(viewRoot) !== viewRoot ||
-      !/^srf-id-[a-z0-9-]+$/.test(capsule)) throw Error('XPRA_BINDING_REFUSED');
+      !/^srf-(id|pg)-[a-z0-9-]+$/.test(capsule)) throw Error('XPRA_BINDING_REFUSED');
   if (typeof process.getuid !== 'function') throw Error('XPRA_HOST_UID_ABSENT');
   const hostUid = process.getuid();
   const outer = join(viewRoot, capsule);

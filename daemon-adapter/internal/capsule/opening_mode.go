@@ -83,19 +83,25 @@ func (r *ProcessRunner) ConsumeOpeningMode(profile string, fallback string) (str
 	return mode, nil
 }
 
-// ConsumeOpeningProgram consumes a private per-create host program request.
-func (r *ProcessRunner) ConsumeOpeningProgram(profile string) (string, error) {
+// ConsumeOpeningProgramMode consumes a private per-create host program request and its opening mode.
+func (r *ProcessRunner) ConsumeOpeningProgramMode(profile string) (string, string, error) {
 	mode, hostBinary, found, err := r.consumeOpeningRequest(profile)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if !found {
-		return "", nil
+		return "", "", nil
 	}
-	if mode != "agent" || strings.TrimSpace(hostBinary) == "" {
-		return "", fault("configuration", "opening mode refused")
+	if (mode != "agent" && mode != "human") || strings.TrimSpace(hostBinary) == "" {
+		return "", "", fault("configuration", "opening mode refused")
 	}
-	return hostBinary, nil
+	return hostBinary, mode, nil
+}
+
+// ConsumeOpeningProgram consumes a private per-create host program request.
+func (r *ProcessRunner) ConsumeOpeningProgram(profile string) (string, error) {
+	hostBinary, _, err := r.ConsumeOpeningProgramMode(profile)
+	return hostBinary, err
 }
 
 // ResolveHostBinary resolves a bare binary name via PATH or validates an
