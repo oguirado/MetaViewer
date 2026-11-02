@@ -316,7 +316,7 @@ async function bootstrap() {
     ? { readRaw: async () => null, writeAtomic: async (/** @type {string} */ _json) => {} }
     : createLayoutStorage(getLayoutFacade());
   const layout = fixture ? createWallLayout(SCOPE, [...fixture.capsules]) : createInitialLayout(SCOPE);
-  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,qa?:import('./qa/anchorCollector.js').QaFacade,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,capture?:unknown,input?:unknown,frames?:unknown}}} */ (window).metaviewer;
+  const host = fixture ? null : /** @type {{metaviewer?: Partial<import('./settings/settingsModel.js').HostSettingsPort> & {nestedDepth?:()=>Promise<0|1|null>,selfCapsuleId?:()=>Promise<string|null>,recordingDestination?:()=>Promise<string|null>,authority?:import('./core/hostAdapters.js').AuthorityPort,qa?:import('./qa/anchorCollector.js').QaFacade,sideTerminal?:import('./core/hostAdapters.js').TerminalPort,clipboard?:unknown,capture?:unknown,input?:unknown,frames?:unknown}}} */ (window).metaviewer;
   let preferences = /** @type {Storage|null} */ (null);
   if (!fixture) { try { preferences = globalThis.localStorage; } catch { /* Storage may be unavailable. */ } }
   const settingsHost = createSettingsHost(host ?? null, preferences, fixture?.scheme ?? null);
@@ -432,8 +432,8 @@ async function bootstrap() {
     ? [...TERMINAL_LIVE_PROVIDERS] : [];
   const terminalCommands = terminalLive && typeof TERMINAL_LIVE_COMMANDS !== 'undefined'
     ? [...TERMINAL_LIVE_COMMANDS] : [];
-  const terminalClipboard = /** @type {{ writeText: (text: string) => Promise<void> }|null} */ (
-    terminalLive?.clipboard ?? null);
+  const terminalClipboard = /** @type {{ writeText: (text: string) => Promise<void>, readText?: () => Promise<string> }|null} */ (
+    fixture ? (terminalLive?.clipboard ?? null) : (host?.clipboard ?? null));
   const replayRuntime = /** @type {{ dispose?: () => void }|null} */ (/** @type {unknown} */ (isLiveReplay ? fixtureMount?.runtime ?? null : null));
   let disposeQa = () => {};
   let tornDown = false;

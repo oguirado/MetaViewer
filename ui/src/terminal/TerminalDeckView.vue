@@ -14,6 +14,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { createTerminalDocument } from '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js';
 import {
+  collectRetainedSlotIds,
   createTerminalDeckController,
   matchDeckShortcut,
 } from './terminalDeckModel.js';
@@ -44,6 +45,20 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const revision = ref(0);
 const customCommand = ref('');
+const pastedBootstrapText = ref('');
+const lastBootstrapFocused = ref(false);
+const contextMenu = ref(
+  /** @type {{ open: boolean, x: number, y: number, slotId: string | null, hasSelection: boolean, selectionText: string }} */ ({
+    open: false,
+    x: 0,
+    y: 0,
+    slotId: null,
+    hasSelection: false,
+    selectionText: '',
+  }),
+);
+const contextMenuWrap = ref(/** @type {any} */ (null));
+const bootstrapWrap = ref(/** @type {any} */ (null));
 
 /** @type {Map<string, HTMLElement>} */
 const viewportElements = new Map();
@@ -52,14 +67,78 @@ const mountedTerminals = new Map();
 /** @type {Map<string, string[]>} */
 const pendingSessionOutput = new Map();
 
+/**
+ * @param {string | null | undefined} slotId
+ * @returns {string}
+ */
+function readSlotSelection(slotId) {
+  if (slotId) {
+    const entry = mountedTerminals.get(slotId);
+    if (entry?.term && typeof entry.term.getSelection === 'function') {
+      try {
+        const text = entry.term.getSelection();
+        if (typeof text === 'string' && text.length > 0) return text;
+      } catch {
+        // Fall through to window selection.
+      }
+    }
+  }
+  try {
+    const sel = globalThis.window?.getSelection?.();
+    const str = sel ? String(sel.toString?.() ?? '') : '';
+    if (str.length > 0) return str;
+  } catch {
+    // Best-effort selection read.
+  }
+  return '';
+}
+
+function closeContextMenu() {
+  if (!contextMenu.value.open) return false;
+  contextMenu.value = {
+    open: false,
+    x: 0,
+    y: 0,
+    slotId: null,
+    hasSelection: false,
+    selectionText: '',
+  };
+  return true;
+}
+
 const controller = createTerminalDeckController({
   broker: props.terminalBroker,
   sessionPort: props.terminalSessionPort,
+  sessionFacade: props.terminalBinding && typeof props.terminalBinding.write === 'function' ? props.terminalBinding : null,
   hostProviders: props.hostProviders,
   brokerCommands: props.brokerCommands,
   clipboard: props.clipboard,
   storage: props.storage ?? (typeof globalThis.localStorage !== 'undefined' ? globalThis.localStorage : null),
   closeGraceMs: props.closeGraceMs,
+  getSelection(slotId) {
+    return readSlotSelection(slotId);
+  },
+  onPasteText(_slotId, text) {
+    const activeEl = /** @type {any} */ (globalThis.document)?.activeElement;
+    const activeId = activeEl?.id ?? activeEl?.props?.id ?? '';
+    if (activeId === 'terminal-deck-custom-input') {
+      customCommand.value = `${customCommand.value}${text}`;
+      controller.setCustomCommandInput(customCommand.value);
+      return true;
+    }
+    if (
+      lastBootstrapFocused.value ||
+      activeId === 'terminal-deck-bootstrap' ||
+      activeId === 'terminal-deck-bootstrap-paste-target'
+    ) {
+      pastedBootstrapText.value = text;
+      return true;
+    }
+    return false;
+  },
+  onEscape() {
+    return closeContextMenu();
+  },
   onChange() {
     revision.value += 1;
     void nextTick(() => syncTerminals());
@@ -111,10 +190,26 @@ const errorCode = computed(() => deckState.value.errorCode);
 const errorMessage = computed(() => deckState.value.errorMessage);
 const gridColumns = computed(() => String(deckState.value.gridColumns));
 const profiles = computed(() => deckState.value.profiles);
+const allScreenSlots = computed(() => {
+  const list = [];
+  const scrs = screens.value ?? [];
+  const activeIdx = activeScreenIndex.value;
+  for (let sIdx = 0; sIdx < scrs.length; sIdx += 1) {
+    const scr = scrs[sIdx];
+    for (const slot of scr.slots ?? []) {
+      list.push({
+        slot,
+        screenIndex: sIdx,
+        onActiveScreen: sIdx === activeIdx,
+      });
+    }
+  }
+  return list;
+});
 const launcherWrap = ref(/** @type {any} */ (null));
 const overlayCoordinator = /** @type {{ set?: (owner: string, active: boolean) => void } | null} */ (inject('overlayCoordinator', null));
 const launcherOverlayOwner = 'terminal-deck-overlay';
-const overlayOpen = computed(() => Boolean(props.open && (launcherOpen.value || pendingCloseSlotId.value)));
+const overlayOpen = computed(() => Boolean(props.open && (launcherOpen.value || pendingCloseSlotId.value || contextMenu.value.open)));
 
 /**
  * @param {boolean} [open]
@@ -156,6 +251,7 @@ function setViewportRef(slotId, el) {
  * @param {string} slotId
  */
 function destroySlotTerminal(slotId) {
+  controller.unregisterTerminal(slotId);
   const existing = mountedTerminals.get(slotId);
   if (!existing) return;
   mountedTerminals.delete(slotId);
@@ -172,14 +268,17 @@ function destroySlotTerminal(slotId) {
 }
 
 function syncTerminals() {
-  const currentSlots = activeScreen.value?.slots ?? [];
-  const activeIds = new Set(currentSlots.map((slot) => slot.id));
+  const retainedIds = collectRetainedSlotIds(screens.value, {
+    open: props.open,
+    activeScreenIndex: activeScreenIndex.value,
+  });
   for (const mountedId of [...mountedTerminals.keys()]) {
-    if (!activeIds.has(mountedId)) {
+    if (!retainedIds.has(mountedId)) {
       destroySlotTerminal(mountedId);
     }
   }
-  for (const slot of currentSlots) {
+  for (const item of allScreenSlots.value) {
+    const { slot, onActiveScreen } = item;
     if (!slot.sessionId) {
       destroySlotTerminal(slot.id);
       continue;
@@ -188,10 +287,22 @@ function syncTerminals() {
     if (!container) continue;
     const current = mountedTerminals.get(slot.id);
     if (current && current.sessionId === slot.sessionId) {
-      try {
-        current.fit?.fit();
-      } catch {
-        // Fit is best-effort in headless DOMs.
+      if (props.open && onActiveScreen) {
+        try {
+          current.fit?.fit();
+          if (current.term && current.term.cols > 0 && current.term.rows > 0) {
+            controller.resizeSession(slot.sessionId, current.term.cols, current.term.rows);
+          }
+        } catch {
+          // Fit is best-effort in headless DOMs.
+        }
+        if (focusedSlotId.value === slot.id && !lastBootstrapFocused.value) {
+          try {
+            current.term?.focus();
+          } catch {
+            // Best-effort focus in headless DOMs.
+          }
+        }
       }
       continue;
     }
@@ -213,18 +324,21 @@ function syncTerminals() {
       });
       const sessionId = slot.sessionId;
       const disposable = term.onData((data) => {
-        const currentSlot = (activeScreen.value?.slots ?? []).find((item) => item.id === slot.id);
+        const found = controller.findSlot(slot.id);
+        const currentSlot = found?.slot ?? null;
         if (!currentSlot || currentSlot.status !== 'running' || !currentSlot.sessionId) return;
         controller.writeSessionBytes(currentSlot.sessionId, Array.from(encoder.encode(data)));
       });
       term.open(container);
-      try {
-        fit.fit();
-        if (term.cols > 0 && term.rows > 0) {
-          controller.resizeSession(sessionId, term.cols, term.rows);
+      if (props.open && onActiveScreen) {
+        try {
+          fit.fit();
+          if (term.cols > 0 && term.rows > 0) {
+            controller.resizeSession(sessionId, term.cols, term.rows);
+          }
+        } catch {
+          // Headless DOM fallback keeps 80x24.
         }
-      } catch {
-        // Headless DOM fallback keeps 80x24.
       }
       const buffered = pendingSessionOutput.get(sessionId);
       if (buffered && buffered.length > 0) {
@@ -239,7 +353,8 @@ function syncTerminals() {
         fit,
         disposeData: () => disposable.dispose(),
       });
-      if (focusedSlotId.value === slot.id) {
+      controller.registerTerminal(slot.id, term);
+      if (props.open && onActiveScreen && focusedSlotId.value === slot.id && !lastBootstrapFocused.value) {
         try {
           term.focus();
         } catch {
@@ -253,6 +368,7 @@ function syncTerminals() {
         fit: null,
         disposeData: null,
       });
+      controller.registerTerminal(slot.id, null);
     }
   }
 }
@@ -300,12 +416,125 @@ function isInsideLauncherWrap(target) {
 }
 
 /**
+ * @param {unknown} target
+ * @returns {boolean}
+ */
+function isInsideContextMenu(target) {
+  if (!target || typeof target !== 'object') return false;
+  const wrap = contextMenuWrap.value;
+  if (wrap && typeof wrap.contains === 'function') {
+    try {
+      if (wrap.contains(target)) return true;
+    } catch {
+      // Custom renderer nodes may not be native DOM nodes.
+    }
+  }
+  const el = /** @type {any} */ (target);
+  if (typeof el.closest === 'function') {
+    try {
+      if (el.closest('.mv-terminal-deck__context-menu')) return true;
+    } catch {
+      // Fallback to ancestor walk.
+    }
+  }
+  let cur = el;
+  while (cur) {
+    if (wrap && cur === wrap) return true;
+    const id = cur.id ?? cur.props?.id;
+    if (
+      id === 'terminal-deck-context-menu' ||
+      id === 'terminal-deck-context-copy' ||
+      id === 'terminal-deck-context-paste'
+    ) {
+      return true;
+    }
+    const cls = String(cur.className ?? cur.props?.class ?? '');
+    if (cls.includes('mv-terminal-deck__context-menu')) return true;
+    cur = cur.parentNode ?? cur.parent ?? null;
+  }
+  return false;
+}
+
+/**
  * @param {Event} event
  */
 function onDocumentPointerDown(event) {
-  if (!props.open || !launcherOpen.value) return;
-  if (isInsideLauncherWrap(event?.target ?? null)) return;
-  controller.setLauncherOpen(false);
+  if (!props.open) return;
+  const target = event?.target ?? null;
+  if (contextMenu.value.open && !isInsideContextMenu(target)) {
+    closeContextMenu();
+  }
+  if (launcherOpen.value && !isInsideLauncherWrap(target)) {
+    controller.setLauncherOpen(false);
+  }
+}
+
+/**
+ * Opens the terminal right-click context menu above the deck.
+ *
+ * @param {string} slotId
+ * @param {MouseEvent | { clientX?: number, clientY?: number, preventDefault?: () => void, stopPropagation?: () => void }} [event]
+ */
+function onTileContextMenu(slotId, event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  lastBootstrapFocused.value = false;
+  focusSlot(slotId);
+  const selText = readSlotSelection(slotId);
+  const x = typeof event?.clientX === 'number' && Number.isFinite(event.clientX) ? event.clientX : 0;
+  const y = typeof event?.clientY === 'number' && Number.isFinite(event.clientY) ? event.clientY : 0;
+  contextMenu.value = {
+    open: true,
+    x,
+    y,
+    slotId,
+    hasSelection: selText.length > 0,
+    selectionText: selText,
+  };
+}
+
+async function onContextMenuCopy() {
+  if (!contextMenu.value.hasSelection) return;
+  const { slotId, selectionText } = contextMenu.value;
+  closeContextMenu();
+  await controller.copySelection(selectionText || undefined, slotId);
+}
+
+async function onContextMenuPaste() {
+  const { slotId } = contextMenu.value;
+  closeContextMenu();
+  await controller.pasteClipboard(undefined, slotId);
+}
+
+/**
+ * @param {ClipboardEvent | { clipboardData?: { getData?: (type: string) => string }, preventDefault?: () => void, stopPropagation?: () => void }} [event]
+ */
+async function onBootstrapPaste(event) {
+  event?.preventDefault?.();
+  event?.stopPropagation?.();
+  lastBootstrapFocused.value = true;
+  const clipDataText = event?.clipboardData?.getData?.('text/plain');
+  if (typeof clipDataText === 'string' && clipDataText.length > 0) {
+    pastedBootstrapText.value = clipDataText;
+    await controller.pasteClipboard(clipDataText);
+    return;
+  }
+  const res = await controller.pasteClipboard();
+  if (res.pasted) {
+    pastedBootstrapText.value = res.text;
+  }
+}
+
+/**
+ * @param {KeyboardEvent} event
+ */
+function onBootstrapKeyDown(event) {
+  lastBootstrapFocused.value = true;
+  if (matchDeckShortcut(event) === 'paste-clipboard') {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    void onBootstrapPaste();
+  }
 }
 
 function toggleLauncher() {
@@ -402,6 +631,7 @@ function canRemoveScreen(index) {
  * @param {string} slotId
  */
 function focusSlot(slotId) {
+  lastBootstrapFocused.value = false;
   controller.focusSlot(slotId);
   const entry = mountedTerminals.get(slotId);
   try {
@@ -425,9 +655,21 @@ function onTileKeyDown(slotId, event) {
   if (tagName === 'BUTTON' || tagName === 'INPUT') {
     return;
   }
-  if (mountedTerminals.get(slotId)?.term) return;
-  const slot = (activeScreen.value?.slots ?? []).find((item) => item.id === slotId);
+  const found = controller.findSlot(slotId);
+  const slot = found?.slot ?? null;
   if (!slot || slot.status !== 'running' || !slot.sessionId) return;
+  if (
+    event &&
+    event.ctrlKey === true &&
+    !event.shiftKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    (event.key === 'c' || event.key === 'C')
+  ) {
+    controller.writeSessionBytes(slot.sessionId, [0x03]);
+    return;
+  }
+  if (mountedTerminals.get(slotId)?.term) return;
   if (typeof event.key === 'string' && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
     controller.writeSessionBytes(slot.sessionId, Array.from(encoder.encode(event.key)));
   } else if (event.key === 'Enter') {
@@ -435,8 +677,32 @@ function onTileKeyDown(slotId, event) {
   }
 }
 
+watch(
+  () => [props.open, activeScreenIndex.value],
+  ([isOpen]) => {
+    if (!isOpen) {
+      closeContextMenu();
+      if (launcherOpen.value) {
+        controller.setLauncherOpen(false);
+      }
+      for (const entry of mountedTerminals.values()) {
+        try {
+          /** @type {any} */ (entry.term)?.blur?.();
+        } catch {
+          // Best-effort blur when hiding deck.
+        }
+      }
+    } else {
+      void controller.refreshProviders();
+    }
+    void nextTick(() => syncTerminals());
+  },
+);
+
 onMounted(() => {
-  void controller.refreshProviders();
+  if (props.open) {
+    void controller.refreshProviders();
+  }
   globalThis.window?.addEventListener?.('keydown', onWindowKeyDown, true);
   globalThis.document?.addEventListener?.('keydown', onWindowKeyDown, true);
   globalThis.document?.addEventListener?.('pointerdown', onDocumentPointerDown, true);
@@ -447,7 +713,9 @@ onMounted(() => {
 watch(
   () => [props.hostProviders, props.brokerCommands, props.terminalSessionPort],
   () => {
-    void controller.refreshProviders();
+    if (props.open) {
+      void controller.refreshProviders();
+    }
     revision.value += 1;
   },
 );
@@ -466,6 +734,13 @@ onBeforeUnmount(() => {
 
 defineExpose({
   controller,
+  contextMenu,
+  pastedBootstrapText,
+  onTileContextMenu,
+  onContextMenuCopy,
+  onContextMenuPaste,
+  onBootstrapPaste,
+  closeContextMenu,
 });
 </script>
 
@@ -515,12 +790,26 @@ defineExpose({
       </div>
 
       <div class="mv-terminal-deck__actions">
-        <span class="mv-terminal-deck__bootstrap-wrap">
+        <span
+          ref="bootstrapWrap"
+          id="terminal-deck-bootstrap-panel"
+          data-semantic-anchor="terminal/bootstrap/panel"
+          :data-pasted-slot-id="pastedBootstrapText || undefined"
+          class="mv-terminal-deck__bootstrap-wrap"
+          tabindex="-1"
+          @focusin="lastBootstrapFocused = true"
+          @mousedown="lastBootstrapFocused = true"
+          @paste="onBootstrapPaste"
+          @keydown="onBootstrapKeyDown"
+        >
           <button
             type="button"
             id="terminal-deck-bootstrap"
             data-semantic-anchor="terminal/bootstrap"
             class="mv-terminal-deck__action-btn"
+            @focus="lastBootstrapFocused = true"
+            @paste="onBootstrapPaste"
+            @keydown="onBootstrapKeyDown"
             @click="onBootstrap"
           >🚀 Bootstrap</button>
           <span
@@ -635,68 +924,106 @@ defineExpose({
       </div>
 
       <article
-        v-for="slot in activeScreen?.slots ?? []"
-        :key="slot.id"
-        :id="`terminal-deck-tile-${slot.id}`"
-        :data-semantic-anchor="`terminal/tile/${slot.id}`"
+        v-for="item in allScreenSlots"
+        :key="item.slot.id"
+        :id="`terminal-deck-tile-${item.slot.id}`"
+        :data-semantic-anchor="`terminal/tile/${item.slot.id}`"
         class="mv-terminal-deck__tile"
         :class="{
-          'mv-terminal-deck__tile--focused': focusedSlotId === slot.id,
-          'mv-terminal-deck__tile--exited': slot.status === 'exited',
-          'mv-terminal-deck__tile--restored': slot.status === 'restored',
+          'mv-terminal-deck__tile--focused': item.onActiveScreen && focusedSlotId === item.slot.id,
+          'mv-terminal-deck__tile--exited': item.slot.status === 'exited',
+          'mv-terminal-deck__tile--restored': item.slot.status === 'restored',
+          'mv-terminal-deck__tile--inactive-screen': !item.onActiveScreen,
         }"
-        :data-slot-status="slot.status"
-        :data-slot-kind="slot.kind"
+        :hidden="!item.onActiveScreen"
+        :inert="!item.onActiveScreen ? true : undefined"
+        :aria-hidden="!item.onActiveScreen ? 'true' : undefined"
+        :data-slot-status="item.slot.status"
+        :data-slot-kind="item.slot.kind"
+        :data-slot-screen="item.screenIndex + 1"
         tabindex="0"
-        :aria-label="slot.title"
-        @mousedown="focusSlot(slot.id)"
-        @focus="focusSlot(slot.id)"
-        @keydown="onTileKeyDown(slot.id, $event)"
+        :aria-label="item.slot.title"
+        @mousedown="focusSlot(item.slot.id)"
+        @focus="focusSlot(item.slot.id)"
+        @contextmenu.prevent="onTileContextMenu(item.slot.id, $event)"
+        @keydown="onTileKeyDown(item.slot.id, $event)"
       >
         <header class="mv-terminal-deck__tile-header">
-          <span class="mv-terminal-deck__tile-title">{{ slot.title }}</span>
+          <span class="mv-terminal-deck__tile-title">{{ item.slot.title }}</span>
           <span
-            v-if="slot.status === 'exited' || slot.status === 'restored'"
-            :id="`terminal-deck-status-${slot.id}`"
-            :data-semantic-anchor="`terminal/tile/${slot.id}/status`"
+            v-if="item.slot.status === 'exited' || item.slot.status === 'restored'"
+            :id="`terminal-deck-status-${item.slot.id}`"
+            :data-semantic-anchor="`terminal/tile/${item.slot.id}/status`"
             class="mv-terminal-deck__tile-status"
             role="status"
-          >{{ slot.status }}</span>
+          >{{ item.slot.status }}</span>
           <div class="mv-terminal-deck__tile-controls">
             <button
-              v-if="slot.status === 'restored' || slot.status === 'exited'"
+              v-if="item.slot.status === 'restored' || item.slot.status === 'exited'"
               type="button"
-              :id="`terminal-deck-restart-${slot.id}`"
-              :data-semantic-anchor="`terminal/tile/${slot.id}/restart`"
+              :id="`terminal-deck-restart-${item.slot.id}`"
+              :data-semantic-anchor="`terminal/tile/${item.slot.id}/restart`"
               class="mv-terminal-deck__tile-restart"
-              @click.stop="onRestartSlot(slot.id)"
+              @click.stop="onRestartSlot(item.slot.id)"
             >Restart</button>
             <button
               type="button"
-              :id="`terminal-deck-close-${slot.id}`"
-              :data-semantic-anchor="`terminal/tile/${slot.id}/close`"
+              :id="`terminal-deck-close-${item.slot.id}`"
+              :data-semantic-anchor="`terminal/tile/${item.slot.id}/close`"
               class="mv-terminal-deck__tile-close"
-              :aria-label="`Close ${slot.title}`"
-              @click.stop="onRequestClose(slot.id)"
+              :aria-label="`Close ${item.slot.title}`"
+              @click.stop="onRequestClose(item.slot.id)"
             >✕</button>
           </div>
         </header>
 
         <div class="mv-terminal-deck__tile-body">
           <div
-            :id="`terminal-deck-viewport-${slot.id}`"
-            :ref="(el) => setViewportRef(slot.id, el)"
-            :data-semantic-anchor="`terminal/tile/${slot.id}/viewport`"
+            :id="`terminal-deck-viewport-${item.slot.id}`"
+            :ref="(el) => setViewportRef(item.slot.id, el)"
+            :data-semantic-anchor="`terminal/tile/${item.slot.id}/viewport`"
             class="mv-terminal-deck__viewport"
+            @contextmenu.prevent="onTileContextMenu(item.slot.id, $event)"
           ></div>
           <div
-            v-if="slot.status === 'restored'"
+            v-if="item.slot.status === 'restored'"
             class="mv-terminal-deck__restored-banner"
           >
-            <span>Saved {{ slot.title }} slot restored from previous session.</span>
+            <span>Saved {{ item.slot.title }} slot restored from previous session.</span>
           </div>
         </div>
       </article>
+    </div>
+
+    <div
+      v-if="contextMenu.open"
+      ref="contextMenuWrap"
+      id="terminal-deck-context-menu"
+      data-semantic-anchor="terminal/context-menu"
+      class="mv-terminal-deck__context-menu"
+      role="menu"
+      aria-label="Terminal context menu"
+      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+      @keydown.esc.stop.prevent="closeContextMenu"
+    >
+      <button
+        type="button"
+        id="terminal-deck-context-copy"
+        data-semantic-anchor="terminal/context-menu/copy"
+        class="mv-terminal-deck__context-item"
+        role="menuitem"
+        :disabled="!contextMenu.hasSelection"
+        :aria-disabled="!contextMenu.hasSelection"
+        @click.stop="onContextMenuCopy"
+      >Copy</button>
+      <button
+        type="button"
+        id="terminal-deck-context-paste"
+        data-semantic-anchor="terminal/context-menu/paste"
+        class="mv-terminal-deck__context-item"
+        role="menuitem"
+        @click.stop="onContextMenuPaste"
+      >Paste</button>
     </div>
 
     <div

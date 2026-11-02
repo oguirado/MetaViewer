@@ -329,17 +329,19 @@ export function resolveDeckProfiles(options = {}) {
 }
 
 /**
- * Matches a KeyboardEvent against the four deck-owned shortcuts:
+ * Matches a KeyboardEvent against the six deck-owned shortcuts:
  * - Ctrl+Shift+T: open a new Shell terminal
  * - Ctrl+Shift+W: close the focused terminal (with confirmation if busy)
+ * - Ctrl+Shift+C: copy the active terminal selection to clipboard
+ * - Ctrl+Shift+V: paste from clipboard into the active target
  * - Ctrl+PageUp: switch to previous screen
  * - Ctrl+PageDown: switch to next screen
  *
- * Returns null for all other keys so ordinary terminal input passes through
- * to the PTY unchanged.
+ * Returns null for all other keys (including Ctrl+C and Ctrl+V) so ordinary
+ * terminal input and SIGINT pass through to the PTY unchanged.
  *
  * @param {{ key?: unknown, ctrlKey?: unknown, shiftKey?: unknown, altKey?: unknown, metaKey?: unknown } | null | undefined} event
- * @returns {'new-shell'|'close-focused'|'prev-screen'|'next-screen'|null}
+ * @returns {'new-shell'|'close-focused'|'copy-selection'|'paste-clipboard'|'prev-screen'|'next-screen'|null}
  */
 export function matchDeckShortcut(event) {
   if (!event || typeof event !== 'object') return null;
@@ -348,11 +350,42 @@ export function matchDeckShortcut(event) {
   if (event.shiftKey === true) {
     if (key === 'T' || key === 't') return 'new-shell';
     if (key === 'W' || key === 'w') return 'close-focused';
+    if (key === 'C' || key === 'c') return 'copy-selection';
+    if (key === 'V' || key === 'v') return 'paste-clipboard';
     return null;
   }
   if (key === 'PageUp') return 'prev-screen';
   if (key === 'PageDown') return 'next-screen';
   return null;
+}
+
+/**
+ * Returns the set of slot IDs whose live terminal instances must be retained
+ * across deck screens and across deck hide/show transitions.
+ *
+ * Every slot with an active `sessionId` across ALL screens is retained whether
+ * the deck is currently visible (`open: true`) or hidden (`open: false`), so
+ * switching screens, navigating to Humans/Agents, or closing More -> Terminal
+ * never disposes a live xterm or PTY session. Only removing a slot (slot close)
+ * or clearing its sessionId drops it from the retained set.
+ *
+ * @param {readonly DeckScreen[] | null | undefined} screens
+ * @param {{ open?: boolean, activeScreenIndex?: number }} [_opts]
+ * @returns {Set<string>}
+ */
+export function collectRetainedSlotIds(screens, _opts = {}) {
+  /** @type {Set<string>} */
+  const retained = new Set();
+  if (!Array.isArray(screens)) return retained;
+  for (const screen of screens) {
+    if (!screen || !Array.isArray(screen.slots)) continue;
+    for (const slot of screen.slots) {
+      if (slot && typeof slot.id === 'string' && slot.id && typeof slot.sessionId === 'string' && slot.sessionId) {
+        retained.add(slot.id);
+      }
+    }
+  }
+  return retained;
 }
 
 /**
@@ -519,7 +552,7 @@ export function deserializeDeckState(raw) {
  *   } | null,
  *   hostProviders?: unknown[],
  *   brokerCommands?: string[],
- *   clipboard?: { writeText?: (text: string) => Promise<unknown> } | null,
+ *   clipboard?: { writeText?: (text: string) => Promise<unknown>, readText?: () => Promise<string> | string } | null,
  *   operatorEntry?: { copy?: () => Promise<{ ok?: boolean } | unknown> } | null,
  *   storage?: Pick<Storage, 'getItem' | 'setItem'> | null,
  *   confirmClose?: ((slot: DeckSlot) => boolean | Promise<boolean>) | null,
@@ -527,6 +560,11 @@ export function deserializeDeckState(raw) {
  *   toastDurationMs?: number,
  *   onChange?: (() => void) | null,
  *   onSessionData?: ((frame: { session: string, seq: number, bytes: number[], byteLength: number }) => void) | null,
+ *   getSelection?: ((slotId: string | null) => string) | null,
+ *   onPasteText?: ((slotId: string | null, text: string) => boolean | void) | null,
+ *   onCopyShortcut?: (() => unknown) | null,
+ *   onPasteShortcut?: (() => unknown) | null,
+ *   onEscape?: (() => boolean) | null,
  * }} [options]
  */
 export function createTerminalDeckController(options = {}) {
@@ -603,6 +641,97 @@ export function createTerminalDeckController(options = {}) {
   let errorMessage = '';
   /** @type {{ entries?: unknown, capabilities?: unknown } | null} */
   let providerListing = null;
+  let lastWrittenClipboardText = '';
+  let lastPastedText = '';
+  /** @type {Map<string, { getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void } | null>} */
+  const registeredTerminals = new Map();
+  /** @type {WeakSet<object>} */
+  const handledEvents = new WeakSet();
+
+  /**
+   * @param {string} slotId
+   * @param {{ getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void } | null} term
+   */
+  function registerTerminal(slotId, term) {
+    if (typeof slotId !== 'string' || !slotId) return;
+    if (term) {
+      registeredTerminals.set(slotId, term);
+    } else {
+      registeredTerminals.delete(slotId);
+    }
+  }
+
+  /**
+   * @param {string} slotId
+   */
+  function unregisterTerminal(slotId) {
+    if (typeof slotId !== 'string' || !slotId) return;
+    registeredTerminals.delete(slotId);
+  }
+
+  function resolveClipboardBinding() {
+    if (options.clipboard && typeof options.clipboard === 'object') {
+      return options.clipboard;
+    }
+    const hostClip = /** @type {{ writeText?: (t: string) => Promise<unknown>, readText?: () => Promise<string> | string } | undefined} */ (
+      /** @type {any} */ (globalThis).metaviewer?.clipboard
+    );
+    if (hostClip && typeof hostClip === 'object') {
+      return hostClip;
+    }
+    return /** @type {{ writeText?: (t: string) => Promise<unknown>, readText?: () => Promise<string> | string } | undefined} */ (
+      globalThis.navigator?.clipboard
+    );
+  }
+
+  /**
+   * @param {string} text
+   * @returns {Promise<boolean>}
+   */
+  async function writeClipboardText(text) {
+    const str = typeof text === 'string' ? text : '';
+    const clip = resolveClipboardBinding();
+    if (clip && typeof clip.writeText === 'function') {
+      try {
+        await clip.writeText(str);
+        lastWrittenClipboardText = str;
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * @returns {Promise<string>}
+   */
+  async function readClipboardText() {
+    const clip = resolveClipboardBinding();
+    if (clip && typeof clip.readText === 'function') {
+      try {
+        const res = await clip.readText();
+        if (typeof res === 'string') return res;
+        if (res && typeof res === 'object' && typeof (/** @type {{ text?: unknown }} */ (res)).text === 'string') {
+          return /** @type {{ text: string }} */ (res).text;
+        }
+      } catch {
+        // Fall through to navigator or last written text.
+      }
+    }
+    const navClip = /** @type {{ readText?: () => Promise<string> | string } | undefined} */ (
+      globalThis.navigator?.clipboard
+    );
+    if (navClip && navClip !== clip && typeof navClip.readText === 'function') {
+      try {
+        const res = await navClip.readText();
+        if (typeof res === 'string') return res;
+      } catch {
+        // Fall through to in-memory fallback.
+      }
+    }
+    return lastWrittenClipboardText;
+  }
 
   function notify() {
     if (!disposed) options.onChange?.();
@@ -1253,6 +1382,7 @@ export function createTerminalDeckController(options = {}) {
     if (clip && typeof clip.writeText === 'function') {
       try {
         await clip.writeText(AGENT_ENTRY_PROMPT);
+        lastWrittenClipboardText = AGENT_ENTRY_PROMPT;
         copied = true;
       } catch {
         copied = false;
@@ -1262,6 +1392,7 @@ export function createTerminalDeckController(options = {}) {
       try {
         const res = await opEntry.copy();
         if (res && typeof res === 'object' && /** @type {{ ok?: unknown }} */ (res).ok === true) {
+          lastWrittenClipboardText = AGENT_ENTRY_PROMPT;
           copied = true;
         }
       } catch {
@@ -1284,6 +1415,107 @@ export function createTerminalDeckController(options = {}) {
   }
 
   /**
+   * Copies the active terminal selection (or `explicitText` if provided) to the
+   * host clipboard. When there is no non-empty selection, does not overwrite the
+   * clipboard and returns `{ copied: false, text: '' }`.
+   *
+   * @param {string} [explicitText]
+   * @param {string|null} [targetSlotId]
+   * @returns {Promise<{ copied: boolean, text: string }>}
+   */
+  async function copySelection(explicitText, targetSlotId = null) {
+    const slotId = targetSlotId ?? focusedSlotId ?? screens[activeScreenIndex]?.slots[0]?.id ?? null;
+    let text = typeof explicitText === 'string' ? explicitText : '';
+    if (!text && slotId) {
+      const term = registeredTerminals.get(slotId);
+      if (term && typeof term.getSelection === 'function') {
+        try {
+          const sel = term.getSelection();
+          if (typeof sel === 'string') text = sel;
+        } catch {
+          // Best-effort selection read.
+        }
+      }
+    }
+    if (!text && typeof options.getSelection === 'function') {
+      try {
+        const sel = options.getSelection(slotId);
+        if (typeof sel === 'string') text = sel;
+      } catch {
+        // Best-effort selection callback.
+      }
+    }
+    if (!text) {
+      return { copied: false, text: '' };
+    }
+    const ok = await writeClipboardText(text);
+    return { copied: ok, text: ok ? text : '' };
+  }
+
+  /**
+   * Pastes text from the host clipboard (or `explicitText` if provided) into the
+   * active target. Routes terminal paste through `term.paste(text)` when an xterm
+   * instance is registered so multi-line payloads receive bracketed-paste framing,
+   * and falls back to raw UTF-8 session bytes when running headless without xterm.
+   * Preserves byte-exact text without trimming.
+   *
+   * @param {string} [explicitText]
+   * @param {string|null} [targetSlotId]
+   * @returns {Promise<{ pasted: boolean, text: string, usedTermPaste: boolean }>}
+   */
+  async function pasteClipboard(explicitText, targetSlotId = null) {
+    const text = typeof explicitText === 'string' ? explicitText : await readClipboardText();
+    if (typeof text !== 'string' || text.length === 0) {
+      return { pasted: false, text: '', usedTermPaste: false };
+    }
+    lastPastedText = text;
+    const slotId = targetSlotId ?? focusedSlotId ?? screens[activeScreenIndex]?.slots[0]?.id ?? null;
+    if (typeof options.onPasteText === 'function') {
+      try {
+        const handled = options.onPasteText(slotId, text);
+        if (handled === true) {
+          notify();
+          return { pasted: true, text, usedTermPaste: false };
+        }
+      } catch {
+        // Fall through to terminal paste.
+      }
+    }
+    const found = slotId ? findSlot(slotId) : null;
+    const slot = found?.slot ?? null;
+    const term = slotId ? registeredTerminals.get(slotId) : null;
+    if (term && typeof term.paste === 'function') {
+      let wroteViaOnData = false;
+      const origWrite = sessionFacade?.write;
+      if (sessionFacade && typeof origWrite === 'function') {
+        sessionFacade.write = (req) => {
+          wroteViaOnData = true;
+          return origWrite.call(sessionFacade, req);
+        };
+      }
+      try {
+        term.paste(text);
+      } finally {
+        if (sessionFacade && typeof origWrite === 'function') {
+          sessionFacade.write = origWrite;
+        }
+      }
+      if (!wroteViaOnData && slot && slot.status === 'running' && slot.sessionId) {
+        writeSessionBytes(slot.sessionId, Array.from(encoder.encode(text)));
+      }
+      notify();
+      return { pasted: true, text, usedTermPaste: true };
+    }
+    if (slot && slot.status === 'running' && slot.sessionId) {
+      writeSessionBytes(slot.sessionId, Array.from(encoder.encode(text)));
+      notify();
+      return { pasted: true, text, usedTermPaste: false };
+    }
+    notify();
+    return { pasted: true, text, usedTermPaste: false };
+  }
+
+  /**
    * Handles deck-level keyboard shortcuts. Returns true if the event matched a
    * deck shortcut and was handled (preventing default PTY delivery), or false
    * if the key belongs to the focused terminal PTY.
@@ -1292,14 +1524,25 @@ export function createTerminalDeckController(options = {}) {
    * @returns {boolean}
    */
   function handleKeyDown(event) {
+    if (event && typeof event === 'object') {
+      if (handledEvents.has(event)) return true;
+    }
     if (event && typeof event === 'object' && event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      if (typeof options.onEscape === 'function' && options.onEscape() === true) {
+        handledEvents.add(event);
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        return true;
+      }
       if (launcherOpen) {
+        handledEvents.add(event);
         event.preventDefault?.();
         event.stopPropagation?.();
         setLauncherOpen(false);
         return true;
       }
       if (pendingCloseSlotId) {
+        handledEvents.add(event);
         event.preventDefault?.();
         event.stopPropagation?.();
         cancelPendingClose();
@@ -1309,6 +1552,9 @@ export function createTerminalDeckController(options = {}) {
     }
     const action = matchDeckShortcut(event);
     if (!action) return false;
+    if (event && typeof event === 'object') {
+      handledEvents.add(event);
+    }
     event.preventDefault?.();
     event.stopPropagation?.();
     if (action === 'new-shell') {
@@ -1319,6 +1565,22 @@ export function createTerminalDeckController(options = {}) {
       const targetId = focusedSlotId ?? screens[activeScreenIndex]?.slots[0]?.id ?? null;
       if (targetId) {
         void requestCloseSlot(targetId).catch(() => {});
+      }
+      return true;
+    }
+    if (action === 'copy-selection') {
+      if (typeof options.onCopyShortcut === 'function') {
+        void Promise.resolve(options.onCopyShortcut()).catch(() => {});
+      } else {
+        void copySelection().catch(() => {});
+      }
+      return true;
+    }
+    if (action === 'paste-clipboard') {
+      if (typeof options.onPasteShortcut === 'function') {
+        void Promise.resolve(options.onPasteShortcut()).catch(() => {});
+      } else {
+        void pasteClipboard().catch(() => {});
       }
       return true;
     }
@@ -1412,12 +1674,20 @@ export function createTerminalDeckController(options = {}) {
         launcherOpen,
         customCommandInput,
         toastMessage,
+        lastPastedText,
         errorCode,
         errorMessage,
         gridColumns: gridColumnsForCount(activeScreen?.slots.length ?? 0),
         profiles: getProfiles(),
       };
     },
+    findSlot,
+    registerTerminal,
+    unregisterTerminal,
+    writeClipboardText,
+    readClipboardText,
+    copySelection,
+    pasteClipboard,
     getProfiles,
     refreshProviders,
     launchProfile,

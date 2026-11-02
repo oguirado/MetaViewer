@@ -44,7 +44,11 @@ export const SIDE_TERMINAL_CHANNELS = Object.freeze({
   terminalProviders:'metaviewer:side-terminal.providers',
   terminalCopy:'metaviewer:side-terminal.copy',
 });
-const ALL_WIRE_CHANNELS = Object.freeze({...WIRE_CHANNELS, ...SIDE_TERMINAL_CHANNELS});
+const CLIPBOARD_CHANNELS = Object.freeze({
+  clipboardWrite:'metaviewer:clipboard.writeText',
+  clipboardRead:'metaviewer:clipboard.readText',
+});
+const ALL_WIRE_CHANNELS = Object.freeze({...WIRE_CHANNELS, ...SIDE_TERMINAL_CHANNELS, ...CLIPBOARD_CHANNELS});
 export const SURFACE_INPUT_CHANNEL = WIRE_CHANNELS.intent;
 export const WIRE_MAX_BYTES = 256 * 1024;
 export const INTENT_OPS = Object.freeze({
@@ -694,7 +698,7 @@ export function nestedIdentity(argv,env) {
   return {depth:flags.length ? Number(flags[0].slice(-1)) : null,self};
 }
 /** @param {any} options */
-export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,profiles=new Map(),capsuleStates=new Map(),listIdentities=null,frames=null,frameDiag=null,now:clock=Date.now}) {
+export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,clipboard=null,profiles=new Map(),capsuleStates=new Map(),listIdentities=null,frames=null,frameDiag=null,now:clock=Date.now}) {
   if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
   const store = createSettingsStore(env);
   const destination = recordingDestination(env);
@@ -919,6 +923,24 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       if (await terminal.copyText({ text: value.text }) !== true) throw new Error('OUTCOME');
       return true;
     },
+    clipboardWrite: async (/** @type {any} */value) => {
+      if (identity.depth === 1) throw new Error('DISPLAY_ONLY');
+      if (!exactDataKeys(value, 'text') || typeof value.text !== 'string'
+          || value.text.includes('\0') || !isWellFormedString(value.text)
+          || Buffer.byteLength(value.text, 'utf8') > WIRE_MAX_BYTES) throw new Error('ERR_CLIPBOARD_INVALID');
+      if (!clipboard || typeof clipboard.writeText !== 'function') throw new Error('ERR_CLIPBOARD_INVALID');
+      await clipboard.writeText(value.text);
+      return true;
+    },
+    clipboardRead: async () => {
+      if (identity.depth === 1) throw new Error('DISPLAY_ONLY');
+      if (!clipboard || typeof clipboard.readText !== 'function') return '';
+      const raw = await clipboard.readText();
+      if (typeof raw !== 'string') return '';
+      const cleaned = raw.includes('\0') ? raw.replace(/\0/g, '') : raw;
+      if (Buffer.byteLength(cleaned, 'utf8') > WIRE_MAX_BYTES) throw new Error('PAYLOAD');
+      return cleaned;
+    },
     terminalEnabled: async (/** @type {boolean} */value) => {
       if (typeof value !== 'boolean') throw new Error('PAYLOAD');
       if (!terminal || await terminal.setEnabled(value) !== true) throw new Error('OUTCOME'); enabled=value; return true;
@@ -1111,8 +1133,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       if (Object.hasOwn(SIDE_TERMINAL_CHANNELS, name) && terminal !== null && typeof terminal.attach !== 'function') {
         continue;
       }
+      if (Object.hasOwn(CLIPBOARD_CHANNELS, name) && !clipboard) {
+        continue;
+      }
       const channel=ALL_WIRE_CHANNELS[/** @type {keyof typeof ALL_WIRE_CHANNELS} */(name)];
-      const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy'].includes(name) ? 1 : 0;
+      const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
       ipcMain.handle(channel,/** @param {unknown} event @param {...any} args */ async (event,...args) => {
         if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
         if (args.length !== arity) throw new Error('ARGS');

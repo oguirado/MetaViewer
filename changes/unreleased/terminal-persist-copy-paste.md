@@ -1,0 +1,2 @@
+- Keep terminals alive across screen switches, Humans and Agents views, and closing the terminal wall; only closing a slot or quitting ends a shell.
+- Add copy and paste in terminals: Ctrl+Shift+C, Ctrl+Shift+V and a right-click menu, with byte-exact paste in Bootstrap.

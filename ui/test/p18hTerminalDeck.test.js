@@ -1537,4 +1537,646 @@ test('V022-TERMINAL-WIRING: packaged boot wiring (host -> authorityWire -> prelo
   }, { code: 'ERR_ASSERTION' });
 });
 
+// ---------------------------------------------------------------------------
+// 9. V023-TERMINAL-PERSIST: Persistence across deck hide/show, navigation,
+//    and screen switches; only slot close disposes (+ mutants)
+// ---------------------------------------------------------------------------
+
+test('V023-T1: deck hide and show keeps the same session id, preserves scrollback, refits on show, and never calls dispose (with mutants)', async () => {
+  // 1. Verify App.vue keeps TerminalDeckView mounted and hidden (never v-if="terminalDeckOpen")
+  const appSource = readText('../src/App.vue');
+  assert.equal(
+    appSource.includes('<section v-if="terminalDeckOpen"'),
+    false,
+    'App.vue must not unmount TerminalDeckView with v-if="terminalDeckOpen"',
+  );
+  assert.ok(
+    appSource.includes('v-if="!nestedMode.displayOnly"') &&
+      appSource.includes(':hidden="!terminalDeckOpen"') &&
+      appSource.includes(':inert="!terminalDeckOpen ? true : undefined"'),
+    'App.vue must keep the terminal deck mounted and hidden/inert when closed',
+  );
+  assert.ok(
+    appSource.includes('.mv-terminal-deck-screen[hidden] { display:none !important; pointer-events:none !important; }'),
+    'Hidden terminal deck must not intercept pointer events',
+  );
+
+  // Mutant check on App.vue: reverting to v-if="terminalDeckOpen" fails the persistence contract
+  const mutatedAppSource = appSource.replace(
+    '<section v-if="!nestedMode.displayOnly"',
+    '<section v-if="terminalDeckOpen"',
+  );
+  assert.notEqual(mutatedAppSource, appSource);
+  assert.throws(() => {
+    assert.equal(mutatedAppSource.includes('<section v-if="terminalDeckOpen"'), false);
+  }, assert.AssertionError);
+
+  // 2. Drive TerminalDeckView across open: true -> false (hide/navigate to Humans/Agents or close More -> Terminal) -> true
+  async function runHideShowAndScreenSwitchOracle(deckApi) {
+    const harness = createBrokerDouble();
+    /** @type {StubTermInstance[]} */
+    const termInstances = [];
+    let fitCalls = 0;
+
+    class StubTermInstance {
+      constructor() {
+        this.cols = 80;
+        this.rows = 24;
+        this.disposed = 0;
+        this.focused = 0;
+        this.blurred = 0;
+        /** @type {string[]} */
+        this.scrollback = [];
+        /** @type {((data: string) => void) | null} */
+        this.dataListener = null;
+        termInstances.push(this);
+      }
+      loadAddon() {}
+      attachCustomKeyEventHandler() {}
+      onData(fn) {
+        this.dataListener = fn;
+        return {
+          dispose: () => {
+            this.dataListener = null;
+          },
+        };
+      }
+      open() {}
+      write(chunk) {
+        this.scrollback.push(String(chunk));
+      }
+      focus() {
+        this.focused += 1;
+      }
+      blur() {
+        this.blurred += 1;
+      }
+      dispose() {
+        this.disposed += 1;
+      }
+    }
+    class StubFitAddon {
+      fit() {
+        fitCalls += 1;
+      }
+    }
+
+    const TerminalDeckView = await compileSfc('../src/terminal/TerminalDeckView.vue', {
+      '@xterm/xterm': { Terminal: StubTermInstance },
+      '@xterm/addon-fit': { FitAddon: StubFitAddon },
+      '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) },
+      './terminalDeckModel.js': deckApi,
+    });
+
+    const openState = vue.ref(true);
+    const HostWrapper = {
+      setup() {
+        return () =>
+          vue.h(TerminalDeckView, {
+            open: openState.value,
+            terminalBroker: harness.broker,
+            terminalBinding: harness.sessionFacade,
+            storage: createMemoryStorage(),
+            closeGraceMs: 5,
+          });
+      },
+    };
+
+    const mounted = mountTree(HostWrapper, {});
+    try {
+      await tick();
+      // Launch Shell on Screen 1
+      await mounted.findById('terminal-deck-empty-shell').props.onClick();
+      await tick();
+      assert.equal(harness.openCalls.length, 1);
+      assert.equal(termInstances.length, 1);
+      const term1 = termInstances[0];
+      const session1 = harness.attachedSessions[0];
+      assert.equal(term1.disposed, 0);
+
+      // Emit scrollback on session 1
+      harness.sessionFacade.emitData(session1, 'line-before-hide\r\n');
+      await tick();
+      assert.equal(term1.scrollback.join(''), 'line-before-hide\r\n');
+
+      // Add Screen 2 and launch a second terminal on Screen 2
+      mounted.findById('terminal-deck-screen-add').props.onClick();
+      await tick();
+      // Screen 1 terminal must NOT be disposed when switching to Screen 2!
+      assert.equal(term1.disposed, 0, 'Switching from Screen 1 to Screen 2 must not dispose Screen 1 terminal');
+
+      await mounted.findById('terminal-deck-empty-shell').props.onClick();
+      await tick();
+      assert.equal(harness.openCalls.length, 2);
+      assert.equal(termInstances.length, 2);
+      const term2 = termInstances[1];
+      const session2 = harness.attachedSessions[1];
+      assert.equal(term1.disposed, 0);
+      assert.equal(term2.disposed, 0);
+
+      // Output to background Screen 1 while on Screen 2 stays in term1 scrollback
+      harness.sessionFacade.emitData(session1, 'while-on-screen-2\r\n');
+      harness.sessionFacade.emitData(session2, 'screen-2-live\r\n');
+      await tick();
+      assert.equal(term1.scrollback.join(''), 'line-before-hide\r\nwhile-on-screen-2\r\n');
+      assert.equal(term2.scrollback.join(''), 'screen-2-live\r\n');
+
+      // Switch back to Screen 1 -> both terminals stay alive, same session IDs, zero reconnects
+      mounted.findById('terminal-deck-screen-1').props.onClick();
+      await tick();
+      assert.equal(harness.openCalls.length, 2, 'Screen switch must not spawn or reconnect PTY');
+      assert.equal(term1.disposed, 0);
+      assert.equal(term2.disposed, 0);
+      assert.equal(mounted.findById('terminal-deck-tile-slot-1').props.hidden, false);
+      assert.equal(mounted.findById('terminal-deck-tile-slot-2').props.hidden, true);
+
+      // Hide deck (leaving to Humans/Agents or closing More -> Terminal)
+      const fitsBeforeHide = fitCalls;
+      openState.value = false;
+      await tick();
+      assert.equal(term1.disposed, 0, 'Hiding deck must not dispose term1');
+      assert.equal(term2.disposed, 0, 'Hiding deck must not dispose term2');
+      assert.equal(harness.closeCalls.length, 0, 'Hiding deck must not close any PTY session');
+      assert.ok(term1.blurred >= 1, 'Hiding deck must blur mounted terminals so hidden deck never holds focus');
+
+      // Emit output while deck is hidden -> preserved in scrollback
+      harness.sessionFacade.emitData(session1, 'while-deck-hidden\r\n');
+      await tick();
+      assert.equal(
+        term1.scrollback.join(''),
+        'line-before-hide\r\nwhile-on-screen-2\r\nwhile-deck-hidden\r\n',
+      );
+
+      // Show deck again -> same session IDs, no dispose, refits active screen
+      openState.value = true;
+      await tick();
+      assert.equal(harness.openCalls.length, 2, 'Re-showing deck must keep same PTY sessions without reconnect');
+      assert.equal(term1.disposed, 0);
+      assert.equal(term2.disposed, 0);
+      assert.ok(fitCalls > fitsBeforeHide, 'Re-showing deck must refit the active terminal');
+
+      // Now explicitly close slot-1 -> ONLY slot-1 disposes; slot-2 on Screen 2 remains alive
+      await mounted.findById('terminal-deck-close-slot-1').props.onClick({ stopPropagation() {} });
+      await tick();
+      await mounted.findById('terminal-deck-confirm-close-yes').props.onClick();
+      await sleep(20);
+      await tick();
+      assert.equal(term1.disposed, 1, 'Explicit slot close must dispose the closed slot terminal');
+      assert.equal(term2.disposed, 0, 'Closing slot-1 must not dispose slot-2 on Screen 2');
+      assert.equal(harness.closeCalls[0]?.session, session1);
+    } finally {
+      mounted.app.unmount();
+    }
+  }
+
+  // Real implementation passes
+  await runHideShowAndScreenSwitchOracle(deckModel);
+
+  // Mutant 1: if collectRetainedSlotIds clears retained slots when open === false (hiding deck disposes terminals)
+  const mutatedHideDisposes = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    'export function collectRetainedSlotIds(screens, _opts = {}) {\n  /** @type {Set<string>} */\n  const retained = new Set();',
+    'export function collectRetainedSlotIds(screens, _opts = {}) {\n  /** @type {Set<string>} */\n  const retained = new Set();\n  if (_opts && _opts.open === false) return retained;',
+  );
+  await assert.rejects(
+    () => runHideShowAndScreenSwitchOracle(mutatedHideDisposes),
+    assert.AssertionError,
+  );
+
+  // Mutant 2: if collectRetainedSlotIds only retains the active screen's slots (screen switch disposes off-screen terminals)
+  const mutatedScreenSwitchDisposes = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    '  for (const screen of screens) {',
+    '  for (const screen of [screens[_opts?.activeScreenIndex ?? 0]]) {',
+  );
+  await assert.rejects(
+    () => runHideShowAndScreenSwitchOracle(mutatedScreenSwitchDisposes),
+    assert.AssertionError,
+  );
+
+  // Mutant 3: if executeCloseSlot does not remove the closed slot from screen.slots (slot close fails to dispose)
+  const mutatedCloseKeepsSlot = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    '    if (currentIdx !== -1) {\n      screen.slots.splice(currentIdx, 1);',
+    '    if (currentIdx !== -1) {\n      void currentIdx;',
+  );
+  await assert.rejects(
+    () => runHideShowAndScreenSwitchOracle(mutatedCloseKeepsSlot),
+    assert.AssertionError,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 10. V023-TERMINAL-PERSIST: Copy and paste shortcuts (Ctrl+Shift+C / Ctrl+Shift+V),
+//     Ctrl+C SIGINT, Ctrl+V passthrough, multi-line bracketed paste via term.paste,
+//     context menu, and byte-exact Bootstrap paste (+ mutants)
+// ---------------------------------------------------------------------------
+
+test('V023-T2: Ctrl+Shift+C copies selection, Ctrl+Shift+V pastes via xterm paste path, Ctrl+C stays SIGINT, and Ctrl+V passes through (with mutants)', async () => {
+  async function runCopyPasteShortcutOracle(deckApi) {
+    const harness = createBrokerDouble();
+    let hostClipboard = '';
+    const clipboardCalls = { writes: [], reads: 0 };
+    const clipboard = {
+      async writeText(text) {
+        hostClipboard = String(text);
+        clipboardCalls.writes.push(hostClipboard);
+      },
+      async readText() {
+        clipboardCalls.reads += 1;
+        return hostClipboard;
+      },
+    };
+
+    const controller = deckApi.createTerminalDeckController({
+      broker: harness.broker,
+      sessionFacade: harness.sessionFacade,
+      clipboard,
+      storage: createMemoryStorage(),
+      closeGraceMs: 5,
+    });
+
+    try {
+      const slot = await controller.launchProfile('shell', { cols: 80, rows: 24 });
+      let currentSelection = '';
+      /** @type {string[]} */
+      const termPastedPayloads = [];
+      const fakeTerm = {
+        getSelection() {
+          return currentSelection;
+        },
+        hasSelection() {
+          return currentSelection.length > 0;
+        },
+        paste(data) {
+          termPastedPayloads.push(data);
+          // Simulate xterm bracketed paste framing written through onData -> PTY
+          const bracketed = `\x1b[200~${data}\x1b[201~`;
+          controller.writeSessionBytes(slot.sessionId, Array.from(new TextEncoder().encode(bracketed)));
+        },
+      };
+      controller.registerTerminal(slot.id, fakeTerm);
+
+      // 1. Ctrl+Shift+C with empty selection does not overwrite clipboard
+      hostClipboard = 'prior-clipboard';
+      const emptyCopyHandled = controller.handleKeyDown({
+        key: 'C',
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: false,
+        metaKey: false,
+        preventDefault() {},
+        stopPropagation() {},
+      });
+      await tick();
+      assert.equal(emptyCopyHandled, true);
+      assert.equal(hostClipboard, 'prior-clipboard', 'Ctrl+Shift+C with no selection must not overwrite clipboard');
+
+      // 2. Ctrl+Shift+C with active selection copies to clipboard
+      currentSelection = 'selected-terminal-output';
+      let copyPrevented = false;
+      const copyHandled = controller.handleKeyDown({
+        key: 'c',
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: false,
+        metaKey: false,
+        preventDefault() {
+          copyPrevented = true;
+        },
+        stopPropagation() {},
+      });
+      await tick();
+      assert.equal(copyHandled, true);
+      assert.equal(copyPrevented, true);
+      assert.equal(hostClipboard, 'selected-terminal-output');
+
+      // 3. Multi-line Ctrl+Shift+V routes through term.paste(...) so bracketed paste applies
+      hostClipboard = 'echo line1\necho line2\n';
+      const writesBeforePaste = harness.writeCalls.length;
+      let pastePrevented = false;
+      const pasteHandled = controller.handleKeyDown({
+        key: 'V',
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: false,
+        metaKey: false,
+        preventDefault() {
+          pastePrevented = true;
+        },
+        stopPropagation() {},
+      });
+      await tick();
+      assert.equal(pasteHandled, true);
+      assert.equal(pastePrevented, true);
+      assert.deepEqual(termPastedPayloads, ['echo line1\necho line2\n']);
+      const pastedBytes = harness.writeCalls[writesBeforePaste]?.bytes ?? [];
+      const pastedStr = new TextDecoder().decode(Uint8Array.from(pastedBytes));
+      assert.equal(pastedStr, '\x1b[200~echo line1\necho line2\n\x1b[201~');
+
+      // 4. Ctrl+C (without Shift) is NOT intercepted by deck shortcuts (returns false) and reaches PTY as SIGINT (0x03)
+      assert.equal(
+        deckApi.matchDeckShortcut({ key: 'c', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }),
+        null,
+      );
+      assert.equal(
+        deckApi.matchDeckShortcut({ key: 'C', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }),
+        null,
+      );
+      const ctrlCHandled = controller.handleKeyDown({
+        key: 'c',
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+      });
+      assert.equal(ctrlCHandled, false, 'Ctrl+C must not be consumed as a deck shortcut');
+
+      // 5. Ctrl+V (without Shift) is NOT intercepted by deck shortcuts (returns false)
+      assert.equal(
+        deckApi.matchDeckShortcut({ key: 'v', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }),
+        null,
+      );
+      const ctrlVHandled = controller.handleKeyDown({
+        key: 'v',
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+      });
+      assert.equal(ctrlVHandled, false, 'Ctrl+V must keep its terminal meaning');
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  // Real implementation passes
+  await runCopyPasteShortcutOracle(deckModel);
+
+  // Mutant 1: omitting Ctrl+Shift+C / Ctrl+Shift+V from matchDeckShortcut fails routing
+  const mutatedNoCopyPasteShortcut = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    "    if (key === 'C' || key === 'c') return 'copy-selection';\n    if (key === 'V' || key === 'v') return 'paste-clipboard';",
+    '    if (false) return null;',
+  );
+  await assert.rejects(
+    () => runCopyPasteShortcutOracle(mutatedNoCopyPasteShortcut),
+    assert.AssertionError,
+  );
+
+  // Mutant 2: intercepting plain Ctrl+C (without Shift) as copy-selection breaks SIGINT passthrough
+  const mutatedInterceptCtrlC = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    "  if (key === 'PageUp') return 'prev-screen';",
+    "  if (key === 'c' || key === 'C') return 'copy-selection';\n  if (key === 'PageUp') return 'prev-screen';",
+  );
+  await assert.rejects(
+    () => runCopyPasteShortcutOracle(mutatedInterceptCtrlC),
+    assert.AssertionError,
+  );
+
+  // Mutant 3: bypassing term.paste(text) on multi-line paste skips bracketed paste
+  const mutatedSkipTermPaste = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    "    if (term && typeof term.paste === 'function') {",
+    '    if (false) {',
+  );
+  await assert.rejects(
+    () => runCopyPasteShortcutOracle(mutatedSkipTermPaste),
+    assert.AssertionError,
+  );
+});
+
+test('V023-T2: right-click context menu renders Copy/Paste above deck, disables Copy when no selection, dismisses on Escape and outside click, Ctrl+C reaches PTY, and Bootstrap paste is byte-exact (with mutants)', async () => {
+  const harness = createBrokerDouble();
+  let currentTermSelection = '';
+  /** @type {string[]} */
+  const termPasted = [];
+  let clipboardText = 'initial-clip';
+
+  class StubTerminal {
+    constructor() {
+      this.cols = 80;
+      this.rows = 24;
+      this.onDataCb = null;
+    }
+    loadAddon() {}
+    attachCustomKeyEventHandler() {}
+    onData(cb) {
+      this.onDataCb = cb;
+      return { dispose() {} };
+    }
+    open() {}
+    write() {}
+    focus() {}
+    blur() {}
+    getSelection() {
+      return currentTermSelection;
+    }
+    paste(text) {
+      termPasted.push(text);
+      if (this.onDataCb) {
+        this.onDataCb(`\x1b[200~${text}\x1b[201~`);
+      }
+    }
+    dispose() {}
+  }
+  class StubFitAddon {
+    fit() {}
+  }
+
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  /** @type {Map<string, Set<Function>>} */
+  const winListeners = new Map();
+  /** @type {Map<string, Set<Function>>} */
+  const docListeners = new Map();
+  const fakeBody = {
+    dataset: {},
+    setAttribute() {},
+    removeAttribute() {},
+  };
+  globalThis.window = /** @type {any} */ ({
+    addEventListener(type, fn) {
+      if (!winListeners.has(type)) winListeners.set(type, new Set());
+      winListeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) {
+      winListeners.get(type)?.delete(fn);
+    },
+  });
+  globalThis.document = /** @type {any} */ ({
+    body: fakeBody,
+    activeElement: null,
+    addEventListener(type, fn) {
+      if (!docListeners.has(type)) docListeners.set(type, new Set());
+      docListeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) {
+      docListeners.get(type)?.delete(fn);
+    },
+  });
+
+  const TerminalDeckView = await compileSfc('../src/terminal/TerminalDeckView.vue', {
+    '@xterm/xterm': { Terminal: StubTerminal },
+    '@xterm/addon-fit': { FitAddon: StubFitAddon },
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) },
+    './terminalDeckModel.js': deckModel,
+  });
+
+  const mounted = mountTree(TerminalDeckView, {
+    open: true,
+    terminalBroker: harness.broker,
+    terminalBinding: harness.sessionFacade,
+    clipboard: {
+      async writeText(t) {
+        clipboardText = String(t);
+      },
+      async readText() {
+        return clipboardText;
+      },
+    },
+    storage: createMemoryStorage(),
+  });
+
+  try {
+    await tick();
+    await mounted.findById('terminal-deck-empty-shell').props.onClick();
+    await tick();
+    const tile = mounted.findById('terminal-deck-tile-slot-1');
+    assert.notEqual(tile, null);
+
+    // 1. Right-click with no selection -> context menu opens, Copy is disabled, Paste is enabled
+    currentTermSelection = '';
+    tile.props.onContextmenu({ clientX: 120, clientY: 160, preventDefault() {}, stopPropagation() {} });
+    await tick();
+    const menu1 = mounted.findById('terminal-deck-context-menu');
+    assert.notEqual(menu1, null, 'Right-click on tile must open #terminal-deck-context-menu');
+    const copyBtn1 = mounted.findById('terminal-deck-context-copy');
+    const pasteBtn1 = mounted.findById('terminal-deck-context-paste');
+    assert.equal(copyBtn1.props.disabled, true, 'Copy must be disabled when there is no selection');
+    assert.notEqual(pasteBtn1, null);
+
+    // 2. Press Escape -> dismisses context menu
+    for (const fn of winListeners.get('keydown') ?? []) {
+      fn({ key: 'Escape', ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, preventDefault() {}, stopPropagation() {} });
+    }
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-context-menu'), null, 'Escape must dismiss the context menu');
+
+    // 3. Right-click with selection -> Copy is enabled; clicking outside dismisses context menu
+    currentTermSelection = 'copied-from-menu';
+    tile.props.onContextmenu({ clientX: 80, clientY: 90, preventDefault() {}, stopPropagation() {} });
+    await tick();
+    const copyBtn2 = mounted.findById('terminal-deck-context-copy');
+    assert.equal(copyBtn2.props.disabled, false, 'Copy must be enabled when terminal has a selection');
+
+    // Click outside on grid -> dismisses context menu
+    const grid = mounted.findById('terminal-deck-grid');
+    for (const fn of docListeners.get('pointerdown') ?? []) {
+      fn({ target: grid });
+    }
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-context-menu'), null, 'Clicking outside must dismiss the context menu');
+
+    // 4. Right-click and click Copy -> copies selection and closes menu
+    tile.props.onContextmenu({ clientX: 80, clientY: 90, preventDefault() {}, stopPropagation() {} });
+    await tick();
+    await mounted.findById('terminal-deck-context-copy').props.onClick({ stopPropagation() {} });
+    await tick();
+    assert.equal(clipboardText, 'copied-from-menu');
+    assert.equal(mounted.findById('terminal-deck-context-menu'), null);
+
+    // 5. Right-click and click Paste with multi-line text -> routes through term.paste
+    clipboardText = 'first-line\nsecond-line';
+    tile.props.onContextmenu({ clientX: 80, clientY: 90, preventDefault() {}, stopPropagation() {} });
+    await tick();
+    await mounted.findById('terminal-deck-context-paste').props.onClick({ stopPropagation() {} });
+    await tick();
+    assert.deepEqual(termPasted, ['first-line\nsecond-line']);
+
+    // 6. Ctrl+C on tile reaches PTY as 0x03 (SIGINT)
+    const writesBeforeSigint = harness.writeCalls.length;
+    tile.props.onKeydown({
+      key: 'c',
+      ctrlKey: true,
+      shiftKey: false,
+      altKey: false,
+      metaKey: false,
+    });
+    await tick();
+    assert.equal(harness.writeCalls.length, writesBeforeSigint + 1);
+    assert.deepEqual(harness.writeCalls[writesBeforeSigint].bytes, [0x03]);
+
+    // 7. Paste in the Bootstrap panel preserves slot identifier byte-exact (including leading/trailing whitespace or exact bytes)
+    const exactSlotId = '  slot-42:exact-id_00\t';
+    clipboardText = exactSlotId;
+    const bootstrapBtn = mounted.findById('terminal-deck-bootstrap');
+    bootstrapBtn.props.onFocus?.();
+    await bootstrapBtn.props.onPaste({
+      clipboardData: { getData: () => exactSlotId },
+      preventDefault() {},
+      stopPropagation() {},
+    });
+    await tick();
+    const bootstrapPanel = mounted.findById('terminal-deck-bootstrap-panel');
+    assert.equal(bootstrapPanel.props['data-pasted-slot-id'], exactSlotId);
+    assert.equal(mounted.vm.controller.state.lastPastedText, exactSlotId);
+
+    // 8. Packaged Electron clipboard round-trip across authorityWire + preload contextBridge
+    const { installAuthorityWire } = await import('../electron/authorityWire.js');
+    const preloadMod = await import('../electron/preload.js');
+    /** @type {Map<string, Function>} */
+    const ipcHandlers = new Map();
+    const ipcMain = {
+      handle(ch, fn) { ipcHandlers.set(ch, fn); },
+      removeHandler(ch) { ipcHandlers.delete(ch); },
+    };
+    const mainFrame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+    const contents = { id: 1, mainFrame, isDestroyed: () => false, postMessage() {} };
+    let hostClipBuffer = '';
+    const wire = installAuthorityWire({
+      ipcMain,
+      contents,
+      env: {},
+      argv: ['--nested-depth=0'],
+      core: { request: async () => ({ schema: 'action_verdict/v0.2', proposal_id: 'p1', core_seq: 1, decision: 'admitted' }) },
+      profiles: new Map(),
+      clipboard: {
+        writeText(t) { hostClipBuffer = String(t); },
+        readText() { return hostClipBuffer; },
+      },
+    });
+    let bridgedApi = null;
+    preloadMod.installPreload({
+      contextBridge: {
+        exposeInMainWorld(_name, api) {
+          bridgedApi = simulateContextBridgeClone(api);
+        },
+      },
+      ipcRenderer: {
+        async invoke(ch, ...args) {
+          const fn = ipcHandlers.get(ch);
+          if (!fn) throw new Error(`Missing handler: ${ch}`);
+          return await fn({ sender: contents, senderFrame: mainFrame }, ...args);
+        },
+        on() {},
+        removeListener() {},
+      },
+    });
+    try {
+      await bridgedApi.clipboard.writeText('slot-99-packaged');
+      const readBack = await bridgedApi.clipboard.readText();
+      assert.equal(readBack, 'slot-99-packaged');
+    } finally {
+      await wire.dispose();
+    }
+  } finally {
+    mounted.app.unmount();
+    globalThis.window = prevWindow;
+    globalThis.document = prevDocument;
+  }
+});
+
+
 

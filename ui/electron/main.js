@@ -2628,6 +2628,10 @@ export async function bootProductionMain(handles) {
     if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
       contents: contentsUnknown, core, env: typed.env, argv: typed.argv, capsuleStates,
+      clipboard: (/** @type {any} */ (typed.wire))?.clipboard ?? {
+        writeText: (/** @type {string} */ text) => { const { clipboard } = createRequire(import.meta.url)('electron'); clipboard.writeText(text); },
+        readText: () => { const { clipboard } = createRequire(import.meta.url)('electron'); return clipboard.readText(); },
+      },
       listIdentities: () => (import('./operatorBridge.js')).then(({identityEnvironment, identityRunner, resolveIdentityTool: resolveOperatorIdentityTool}) => {
         const env = /** @type {NodeJS.ProcessEnv} */ (typed.env);
         const resolved = resolveOperatorIdentityTool({

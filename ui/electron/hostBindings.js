@@ -190,7 +190,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
     }
     const channelFactory = createMessageChannel;
-    const clipboardMod = electronMod?.clipboard ?? { writeText() {} };
+    const clipboardMod = electronMod?.clipboard ?? { writeText() {}, readText: () => '' };
     const terminal = createTerminalHost({ createMessageChannel: channelFactory, clipboard: clipboardMod, env, resourcesPath: process.resourcesPath });
     const display = createDisplayHost({ root: displayBaseDir(env), env, createDisplayChannel: channelFactory });  // ring spec v1.1 base
     electronMod?.app?.once?.('before-quit', () => { void terminal.dispose(); void display.dispose(); });
@@ -1084,7 +1084,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           pending.set(key,{body,resolve,reject,timer});
           try {send(body);} catch {shutdown();}
         });
-      }},wire:{terminal,profiles:terminal.profiles,display,frames:{
+      }},wire:{terminal,clipboard:clipboardMod,profiles:terminal.profiles,display,frames:{
       get requestedWallFps() {
         return requestedWallFps;
       },

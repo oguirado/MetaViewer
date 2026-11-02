@@ -1469,7 +1469,7 @@ const chromeWorkspace = markRaw(defineComponent({
           <UiButton id="settings-back" data-semantic-anchor="settings/back" label="Back to wall" @click="settingsOpen = false" />
           <MvSettingsPanel :settings-host="props.settingsHost ?? {}" v-model:density="density" :frames-port="props.framesPort ?? null" @scheme-change="onScheme" />
         </section>
-        <section v-if="terminalDeckOpen" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
+        <section v-if="!nestedMode.displayOnly" :hidden="!terminalDeckOpen" :inert="!terminalDeckOpen ? true : undefined" :aria-hidden="!terminalDeckOpen ? 'true' : undefined" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
           <TerminalDeckView :open="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @update:open="terminalOpen = $event" />
         </section>
       </main>
@@ -1559,6 +1559,7 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 <style>
 .mv-creative-screen, .mv-multislot-screen, .mv-settings-screen, .mv-terminal-deck-screen { position:absolute; inset:0; z-index:2; overflow:auto; padding:var(--cuk-semantic-spacing-md); background:var(--cuk-semantic-surface-canvas); }
 .mv-terminal-deck-screen { padding:0; overflow:hidden; }
+.mv-terminal-deck-screen[hidden] { display:none !important; pointer-events:none !important; }
 .mv-shell--nested { grid-template-rows:minmax(0,1fr); }
 .mv-shell--nested > .mv-shell-body { grid-row:1; }
 .mv-nested-wall { display:grid; height:100%; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }

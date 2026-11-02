@@ -791,7 +791,8 @@ const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'set
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
   terminalAttach:'side-terminal.attach',terminalResize:'side-terminal.resize',
   terminalClose:'side-terminal.close',terminalProviders:'side-terminal.providers',
-  terminalCopy:'side-terminal.copy'});
+  terminalCopy:'side-terminal.copy',
+  clipboardWrite:'clipboard.writeText',clipboardRead:'clipboard.readText'});
 /** @param {string} channel @param {ReadonlyArray<unknown>} args */
 function wireCall(channel,args) {
   if(channel===QA_ANCHORS_CHANNEL) return {channel,args:Object.freeze([assertQaSnapshot(args)])};
@@ -801,7 +802,7 @@ function wireCall(channel,args) {
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
-  const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy'].includes(name) ? 1 : 0;
+  const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
   if (!Array.isArray(args) || args.length !== arity) throw new ContractError('ARGS','wrong arity');
   if (name==='intent' && args[0] !== null && typeof args[0] === 'object') {
     const checked = validateSurfaceInputBatch(args[0]);
@@ -842,6 +843,12 @@ function wireCall(channel,args) {
   if (name==='terminalCopy') {
     const v=/** @type {any} */(args[0]);
     if (!captureKeys(v,'text') || typeof v.text !== 'string' || v.text.length<1 || v.text.length>128 || !captureId(v.text)) {
+      throw new ContractError('ERR_CLIPBOARD_INVALID','clipboard text');
+    }
+  }
+  if (name==='clipboardWrite') {
+    const v=/** @type {any} */(args[0]);
+    if (!captureKeys(v,'text') || typeof v.text !== 'string' || v.text.includes('\0') || utf8Bytes(v.text)>IPC_BOUNDS.maxLayoutBytes) {
       throw new ContractError('ERR_CLIPBOARD_INVALID','clipboard text');
     }
   }
@@ -989,7 +996,7 @@ function wireFacade(transport) {
   /** @param {keyof typeof WIRE_NAMES} name @param {unknown[]} args */
   const call=async(name,args) => {
     if (name==='intent' && args.length===1 && typeof args[0]!=='string') throw new ContractError('PAYLOAD','expected JSON text');
-    if (transport.nested && name.startsWith('terminal')) {
+    if (transport.nested && (name.startsWith('terminal') || name.startsWith('clipboard'))) {
       throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
     }
     if (name==='terminalAttach') ensureTerminalPortSubscription();
@@ -1002,7 +1009,7 @@ function wireFacade(transport) {
       }
     }
     const reply=await transport.invoke(admitted.channel,admitted.args);
-    if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled','terminalResize','terminalClose','terminalCopy'].includes(name)) {
+    if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name)) {
       const out=assertSaveReply(reply);
       if (name==='terminalClose') {
         const reqSession=/** @type {any} */(admitted.args[0]).session;
@@ -1011,6 +1018,12 @@ function wireFacade(transport) {
       return out;
     }
     if (['loadSettings','recordingDestination','selfCapsuleId'].includes(name)) return assertLoadReply(reply);
+    if (name==='clipboardRead') {
+      if (typeof reply !== 'string' || reply.includes('\0') || utf8Bytes(reply) > IPC_BOUNDS.maxLayoutBytes) {
+        throw new ContractError('OUTCOME','clipboard text');
+      }
+      return reply;
+    }
     if (name==='nestedDepth') {
       if (reply!==null && reply!==0 && reply!==1) throw new ContractError('OUTCOME','nested depth');return reply;
     }
@@ -1557,6 +1570,15 @@ function wireFacade(transport) {
     listProviders:(...args)=>call('terminalProviders',args),
     /** @param {...unknown} args */
     copyText:(...args)=>call('terminalCopy',args)});
+  api.clipboard=Object.freeze({
+    /** @param {...unknown} args */
+    writeText:(...args)=>{
+      if (args.length===1 && typeof args[0]==='string') return call('clipboardWrite',[{text:args[0]}]);
+      return call('clipboardWrite',args);
+    },
+    /** @param {...unknown} args */
+    readText:(...args)=>call('clipboardRead',args),
+  });
   if (transport.qa === true && !transport.nested) {
     api.qa = Object.freeze({
       /** @param {...unknown} args */
@@ -1660,7 +1682,7 @@ export function installPreload(electron) {
        * @returns {Promise<unknown>} Main outcome.
        */
       invoke: (channel, args) => {
-        if (nested && channel.startsWith('metaviewer:side-terminal.')) {
+        if (nested && (channel.startsWith('metaviewer:side-terminal.') || channel.startsWith('metaviewer:clipboard.'))) {
           throw new ContractError('DISPLAY_ONLY', 'side-terminal is disabled in nested display');
         }
         if (channel === QA_ANCHORS_CHANNEL && !qaEnabled) {
