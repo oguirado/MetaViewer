@@ -4,7 +4,7 @@ I build MetaViewer as a Linux-first desktop wall of live, isolated application s
 
 ## Status
 
-`VERSION` is **0.2.2** [CITED: `VERSION`], the release candidate. Changes after the candidate belong to [Unreleased](CHANGELOG.md#unreleased).
+`VERSION` is **0.2.3** [CITED: `VERSION`], the release candidate. Changes after the candidate belong to [Unreleased](CHANGELOG.md#unreleased).
 
 I verify this assembly with `bash tools/gate.sh` and `bash tools/gate.sh --self-test`; I do not carry forward suite pass totals from an earlier head. The gate covers manifests, laws, contracts, Python units and agents, kit/JavaScript checks, Rust, Go, UI, Electron smoke, and performance budgets [CITED: `tools/gate.sh`]. I run live acceptance separately; an offline pass does not establish live frame rate.
 

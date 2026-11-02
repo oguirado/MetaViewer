@@ -4,6 +4,14 @@
 
 - Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
 
+## 0.2.3 (2026-11-02) [CITED: `VERSION`]
+
+- Add Program capsules with a Binary name field: Add capsule opens a host program in a tile you can type into and click, through the OpenSuperficies `host-exec` capsule (OpenSuperficies branch not yet in the pinned release), with exact refusal reasons in the dialog.
+- Remove Holdings app and Desktop from Add capsule.
+- Keep terminals alive across screens, Humans and Agents views and closing the wall, and add copy and paste (Ctrl+Shift+C, Ctrl+Shift+V, right-click menu).
+- Fix Copy ID for AI on tiles, the login handoff notice in the packaged app, and the display stream of every capsule after the first.
+- Fix identity create retry after failed provisioning, and review findings in program creation and terminal paste.
+
 ## 0.2.2 (2026-11-02) [CITED: `VERSION`]
 
 - Make terminals work in the packaged app: the terminal wall under More opens Shell and custom CLI terminals, node-pty ships pinned outside the ASAR under `resources/build-native`, and refusals keep their real code.
