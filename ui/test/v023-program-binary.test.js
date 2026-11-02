@@ -954,7 +954,7 @@ test('V023-HOST-MV: real modules pass all program binary probes', async () => {
   assert.deepEqual(await runProbes(), []);
 });
 
-test('V023-HOST-MV: multiple program capsules, immediate writable tile arming, tile label, and Stop', async (t) => {
+test('V023-HOST-MV: multiple agent-controlled program capsules, tile reveal, tile label, and Stop', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'v023-lifecycle-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const binDir = join(root, 'bin');
@@ -1060,17 +1060,13 @@ test('V023-HOST-MV: multiple program capsules, immediate writable tile arming, t
     host_binary: geditPath,
   });
 
-  // Both tiles were revealed in agent view and immediately armed via take_control with no extra menu click.
+  // Both tiles remain revealed in agent view without taking control from the agent.
   assert.deepEqual(appH.revealed, [
     { id: 'surface-pg-1', mode: 'agent' },
     { id: 'surface-pg-2', mode: 'agent' },
   ]);
-  assert.deepEqual(appH.controlCalls, [
-    { id: 'surface-pg-1', verb: 'take_control' },
-    { id: 'surface-pg-2', verb: 'take_control' },
-  ]);
-  assert.equal(appH.ctx.wallInputPending.value['surface-pg-1'], true);
-  assert.equal(appH.ctx.wallInputPending.value['surface-pg-2'], true);
+  assert.deepEqual(appH.controlCalls, []);
+  assert.deepEqual(Object.keys(appH.ctx.wallInputPending.value), []);
 
   // Tile label uses profile_id ('gedit') and status + Stop work on the program capsule.
   const status1 = await rolesBridge.status('surface-pg-1');
@@ -1313,7 +1309,8 @@ sys.exit(mv.main())
   assert.equal(launcherH.ctx.choosingProgram.value, false, 'dialog closes on successful gedit launch');
   assert.equal(states.get('surface-cli-1')?.profile_id, 'gedit');
   assert.equal(states.get('surface-cli-1')?.display, ':111');
-  assert.equal(appH.ctx.wallInputPending.value['surface-cli-1'], true);
+  assert.deepEqual(Object.keys(appH.ctx.wallInputPending.value), [], 'program creation never arms pending human input');
+  assert.deepEqual(appH.controlCalls, [], 'program creation preserves agent control');
 
   // 4. Stop frees display (:111) and name ('gedit'); re-opening 'gedit' reuses the 'gedit' program identity and display :111.
   const stopped1 = await rolesBridge.stop('surface-cli-1');
@@ -1513,10 +1510,10 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     assert.ok(failed.includes('app-view-on-success-only-and-post-launch-throw-safe'), `Mutant 12a survived: ${failed}`);
   }
 
-  // Mutant 12b (Fix 5 post-launch throw): post-launch reveal/wall-control throw is not caught.
+  // Mutant 12b (Fix 5 post-launch throw): post-launch reveal throw is not caught.
   {
     const mutatedApp = appSrc.replace(
-      '  } catch {\n    // Post-launch view, reveal, or wall-control errors must not report the launch as failed.\n  }',
+      '  } catch {\n    // Post-launch view or reveal errors must not report the launch as failed.\n  }',
       '  } catch (err) { throw err; }',
     );
     assert.notEqual(mutatedApp, appSrc);

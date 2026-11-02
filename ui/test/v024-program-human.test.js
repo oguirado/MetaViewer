@@ -729,7 +729,9 @@ printf '{"schema":"srf.human-xpra/v1","container":"%s","kind":"program","ready":
   assert.equal(states.get(agentSurfaceId)?.display, ':111');
   assert.equal(states.get(agentSurfaceId)?.control, 'agent');
   assert.equal(appH.views.at(-1), 'agent');
-  assert.equal(appH.controlCalls.at(-1)?.id, agentSurfaceId);
+  assert.deepEqual(appH.controlCalls, [], 'Agent program opening preserves agent control');
+  assert.deepEqual(Object.keys(appH.ctx.wallInputPending.value), [], 'Agent program opening never arms pending human input');
+  assert.deepEqual(appH.revealed.at(-1), { id: agentSurfaceId, mode: 'agent' });
   await rolesBridge.stop(agentSurfaceId);
 });
 

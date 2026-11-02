@@ -761,13 +761,9 @@ async function createProgramCapsule(body) {
     await nextTick();
     if (reply.surfaceId) {
       await revealOpenedIdentity(reply.surfaceId, openedRole);
-      if (openedRole === 'agent' && props.runtime?.intentBuilders) {
-        wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
-        applyWallControl(reply.surfaceId, 'take_control');
-      }
     }
   } catch {
-    // Post-launch view, reveal, or wall-control errors must not report the launch as failed.
+    // Post-launch view or reveal errors must not report the launch as failed.
   }
   return reply;
 }
