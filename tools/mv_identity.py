@@ -16,8 +16,10 @@ The host menu invokes this tool; it is never an agent tool or a wire request.
 - `release` clears a stale active lease through the native `stop` (the only releasing
   CLI; native `Store.Reclaim` has no CLI), `status` reports lease, provisioning,
   login reservation and whether a login was recorded (never a current-session claim);
-- ids beginning with `mv-` (live profile family) and MV_SRF_LIVE_PROFILE are refused
-  for create, release, and login without an active lease.
+- product `mv-` names remain reserved for creation and protected from deletion;
+  existing product profiles can log in through the normal provisioning gate;
+- foreign identity prefixes and protected holders are refused before any mutating
+  operation, staging, or login dispatch.
 """
 import argparse
 import fcntl
@@ -42,6 +44,7 @@ NATIVE_PROFILE_UID = 10001
 PROFILE_IMAGE = "opensuperficies-identity-browser-arm64:0.1.0"
 PROFILE_TIMEOUT = 15
 RESERVED_PREFIX = "mv-"
+FOREIGN_PREFIXES = ("cuentas-", "perplexity-", "srf-id-cuentas-", "srf-id-perplexity-", "srf-pg-")
 # Mirror daemon-adapter/internal/capsule/protect.go RefuseProtectedContainer.
 PROTECTED_HOLDERS = frozenset({"srf-id-cuentas-1", "srf-id-perplexity-1", "srf-pg-notepad-1",
                                "srf-pg-metaviewer-1", "srf-egress-proxy", "n8n", "distil-box"})
@@ -76,13 +79,23 @@ def checked_id(value):
     return value
 
 
+def foreign_identity(value):
+    return value.startswith(FOREIGN_PREFIXES) or value in PROTECTED_HOLDERS
+
+
+def operational_id(value):
+    value = checked_id(value)
+    if foreign_identity(value):
+        raise Refused("IDENTITY_PROTECTED")
+    return value
+
+
 def protected_identity(value):
-    return value.startswith(("mv-", "cuentas-", "perplexity-", "srf-id-cuentas-",
-                             "srf-id-perplexity-", "srf-pg-")) or value in PROTECTED_HOLDERS
+    return value.startswith(RESERVED_PREFIX) or foreign_identity(value)
 
 
 def fresh_id(value, live_profile=None):
-    value = checked_id(value)
+    value = operational_id(value)
     if value.startswith(RESERVED_PREFIX) or (live_profile and value == live_profile):
         raise Refused("RESERVED_ID")
     return value
@@ -166,9 +179,25 @@ class Identities:
             raise Refused("INVALID_DOMAINS")
         self.native("srf-identity-admin", ["create", "--store-root", str(self.root), "--id", identity,
                                           "--label", label, "--domains", domains])
-        result = self.show(identity)
-        self.provision(identity)
-        return result
+        try:
+            result = self.show(identity)
+            self.provision(identity)
+            return result
+        except Exception:
+            # Roll back only the entry this successful create introduced. The
+            # native per-id guard prevents deleting a concurrently bound entry.
+            locks = self.root / "locks"
+            private(locks)
+            fd = os.open(locks / (identity + ".guard"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "r+") as guard:
+                fcntl.flock(guard, fcntl.LOCK_EX)
+                lease = self.lease(identity)
+                if lease is None or lease["active"] is False:
+                    metadata = self.root / "metadata" / (identity + ".json")
+                    if metadata.exists():
+                        private(metadata, directory=False)
+                        metadata.unlink()
+            raise
 
     def list(self):
         metadata = self.root / "metadata"
@@ -196,12 +225,17 @@ class Identities:
             # Native absence of a lock means never acquired (store.go:435-438).
             metadata = self.root / "metadata" / (identity + ".json")
             profile = self.profile_path(identity)
-            if metadata.is_symlink() or profile.is_symlink() or not metadata.is_file() or not profile.is_dir():
+            if metadata.is_symlink() or profile.is_symlink() or not metadata.is_file() or (profile.exists() and not profile.is_dir()):
                 raise Refused("UNSAFE_IDENTITY_PATH")
-            # Store deletion precedes privileged removal, under the native guard.
+            # Keep the entry until privileged removal succeeds, so a failed
+            # helper (or a crash after removal) can be retried under this guard.
+            self._deleting_identity = identity
+            try:
+                self.profile_helper(identity, remove=True)
+            finally:
+                del self._deleting_identity
             metadata.unlink()
             record.unlink(missing_ok=True)
-            self.profile_helper(identity, remove=True)
             # Never unlink the guard: a waiter must retain the same flock inode.
         return {"deleted": identity}
 
@@ -223,20 +257,28 @@ class Identities:
         return target
 
     def profile_helper(self, identity, remove=False):
-        identity = checked_id(identity)
+        identity = operational_id(identity)
         target = self.profile_path(identity)
-        # Admission differs deliberately: creation requires a store entry, removal
-        # requires its absence. Delete already holds the native per-id flock.
+        # Removal retains the entry until success. Delete holds the native guard
+        # and this check refuses removal of any actively leased profile.
         if remove:
-            metadata = self.root / "metadata" / (identity + ".json")
-            if metadata.exists() or metadata.is_symlink():
+            if getattr(self, "_deleting_identity", None) != identity:
                 raise Refused("IDENTITY_BOUND")
+            metadata = self.root / "metadata" / (identity + ".json")
+            if metadata.is_symlink() or not metadata.is_file():
+                raise Refused("UNSAFE_IDENTITY_PATH")
+            self.show(identity)
             lease = self.lease(identity)
             if lease is not None and lease["active"]:
                 raise Refused("IDENTITY_BOUND")
         else:
             self.show(identity)
         name = "mv-provision-" + identity + "-" + uuid.uuid4().hex[:12]
+        receipts = self.root / "locks" / "profile-helpers"
+        receipts.mkdir(mode=0o700, exist_ok=True)
+        private(receipts)
+        cidfile = receipts / (name + ".cid")
+        receipt = receipts / (name + ".json")
         script = ('set -eu; p="/profiles/$1"; test ! -L "$p"; '
                   'test "$(realpath "$p")" = "$p"; ')
         if remove:
@@ -244,7 +286,7 @@ class Identities:
         else:
             script += ('mkdir -p -- "$p"; test -d "$p"; test ! -L "$p"; '
                        'cd -P -- "$p"; test "$PWD" = "$p"; chown 10001:10001 .; chmod 0700 .')
-        command = ["docker", "run", "--rm", "--pull=never", "--name", name,
+        command = ["docker", "run", "--rm", "--pull=never", "--name", name, "--cidfile", str(cidfile),
                    "--network", "none", "--user", "0", "--entrypoint", "/bin/sh",
                    "--mount", "type=bind,src=" + str(target.parent) + ",dst=/profiles",
                    PROFILE_IMAGE, "-c", script, "mv-profile-helper", identity]
@@ -262,15 +304,36 @@ class Identities:
                 if (not stat.S_ISDIR(st.st_mode) or st.st_uid != NATIVE_PROFILE_UID or
                         st.st_gid != NATIVE_PROFILE_UID or stat.S_IMODE(st.st_mode) != 0o700):
                     raise Refused("PROFILE_NOT_PROVISIONED")
+            cidfile.unlink(missing_ok=True)
         except (OSError, subprocess.TimeoutExpired, Refused) as exc:
-            # A timed-out docker client can leave its container running. Remove
-            # only this exact random helper name, with a separate bounded wait.
+            # A failed name-based create proves no ownership. Only Docker's
+            # private CID file can authorize cleanup; never remove by name.
+            cid = None
             try:
-                subprocess.run(["docker", "rm", "-f", name], stdin=subprocess.DEVNULL,
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                               timeout=5, check=False)
-            except (OSError, subprocess.TimeoutExpired):
+                fd = os.open(cidfile, os.O_RDONLY | os.O_NOFOLLOW)
+                with os.fdopen(fd, "r") as source:
+                    st = os.fstat(source.fileno())
+                    if stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_size <= 128:
+                        value = source.read(129).strip()
+                        if re.fullmatch(r"[0-9a-f]{64}", value):
+                            cid = value
+            except (OSError, UnicodeError):
                 pass
+            if cid:
+                record = {"schema":"metaviewer.profile_helper/v1", "profile_id":identity,
+                          "container_id":cid, "container_name":name, "state":"cleanup_pending"}
+                fd = os.open(receipt, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd,"w") as sink:
+                    json.dump(record,sink); sink.flush(); os.fsync(sink.fileno())
+                try:
+                    cleanup = subprocess.run(["docker", "rm", "-f", cid], stdin=subprocess.DEVNULL,
+                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                             timeout=5, check=False)
+                    if cleanup.returncode == 0:
+                        receipt.unlink(); cidfile.unlink(missing_ok=True)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass  # Durable control receipt retains ownership for recovery.
+
             raise Refused("PROFILE_NOT_PROVISIONED") from exc
 
     def provision(self, identity):
@@ -360,7 +423,7 @@ class Identities:
                 "login_recorded": "yes" if type(stamp) is int and stamp > 0 else "no"}
 
     def release(self, identity, holder):
-        identity = fresh_id(identity, self.live_profile)
+        identity = operational_id(identity)
         self.show(identity)
         state = absolute(self.state_dir)
         private(state)
@@ -368,7 +431,7 @@ class Identities:
         if lease is None or not lease["active"]:
             return {"released": identity, "was_active": False}
         container = lease.get("holder", "")
-        if isinstance(container, str) and container in PROTECTED_HOLDERS:
+        if isinstance(container, str) and foreign_identity(container):
             raise Refused("PROTECTED_CONTAINER")
         if not isinstance(container, str) or not CAPSULE.fullmatch(container):
             raise Refused("IDENTITY_BOUND")
@@ -390,7 +453,7 @@ class Identities:
                 "capsule_removed": True, "hint": "The capsule was removed."}
 
     def login(self, identity):
-        identity = checked_id(identity)
+        identity = operational_id(identity)
         self.show(identity)
         state = absolute(self.state_dir)
         private(state)
@@ -400,11 +463,12 @@ class Identities:
         active = lease is not None and lease["active"]
         if active:
             container = lease.get("holder", "")
+            if isinstance(container, str) and foreign_identity(container):
+                raise Refused("IDENTITY_PROTECTED")
             if not isinstance(container, str) or not CAPSULE.fullmatch(container):
                 raise Refused("IDENTITY_BOUND")
         args = ["--state-dir", str(state), "--store-root", str(self.root)]
         if not active:
-            fresh_id(identity, self.live_profile)
             # Name the missing operator step before the native start can fail generically.
             profile = self.profile_state(identity)
             if profile != "ok":

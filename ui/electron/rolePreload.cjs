@@ -15,6 +15,12 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
     mount: (surfaceId, bounds) => invoke('mount', {surfaceId,bounds}),
     resize: (surfaceId, bounds) => invoke('resize', {surfaceId,bounds}),
     visibility: (surfaceId, visible) => invoke('visibility', {surfaceId,visible}),
+    raise: surfaceId => invoke('raise', {surfaceId}),
+    onFocus: callback => {
+      const listener = (_event,id) => {if(typeof id === 'string')callback(id);};
+      ipcRenderer.on('metaviewer:role-focus.v0.3',listener);
+      return () => ipcRenderer.removeListener('metaviewer:role-focus.v0.3',listener);
+    },
     close: surfaceId => invoke('close', {surfaceId}),
   }));
 }

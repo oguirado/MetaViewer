@@ -102,7 +102,7 @@ class IdentityTests(unittest.TestCase):
         self.tool.provision = Mock()
         def remove_profile(identity, remove=False):
             self.assertTrue(remove)
-            self.assertFalse((self.root/'metadata'/(identity+'.json')).exists())
+            self.assertTrue((self.root/'metadata'/(identity+'.json')).exists(), 'metadata survives until helper success')
             shutil.rmtree(self.root/'profiles'/identity)
         self.tool.profile_helper = Mock(side_effect=remove_profile)
         docker = self.bin/'docker'
@@ -312,6 +312,11 @@ class IdentityTests(unittest.TestCase):
         strict = mv.Identities(str(self.root), str(self.home), str(self.bin), str(self.state))  # real uid 10001 policy
         with self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
             strict.create("account-a", "account-a", "example.com")
+        self.assertFalse((self.root / "metadata/account-a.json").exists(), "failed create rolls back its store entry")
+        # Seed the pre-existing UI-only metadata directly: native create refuses
+        # the leftover unprovisioned directory, independently of metadata rollback.
+        (self.root / "metadata/account-a.json").write_text(json.dumps({"profile_id":"account-a","browser":"chromium","account_label":"a","allowed_domains":["example.com"]}))
+        (self.root / "metadata/account-a.json").chmod(0o600)
         with self.only_show(strict), self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
             strict.login("account-a")
         self.assertFalse((self.root / "locks/account-a.json").exists())  # No native start was attempted.
@@ -335,6 +340,9 @@ class IdentityTests(unittest.TestCase):
         self.assertIn("uid 10001", made.stderr)
         self.assertIn(cmd_hint, made.stderr)
         self.assertEqual(json.loads(made.stdout)["error"], "PROFILE_NOT_PROVISIONED")
+        self.assertFalse((self.root / "metadata/account-a.json").exists(), "failed CLI create rolls back metadata")
+        (self.root / "metadata/account-a.json").write_text(json.dumps({"profile_id":"account-a","browser":"chromium","account_label":"a","allowed_domains":["example.com"]}))
+        (self.root / "metadata/account-a.json").chmod(0o600)
         login = subprocess.run([sys.executable, tool, "login", "--id", "account-a"], env=env, capture_output=True, text=True)
         self.assertEqual(login.returncode, 6)
         self.assertEqual(json.loads(login.stdout)["error"], "PROFILE_NOT_PROVISIONED")
@@ -413,15 +421,15 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(self.tool.pending_state(pending), "stale")
         self.assertEqual(self.tool.pending_state(self.state / "absent.login-pending"), "none")
 
-    def test_reserved_ids_refused_for_create_and_inactive_login(self):
+    def test_reserved_create_and_owned_inactive_login_reaches_provisioning_gate(self):
         live = mv.Identities(str(self.root), str(self.home), str(self.bin), str(self.state), live_profile="live-main")
         for tool, identity in ((self.tool, "mv-live-1"), (self.tool, "mv-x"), (live, "live-main")):
             with self.subTest(identity=identity):
                 with patch.object(tool, "native", side_effect=AssertionError("spawned")):
                     with self.assertRaisesRegex(mv.Refused, "^RESERVED_ID$"):
                         tool.create(identity, "x", "example.com")
-                with patch.object(tool, "show", return_value={}), patch.object(tool, "lease", return_value=None):
-                    with self.assertRaisesRegex(mv.Refused, "^RESERVED_ID$"):
+                with patch.object(tool, "show", return_value={}), patch.object(tool, "lease", return_value=None), patch.object(tool, "profile_state", return_value="missing"):
+                    with self.assertRaisesRegex(mv.Refused, "^PROFILE_MISSING$"):
                         tool.login(identity)
 
     def test_reserved_active_live_identity_can_attach(self):
@@ -485,11 +493,10 @@ class IdentityTests(unittest.TestCase):
         with self.only_show(self.tool), self.assertRaisesRegex(mv.Refused, "^IDENTITY_BOUND$"):
             self.tool.release("account-a", self.holder())
 
-    def test_release_reserved_ids_never_spawn(self):
-        self.tool.live_profile = "live-main"
+    def test_release_foreign_identities_never_spawn(self):
         with patch.object(self.tool, "native", side_effect=AssertionError("spawned")):
-            for identity in ("mv-live-1", "live-main"):
-                with self.subTest(identity=identity), self.assertRaisesRegex(mv.Refused, "^RESERVED_ID$"):
+            for identity in ("cuentas-1", "perplexity-1", "srf-pg-fixture", *mv.PROTECTED_HOLDERS):
+                with self.subTest(identity=identity), self.assertRaisesRegex(mv.Refused, "^IDENTITY_PROTECTED$"):
                     self.tool.release(identity, "srf-id-safe")
 
     def test_release_protected_holders_and_mismatch_never_stop(self):

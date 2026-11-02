@@ -217,3 +217,33 @@ test('P18D runtime profiles require an explicit configured browser template',asy
     } finally {await host.dispose();}
   }
 });
+
+const foreignOpenIds=protectedIds.filter(id=>!id.startsWith('mv-'));
+async function foreignUiOracle(source,legacy=false){
+ const previous=globalThis.metaviewerRoles;let calls=0;const opened=[];
+ globalThis.metaviewerRoles=legacy?undefined:{choices:async()=>foreignOpenIds.map(profileId=>({profileId,available:true}))};
+ const view=mount(await dialog(source),{open:true,onOpenIdentity:v=>opened.push(v),host:{identity:{list:async()=>({ok:true,rows:foreignOpenIds.map(id=>({id,label:id,domains:[]}))}),login:async()=>{calls++;return {ok:true};}}}});
+ try{await tick();for(const b of nodes(view.root).filter(n=>n.tag==='button'&&['Log in','Open as human','Open as agent'].includes(n.text))){assert.equal(b.props.disabled,true,b.text);b.props.onClick();assert.equal(calls,0,'guard blocks dispatch before rendering');await tick();}assert.equal(calls,0);assert.deepEqual(opened,[]);}
+ finally{view.close();globalThis.metaviewerRoles=previous;}
+}
+test('P18G foreign identities refuse disabled and forced human/agent opens',()=>foreignUiOracle());
+test('P18G legacy login refuses disabled and forced foreign clicks',()=>foreignUiOracle(undefined,true));
+test('P18G UI guard mutants cannot dispatch foreign opens or login',async()=>{
+ const source=readFileSync(new URL('../src/identities/IdentitiesDialog.vue',import.meta.url),'utf8');
+ const mutant=source.replaceAll('isForeignIdentity(row.id) || ','').replaceAll('busy || isForeignIdentity(row.id)','busy');assert.notEqual(source,mutant);
+ await assert.rejects(foreignUiOracle(mutant),{code:'ERR_ASSERTION'});await assert.rejects(foreignUiOracle(mutant,true),{code:'ERR_ASSERTION'});
+});
+test('H9 successful identity creation clears its form despite unavailable mode refresh',async t=>{
+ const previous=globalThis.metaviewerRoles;let modes=0;
+ globalThis.metaviewerRoles={choices:async()=>{if(++modes>1)throw Error('MODE_LOOKUP_FAILED');return [];}};
+ const view=mount(await dialog(),{open:true,host:{identity:{list:async()=>({ok:true,rows:[]}),create:async()=>({ok:true})}}});
+ t.after(()=>{view.close();globalThis.metaviewerRoles=previous;});await tick();field(view.root,'Name').props.onInput({target:{value:'fixture-owned'}});await tick();
+ button(view.root,'Add identity').props.onClick();await tick();assert.equal(field(view.root,'Name').props.value,'');assert(!text(view.root).includes('Unavailable'));
+});
+test('P18G identity form reserves every named foreign holder as well as the prefixes',()=>{
+ for(const id of foreignOpenIds)assert.equal(validIdentityName(id),false,id);
+});
+test('H10 invalid auto-filled display names have a visible field error',async t=>{
+ const view=mount(await dialog(),{open:true,host:{identity:{list:async()=>({ok:true,rows:[]})}}});t.after(view.close);await tick();
+ field(view.root,'Name').props.onInput({target:{value:'Work$'}});await tick();assert.equal(field(view.root,'Name').props.value,'work');assert.equal(button(view.root,'Add identity').props.disabled,true);assert.match(text(view.root),/Display name contains unsupported characters/);
+});

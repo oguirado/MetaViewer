@@ -138,7 +138,7 @@ async function roleHostFixture(t, role='human', failure=null, native=false) {
   capsuleStates:states,core:{getHumanSurface:()=>surface,request:async value=>{calls.push(value);return{};}},
   listIdentities:async()=>({ok:true,rows:[{id:'demo'}]}),mode:async value=>{modes.push(value.readonly);return true;},
   bridgeFactory:async()=>({origin:'http://127.0.0.1:12345',requestHeaders:{secret:'never-renderer'},close:async()=>calls.push('bridge-close')}),
-  tileFactory:async options=>{if(failure)throw failure;tileOptions.push(options);queries.push(options.clientQuery);calls.push({writable:options.writable});
+  tileFactory:async options=>{if(typeof failure === 'function')return failure(options);if(failure)throw failure;tileOptions.push(options);queries.push(options.clientQuery);calls.push({writable:options.writable});
    if(native)return attachXpraHumanTile(options);
    return{resize(){},setVisible:v=>calls.push({visible:v}),close:async()=>calls.push('tile-close')};}});
  t.after(()=>host.dispose());
@@ -500,4 +500,40 @@ async function pendingVisibilityOracle(initiallyVisible = false) {
 test('P18B a pending native role mount stays hidden until renderer visibility admission', () => pendingVisibilityOracle());
 test('P18B mutant: showing a pending native view bypasses menu occlusion', async () => {
  await assert.rejects(()=>pendingVisibilityOracle(true),{code:'ERR_ASSERTION'});
+});
+
+test('P18G focused native tile re-adds last and detached tiles cannot be raised',async()=>{
+ const f=fakeElectron();let focused=0;
+ const make=()=>attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,trace:{setActive(){},record(){}},isActive:()=>true,writable:true,capsuleSize:()=>({width:1280,height:900}),onFailure:assert.fail,onFocus:()=>focused++});
+ const back=await make(),front=await make();
+ try {assert.equal(f.children.at(-1),front.view);back.bringToFront();assert.equal(f.children.at(-1),back.view);
+ front.view.webContents.emit('focus');assert.equal(f.children.at(-1),front.view);assert.equal(focused,1);
+ await front.close();front.bringToFront();assert(!f.children.includes(front.view));
+ }finally{await back.close();await front.close();}
+});
+
+test('P18G tile insertion failure releases IPC listeners and webContents',async()=>{
+ const f=fakeElectron();let view;const Original=f.electron.WebContentsView;
+ f.electron.WebContentsView=class extends Original{constructor(...a){super(...a);view=this;}};
+ f.window.contentView.addChildView=()=>{throw Error('PARENT_CLOSED');};
+ await assert.rejects(attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,trace:{setActive(){},record(){}},isActive:()=>true,writable:true,capsuleSize:()=>({width:1280,height:900}),onFailure:assert.fail}),/PARENT_CLOSED/);
+ assert.equal(f.electron.ipcMain.listenerCount('metaviewer:human-trace.v0.3'),0);assert.equal(view.webContents.closed,true);
+});
+test('H28 surface loss during client timeout preserves the typed timeout and completes cleanup',async t=>{
+ let f;f=await roleHostFixture(t,'human',()=>{f.surface.state='destroyed';throw Object.assign(Error('XPRA_CLIENT_READY_TIMEOUT'),{code:'XPRA_CLIENT_READY_TIMEOUT'});});
+ assert.deepEqual(await f.request('mount',{surfaceId:f.surface.surface_id,bounds}),{ok:false,code:'XPRA_CLIENT_READY_TIMEOUT'});
+ assert(f.calls.includes('bridge-close'));
+});
+test('H46 role host retains failed session cleanup handles for an explicit retry',async t=>{
+ let closes=0;const f=await roleHostFixture(t,'human',()=>({resize(){},setVisible(){},close:async()=>{if(++closes===1)throw Error('FAIL_ONCE');}}));
+ assert.equal((await f.request('mount',{surfaceId:f.surface.surface_id,bounds})).ok,true);
+ assert.equal((await f.request('close',{surfaceId:f.surface.surface_id})).ok,false);
+ assert.equal((await f.request('close',{surfaceId:f.surface.surface_id})).ok,true);assert.equal(closes,2);
+});
+test('F reaching the trace byte cap pauses recording and leaves the native view open',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'p18g-native-cap-'));t.after(()=>rm(directory,{recursive:true,force:true}));let pauses=0,failures=0;
+ const trace=createHumanTraceFile({directory,sessionId:'fixture',surfaceId:'fixture',capsuleId:'fixture',maxBytes:1,onPause:()=>pauses++});t.after(()=>trace.close());
+ const f=fakeElectron();const tile=await attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,trace,isActive:()=>true,writable:true,capsuleSize:()=>({width:1280,height:900}),onFailure:()=>failures++});t.after(()=>tile.close());
+ const wc=tile.view.webContents;f.electron.ipcMain.emit('metaviewer:human-trace.v0.3',{sender:wc,senderFrame:wc.mainFrame},{kind:'move',x:2,y:3,width:1280,height:900});
+ assert.equal(trace.paused,true);assert.equal(pauses,1);assert.equal(failures,0);assert.equal(wc.closed,false);assert.equal(tile.view.visible,true);
 });

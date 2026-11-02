@@ -10,14 +10,17 @@ export function createXpraHumanSession(host) {
   let bridge = /** @type {any} */ (null), tile = /** @type {any} */ (null);
   let opening = /** @type {Promise<void>|null} */ (null);
   let recovering = /** @type {Promise<any>|null} */ (null);
-  async function cleanup() {
-    const failures = [];
-    try { await tile?.close(); } catch (e) { failures.push(e); }
-    tile = null;
-    try { await bridge?.close(); } catch (e) { failures.push(e); }
-    bridge = null;
-    try { host.closeTrace(); } catch (e) { failures.push(e); }
-    if (failures.length) throw new AggregateError(failures, 'XPRA_CLOSE_FAILED');
+  let cleaning = /** @type {Promise<void>|null} */ (null), closing = /** @type {Promise<void>|null} */ (null), traceClosed = false;
+  function cleanup() {
+    if (cleaning) return cleaning;
+    cleaning = (async () => {
+      const failures = [];
+      try { await tile?.close(); tile = null; } catch (e) { failures.push(e); }
+      try { await bridge?.close(); bridge = null; } catch (e) { failures.push(e); }
+      if (!traceClosed) try { host.closeTrace(); traceClosed = true; } catch (e) { failures.push(e); }
+      if (failures.length) throw new AggregateError(failures, 'XPRA_CLOSE_FAILED');
+    })().finally(() => {cleaning = null;});
+    return cleaning;
   }
   const check = () => { if (revoked) throw Error('XPRA_SESSION_CLOSED'); };
   function recoverBridge() {
@@ -30,7 +33,10 @@ export function createXpraHumanSession(host) {
       bridge = null;
       check();
       const replacement = await host.openBridge();
-      if (revoked) { await replacement.close(); check(); }
+      if (revoked) {
+        bridge = replacement;
+        try { await replacement.close(); bridge = null; } finally { check(); }
+      }
       bridge = replacement;
       return bridge;
     })().finally(() => { recovering = null; });
@@ -56,13 +62,18 @@ export function createXpraHumanSession(host) {
     },
     /** @param {any} bounds */
     resize(bounds) { check(); if (!tile) throw Error('XPRA_VIEW_ABSENT'); tile.resize(bounds); },
+    bringToFront() { check(); tile?.bringToFront?.(); },
     /** @param {boolean} visible */
     setVisible(visible) { check(); tile?.setVisible(visible); },
-    async close() {
+    close() {
+      if (closing) return closing;
       revoked = true;
-      try { await opening; } catch { /* failed open already cleans up */ }
-      try { await recovering; } catch { /* revoked replacement is already closed */ }
-      await cleanup();
+      closing = (async () => {
+        try { await opening; } catch { /* failed open already attempted cleanup */ }
+        try { await recovering; } catch { /* retained failed replacement is retried below */ }
+        await cleanup();
+      })().finally(() => {closing = null;});
+      return closing;
     },
   });
 }

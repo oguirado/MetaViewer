@@ -1,0 +1,4 @@
+- Release v0.2.1 integration: removed per-unit live harness scripts that carried host paths, refreshed the router index, kept the 1 GB heap cap on UI tests.
+- Identities: foreign protected identities are refused for every operation; identity create, delete and provisioning are safer.
+- Terminal: a terminal wall under More with screens, Shell and custom CLI terminals.
+- Wall: tile history keeps panels when no panel list is available.

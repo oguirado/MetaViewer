@@ -68,6 +68,10 @@ function reconcile() {
     const view = props.modes[row.id] || 'agent';
     if (VIEWS.includes(view)) assignSurface(state.value,row.id,view);
   }
+  for (const [key,seen] of revealed) for (const id of seen) {
+    const home = homeOf(id);
+    if (!home || keyOf(home.view,home.desktop) !== key) seen.delete(id);
+  }
 }
 /** @param {string} view @param {number} id */
 function adapter(view,id) {
@@ -126,7 +130,7 @@ function selectDesktop(id) {
   const group = state.value.views[state.value.activeView];
   if (group.desktops.some(d => d.id === id)) group.active = id;
 }
-function addDesktop() { if (loaded.value) return appendDesktop(state.value); }
+function addDesktop() { if (loaded.value) {try {return appendDesktop(state.value);} catch(error) {emit('layout-error',error);}} }
 /** @param {number} id */
 function removeDesktop(id) {
   const key = keyOf(state.value.activeView,id);
@@ -179,7 +183,7 @@ async function moveTile(/** @type {string} */ id, /** @type {number|'new'} */ de
   const home = homeOf(id); if (!home) return {ok:false};
   const source = keyOf(home.view,home.desktop), group = state.value.views[home.view];
   let target = destination;
-  if (target === 'new') { const active = group.active; target = appendDesktop(state.value,home.view); group.active = active; }
+  if (target === 'new') {const active = group.active;try {target = appendDesktop(state.value,home.view);} catch {return {ok:false,code:'DESKTOP_LIMIT'};} group.active = active;}
   if (!group.desktops.some(d=>d.id === target)) return {ok:false};
   if (home.desktop === target) { if (follow) await followSurface(id); return {ok:true}; }
   const native = /** @type {any} */ (globalThis).metaviewerRoles;
@@ -197,7 +201,7 @@ async function moveTile(/** @type {string} */ id, /** @type {number|'new'} */ de
   return {ok:true};
 }
 provide('tileLayoutActions',{
-  resize:resizeTile, move:moveTile, transfers,
+  resize:resizeTile, move:moveTile, transfers, focus:(/** @type {string} */ id)=>revealSurface(id,'tab'),
   desktops:(/** @type {string} */ id)=> {const home = homeOf(id);return home ? state.value.views[home.view].desktops.map(d=>({id:d.id,current:d.id === home.desktop})) : [];},
 });
 /** @param {{type:string,desktop?:number,action?:string,capsuleId?:string}|null} chord */
@@ -250,12 +254,28 @@ onMounted(async () => {
   loaded.value = true; reconcile(); announce();
   // Same startup grace as the existing wall orphan gate: never prune while
   // native surfaces are still filling the authoritative projection.
-  pruneTimer = setTimeout(() => {
-    if (!Array.isArray(props.projectionView.getProjection?.()?.rows)) return;
-    const ids = new Set(props.rows.map(row => row.id));
-    for (const id of Object.keys(state.value.assignments)) if (!ids.has(id)) delete state.value.assignments[id];
-    cleanLayouts(state.value);
-  },5000);
+  let projectionSince = /** @type {number|null} */ (null);
+  const prune = () => {
+    if (!alive) return;
+    const snapshot = props.projectionView.getSnapshot?.();
+    const projection = snapshot?.envelope?.projection;
+    if (!projection || snapshot.stale !== false || snapshot.status !== 'live' || !Array.isArray(projection.rows)) {
+      projectionSince = null;
+    } else {
+      projectionSince ??= Date.now();
+      if (Date.now() - projectionSince >= 5000) {
+        const ids = new Set(projection.rows.filter((/** @type {any} */ row)=>row.backendLifecycle !== 'destroyed').map((/** @type {any} */ row)=>row.id));
+        for (const id of Object.keys(state.value.assignments)) if (!ids.has(id)) {
+          delete state.value.assignments[id];
+          for (const seen of revealed.values()) seen.delete(id);
+        }
+        cleanLayouts(state.value);
+        return;
+      }
+    }
+    pruneTimer = setTimeout(prune,250);
+  };
+  pruneTimer = setTimeout(prune,5000);
   window.addEventListener('keydown',onKey,true); window.addEventListener('keyup',onKey,true);
   window.addEventListener('metaviewer:desktop-shortcut',onNativeShortcut);
 });
@@ -280,7 +300,7 @@ defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,appl
         :scope="scope" :default-profile="adapter(view,desktop.id).defaultProfile" :storage="adapter(view,desktop.id).storage"
         :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
-        @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">
+        @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">
         <template #surface="slotProps"><slot name="surface" v-bind="slotProps" :desktop-active="isActive(view,desktop.id)" /></template>
       </WallWorkspace>
     </template>

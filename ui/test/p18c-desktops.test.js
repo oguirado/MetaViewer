@@ -206,11 +206,11 @@ test('P18C mutant: revoking instead of hiding a human view is rejected',async()=
 });
 
 async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vue'),initial=null) {
-  const restore=environment();let live;const saved=[],mounted=[],retired=[],presetCalls=[],presetReplies=new Map();
+  const restore=environment();let live;const saved=[],mounted=[],retired=[],presetCalls=[],presetReplies=new Map(),reveals=[];
   let stored=initial;
   const Wall=vue.defineComponent({props:['projectionView','storage'],emits:['ready','wall-settled'],setup(p,ctx){
     const identity=++serial;mounted.push(identity);const revision=vue.ref(0),stop=p.projectionView.subscribe(()=>revision.value++);
-    ctx.expose({revealSurface:id=>({ok:p.projectionView.getProjection().rows.some(r=>r.id===id)}),setPreset:preset=>{const key=ctx.attrs['data-desktop'];presetCalls.push({key,preset});return presetReplies.get(key)??{ok:true};},applyPresentationIntent:()=>({ok:true})});
+    ctx.expose({revealSurface:id=>{reveals.push({key:ctx.attrs['data-desktop'],id});return {ok:p.projectionView.getProjection().rows.some(r=>r.id===id)};},setPreset:preset=>{const key=ctx.attrs['data-desktop'];presetCalls.push({key,preset});return presetReplies.get(key)??{ok:true};},applyPresentationIntent:()=>({ok:true})});
     vue.onMounted(()=>{ctx.emit('ready');ctx.emit('wall-settled');});vue.onBeforeUnmount(()=>{stop();retired.push(identity);});
     return()=>{void revision.value;return vue.h('section',{},p.projectionView.getProjection().rows.map(r=>vue.h('article',{id:r.id},r.id)));};
   }});
@@ -218,7 +218,7 @@ async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vu
     const Workspace=await compile(source,{'./WallWorkspace.vue':Wall,'./layout.js':{createWallLayout},'../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js':{decodeAndMigrateLayoutProfile},'../../electron/desktopLayout.js':model,'../../electron/desktopShortcuts.js':keys});
     const props=vue.reactive({storage:{readRaw:async()=>stored,writeAtomic:async raw=>{stored=raw;saved.push(JSON.parse(raw));}},scope:SCOPE,defaultProfile:createWallLayout(SCOPE),projectionView:{getSnapshot:()=>({envelope:{projection:{rows}}})},rows:[...rows],modes:{h:'human',a:'agent'},intentBuilders:{},controlRegistry:{},scheduler:{},tileScheduler:{}});
     live=mount(Workspace,props);await tick();await tick();
-    await run({vm:live.vm,props,saved,mounted,retired,presetCalls,presetReplies,getStored:()=>stored});
+    await run({vm:live.vm,props,saved,mounted,retired,presetCalls,presetReplies,reveals,getStored:()=>stored});
   } finally {live?.app.unmount();restore();}
 }
 test('P18C actual desktop host keeps inactive walls mounted, routes openings, and persists navigation',()=>workspaceFixture(async({vm,props,saved,mounted,retired})=>{
@@ -284,4 +284,29 @@ test('P18E mutant routing presets to the former single wall is detected',async()
   const mutant=source.replace('const result = walls.get(activeKey())?.setPreset(preset);',"const result = walls.get('human-1')?.setPreset(preset);");
   assert.notEqual(mutant,source);
   await assert.rejects(()=>activePresetOracle(mutant),{code:'ERR_ASSERTION'});
+});
+
+test('P18G desktop prune waits for loaded projection and uses authoritative rows rather than stale props',async()=>{
+ const originalTimer=globalThis.setTimeout,originalNow=Date.now;let callback=null,now=0;
+ globalThis.setTimeout=(fn,ms,...args)=>[250,5000].includes(ms)?(callback=fn,{unref(){}}):originalTimer(fn,ms,...args);
+ Date.now=()=>now;
+ try {await workspaceFixture(async({props,saved,vm})=>{
+   props.projectionView.getProjection=()=>({rows:[]});
+   props.projectionView.getSnapshot=()=>({status:'unavailable',envelope:null});
+   props.rows.splice(0);await tick();assert(callback);now=30000;callback();await tick();
+   assert(vm.testState.assignments.h,'unloaded projection must retain persisted assignment');
+   props.projectionView.getProjection=()=>({rows});
+   props.projectionView.getSnapshot=()=>({status:'live',stale:false,envelope:{projection:{rows}}});
+   now=30001;callback();await tick();now=35002;callback();await tick();
+   assert(vm.testState.assignments.h,'authoritative h survives even with stale empty props.rows');
+ },read('../src/wall/DesktopWorkspace.vue').replace('defineExpose({','defineExpose({testState:state,'));}finally{globalThis.setTimeout=originalTimer;Date.now=originalNow;}
+});
+test('H41 returning to a former desktop reveals the surface again',()=>workspaceFixture(async({props,reveals})=>{
+ const count=()=>reveals.filter(r=>r.id==='h'&&r.key==='human-1').length;assert.equal(count(),1);
+ props.modes.h='agent';await tick();props.modes.h='human';await tick();assert.equal(count(),2);
+}));
+test('H42 desktop admission and restored-state validation enforce a finite per-view cap',()=>{
+ const state=model.createDesktopState();for(let i=1;i<16;i++)model.addDesktop(state,'human');
+ const before=JSON.stringify(state);assert.throws(()=>model.addDesktop(state,'human'),/DESKTOP_LIMIT/);assert.equal(JSON.stringify(state),before);
+ state.views.human.desktops.push({id:17,preset:null,layout:null});state.views.human.next=18;assert.equal(model.validateDesktopState(state,()=>true),false);
 });

@@ -3,8 +3,8 @@ import { computed, ref, watch, onBeforeUnmount, nextTick } from 'vue';
 import { UiButton, UiTextInput } from 'capsule-ui-kit/ui';
 import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.vue';
 import { operatorHost } from '../operatorHost.js';
-import { identityErrorText, identityFormRequest, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
-import { isProtectedIdentity } from '../../electron/identityProtection.js';
+import { identityErrorText, identityFormRequest, validLabel, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
+import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityProtection.js';
 const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
@@ -23,6 +23,7 @@ const modeFor = (/** @type {string} */ id) => modes.value.find(row => row.profil
 const busy=ref(false), login=ref(false), error=ref(''), pendingDelete=ref('');
 const form=computed(()=>identityFormRequest(id.value,displayName.value,domains.value));
 const validForm=computed(()=>form.value!==null);
+const labelError=computed(()=>id.value && !validLabel(displayName.value.trim() || id.value) ? 'Display name contains unsupported characters or is too long.' : '');
 const nameError=computed(()=>id.value && !validIdentityName(id.value) ? 'Use 2–40 lowercase letters, numbers and dashes. Start with a letter or number; product and protected names are reserved.' : '');
 const isOpen=(/** @type {string} */ name)=>{
   const mode=modeFor(name);return !!mode?.busy || !!mode?.surfaceId || ['human','agent'].includes(mode?.currentMode);
@@ -40,6 +41,7 @@ function deleteIdentity(){
 /** @param {string} method @param {any} [request] */
 async function invoke(method,request) {
   if(busy.value)return;
+  if(request?.id && isForeignIdentity(request.id)){error.value=identityErrorText('IDENTITY_PROTECTED',request.id);return;}
   busy.value=true;error.value='';login.value=method==='login';
   try {
     const api=props.host?.identity;if(!api)throw new Error('IDENTITY_HOST_ABSENT');
@@ -48,11 +50,16 @@ async function invoke(method,request) {
     const listed=method==='list'?result:await api.list();
     if(!listed.ok)throw new Error(listed.code);rows.value=listed.rows;
     const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
-    if (roleApi) { const result = await roleApi.choices(); if (Array.isArray(result)) modes.value = result; }
+    if (roleApi) {try {const result = await roleApi.choices(); if (Array.isArray(result)) modes.value = result;} catch {modes.value = [];} }
     if(method==='create'){id.value='';typedName.value='';labelEdited.value=false;label.value='';domains.value='';}
     pendingDelete.value='';
   }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);}
   finally{busy.value=false;login.value=false;}
+}
+/** @param {string} profileId @param {string} role */
+function openIdentity(profileId,role){
+  if(isForeignIdentity(profileId)){error.value=identityErrorText('IDENTITY_PROTECTED',profileId);return;}
+  emit('open-identity',{profileId,role});emit('close');
 }
 function create(){if(form.value)void invoke('create',form.value);}
 // App owns the marker during normal use. Also cover isolated dialog mounts;
@@ -78,9 +85,9 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
           <span class="identity-last-login">Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded' }}</span>
         </div>
         <div class="identity-actions">
-        <UiButton v-if="!roleApi" label="Log in" :disabled="busy" @click="invoke('login',{id:row.id})" />
-        <UiButton label="Open as human" :disabled="busy || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="emit('open-identity',{profileId:row.id,role:'human'}); emit('close')" />
-        <UiButton label="Open as agent" :disabled="busy || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="emit('open-identity',{profileId:row.id,role:'agent'}); emit('close')" />
+        <UiButton v-if="!roleApi" label="Log in" :disabled="busy || isForeignIdentity(row.id)" @click="invoke('login',{id:row.id})" />
+        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'human')" />
+        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'agent')" />
         <UiButton label="Delete" :disabled="busy || isProtectedIdentity(row.id)" :title="isProtectedIdentity(row.id) ? 'Managed outside MetaViewer' : undefined" @click="askDelete(row.id)" />
         </div>
       </li>
@@ -88,6 +95,7 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
     <section class="identity-add" aria-label="Add identity">
       <h4>Add identity</h4>
       <p><label>Name (required)<UiTextInput ref="nameInput" :model-value="id" @update:model-value="updateName" label="Name" placeholder="work-account" aria-describedby="identity-id-hint identity-name-error" :aria-invalid="!!nameError" :disabled="busy" /></label></p>
+      <p v-if="labelError" role="alert">{{ labelError }}</p>
       <p id="identity-id-hint">lowercase letters, numbers and dashes</p>
       <p v-if="id" id="identity-normalized" role="status">Will be saved as {{ id }}</p>
       <p v-if="nameError" id="identity-name-error" role="alert">{{ nameError }}</p>

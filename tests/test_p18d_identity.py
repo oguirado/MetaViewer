@@ -58,8 +58,8 @@ class P18DToolTests(P18DToolFixture):
         lock.write_text(json.dumps({'active':False}))
         def remove_profile(identity, remove=False):
             self.assertTrue(remove)
-            self.assertFalse(metadata.exists(), 'store delete precedes profile removal')
-            self.assertFalse(lock.exists())
+            self.assertTrue(metadata.exists(), 'metadata remains retryable until profile removal succeeds')
+            self.assertTrue(lock.exists(), 'inactive lease remains until profile removal succeeds')
             profile.rmdir()
         self.tool.profile_helper = Mock(side_effect=remove_profile)
         self.assertEqual(self.tool.delete('p18d-test'), {'deleted':'p18d-test'})
@@ -191,13 +191,12 @@ class P18DProvisionTests(P18DToolFixture):
                 self.tool.provision(self.identity)
         self.assertTrue(outside.is_dir())
 
-    def test_timeout_removes_only_named_helper_and_keeps_sudo_hint(self):
+    def test_timeout_without_cid_never_removes_a_container_and_keeps_sudo_hint(self):
         with patch.object(mv.subprocess, 'run', side_effect=[mv.subprocess.TimeoutExpired('docker', 30), Mock(returncode=0)]) as run:
             with self.assertRaisesRegex(mv.Refused, 'PROFILE_NOT_PROVISIONED'):
                 self.tool.provision(self.identity)
-            name = run.call_args_list[0].args[0][run.call_args_list[0].args[0].index('--name')+1]
-            self.assertEqual(run.call_args_list[1].args[0], ['docker', 'rm', '-f', name])
-            self.assertEqual(run.call_args_list[1].kwargs['timeout'], 5)
+            run.assert_called_once()
+            self.assertIn('--cidfile',run.call_args.args[0])
         self.assertIn('sudo install -d -m 0700 -o 10001 -g 10001', mv.HINTS['PROFILE_NOT_PROVISIONED'])
 
     def test_delete_unsafe_path_preserves_store(self):
@@ -212,7 +211,7 @@ class P18DProvisionTests(P18DToolFixture):
         self.assertTrue(self.metadata.exists())
         self.assertTrue(outside.is_dir())
 
-    def test_delete_orders_store_before_helper_and_refuses_open(self):
+    def test_delete_retains_store_until_helper_success_and_refuses_open(self):
         record = self.root/'locks'/(self.identity+'.json')
         record.write_text(json.dumps({'active': True}))
         record.chmod(0o600)
@@ -224,7 +223,7 @@ class P18DProvisionTests(P18DToolFixture):
         self.assertTrue(self.target.exists())
         record.write_text(json.dumps({'active': False}))
         def remove(command, **kwargs):
-            self.assertFalse(self.metadata.exists(), 'store delete precedes helper')
+            self.assertTrue(self.metadata.exists(), 'metadata remains retryable until helper success')
             self.assertIn('rm -rf -- "$p"', command[-3])
             self.target.rmdir()
             return Mock(returncode=0)

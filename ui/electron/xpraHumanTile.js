@@ -16,11 +16,11 @@ export const DROPPABLE_TRACE_CODES = Object.freeze(new Set(['TRACE_EVENT_REFUSED
  * trace:ReturnType<typeof import('./humanTrace.js').createHumanTrace>,isActive:()=>boolean,writable?:boolean,capsuleId?:string,rawKeyboard?:boolean,initiallyVisible?:boolean,
  * capsuleSize:()=>{width:number,height:number},
  * axContext?:()=>{sensitive?:boolean,password?:boolean,row?:number}|null,clientQuery?:string,
- * recoverBridge?:()=>Promise<any>,onState?:(state:string)=>void,onFailure:(error:unknown)=>void}} options
+ * recoverBridge?:()=>Promise<any>,onState?:(state:string)=>void,onFocus?:()=>void,onFailure:(error:unknown)=>void}} options
  */
 export async function attachXpraHumanTile({ electron, window, bridge, bounds, trace,
   isActive, capsuleSize, capsuleId, writable = true, rawKeyboard = false, initiallyVisible = true, axContext = () => null, clientQuery = xpraClientQuery(writable),
-  recoverBridge = async () => bridge, onState = () => {}, onFailure }) {
+  recoverBridge = async () => bridge, onState = () => {}, onFailure, onFocus = () => {} }) {
   const { WebContentsView, session, ipcMain } = electron;
   if (typeof isActive !== 'function' || isActive() !== true || typeof capsuleSize !== 'function' ||
       typeof onFailure !== 'function') {
@@ -131,9 +131,12 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     }
   };
   ipcMain.on('metaviewer:human-trace.v0.3', onTrace);
-  // A role mount must not cover renderer menus while readiness is pending.
-  view.setVisible(initiallyVisible);
-  window.contentView.addChildView(view);
+  function bringToFront() {
+    if (detached) return;
+    window.contentView.removeChildView(view);
+    window.contentView.addChildView(view);
+  }
+  wc.on('focus', () => { if (!detached) {bringToFront();onFocus();} });
   async function close() {
     if (detached) return;
     detached = true;
@@ -147,6 +150,9 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     await isolated.clearStorageData();
   }
   try {
+    // Insertion can fail during window teardown; it shares the cleanup gate.
+    view.setVisible(initiallyVisible);
+    window.contentView.addChildView(view);
     onState('connecting');
     resize(bounds);
     if (clientQuery && !/^\?[a-zA-Z0-9_=&.-]+$/.test(clientQuery)) throw Error('XPRA_QUERY_REFUSED');
@@ -176,7 +182,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
         publish('reconnecting');
         await waitForXpraClient(wc, {writable, rawKeyboard, isActive:live});
       }, onState:publish});
-    return Object.freeze({ view, resize, close,
+    return Object.freeze({ view, resize, close, bringToFront,
       /** @param {boolean} visible */
       setVisible(visible) { if (!detached) view.setVisible(visible); } });
   } catch (error) { await close(); throw failure || error; }

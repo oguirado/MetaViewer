@@ -1,6 +1,6 @@
 // Continuous human_trace/v0.3 recorder; frozen wire contracts are unchanged.
-import { open } from 'node:fs/promises';
-import { constants, mkdirSync, lstatSync, realpathSync, openSync, writeSync, fsyncSync, closeSync } from 'node:fs';
+import { open, unlink } from 'node:fs/promises';
+import { constants, mkdirSync, lstatSync, realpathSync, openSync, writeSync, fsyncSync, closeSync, readdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 export const HUMAN_TRACE_SCHEMA = 'metaviewer.human_trace/v0.3';
@@ -13,7 +13,7 @@ const navKeys = new Set(['Enter', 'Tab', 'Escape', 'Backspace', 'Delete', 'Arrow
  * AX context must be a trusted, current capsule AX row, NOT the HTML5 canvas.
  * All printable keys are withheld: a missing/stale password classification
  * cannot leak text. A later consented text-learning channel needs its own gate.
- * @param {{sessionId:string,surfaceId:string,capsuleId:string,write:(line:string)=>void,clock?:()=>bigint,maxEvents?:number}} options
+ * @param {{sessionId:string,surfaceId:string,capsuleId:string,write:(line:string)=>void|boolean,clock?:()=>bigint,maxEvents?:number}} options
  */
 export function createHumanTrace({ sessionId, surfaceId, capsuleId, write,
   clock = () => process.hrtime.bigint(), maxEvents = 100000 }) {
@@ -64,17 +64,33 @@ export function createHumanTrace({ sessionId, surfaceId, capsuleId, write,
         details,
       };
       // A synchronous bounded sink refuses before publication on overflow.
-      write(JSON.stringify(row) + '\n');
+      if (write(JSON.stringify(row) + '\n') === false) return false;
       seq++; last = now;
       return true;
     },
   });
 }
 
+/** Remove only private regular trace files; never follow profile symlinks.
+ * @param {string} directory @param {number} [retentionDays] */
+export function pruneHumanTraces(directory, retentionDays = 14, profiles = true) {
+  if (!Number.isFinite(retentionDays) || retentionDays < 1) throw Error('TRACE_RETENTION_REFUSED');
+  const root = lstatSync(directory);
+  if (!root.isDirectory() || root.uid !== process.getuid?.() || (root.mode & 0o077) || realpathSync(directory) !== directory) throw Error('TRACE_DIRECTORY_REFUSED');
+  const cutoff = Date.now() - retentionDays * 86400000;
+  for (const entry of readdirSync(directory, {withFileTypes:true})) {
+    if (profiles && entry.isDirectory() && /^[a-z0-9][a-z0-9-]{0,63}$/.test(entry.name)) {pruneHumanTraces(join(directory,entry.name),retentionDays,false);continue;}
+    if (!/^human-trace-[a-zA-Z0-9-]+\.jsonl$/.test(entry.name) || !entry.isFile()) continue;
+    const path = join(directory, entry.name), st = lstatSync(path);
+    if (st.isFile() && st.uid === process.getuid?.() && st.mtimeMs < cutoff) unlinkSync(path);
+  }
+}
+
 /** Host-owned directory, no-clobber private file; every event is written now,
  * rather than exported from a memory buffer when the tile closes.
- * @param {{directory:string,sessionId:string,surfaceId:string,capsuleId:string,profileId?:string}} options */
-export function createHumanTraceFile({ directory, sessionId, surfaceId, capsuleId, profileId }) {
+ * @param {{directory:string,sessionId:string,surfaceId:string,capsuleId:string,profileId?:string,maxBytes?:number,retentionDays?:number,onPause?:()=>void,budget?:{bytes:number,paused:boolean}}} options */
+export function createHumanTraceFile({ directory, sessionId, surfaceId, capsuleId, profileId, maxBytes = 50 * 1024 * 1024, retentionDays = 14, onPause = () => {}, budget = {bytes:0,paused:false} }) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw Error('TRACE_LIMIT');
   if (profileId !== undefined) {
     if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profileId)) throw Error('TRACE_PROFILE_REFUSED');
     directory = join(directory, profileId);
@@ -82,22 +98,25 @@ export function createHumanTraceFile({ directory, sessionId, surfaceId, capsuleI
     const st = lstatSync(directory);
     if (!st.isDirectory() || st.uid !== process.getuid?.() || (st.mode & 0o777) !== 0o700 || realpathSync(directory) !== directory) throw Error('TRACE_DIRECTORY_REFUSED');
   }
+  pruneHumanTraces(directory, retentionDays);
   const filename = `human-trace-${randomUUID()}.jsonl`;
   const path = join(directory, filename);
   const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-  let closed = false;
+  let closed = false, notified = false, size = 0;
   let trace;
   try { trace = createHumanTrace({ sessionId, surfaceId, capsuleId, maxEvents:Number.MAX_SAFE_INTEGER, write(line) {
     if (closed) throw Error('TRACE_CLOSED');
     const bytes = Buffer.from(line);
+    if (budget.paused || budget.bytes + bytes.length > maxBytes) {budget.paused = true; if(!notified){notified=true;onPause();} return false;}
     let offset = 0;
     while (offset < bytes.length) {
       const count = writeSync(fd, bytes, offset, bytes.length - offset);
       if (count <= 0) throw Error('TRACE_WRITE_FAILED');
       offset += count;
+      size += count; budget.bytes += count;
     }
   } }); } catch (error) { closeSync(fd); throw error; }
-  return Object.freeze({ ...trace, path, close() {
+  return Object.freeze({ ...trace, path, get paused() {return budget.paused;}, get bytes() {return size;}, close() {
     if (closed) return;
     closed = true;
     trace.setActive(false);
@@ -113,6 +132,7 @@ export function createHumanTraceBuffer(maxBytes = 4 * 1024 * 1024) {
   return Object.freeze({
     /** @param {string} line */
     write(line) {
+      if (line === '') throw Error('TRACE_EVENT_REFUSED');
       if (typeof line !== 'string' || size + Buffer.byteLength(line) > maxBytes) throw Error('TRACE_LIMIT');
       chunks.push(line); size += Buffer.byteLength(line);
     },
@@ -120,7 +140,9 @@ export function createHumanTraceBuffer(maxBytes = 4 * 1024 * 1024) {
     /** @param {string} path */
     async exportTo(path) {
       const handle = await open(path, 'wx', 0o600);
-      try { await handle.writeFile(chunks.join('')); await handle.sync(); } finally { await handle.close(); }
+      try { await handle.writeFile(chunks.join('')); await handle.sync(); }
+      catch(error) {await unlink(path);throw error;}
+      finally { await handle.close(); }
     },
   });
 }

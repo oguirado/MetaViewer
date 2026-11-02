@@ -28,6 +28,8 @@ const emit = defineEmits(['update:visible', 'create', 'close']);
 
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
+let choiceGeneration = 0;
+watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;}});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
@@ -56,6 +58,7 @@ watch(() => props.visible, (open, previous) => {
 
 /** @param {boolean} value */
 function forwardVisible(value) {
+  if(!value){choiceGeneration++;choosingRole.value=false;}
   emit('update:visible', value);
 }
 
@@ -64,16 +67,21 @@ async function onCreate(payload) {
   const result = buildCreateIntent({ kind: payload?.type?.id, placement: payload?.placement });
   if (!result.ok) return;
   if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create', result.intent); return; }
+  const generation = ++choiceGeneration;
   pendingIntent.value = result.intent; roleChoice.value = 'agent'; roleError.value = '';
   try {
-    profileChoices.value = await api.choices();
+    const choices = await api.choices();
+    if (!props.visible || generation !== choiceGeneration) return;
+    profileChoices.value = choices;
     if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');
     profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';
-  } catch { profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
+    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';
+  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
   choosingRole.value = true;
 }
 
 function onClose() {
+  choiceGeneration++;choosingRole.value=false;
   emit('close');
 }
 </script>

@@ -1,4 +1,4 @@
-import { isProtectedIdentity } from './identityProtection.js';
+import { isProtectedIdentity, isForeignIdentity } from './identityProtection.js';
 import {adapterNetworkProbe} from './coreLauncher.js';
 import {createButtonService,OPERATOR_STOP_BUDGET_MS} from './buttonBridge.js';
 // @ts-check
@@ -110,7 +110,7 @@ const LOGIN_STOP_GRACE_MS=200000;
 export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=async()=>{}}) {
   /** @type {Set<()=>void>} */ const live=new Set();
   const run=(/** @type {string} */method,/** @type {any} */v)=>new Promise((accept,reject)=>{
-    if(method==='delete' && isProtectedIdentity(v.id)){reject(new Error('IDENTITY_PROTECTED'));return;}
+    if(v?.id && (isForeignIdentity(v.id) || method==='delete' && isProtectedIdentity(v.id))){reject(new Error('IDENTITY_PROTECTED'));return;}
     const argv=[tool,method,...(method==='list'?[]:['--id',v.id]),...(method==='create'?['--label',v.label,'--domains',v.domains.join(',')]:[])];
     const child=spawnTool('python3',argv,{shell:false,env:Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','MV_MW_HOME'].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]])),stdio:['ignore','pipe','pipe'],detached:true});
     let stdout='',stderr='',bytes=0,settled=false,opened=false;
@@ -230,7 +230,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
     if(BUTTON_METHODS.includes(method))return buttons.request(method,args);
     const v=args[0];
     if(method.startsWith('identity.')) {
-      if(method==='identity.delete' && isProtectedIdentity(v.id))return {ok:false,code:'IDENTITY_PROTECTED'};
+      if(v?.id && (isForeignIdentity(v.id) || method==='identity.delete' && isProtectedIdentity(v.id)))return {ok:false,code:'IDENTITY_PROTECTED'};
       try {return assertOperatorReply(method,await runIdentity(method.split('.')[1],v));}
       catch(e){const code=/** @type {any} */(e)?.message;return {ok:false,code:IDENTITY_REFUSALS.has(code)?code:'IDENTITY_UNAVAILABLE'};}
     }

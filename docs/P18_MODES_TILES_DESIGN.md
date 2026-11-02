@@ -465,3 +465,121 @@ multiple tiles use a controlled Dockview fixture with simulated transport, and
 native screenshots/checks use the sole owned live capsule. Verification artifacts
 and command receipts are local evidence, not a replacement for the final report.
 This section scopes the implementation mandate to the supplied MetaViewer and OpenSuperficies corpus.
+
+## P18g — identity, projection and native-view hardening
+
+Foreign identity protection is independent of product profile reservation.
+The Python tool and Electron share the same foreign prefixes and named holders;
+foreign create, provision, login, release, stage and open requests fail with
+`IDENTITY_PROTECTED` before dispatch. The dialog also guards forced clicks and
+legacy login. Product `mv-*` profiles remain eligible for opening and login;
+deleting them remains refused. The form uses the shared protection predicate.
+A fixture compares the actual prefix and holder lists across languages.
+
+A successful native create owns its new metadata entry. If provisioning fails,
+the wrapper reacquires the native per-identity guard, proves no active lease,
+and rolls back that entry. It does not remove browser payloads on this failure
+path. Deletion keeps metadata and its inactive lease until profile removal has
+succeeded under the same guard. A retry can finish after either helper failure
+or a crash between profile removal and metadata removal. Direct helper removal
+requires the wrapper's active deletion guard context. Foreign fixtures never
+use the real identity store. Privileged helpers request a private Docker CID
+file and authorize cleanup only by that validated container ID. Failed creation
+without a CID never removes a name. Before cleanup, the wrapper syncs a private
+`cleanup_pending` JSON receipt; a failed or timed-out cleanup preserves it for
+recovery, while proven cleanup removes the receipt.
+
+The role host compensates an invalid created acknowledgement with `stopSurface`
+and requires a destroyed acknowledgement. A creation completing after host
+disposal is also compensated. An unproven stop retains the authoritative row
+and its profile reservation. Mount and open are fenced during stop/switch.
+Per-mount Symbol tokens invalidate pending work without accumulating arbitrary
+renderer close identifiers; close removes their entries and disposal clears
+remaining tokens. Failed session cleanup retains handles for retry and shares
+concurrent cleanup. Renderer surface enumeration projects only schema, surface
+and profile identifiers, state, control, visibility, display and geometry.
+
+Both orphan pruning and desktop assignment pruning require a live, non-stale
+authoritative snapshot envelope. Missing evidence does not count as an empty
+projection. The wall resets absence clocks while unavailable. The desktop grace
+starts when the loaded snapshot is observed and reads that snapshot's rows,
+independently of renderer presentation props. Native polling marks its retained
+projection stale when enumeration fails. Preset failures clear the active preset
+and emit one `LAYOUT_PRESET_FAILED`; required panel operations are checked before
+moving any panel. Returning desktop surfaces clear obsolete reveal-cache entries.
+Inactive identity placement history retains at most 256 entries [TARGET], with
+active panels protected from eviction. Persistent desktops are capped at sixteen per view [TARGET], including restored
+state admission, to bound permanently mounted workspace instances.
+
+Human recording uses a shared application-session byte budget: fifty MiB
+[TARGET], configurable at the recorder seam. Reaching it returns a paused result
+without throwing, closes no view, and exposes `Recording paused (size limit)` in
+the tile chrome. Every append is checked before writing. Startup retention removes
+private regular trace files older than fourteen days [TARGET], including profile
+subdirectories, without following symlinks or reading event payloads. Printable
+keys and sensitive AX context retain their existing redaction rules. Empty buffer
+chunks are refused, and failed no-clobber exports remove their partial output.
+
+Floating chrome and native pixels use the same stacking authority. Dockview
+renders floating content in a sibling portal one stacking level above its resize
+container; that relationship identifies the owning floating window. The highest
+floating panel raises its native child by removing and re-adding it last in
+`contentView`. Native focus activates the corresponding existing Dockview panel.
+Each native viewport subtracts complete floating-window rectangles above it,
+including their chrome. A rectangular remainder is painted within its bounds;
+an empty, disconnected or nonrectangular remainder hides the view. Occlusion is
+excluded from hidden-session resource eviction, so hiding preserves the bridge
+and lease even when the hidden-session limit is zero [TARGET, negative control].
+
+Verification uses fixture-only identity stores, delayed projections, failing
+helpers and bridges, source mutants and an isolated Electron paint harness on
+display `:97`. The paint harness uses actual WebContentsViews with local canvas
+fixtures and explicit loopback listeners; it captures the X11 display because
+Electron page capture excludes native child views. It never opens an identity or
+starts a capsule. Capsule-backed transport remains a separate integration gate.
+The operator's packaged application and display `:100` are outside that gate.
+
+The fixture suite enforces profile-first deletion by asserting metadata and its
+inactive lease remain present during helper execution. Failed-create rollback is
+asserted before explicitly seeding older UI-only metadata fixtures, preserving
+the existing provisioning-hint coverage.
+## P18h
+
+More → “Terminal” opens an OpenFresnel-style full-wall Terminal deck workspace
+(`TerminalDeckView.vue`, backed by `terminalDeckModel.js`) as a third workspace
+beside Humans and Agents. Entering the Terminal deck hides `DesktopWorkspace`
+and sets `RoleSurface` `presentation-active` to `false` (hide-not-revoke for
+mounted human views); selecting Humans or Agents, or toggling Terminal closed,
+restores the capsule wall without revoking native sessions. The legacy
+`SideTerminalOverlay.vue` remains intact for the `side-terminal-open` fixture.
+
+The operator bar displays positional screen chips (`Screen 1, 2, …`, starting
+with `1` screen [TARGET] and bounded at `16` screens [TARGET]) with `+` to add a
+screen and `✕` to remove a screen only when it is empty and more than `1` screen
+[TARGET] exists; remaining screens renumber by position. On the right,
+`🚀 Bootstrap` copies the canonical agent entry prompt from `docs/AGENT_ENTRY.md`
+verbatim and confirms with a `2000 ms` [TARGET] `Copied` status toast, and
+`＋ New terminal` opens the launcher popover.
+
+The launcher popover offers **Shell** (`command: 'shell', args: []`), configured
+and available broker provider profiles from `ui/src/terminal/providers.js`
+(**Claude (TUI)** and **Agy**, omitted when unconfigured or unavailable), and
+**Custom CLI**. Custom CLI never widens `ptyBroker.js` `assertSpawnProfile`: it
+opens an admitted login shell session (`command: 'shell', args: []`), attaches to
+the session port, and writes the trimmed command followed by `\n` into the PTY
+input stream.
+
+Active-screen terminals render in an equal-tile CSS grid (`1` to `4` columns
+[TARGET] reflowing with tile count, up to `16` slots per screen [TARGET]) with
+focus rings, status badges, and `✕` close controls. Closing a running (`busy`)
+terminal requires confirmation, then writes `SIGINT` (`0x03` [TARGET]) to the
+PTY input stream and closes the broker session after a `150 ms` [TARGET] grace
+period. A process that exits on its own remains visible with status `exited`
+until closed or restarted. Screen and slot layouts (without live process handles)
+persist under `metaviewer.terminalDeck/v1`; restored slots render `Restart`
+buttons that re-launch the saved profile or Custom CLI in place. Deck shortcuts
+capture `Ctrl+Shift+T` (new Shell), `Ctrl+Shift+W` (confirmed close of focused
+tile), and `Ctrl+PageUp` / `Ctrl+PageDown` (screen switch) while forwarding
+ordinary terminal keystrokes to the PTY.
+
+This section scopes the implementation mandate strictly to the supplied MetaViewer worktree corpus.

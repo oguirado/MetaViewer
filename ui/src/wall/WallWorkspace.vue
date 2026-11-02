@@ -124,6 +124,8 @@ export function arrangePreset(layout, preset, tiles, width, height) {
 /** Panel id namespace: deterministic, reversible, never a bare numeric index. */
 export const WALL_PANEL_ID_PREFIX = 'panel-';
 /** How long a restored panel may lack a projection row before it is closed. */
+/** Maximum remembered identity placements [TARGET]; active panels are retained. */
+export const MAX_IDENTITY_SLOT_HISTORY = 256;
 export const ORPHAN_GRACE_MS = 5000;
 /** Minimum live tile size, shared with the Holdings grid exemplar. */
 export const WALL_PANEL_MIN_WIDTH = 240;
@@ -164,6 +166,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * required here so the shared view keeps matching the sibling panel prop.
  * @typedef {Object} WallProjectionView
  * @property {() => ({ rows: ReadonlyArray<WallSurfaceRow> } | null)} getProjection
+ * @property {() => WallSnapshotLike | null} [getSnapshot]
  */
 
 /** @typedef {Object} WallDockviewApi
@@ -228,6 +231,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 /**
  * @typedef {Object} WallWorkspaceControllerOptions
  * @property {boolean} [allowLostSurface] - Diagnostic fixture presentation only.
+ * @property {(error:WallAdmissionError)=>void} [onLayoutError]
  * @property {WallProjectionView | null} [projectionView]
  */
 
@@ -456,6 +460,23 @@ export function createWallWorkspaceController(options = {}) {
   const identitySlots = new Map();
   /** @type {string[]} */
   const panelOrder = [];
+  /** @param {string} profileId @param {any} slot */
+  function rememberSlot(profileId,slot) {
+    identitySlots.delete(profileId); identitySlots.set(profileId,slot);
+  }
+  function trimHistory() {
+    // Without a panel list the live set is unknown: never prune on a guess.
+    if (!Array.isArray(api?.panels)) return;
+    const active = new Set(api.panels.map(panel=>panel.id));
+    for (const [profileId,slot] of identitySlots) {
+      if (identitySlots.size <= MAX_IDENTITY_SLOT_HISTORY) break;
+      if (!active.has(slot.panelId)) identitySlots.delete(profileId);
+    }
+    const retained = new Set([...active,...[...identitySlots.values()].map(slot=>slot.panelId)]);
+    for (const panelId of panelIdentities.keys()) if (!retained.has(panelId)) panelIdentities.delete(panelId);
+    for (let i=panelOrder.length-1;i>=0;i--) if (!retained.has(panelOrder[i])) panelOrder.splice(i,1);
+  }
+
   /** @param {string} panelId */
   function captureSlot(panelId) {
     if (!api) return;
@@ -474,7 +495,7 @@ export function createWallWorkspaceController(options = {}) {
     const index = groupPanels.indexOf(panel);
     const sibling = groupPanels.find((/** @type {any} */ candidate) => candidate && candidate.id !== panelId && api?.getPanel(candidate.id));
     if (sibling?.id) {
-      identitySlots.set(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel: sibling.id, direction: 'within', orderIndex});
+      rememberSlot(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel: sibling.id, direction: 'within', orderIndex});
       return;
     }
     let referencePanel = /** @type {string|null} */ (null);
@@ -502,7 +523,7 @@ export function createWallWorkspaceController(options = {}) {
         if (orderIndex >= 0 && refOrder >= 0 && orderIndex !== refOrder) direction = orderIndex < refOrder ? 'left' : 'right';
       }
     }
-    identitySlots.set(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel, direction, orderIndex});
+    rememberSlot(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel, direction, orderIndex});
   }
   const presentationRows = () => {
     if (!api || !windows) return [];
@@ -527,6 +548,8 @@ export function createWallWorkspaceController(options = {}) {
   // live tile.
   const orphanSince = new Map();
   function pruneOrphanPanels(now = Date.now()) {
+    const snapshot = projectionView?.getSnapshot?.();
+    if (!snapshot?.envelope || snapshot.stale !== false || snapshot.status !== 'live') {orphanSince.clear(); return;}
     const rows = projectionView?.getProjection()?.rows;
     if (!api || !Array.isArray(rows) || !Array.isArray(api.panels)) return;
     const live = new Set(rows.filter(row => row?.backendLifecycle !== 'destroyed').map(row => WALL_PANEL_ID_PREFIX + row.id));
@@ -541,6 +564,15 @@ export function createWallWorkspaceController(options = {}) {
     }
   }
   function refreshPreset(now = Date.now()) {
+    try {trimHistory(); return applyPreset(now); }
+    catch {
+      preset = null; layoutSignature = '';
+      const error = wallError('LAYOUT_PRESET_FAILED','Tile layout is unavailable.');
+      options.onLayoutError?.(error);
+      return fail(error.code,error.message);
+    }
+  }
+  function applyPreset(now = Date.now()) {
     if (api) {
       for (const row of projectionView?.getProjection()?.rows || []) {
         if (row?.backendLifecycle === 'destroyed') {
@@ -558,6 +590,7 @@ export function createWallWorkspaceController(options = {}) {
     if (focusTile && (preset === 'single' || preset === 'focus-strip')) tiles.sort((a,b)=>Number(b.id === focusTile)-Number(a.id === focusTile));
     const rectangles = presetRectangles(preset,tiles,api.width,api.height);
     if (!rectangles.length) return;
+    if (rectangles.some(rect=>typeof api?.getPanel(rect.id)?.api?.moveTo !== 'function')) throw Error('LAYOUT_PRESET_FAILED');
     // Move existing panels; the kit remains the only layout-restore owner.
     for (const rect of rectangles) if (windows?.state(rect.id).floating) {
       let grid = (api.groups || []).find((/** @type {any} */ group)=>group.api.location.type === 'grid');
@@ -614,7 +647,8 @@ export function createWallWorkspaceController(options = {}) {
     if (!api || !windows) return fail('ERR_NOT_READY','Wall is not ready.');
     preset = next; layoutSignature = ''; focusTile = /** @type {any} */ (api).activePanel?.id || '';
     try {
-      refreshPreset();
+      const result = refreshPreset();
+      if (result?.ok === false) return result;
       // The kit owns validated persistence and its settled/read-only gates.
       void host?.completeUserGesture?.();
       return succeed({preset});
@@ -832,7 +866,7 @@ export function createWallWorkspaceController(options = {}) {
         } else if (!panelOrder.includes(panelId)) {
           panelOrder.push(panelId);
         }
-        identitySlots.set(profileId, {
+        rememberSlot(profileId, {
           panelId,
           groupId: asNonEmptyString(/** @type {any} */ (panel)?.group?.id) ?? slot?.groupId ?? null,
           index: slot?.index ?? 0,
@@ -841,7 +875,7 @@ export function createWallWorkspaceController(options = {}) {
           orderIndex: panelOrder.indexOf(panelId),
         });
       }
-      collapseEmptyGroups();
+      collapseEmptyGroups(); trimHistory();
       if (placement === 'floating') windows.float(panelId);
       else panel.api.setActive();
       return succeed(Object.freeze({ panelId }));
@@ -1041,9 +1075,10 @@ const emit = defineEmits([
   'submit-intent',
   'activate-surface',
   'panel-closed',
+  'layout-error',
 ]);
 
-const controller = createWallWorkspaceController({ projectionView: props.projectionView, allowLostSurface: props.allowLostSurface });
+const controller = createWallWorkspaceController({ projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
 const callbacks = controller.createPanelCallbacks(emit);
 
 const slots = useSlots();

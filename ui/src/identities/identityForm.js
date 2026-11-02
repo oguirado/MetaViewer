@@ -1,3 +1,4 @@
+import {isProtectedIdentity} from '../../electron/identityProtection.js';
 // @ts-check
 /** Pure form rules for the Identities dialog. They mirror the closed host
  * validation in electron/preload.js so a typo is explained before the request
@@ -58,7 +59,7 @@ export function retainTypedIdentityName(previous, incoming) {
 
 /** @param {string} name */
 export function validIdentityName(name) {
-  return /^[a-z0-9][a-z0-9-]{1,39}$/.test(name) && !/^(mv-|cuentas-|perplexity-|srf-id-cuentas-|srf-id-perplexity-|srf-pg-)/.test(name);
+  return /^[a-z0-9][a-z0-9-]{1,39}$/.test(name) && !isProtectedIdentity(name);
 }
 
 /** @param {string} name @param {string} displayName @param {string} sites */

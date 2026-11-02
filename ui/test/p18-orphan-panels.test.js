@@ -32,7 +32,7 @@ function harness(wall, rows) {
   const add = id => panels.push({ id, api: { close() { closed.push(id); panels.splice(panels.findIndex(p => p.id === id), 1); } } });
   const windows = { state: () => ({}), show() {}, hide() {}, float() {}, dock() {} };
   const projection = { rows };
-  const controller = wall.createWallWorkspaceController({ projectionView: { getProjection: () => projection } });
+  const controller = wall.createWallWorkspaceController({ projectionView: { getProjection: () => projection, getSnapshot:()=>({status:'live',stale:false,envelope:{projection}}) } });
   assert.equal(controller.handleReady({ api, windows, revision: 1 }).ok, true);
   return { controller, add, closed, projection };
 }

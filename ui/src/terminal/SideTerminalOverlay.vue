@@ -25,6 +25,7 @@ const props = defineProps({
   terminalBinding: { type: /** @type {TerminalBindingProp} */ (Object), default: null },
   hostProviders: { type: /** @type {import('vue').PropType<unknown[]>} */ (Array), default: () => [] },
   open: { type: Boolean, default: null },
+  deck: { type: Boolean, default: false },
   storage: { type: /** @type {import('vue').PropType<Pick<Storage, 'getItem' | 'setItem'> | null | undefined>} */ (Object), default: undefined },
   topOffset: { type: Number, default: 0 },
   bottomOffset: { type: Number, default: 0 },
@@ -39,6 +40,7 @@ function updateOpen(value) { overlayOpen.value = value; emit('update:open', valu
 /** Escape closes this view without affecting host session ownership.
  * @param {KeyboardEvent} event */
 function onEscape(event) {
+  if (props.deck) return;
   if (event.key === 'Escape' && overlayOpen.value) updateOpen(false);
 }
 onMounted(() => globalThis.window?.addEventListener?.('keydown', onEscape));
@@ -95,7 +97,7 @@ const kitProviders = computed(() => {
 });
 </script>
 <template>
-  <div id="mv-side-terminal-overlay" class="mv-side-terminal-overlay" data-semantic-anchor="terminal/overlay" :data-cuk-geometry-id="chromeGeometry" :data-terminal-state="bindingState">
+  <div v-if="!deck" id="mv-side-terminal-overlay" class="mv-side-terminal-overlay" data-semantic-anchor="terminal/overlay" :data-cuk-geometry-id="chromeGeometry" :data-terminal-state="bindingState">
     <BrokerLaunchControls v-if="terminalBroker" :visible="overlayOpen" :broker="terminalBroker" :providers="hostProviders" />
     <SideTerminalPanel
       :facade="facadeRef ?? undefined"

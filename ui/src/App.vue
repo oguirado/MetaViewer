@@ -26,7 +26,7 @@ import { UiButton } from 'capsule-ui-kit/ui';
 import { setKitScheme } from 'capsule-ui-kit/theme';
 import WallWorkspace from './wall/WallWorkspace.vue';
 import DesktopWorkspace from './wall/DesktopWorkspace.vue';
-import {createDesktopState, desktopRows} from '../electron/desktopLayout.js';
+import {createDesktopState, desktopRows, MAX_DESKTOPS_PER_VIEW} from '../electron/desktopLayout.js';
 import SurfaceCanvas from './surfaces/SurfaceCanvas.vue';
 import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {import('capsule-ui-kit/layout').LayoutProfileEnvelope} LayoutProfile */
@@ -165,6 +165,7 @@ const settingsOpen = ref(props.fixture?.screen === 'settings');
 const creativeOpen = ref(props.fixture?.key === 'creative');
 const creativeFrames = computed(() => /** @type {unknown[]} */ (props.fixture?.ui.creativeFrames ?? []));
 const terminalOpen = ref(props.fixture?.key === 'side-terminal-open');
+const terminalDeckOpen = computed(() => terminalOpen.value && !nestedMode.displayOnly && props.fixture?.key !== 'side-terminal-open');
 // MVUI29c lane T: the multislot auto-open keeps its fixture-key rule
 // (multislot/recording) and additionally opens for the screen that
 // renders it: the terminal-live alias declares screen 'multislot' under
@@ -201,6 +202,7 @@ function revealHandoffSurface(surfaceId) {
   creativeOpen.value = false;
   settingsOpen.value = false;
   multislotOpen.value = false;
+  terminalOpen.value = false;
   if (wall.value?.revealSurface(row.id, 'tab')?.ok === true) markPanelOpen(row.id);
 }
 /**
@@ -297,7 +299,7 @@ function applyWallControl(id, verb, prebuiltIntent) {
       const builders = props.runtime?.intentBuilders;
       if (!builders) return;
       try { intent = builders.control({ capsuleId: targetId, verb: 'release_control' }); }
-      catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
+      catch { disarmWallInput(targetId); hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
     }
     if (intent !== null && intent !== undefined) dispatch(intent);
     return;
@@ -309,11 +311,12 @@ function applyWallControl(id, verb, prebuiltIntent) {
   if (intent === undefined) {
     const builders = props.runtime?.intentBuilders;
     if (!builders) {
+      disarmWallInput(targetId);
       hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' };
       return;
     }
     try { intent = builders.control({ capsuleId: targetId, verb: 'take_control' }); }
-    catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
+    catch { disarmWallInput(targetId); hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
   }
   const sent = dispatch(intent);
   if (sent !== undefined) {
@@ -350,7 +353,7 @@ function reconcileWallInput() {
   /** @type {Record<string, true>} */ const nextArmed = {};
   /** @type {Record<string, true>} */ const nextPending = {};
   /** @type {Record<string, true>} */ const nextEscaped = {};
-  for (const id of [...new Set([...armed, ...pending])]) {
+  for (const id of [...new Set([...armed, ...pending, ...escaped])]) {
     const row = byId.get(id);
     if (!row || !ARMABLE_LIFECYCLES.includes(row.backendLifecycle)) continue;
     if (row.control === 'human') {
@@ -668,8 +671,8 @@ function onCapsuleLifecycle({surfaceId,completion}) {
   void submitHost(async () => {
     const result = await completion;
     if (!result.ok) throw Object.assign(Error(result.code),{code:result.code});
-    if (result.surfaceId && !await revealOpenedIdentity(result.surfaceId,result.role)) throw Object.assign(Error('TILE_REVEAL_UNPROVEN'),{code:'TILE_REVEAL_UNPROVEN'});
     onCapsuleStopped(surfaceId);
+    if (result.surfaceId && !await revealOpenedIdentity(result.surfaceId,result.role)) throw Object.assign(Error('TILE_REVEAL_UNPROVEN'),{code:'TILE_REVEAL_UNPROVEN'});
     return true;
   });
 }
@@ -1160,7 +1163,7 @@ function surfaceWitness(surface) {
 const baseFeed = props.runtime?.projectionView ?? projectionView;
 const nativeRows = shallowRef(/** @type {any[]} */([]));
 const nativeListeners = new Set();
-let nativeRevision = 0, nativePolling = false;
+let nativeRevision = 0, nativePolling = false, nativeLoaded = false, nativePollFailed = false;
 const nativeApi = !props.fixture && !nestedMode.displayOnly ? /** @type {any} */(globalThis).metaviewerRoles : null;
 const mergedRows = () => {
   const base = baseFeed.getProjection()?.rows || [];
@@ -1169,8 +1172,9 @@ const mergedRows = () => {
 };
 const nativeSnapshot = () => {
   const base = baseFeed.getSnapshot();
-  if (!nativeRows.value.length) return base;
-  return {status:'live',stale:false,error:null,envelope:{schema:'surface/v0.1',epoch:base?.envelope?.epoch || 1,
+  const stale = base?.stale || !base?.envelope || !nativeLoaded || nativePollFailed;
+  if (!nativeRows.value.length) return base ? {...base,stale} : base;
+  return {status:'live',stale,error:null,envelope:{schema:'surface/v0.1',epoch:base?.envelope?.epoch || 1,
     revision:nativeRevision,query:'wall',projection:{rows:mergedRows()}}};
 };
 const feed = nativeApi?.surfaces ? {
@@ -1186,15 +1190,21 @@ async function pollNativeSurfaces() {
   nativePolling = true;
   try {
     const listed = await nativeApi.surfaces();
-    if (!Array.isArray(listed) || !hostActive) return;
+    if (!hostActive) return;
+    if (!Array.isArray(listed)) throw Error('NATIVE_PROJECTION_UNAVAILABLE');
+    const availabilityChanged = !nativeLoaded || nativePollFailed;
+    nativeLoaded = true; nativePollFailed = false;
     const admitted = listed.filter(item => item?.schema === 'metaviewer.role_surface/v0.3' && item.role === 'human'
       && item.surface?.schema === 'surface/v0.2' && item.surface.state === 'active' && item.surface.control === 'human');
     const next = admitted.map(({surface:s}) => ({id:s.surface_id,surfaceId:s.surface_id,title:s.profile_id,profile_id:s.profile_id,
       backendLifecycle:s.state,generation:null,visibility:s.visibility,control:s.control,display:s.display,geometry:s.geometry,
       attachmentState:'live',refusal:null}));
-    if (JSON.stringify(next) === JSON.stringify(nativeRows.value)) return;
+    if (!availabilityChanged && JSON.stringify(next) === JSON.stringify(nativeRows.value)) return;
     nativeRows.value = next; nativeRevision++;
     for (const row of next) onCapsuleMode({surfaceId:row.id,mode:'human'});
+    for (const listener of nativeListeners) listener(nativeSnapshot());
+  } catch {
+    nativePollFailed = true;
     for (const listener of nativeListeners) listener(nativeSnapshot());
   } finally { nativePolling = false; }
 }
@@ -1325,10 +1335,10 @@ const chromeWorkspace = markRaw(defineComponent({
       <template #context>
         <div class="mv-views" role="group" aria-label="Capsule views">
           <div v-for="view in ['human','agent']" :key="view" class="mv-view-column">
-            <UiButton :id="`view-${view}`" :data-semantic-anchor="`wall/view/${view}`" class="mv-view-button" :label="view === 'human' ? 'Humans' : 'Agents'" :aria-pressed="desktopState.activeView === view" @click="selectGlobalView(view)" />
-            <div v-if="desktopState.activeView === view" class="mv-desktop-numbers" :aria-label="`${view === 'human' ? 'Humans' : 'Agents'} desktops`">
+            <UiButton :id="`view-${view}`" :data-semantic-anchor="`wall/view/${view}`" class="mv-view-button" :label="view === 'human' ? 'Humans' : 'Agents'" :aria-pressed="!terminalDeckOpen && desktopState.activeView === view" @click="selectGlobalView(view)" />
+            <div v-if="!terminalDeckOpen && desktopState.activeView === view" class="mv-desktop-numbers" :aria-label="`${view === 'human' ? 'Humans' : 'Agents'} desktops`">
               <UiButton v-for="desktop in desktopState.views[view].desktops" :key="desktop.id" :id="`desktop-${view}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view}/${desktop.id}`" :label="String(desktop.id)" :aria-label="`Desktop ${desktop.id}`" :aria-pressed="desktopState.views[view].active === desktop.id" @click="selectGlobalView(view); wall?.selectDesktop(desktop.id)" />
-              <UiButton id="desktop-add" data-semantic-anchor="wall/desktop/add" label="+" aria-label="Add desktop" :disabled="!desktopStateLoaded" @click="selectGlobalView(desktopState.activeView); wall?.addDesktop()" />
+              <UiButton id="desktop-add" data-semantic-anchor="wall/desktop/add" label="+" aria-label="Add desktop" :disabled="!desktopStateLoaded || desktopState.views[desktopState.activeView].desktops.length >= MAX_DESKTOPS_PER_VIEW" @click="selectGlobalView(desktopState.activeView); wall?.addDesktop()" />
               <UiButton v-if="desktopState.views[view].active !== 1" id="desktop-remove" data-semantic-anchor="wall/desktop/remove" label="−" aria-label="Remove empty desktop" :disabled="Object.values(desktopState.assignments).some(home => home.view === view && home.desktop === desktopState.views[view].active)" @click="wall?.removeDesktop(desktopState.views[view].active)" />
             </div>
           </div>
@@ -1352,7 +1362,7 @@ const chromeWorkspace = markRaw(defineComponent({
     </TopBar>
     <div v-if="!nestedMode.displayOnly" id="mv-layout-notice" class="mv-layout-notice">
       <!-- Reserve the longest outcome before the wall becomes interactive, including while panels open. -->
-      <div v-if="!nestedMode.displayOnly && wallView === 'workspace'" class="mv-tile-presets" aria-label="Tile layout presets">
+      <div v-if="!nestedMode.displayOnly && wallView === 'workspace' && !terminalDeckOpen" class="mv-tile-presets" aria-label="Tile layout presets">
         <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1 tile" :aria-pressed="activeDesktopPreset === 'single'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('single')" />
         <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2 side by side" :aria-pressed="activeDesktopPreset === 'side-by-side'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('side-by-side')" />
         <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" :aria-pressed="activeDesktopPreset === 'grid'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid')" />
@@ -1361,7 +1371,7 @@ const chromeWorkspace = markRaw(defineComponent({
         <span v-if="presetError" role="status">{{ presetError }}</span>
       </div>
       <p class="mv-layout-notice-reserve" aria-hidden="true"><strong>Layout unavailable.</strong> The default layout is shown read-only. Changes will not be saved.</p>
-      <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
+      <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !terminalDeckOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
         class="mv-layout-unavailable" role="alert" :data-error-code="layoutUnavailable.code">
         <strong>Layout unavailable.</strong> {{ layoutUnavailable.saveRefused
           ? 'Changes cannot be saved in this session.'
@@ -1369,7 +1379,7 @@ const chromeWorkspace = markRaw(defineComponent({
       </p>
     </div>
     <div class="mv-shell-body">
-      <div v-if="!nestedMode.displayOnly && !creativeOpen" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
+      <div v-if="!nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
       <main id="shell-wall" aria-label="MetaViewer capsule wall">
         <HostOutcome :row="hostOutcome" />
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
@@ -1377,13 +1387,13 @@ const chromeWorkspace = markRaw(defineComponent({
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </article>
         </section>
-        <DesktopWorkspace v-else :hidden="creativeOpen" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
+        <DesktopWorkspace v-else :hidden="creativeOpen || terminalDeckOpen" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId, desktopActive }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
+            <RoleSurface :presentation-active="desktopActive && !creativeOpen && !terminalDeckOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
               <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? 'Taking control…' }}</span>
@@ -1395,7 +1405,7 @@ const chromeWorkspace = markRaw(defineComponent({
             </template>
           </template>
         </DesktopWorkspace>
-        <EmptyWallView v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen" @add-capsule="launcherOpen = true" />
+        <EmptyWallView v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" @add-capsule="launcherOpen = true" />
         <section v-if="creativeOpen && selectedSurface && !nestedMode.displayOnly" class="mv-creative-screen" aria-label="Creative capsule">
           <CreativeCapsule :capsule-id="selectedSurface.id" :frames="creativeFrames" title="Storyboard" @submit-intent="dispatch" />
         </section>
@@ -1415,6 +1425,9 @@ const chromeWorkspace = markRaw(defineComponent({
           <UiButton id="settings-back" data-semantic-anchor="settings/back" label="Back to wall" @click="settingsOpen = false" />
           <MvSettingsPanel :settings-host="props.settingsHost ?? {}" v-model:density="density" :frames-port="props.framesPort ?? null" @scheme-change="onScheme" />
         </section>
+        <section v-if="terminalDeckOpen" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
+          <TerminalDeckView :open="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @update:open="terminalOpen = $event" />
+        </section>
       </main>
     </div>
     <div v-if="!nestedMode.displayOnly">
@@ -1428,7 +1441,7 @@ const chromeWorkspace = markRaw(defineComponent({
       <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.length} capsules` : 'Ready when you are' }}</span></template>
     </StatusBar>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
-      <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
+      <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :deck="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
     </div>
     <DemoDialog v-if="!nestedMode.displayOnly" :open="demoOpen" @close="demoOpen=false" />
     <div v-if="pendingModeSwitch" class="mv-mode-confirm s1-confirm-backdrop" role="dialog" aria-modal="true" aria-label="Switch capsule mode" @keydown.esc="pendingModeSwitch = null">
@@ -1500,7 +1513,8 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 </style>
 
 <style>
-.mv-creative-screen, .mv-multislot-screen, .mv-settings-screen { position:absolute; inset:0; z-index:2; overflow:auto; padding:var(--cuk-semantic-spacing-md); background:var(--cuk-semantic-surface-canvas); }
+.mv-creative-screen, .mv-multislot-screen, .mv-settings-screen, .mv-terminal-deck-screen { position:absolute; inset:0; z-index:2; overflow:auto; padding:var(--cuk-semantic-spacing-md); background:var(--cuk-semantic-surface-canvas); }
+.mv-terminal-deck-screen { padding:0; overflow:hidden; }
 .mv-shell--nested { grid-template-rows:minmax(0,1fr); }
 .mv-shell--nested > .mv-shell-body { grid-row:1; }
 .mv-nested-wall { display:grid; height:100%; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }

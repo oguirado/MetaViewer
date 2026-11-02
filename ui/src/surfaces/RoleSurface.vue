@@ -34,6 +34,60 @@ export function clipRoleBounds(tileRect, scrollAncestors = [], wallViewport = nu
   const width = Math.max(0, r - x), height = Math.max(0, b - y);
   return {visible:width >= 1 && height >= 1, bounds:{x, y, width, height}};
 }
+/** Subtract floating windows. Native views can paint only one rectangle.
+ * @param {{x:number,y:number,width:number,height:number}} bounds @param {Array<any>} occluders */
+export function subtractRoleOccluders(bounds, occluders = []) {
+  const hidden = {visible:false,bounds:{...bounds,width:0,height:0}};
+  if (occluders.length > 64) return hidden;
+  let pieces = [bounds];
+  for (const raw of occluders) {
+    const original = normalizeRect(raw);
+    if (!original) continue;
+    const cut = {x:Math.floor(original.x),y:Math.floor(original.y),width:Math.ceil(original.x+original.width)-Math.floor(original.x),height:Math.ceil(original.y+original.height)-Math.floor(original.y)};
+    pieces = pieces.flatMap(r => {
+      const l = Math.max(r.x,cut.x), t = Math.max(r.y,cut.y);
+      const right = Math.min(r.x+r.width,cut.x+cut.width), bottom = Math.min(r.y+r.height,cut.y+cut.height);
+      if (l >= right || t >= bottom) return [r];
+      return [{x:r.x,y:r.y,width:r.width,height:t-r.y},
+        {x:r.x,y:bottom,width:r.width,height:r.y+r.height-bottom},
+        {x:r.x,y:t,width:l-r.x,height:bottom-t},
+        {x:right,y:t,width:r.x+r.width-right,height:bottom-t}].filter(p=>p.width>0 && p.height>0);
+    });
+    if (!pieces.length || pieces.length > 256) return hidden;
+  }
+  const x=Math.min(...pieces.map(r=>r.x)), y=Math.min(...pieces.map(r=>r.y));
+  const right=Math.max(...pieces.map(r=>r.x+r.width)), bottom=Math.max(...pieces.map(r=>r.y+r.height));
+  if (pieces.reduce((sum,r)=>sum+r.width*r.height,0) !== (right-x)*(bottom-y)) return hidden;
+  return {visible:true,bounds:{x,y,width:right-x,height:bottom-y}};
+}
+/** DOM stacking authority includes the whole floating window, including chrome.
+ * @param {any} el @param {any} [doc] @param {(el:any)=>any} [styleOf] */
+export function floatingPresentation(el, doc = globalThis.document, styleOf = globalThis.getComputedStyle) {
+  let own = el?.closest?.('.dv-resize-container');
+  const floats = [...(doc?.querySelectorAll?.('.dv-resize-container') || [])].filter(node => {
+    const style=styleOf?.(node);
+    const rect = normalizeRect(node.getBoundingClientRect());
+    return rect && rect.width > 0 && rect.height > 0 && style?.display !== 'none' && !['hidden','collapse'].includes(style?.visibility);
+  });
+  const z = (/** @type {any} */ node) => {
+    let value=0; const seen=new Set();
+    for (let cur=node;cur && !seen.has(cur) && seen.size<MAX_ANCESTORS;cur=cur.parentElement) {
+      seen.add(cur);const n=Number(styleOf?.(cur)?.zIndex);if(Number.isFinite(n))value=Math.max(value,n);
+    }
+    return value;
+  };
+  // Dockview portals the content beside its floating chrome. The portal is
+  // exactly one native stacking level above its own resize container.
+  const portal = !own && el?.closest?.('.dv-render-overlay-float');
+  if (portal) {
+    const portalZ = z(portal);
+    const matches = floats.filter(node=>z(node)+1 === portalZ);
+    if (matches.length === 1) own = matches[0];
+  }
+  const stack = floats.map((node,index)=>({node,index,z:z(node)})).sort((a,b)=>a.z-b.z || a.index-b.index);
+  const index = stack.findIndex(item=>item.node===own);
+  return {front:index >= 0 && index === stack.length-1,occluders:stack.slice(index+1).map(item=>item.node.getBoundingClientRect())};
+}
 /** @param {any} [doc] */
 export function isModalActive(doc = globalThis.document) {
   const body = doc?.body;
@@ -85,7 +139,7 @@ export function collectClipRects(el) {
 import { onMounted, onBeforeUnmount, computed, ref, watch, inject, nextTick } from 'vue';
 const props = defineProps({surfaceId:{type:String,required:true},label:{type:String,default:''},control:{type:String,default:'agent'},canTakeControl:{type:Boolean,default:false},presentationActive:{type:Boolean,default:true}});
 const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control']);
-const progress = ref(''), confirmed = ref(false);
+const progress = ref(''), confirmed = ref(false), recordingPaused = ref(false);
 const overlays = /** @type {ReturnType<typeof import('./overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
 const hiddenSessions = /** @type {ReturnType<typeof import('./hiddenSessions.js').createHiddenSessionPool>|null} */ (inject('hiddenSessionPool', null));
 const menuOpen = ref(false), menuHost = ref(/** @type {HTMLElement|null} */ (null)), headerTarget = ref(/** @type {Element|null} */ (null)), resourceReleased = ref(false);
@@ -99,6 +153,7 @@ async function moveTile(/** @type {number|'new'} */ desktop, follow = false) {
   const result = await tileLayout?.move(props.surfaceId,desktop,follow);
   if (!result?.ok) error.value = 'Desktop move is unavailable.';
 }
+let stopNativeFocus = /** @type {(()=>void)|undefined} */ (undefined);
 const menuPopup = ref(/** @type {HTMLElement|null} */ (null));
 watch(menuOpen, async open => {
   if (!open) { if (menuPopup.value?.matches?.(':popover-open')) menuPopup.value.hidePopover(); return; }
@@ -147,14 +202,17 @@ async function sync() {
       const status = await api.status(props.surfaceId);
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
       viewState.value = status.view?.state || 'ready';
+      recordingPaused.value = status.view?.recording === 'paused_size_limit';
       if (viewState.value === 'ready') hasConnected.value = true;
       if (status.view?.state === 'error') throw Error(status.view.code);
     }
     const box = root.value?.getBoundingClientRect();
     const {scrollAncestors, wallViewport} = collectClipRects(root.value);
-    const clipped = clipRoleBounds(box, scrollAncestors, wallViewport);
-    const geometricallyShown = props.presentationActive && clipped.visible && isRoleElementPainted(root.value);
-    const visible = geometricallyShown && !isModalActive();
+    const floating = floatingPresentation(root.value);
+    const baseClip = clipRoleBounds(box, scrollAncestors, wallViewport);
+    const clipped = baseClip.visible ? subtractRoleOccluders(baseClip.bounds,floating.occluders) : baseClip;
+    const geometricallyShown = props.presentationActive && baseClip.visible && isRoleElementPainted(root.value);
+    const visible = geometricallyShown && clipped.visible && !isModalActive();
     if (mounted) hiddenSessions?.update(props.surfaceId, geometricallyShown, releaseHiddenSession, isGeometricallyShown);
     if (resourceReleased.value) return;
     if (!wanted()) { if (mounted) await revoke(); return; }
@@ -173,6 +231,7 @@ async function sync() {
       if (!reply.ok) throw Error(reply.code);
       shown = true;
     }
+    if (mounted && floating.front) await api.raise?.(props.surfaceId);
     const bounds = clipped.bounds;
     const next = JSON.stringify(bounds);
     if (mounted && next === signature) return;
@@ -248,6 +307,7 @@ async function confirmLogin() {
   catch (reason) { error.value = /** @type {Error} */(reason).message; }
 }
 onMounted(async () => {
+  stopNativeFocus = api?.onFocus?.((/** @type {string} */ id) => {if(id === props.surfaceId) {tileLayout?.focus?.(id);void sync();}});
   headerTarget.value = root.value?.closest?.('.mv-tile')?.querySelector('.cuk-capsule-panel__actions') ?? null;
   globalThis.document?.addEventListener?.('pointerdown', closeMenu, true);
   globalThis.window?.addEventListener?.('pointermove', onGeometryChange, true);
@@ -273,7 +333,7 @@ watch(() => props.control, () => { if (props.control !== 'agent') watching.value
 watch(watching, () => { void sync(); }, {flush:'post'});
 watch(progress, () => { if (!progress.value && ended) void sync(); });
 watch(() => props.presentationActive, () => { menuOpen.value = false; void sync(); }, {flush:'sync'});
-onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.window?.removeEventListener?.('pointermove', onGeometryChange, true); globalThis.window?.removeEventListener?.('resize', onGeometryChange); globalThis.document?.removeEventListener?.('pointerdown', closeMenu, true); transferring = tileLayout?.transfers.has(props.surfaceId) === true; if (transferring) Object.assign(tileLayout.transfers.get(props.surfaceId),{watching:watching.value,mounted}); alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); if (!transferring) void revoke(); });
+onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); globalThis.window?.removeEventListener?.('pointermove', onGeometryChange, true); globalThis.window?.removeEventListener?.('resize', onGeometryChange); globalThis.document?.removeEventListener?.('pointerdown', closeMenu, true); transferring = tileLayout?.transfers.has(props.surfaceId) === true; if (transferring) Object.assign(tileLayout.transfers.get(props.surfaceId),{watching:watching.value,mounted}); alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); if (!transferring) void revoke(); });
 </script>
 <template>
   <div class="mv-role-surface" :data-capsule-role="role || 'unproven'">
@@ -283,6 +343,7 @@ onBeforeUnmount(() => { overlays?.set(menuOwner, false); globalThis.window?.remo
           <button v-for="control in sizeControls" :key="control.action" type="button" :id="`tile-size-${control.action}-${surfaceId}`" :title="control.title" :aria-label="control.title" @pointerdown.stop @click.stop="resizeTile(control.action)">{{ control.label }}</button>
         </div>
         <span class="mv-role-mode-badge">{{ role }}</span>
+        <span v-if="recordingPaused" role="status">Recording paused (size limit)</span>
         <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
         <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
           <button :id="`tile-switch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/mode/switch`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('switchMode'))">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>

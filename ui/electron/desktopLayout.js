@@ -1,5 +1,7 @@
 // Presentation state only. Shared by the renderer and packaged layout gate.
 export const DESKTOP_SCHEMA = 'metaviewer.desktops/v1';
+/** Maximum persistent walls per view [TARGET]. */
+export const MAX_DESKTOPS_PER_VIEW = 16;
 export const VIEWS = Object.freeze(['human', 'agent']);
 export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'focus-strip', 'floating']);
 
@@ -23,7 +25,7 @@ export function validateDesktopState(state, validateLayout = (_layout) => false)
   for (const view of VIEWS) {
     const group = state.views[view];
     if (!keys(group,['active','next','desktops']) || !number(group.active) || !number(group.next) ||
-        !Array.isArray(group.desktops) || !group.desktops.length) return false;
+        !Array.isArray(group.desktops) || !group.desktops.length || group.desktops.length > MAX_DESKTOPS_PER_VIEW) return false;
     const ids = new Set();
     for (const desktop of group.desktops) {
       if (!keys(desktop,['id','preset','layout']) || !number(desktop.id) || ids.has(desktop.id) ||
@@ -53,7 +55,7 @@ export function validateDesktopState(state, validateLayout = (_layout) => false)
 /** @param {DesktopState} state @param {string} view */
 export function addDesktop(state, view = state.activeView) {
   const group = state.views[view], id = group.desktops.length + 1;
-  if (!number(id + 1)) throw Error('DESKTOP_LIMIT');
+  if (group.desktops.length >= MAX_DESKTOPS_PER_VIEW || !number(id + 1)) throw Error('DESKTOP_LIMIT');
   group.next = id + 1; group.desktops.push({id,preset:null,layout:null}); group.active = id;
   return id;
 }
