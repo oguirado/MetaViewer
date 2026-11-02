@@ -1,3 +1,4 @@
+import { programBinaries } from './programBinaries.js';
 import { isForeignIdentity } from './identityProtection.js';
 import { hostKeyboardLayout } from './keyboardLayout.js';
 import { stageOpeningMode } from './openingMode.js';
@@ -376,6 +377,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     return [...profiles, ...dynamicProfiles.values(), ...programProfiles.values(), ...windowProfiles.values()];
   };
   const roleFor = (/** @type {any} */ surface) => openingRoles.get(surface.surface_id) ?? roleOf(surface.profile_id);
+  const savedPrograms = programBinaries(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'program-binaries'));
   const markers = identityMarkers(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'identity-markers'));
   const transitions = new Map();
   const sessions = new Map(), failedSessions = new Map();
@@ -543,6 +545,24 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
         currentMode:entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
         lastLogin:await markers.read(p.id),busy:bound.has(p.id) && !entry?.surface_id};
+    }));
+  }
+
+  // [TARGET, unit decision] Separate from browser-only choices used by Add capsule.
+  async function programs() {
+    const reply = await listIdentities();
+    if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
+    return await Promise.all(reply.rows.filter((/** @type {any} */ row) => row.browser === 'program' && !isForeignIdentity(row.id)).map(async (/** @type {any} */ row) => {
+      // Older program identities have no saved binary: their id is the binary's name.
+      let binary = await savedPrograms.read(row.id);
+      if (!binary) {
+        try { binary = resolveHostBinary(row.id, {...process.env, ...env}).path; }
+        catch { /* not on this host: stays unavailable, and other rows still list */ }
+      }
+      const entry = [...capsuleStates.values()].find(s => s.profile_id === row.id && !['destroyed','closed'].includes(s.state));
+      return {profileId:row.id,kind:'program',binary,available:!!binary,
+        currentMode:entry?.surface_id ? roleFor(entry) : 'closed',surfaceId:entry?.surface_id || null,
+        busy:creating || transitions.has(row.id)};
     }));
   }
 
@@ -734,6 +754,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         const reason = rawReason.includes(resolved.name) ? rawReason : `${resolved.name}: ${rawReason}`;
         throw Object.assign(refuse(rawCode), {reason});
       }
+      await savedPrograms.remember(profileId, resolved.path);
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, role, resolved.path);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:1280, h:900}}});
@@ -879,12 +900,13 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const handler = async (event, message) => {
     if (disposed || !admit(event) || !message || message.schema !== 'metaviewer.roles/v0.3') throw refuse('XPRA_SENDER_REFUSED');
     const {op} = message;
-    const keys = ['choices','surfaces','list-windows'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window'].includes(op) ? 'choice,op,schema'
+    const keys = ['choices','programs','surfaces','list-windows'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window'].includes(op) ? 'choice,op,schema'
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
       : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
     try {
       if (op === 'choices') return await choices();
+      if (op === 'programs') return await programs();
       if (op === 'list-windows') return await listHostWindowChoices();
       if (op === 'surfaces') {
         pruneProgramProfiles();

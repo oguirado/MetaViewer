@@ -5,7 +5,7 @@ import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.
 import { operatorHost } from '../operatorHost.js';
 import { identityErrorText, identityFormRequest, validLabel, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
 import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityProtection.js';
-const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
+const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
@@ -50,16 +50,34 @@ async function invoke(method,request) {
     const listed=method==='list'?result:await api.list();
     if(!listed.ok)throw new Error(listed.code);rows.value=listed.rows;
     const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
-    if (roleApi) {try {const result = await roleApi.choices(); if (Array.isArray(result)) modes.value = result;} catch {modes.value = [];} }
+    if (roleApi) {try {const result = await roleApi.choices(); if (Array.isArray(result)) {
+      const programs = typeof roleApi.programs === 'function' ? await roleApi.programs() : [];
+      modes.value = [...result, ...(Array.isArray(programs) ? programs : [])];
+    }} catch {modes.value = [];} }
     if(method==='create'){id.value='';typedName.value='';labelEdited.value=false;label.value='';domains.value='';}
     pendingDelete.value='';
   }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);}
   finally{busy.value=false;login.value=false;}
 }
 /** @param {string} profileId @param {string} role */
-function openIdentity(profileId,role){
+async function openIdentity(profileId,role){
   if(isForeignIdentity(profileId)){error.value=identityErrorText('IDENTITY_PROTECTED',profileId);return;}
-  if(rows.value.find(r=>r.id===profileId)?.browser==='program')return;
+  if(busy.value)return;
+  if(rows.value.find(r=>r.id===profileId)?.browser==='program') {
+    const mode=modeFor(profileId);
+    if(!mode?.available || mode.busy || !mode.binary || !roleApi?.createProgram) {
+      error.value='Saved program binary unavailable. Open the program through Add capsule first.';return;
+    }
+    busy.value=true;error.value='';
+    try {
+      const choice={binary:mode.binary,role};
+      const reply=await (props.openProgram ? props.openProgram(choice) : roleApi.createProgram(choice));
+      if(reply?.ok!==true)throw Error(reply?.code || 'PROGRAM_OPEN_FAILED');
+      emit('close');
+    } catch(reason) {error.value=identityErrorText(reason instanceof Error ? reason.message : '');}
+    finally {busy.value=false;}
+    return;
+  }
   emit('open-identity',{profileId,role});emit('close');
 }
 function create(){if(form.value)void invoke('create',form.value);}
@@ -82,13 +100,14 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
     <ul class="identity-list" aria-label="Saved identities">
       <li v-for="row in rows" :key="row.id" class="identity-row">
         <div class="identity-summary"><code>{{ row.id }}</code><strong>{{ row.label }}</strong>
-          <span class="identity-mode">{{ row.browser === 'program' ? 'program' : (modeFor(row.id)?.currentMode || 'closed') }}</span>
-          <span class="identity-last-login">Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded' }}</span>
+          <span class="identity-mode">{{ modeFor(row.id)?.currentMode || (row.browser === 'program' ? 'program' : 'closed') }}</span>
+          <span v-if="row.browser === 'program' && !busy && !modeFor(row.id)?.available">Saved binary unavailable. Open through Add capsule first.</span>
+          <span v-if="row.browser !== 'program'" class="identity-last-login">Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded' }}</span>
         </div>
         <div class="identity-actions">
         <UiButton v-if="!roleApi" label="Log in" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program'" @click="invoke('login',{id:row.id})" />
-        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program' || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'human')" />
-        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program' || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'agent')" />
+        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'human')" />
+        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'agent')" />
         <UiButton label="Delete" :disabled="busy || isProtectedIdentity(row.id)" :title="isProtectedIdentity(row.id) ? 'Managed outside MetaViewer' : undefined" @click="askDelete(row.id)" />
         </div>
       </li>

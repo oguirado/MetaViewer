@@ -1,3 +1,4 @@
+import { workflowPrompt } from './workflowPrompts.js';
 /**
  * OpenFresnel-style Terminal Deck model and controller for MetaViewer (P18h).
  *
@@ -1588,7 +1589,7 @@ export function createTerminalDeckController(options = {}) {
    *
    * @returns {Promise<{ ok: boolean, text: string, toast: string }>}
    */
-  async function bootstrap() {
+  async function bootstrap(promptText = AGENT_ENTRY_PROMPT) {
     if (toastTimer !== null) {
       clearTimeout(toastTimer);
       toastTimer = null;
@@ -1603,13 +1604,17 @@ export function createTerminalDeckController(options = {}) {
 
     if (clip && typeof clip.writeText === 'function') {
       try {
-        await clip.writeText(AGENT_ENTRY_PROMPT);
+        if (promptText === AGENT_ENTRY_PROMPT) {
+          await clip.writeText(AGENT_ENTRY_PROMPT);
+        } else {
+          await clip.writeText(promptText);
+        }
         copied = true;
       } catch {
         copied = false;
       }
     }
-    if (opEntry && typeof opEntry.copy === 'function') {
+    if (promptText === AGENT_ENTRY_PROMPT && opEntry && typeof opEntry.copy === 'function') {
       try {
         const res = await opEntry.copy();
         if (res && typeof res === 'object' && /** @type {{ ok?: unknown }} */ (res).ok === true) {
@@ -1635,7 +1640,7 @@ export function createTerminalDeckController(options = {}) {
         }
       }, toastDurationMs);
     }
-    return { ok: copied, text: AGENT_ENTRY_PROMPT, toast: toastMessage };
+    return { ok: copied, text: promptText, toast: toastMessage };
   }
 
   /**
@@ -1969,6 +1974,7 @@ export function createTerminalDeckController(options = {}) {
     switchScreen,
     focusSlot,
     bootstrap,
+    copyWorkflowPrompt: (/** @type {string} */ kind) => bootstrap(workflowPrompt(kind)),
     dismissError,
     handleKeyDown,
     writeSessionBytes,

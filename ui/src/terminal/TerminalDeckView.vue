@@ -878,6 +878,15 @@ defineExpose({
             @keydown="onBootstrapKeyDown"
             @click="onBootstrap"
           >🚀 Bootstrap</button>
+          <button
+            v-for="action in [{kind:'automate',label:'Automate'}, {kind:'use-automation',label:'Use automation'}, {kind:'no-automation',label:'No automation'}]"
+            :key="action.kind"
+            type="button"
+            :id="`terminal-deck-${action.kind}`"
+            :data-semantic-anchor="`terminal/${action.kind}`"
+            class="mv-terminal-deck__action-btn"
+            @click="controller.copyWorkflowPrompt(action.kind)"
+          >{{ action.label }}</button>
           <span
             v-if="toastMessage"
             id="terminal-deck-bootstrap-toast"
