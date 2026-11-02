@@ -152,6 +152,7 @@ p12-display-tap.md	changes/unreleased/p12-display-tap.md
 p18-opening-modes.md	changes/unreleased/p18-opening-modes.md
 p18b-header-menus.md	changes/unreleased/p18b-header-menus.md
 p18cr2d-0ee9a63466b2	changes/unreleased/p18c-r2-desktop-restore.md
+p18h-packaged-pty.md	changes/unreleased/p18h-packaged-pty.md
 pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
@@ -159,6 +160,7 @@ u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
 ui-control-arm.md	changes/unreleased/ui-control-arm.md
 ui-geometry-wire.md	changes/unreleased/ui-geometry-wire.md
 ux-chip.md	changes/unreleased/ux-chip.md
+v021-release.md	changes/unreleased/v021-release.md
 witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
 xpra-role-tiles.md	changes/unreleased/xpra-role-tiles.md
