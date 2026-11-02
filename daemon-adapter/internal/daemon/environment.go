@@ -761,10 +761,40 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 			}
 		}
 		if strings.TrimSpace(q.Op) == "list" {
-			return listSnapshots(events)
+			events, err = listSnapshots(events)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if q.Op != "input" {
-			return events, nil
+			// State updates fence core admission even when the picture is static.
+			// Preserve reply-before-frame order, including list reconciliation.
+			out := make([]json.RawMessage, 0, len(events))
+			for _, event := range events {
+				out = append(out, event)
+				var state struct {
+					Event string `json:"event"`
+					Data  struct {
+						Surface capsule.Surface `json:"surface"`
+					} `json:"data"`
+				}
+				if json.Unmarshal(event, &state) != nil || state.Event != "state_changed" || state.Data.Surface.State != "active" || state.Data.Surface.Control != "agent" {
+					continue
+				}
+				id := state.Data.Surface.SurfaceID
+				ref, refreshErr := captureStateFrame(ctx, m, profiles, pubs, id)
+				if refreshErr != nil {
+					fmt.Fprintf(os.Stderr, "adapter: state refresh %s: %v; state change remains successful\n", id, refreshErr)
+					continue
+				}
+				frameJSON, _ := json.Marshal(ref)
+				frameMu.Lock()
+				lastFrames[id] = frameJSON
+				frameMu.Unlock()
+				ready, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "frame_ready", "data": map[string]any{"frame_ref": ref}})
+				out = append(out, ready)
+			}
+			return out, nil
 		}
 		// [TARGET, unit decision] Execution time is adapter-observed native
 		// completion, before capture; expectation verification remains false.
