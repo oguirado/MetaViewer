@@ -232,13 +232,21 @@ func TestSubscriptionDeliveryFailure(t *testing.T) {
 			FrameRef Ref `json:"frame_ref"`
 		}
 	}
+	source.mu.Lock()
+	captureCalls := source.calls
+	source.mu.Unlock()
+	if captureCalls < 2 {
+		t.Fatalf("retry reused a capture: calls=%d", captureCalls)
+	}
 	var previous uint64
+	var previousTick uint64
 	for i := 0; i < 2; i++ {
 		msg := <-delivered
-		if json.Unmarshal(msg, &frame) != nil || frame.Event != "frame_ready" || frame.Data.FrameRef.Generation <= previous {
+		if json.Unmarshal(msg, &frame) != nil || frame.Event != "frame_ready" || frame.Data.FrameRef.Generation <= previous || frame.Data.FrameRef.Tick <= previousTick {
 			t.Fatalf("missing fresh frame attempt: %s", msg)
 		}
 		previous = frame.Data.FrameRef.Generation
+		previousTick = frame.Data.FrameRef.Tick
 	}
 	var failure capsule.ErrorEvent
 	if msg := <-delivered; json.Unmarshal(msg, &failure) != nil || failure.Event != "error" || failure.Data.Code != "capture_failed" || failure.Data.SurfaceID != "a" {

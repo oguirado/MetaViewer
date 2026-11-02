@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -31,6 +32,9 @@ func TestSubscriptionRecoversOneFrameFault(t *testing.T) {
 			t.Run(fmt.Sprintf("%s/serial=%v", mode, serial), func(t *testing.T) {
 				root, b, f := ramFixture(t)
 				p := publisher(t, root)
+				if mode == "retention_enoent" {
+					p.cfg.MaxRetained = 2
+				}
 				changed := f
 				changed.Path = filepath.Join(b.FramesRoot, "changed.png")
 				file, err := os.OpenFile(changed.Path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
@@ -75,6 +79,8 @@ func TestSubscriptionRecoversOneFrameFault(t *testing.T) {
 				})
 				delivered := make(chan Ref, 8)
 				attempts := 0
+				setupErrors := make(chan error, 1)
+				evicted := false
 				sub, err := NewSubscriptions(context.Background(), SubscriptionConfig{MaxSubscriptions: 1, PollInterval: time.Millisecond, CaptureTimeout: time.Second, ShutdownTimeout: time.Second, Serial: serial, DeduplicateUnchanged: true, Diagnostics: &diagnostic}, source, p, func(_ context.Context, msg json.RawMessage) error {
 					var event struct {
 						Event string
@@ -100,15 +106,20 @@ func TestSubscriptionRecoversOneFrameFault(t *testing.T) {
 								next.Seq = seq
 								newer, err := p.Publish("a", b, next)
 								if err != nil {
+									setupErrors <- err
 									return err
 								}
 								if _, err = os.Stat(newer.RAMWSPath); err != nil {
+									setupErrors <- err
 									return err
 								}
 							}
 							if _, err := os.ReadFile(ref.RAMWSPath); !errors.Is(err, os.ErrNotExist) {
-								return errors.New("negative control: expected evicted frame")
+								setupErr := fmt.Errorf("negative control: expected evicted frame, got %v", err)
+								setupErrors <- setupErr
+								return setupErr
 							}
+							evicted = true
 							return os.ErrNotExist
 						}
 					}
@@ -126,11 +137,22 @@ func TestSubscriptionRecoversOneFrameFault(t *testing.T) {
 				deadline := time.After(time.Second)
 				for len(ticks) < 3 {
 					select {
+					case setupErr := <-setupErrors:
+						t.Fatalf("retention setup failed: %v", setupErr)
 					case ref := <-delivered:
 						ticks = append(ticks, ref.Tick)
 					case <-deadline:
 						t.Fatalf("picture froze after one %s fault; delivered ticks=%v terminal=%v", mode, ticks, sub.TerminalError("a"))
 					}
+				}
+				if terminal := sub.TerminalError("a"); terminal != nil {
+					t.Fatalf("recovered fault retained terminal error: %v", terminal)
+				}
+				sub.mu.Lock()
+				_, active := sub.tasks["a"]
+				sub.mu.Unlock()
+				if !active {
+					t.Fatal("recovered subscription terminated")
 				}
 				if err = sub.Unsubscribe(context.Background(), "a"); err != nil {
 					t.Fatal(err)
@@ -138,8 +160,13 @@ func TestSubscriptionRecoversOneFrameFault(t *testing.T) {
 				if ticks[0] != 10 || ticks[1] != 20 || ticks[2] != 40 {
 					t.Fatalf("unexpected recovery order: %v", ticks)
 				}
-				if sub.TerminalError("a") != nil {
-					t.Fatal("recovered fault retained terminal error")
+				select {
+				case setupErr := <-setupErrors:
+					t.Fatalf("retention setup failed: %v", setupErr)
+				default:
+				}
+				if mode == "retention_enoent" && !evicted {
+					t.Fatal("retention fault was never exercised")
 				}
 				if !strings.Contains(diagnostic.String(), "failure") {
 					t.Fatalf("missing diagnostic: %s", diagnostic.String())
@@ -147,5 +174,71 @@ func TestSubscriptionRecoversOneFrameFault(t *testing.T) {
 				t.Logf("[MEASURED] recovered ticks=%v frame delivery attempts=%d", ticks, attempts)
 			})
 		}
+	}
+}
+
+// Cancellation during a failing source read must bypass publication retry diagnostics.
+// The uncancelled control proves that the same publication error exercises retry.
+func TestSubscriptionPublicationCancellationQuiet(t *testing.T) {
+	for _, mode := range []string{"task", "context", "uncancelled"} {
+		t.Run(mode, func(t *testing.T) {
+			root, b, f := ramFixture(t)
+			p := publisher(t, root)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			work := &task{}
+			reads := 0
+			p.sourceRead = func(fd int, _, _ string) ([]byte, error) {
+				_ = syscall.Close(fd)
+				reads++
+				switch mode {
+				case "task":
+					work.cancelled.Store(true)
+				case "context":
+					cancel()
+				}
+				return nil, os.ErrNotExist
+			}
+			var diagnostic bytes.Buffer
+			emissions := 0
+			sub, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+				MaxSubscriptions: 1, PollInterval: time.Millisecond, CaptureTimeout: time.Second,
+				ShutdownTimeout: time.Second, Diagnostics: &diagnostic,
+			}, orderedFrameSource(func(context.Context, string) (capsule.Binding, capsule.NativeFrame, error) {
+				t.Fatal("publish loop must consume the supplied capture")
+				return b, f, nil
+			}), p, func(context.Context, json.RawMessage) error { emissions++; return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = sub.Close(context.Background()) }()
+			items := make(chan capturedItem, 1)
+			ack := make(chan struct{})
+			items <- capturedItem{binding: b, native: f, ack: ack}
+			close(items)
+			sub.publishLoop(ctx, "a", work, items)
+			if reads != 1 || work.err != nil || emissions != 0 {
+				t.Fatalf("reads=%d terminal=%v emissions=%d", reads, work.err, emissions)
+			}
+			if mode == "uncancelled" {
+				if !strings.Contains(diagnostic.String(), "frame failure") {
+					t.Fatalf("missing retry diagnostic: %s", diagnostic.String())
+				}
+				select {
+				case <-ack:
+				default:
+					t.Fatal("retry did not acknowledge the failed capture")
+				}
+			} else {
+				if diagnostic.Len() != 0 {
+					t.Fatalf("cancellation logged a failure: %s", diagnostic.String())
+				}
+				select {
+				case <-ack:
+					t.Fatal("cancelled publication was retried")
+				default:
+				}
+			}
+		})
 	}
 }

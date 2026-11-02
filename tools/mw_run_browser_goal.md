@@ -15,6 +15,10 @@ supplies `MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`, `MV_SRF_STATE_DIR`, `MV_SRF_BIN_DI
 `SRF_IDENTITY_STORE_ROOT`, and `MV_WENDER_ROOT` when configured. Missing values
 must come from the running app/operator, not a guessed path.
 
+Agent programs start agent controlled. If you used **Take control** on the
+selected tile, press **Release control** before running a command and verify
+`control:'agent'`.
+
 ```sh
 (
   set -a; . "<copied-current.env-path>"; set +a
@@ -25,7 +29,7 @@ must come from the running app/operator, not a guessed path.
 )
 ```
 
-Release human control on the selected tile before starting. Evidence must be in
+Evidence must be in
 an owned private RAM directory beneath `/dev/shm`, mode `0700` [CITED:
 `tools/mw_run_program.py` (`private_evidence_base`)], without symlink ancestors.
 The example creates a fresh directory; keep its path to inspect the JSON result's
