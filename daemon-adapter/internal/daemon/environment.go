@@ -634,11 +634,16 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		var input struct {
 			SurfaceID  string `json:"surface_id"`
 			ProposalID string `json:"proposal_id"`
+			Origin     string `json:"origin"`
+			Action     struct {
+				Type string `json:"type"`
+			} `json:"action"`
 		}
 		_ = json.Unmarshal(q.Params, &input)
 		frameMu.Lock()
 		before := lastFrames[input.SurfaceID]
 		frameMu.Unlock()
+		var currentBaseline json.RawMessage
 		failure := func(err error) ([]json.RawMessage, error) {
 			if q.Op == "input" && input.ProposalID != "" && len(before) != 0 {
 				completed := monotonic()
@@ -664,6 +669,32 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		var evidence capsule.InputEvidence
 		var err error
 		if q.Op == "input" {
+			// Snapshot the actual publication before native input. Subscriptions
+			// can advance independently of this handler's diagnostic lastFrames.
+			if input.Origin != "human" && (input.Action.Type == "click" || input.Action.Type == "type" || input.Action.Type == "key") {
+				current, baselineErr := m.SubscriptionBinding(input.SurfaceID)
+				if baselineErr != nil {
+					return failure(baselineErr)
+				}
+				if current.NativeKind != "holdings" {
+					profile, ok := profiles[current.Surface.ProfileID]
+					if !ok {
+						profile, ok = m.ProfileFor(current.Surface.ProfileID)
+					}
+					if !ok {
+						return failure(configuration("current input frame publisher required"))
+					}
+					ref, baselineErr := pubs[profile.RAMRoot].Current(input.SurfaceID)
+					if baselineErr != nil {
+						return failure(configuration("current published input frame required"))
+					}
+					currentJSON, baselineErr := json.Marshal(ref)
+					if baselineErr != nil {
+						return failure(baselineErr)
+					}
+					currentBaseline = currentJSON
+				}
+			}
 			events, evidence, err = m.HandleInputWithEvidence(ctx, q)
 		} else {
 			events, err = m.Handle(ctx, q)
@@ -810,7 +841,11 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		}
 		capture := func(c context.Context) (capsule.Binding, capsule.NativeFrame, error) { return m.Capture(c, id) }
 		var baseline frames.Ref
-		_ = json.Unmarshal(before, &baseline)
+		baselineSource := before
+		if currentBaseline != nil {
+			baselineSource = currentBaseline
+		}
+		_ = json.Unmarshal(baselineSource, &baseline)
 		var binding capsule.Binding
 		var native capsule.NativeFrame
 		settle := params.Action.Type == "type" || params.Action.Type == "key"
