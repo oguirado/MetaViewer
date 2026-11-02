@@ -172,6 +172,18 @@ window focus alone does not establish focused-editor custody, and the current
 program receipt path supplies RGB evidence rather than the semantic text witness
 required by `text_present`. Pixel changes cannot certify intended editor text.
 
+If a genuinely newer same-surface publication changes after planning, rebind
+refuses the old decision before constructing a proposal. The program loop may
+acquire a new frame, perceive it and plan again for the original goal, consuming
+the same existing attempt limit and absolute run deadline. It records the actual
+old/fresh metadata and mismatch fields. Persistent motion can exhaust this bound;
+there is no guarantee of progress on continuously changing pixels. A known
+unsubmitted refusal retains previous verified moves as partial evidence without
+calling the rejected decision delivered or uncertain. Any proposal/transport
+evidence or uncertain settlement prevents this recovery and retains the
+`INPUT_UNCERTAIN` outcome. The existing explicit core `STALE_FRAME` nonexecution
+path remains separate. No rejected coordinates are replayed.
+
 Focused checks:
 
 ```sh

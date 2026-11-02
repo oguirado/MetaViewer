@@ -289,9 +289,171 @@ class ProgramTests(unittest.TestCase):
         self.b.surface_id = 'surface-alice'
         with patch.object(self.b, 'ownership'), patch.object(self.b, 'observe', return_value=dict(
                 frame_ref=dict(frame(2), sha256='b' * 64))), patch.object(host.tools, 'propose') as submit:
-            with self.assertRaisesRegex(host.OwnerRefused, 'MW_STALE_FRAME_EXHAUSTED'):
+            with self.assertRaisesRegex(program.ProgramObservationChanged, 'MW_PROGRAM_OBSERVATION_CHANGED'):
                 self.b.propose(dict(frame=frame()), planner_reply(), 1000)
             submit.assert_not_called()
+
+    def freshness_fixture(self, frames):
+        self.b.surface_id='surface-alice'
+        values=iter(frames)
+        self.b.observe=Mock(side_effect=lambda _:dict(frame_ref=next(values)))
+        def perceive(observed):
+            f=observed['frame_ref']; table=element_table();table['frame_sha256']=f['sha256']
+            return dict(frame=f,frame_witness={},observation=dict(frame_ref=f),table=table)
+        self.b.perceive=Mock(side_effect=perceive)
+        reply=planner_reply()
+        planner=Mock(battery_state_sha256='d'*64)
+        def plan(*args):
+            action=copy.deepcopy(reply['action']);action['x']=19+planner.plan_step.call_count
+            return action,reply['expectation'],reply['state'],reply['target_node']
+        planner.plan_step.side_effect=plan
+        return planner
+
+    def test_inherited_propose_changed_pixels_requires_new_perception_and_plan(self):
+        b=lambda n:dict(frame(n),sha256='b'*64)
+        planner=self.freshness_fixture([frame(1),b(2),b(3),b(4),b(5)])
+        def settle(pid,*args,**kwargs):
+            return dict(schema='action_receipt/v0.2',proposal_id=pid,executed_at_ns=2,
+                after_frame=b(6),verified=True,verification=dict(method='pixel',detail='changed'),error='',
+                native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1))
+        with patch.object(self.b,'ownership'),patch.object(self.b,'retain',return_value={}), \
+             patch.object(host.tools,'propose',return_value=dict(status='admitted')) as submit, \
+             patch.object(host.tools,'wait_verify',side_effect=settle):
+            moves=program.run_moves(self.b,planner,'Covered square',1,1000)
+        self.assertEqual(len(moves),1);self.assertEqual(planner.plan_step.call_count,2)
+        self.assertEqual(self.b.perceive.call_count,2);submit.assert_called_once()
+        proposal=submit.call_args.args[0]
+        self.assertEqual(proposal['based_on_frame'],dict(sha256='b'*64,generation=5))
+        self.assertEqual(proposal['action']['x'],21) # Fresh second decision, not old x20.
+        rejected=self.b.program_attempts[0]
+        self.assertEqual(rejected['status'],'refused_before_dispatch')
+        self.assertNotIn('proposal_id',rejected)
+        self.assertEqual(rejected['rebind']['fresh_frame'],b(2))
+        self.assertEqual(rejected['rebind']['mismatches'],dict(sha256=dict(sensed='a'*64,fresh='b'*64)))
+
+    def test_persistent_changed_pixels_is_bounded_without_proposals(self):
+        f=lambda n,h:dict(frame(n),sha256=h*64)
+        planner=self.freshness_fixture([f(1,'a'),f(2,'b'),f(3,'b'),f(4,'b'),
+            f(5,'c'),f(6,'c'),f(7,'c'),f(8,'d')])
+        with patch.object(self.b,'ownership'),patch.object(host.tools,'propose') as submit:
+            with self.assertRaises(program.ProgramObservationChanged):
+                program.run_moves(self.b,planner,'Covered square',1,1000)
+        submit.assert_not_called();self.assertEqual(planner.plan_step.call_count,3)
+        self.assertEqual(len(self.b.program_attempts),3)
+        self.assertTrue(all(a['status']=='refused_before_dispatch' for a in self.b.program_attempts))
+        self.assertTrue(self.b.program_clean_refusal)
+
+    def test_changed_observation_cannot_reset_deadline(self):
+        planner=self.freshness_fixture([frame(1),dict(frame(2),sha256='b'*64)])
+        deadline=100000000;self.b.run_deadline_ns=deadline
+        clock=[0];observe=self.b.observe.side_effect
+        def advancing(timeout):
+            result=observe(timeout)
+            if result['frame_ref']['generation']==2:clock[0]=deadline
+            return result
+        self.b.observe.side_effect=advancing
+        with patch.object(program.time,'monotonic_ns',side_effect=lambda:clock[0]), \
+             patch.object(self.b,'ownership'),patch.object(host.tools,'propose') as submit:
+            with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_DEADLINE'):
+                program.run_moves(self.b,planner,'Covered square',1,1000)
+        submit.assert_not_called();planner.plan_step.assert_called_once()
+        self.assertEqual(self.b.run_deadline_ns,deadline)
+
+    def test_typed_signal_after_dispatch_evidence_never_retries(self):
+        planner=self.freshness_fixture([frame()])
+        def suspect(*args):
+            self.b.frame_attempts=[dict(status='dispatch_pending')]
+            raise program.ProgramObservationChanged(frame(),frame(2),{})
+        with patch.object(self.b,'propose',side_effect=suspect) as propose:
+            with self.assertRaises(program.ProgramObservationChanged):
+                program.run_moves(self.b,planner,'Covered square',1,1000)
+        propose.assert_called_once();self.assertEqual(self.b.program_attempts[0]['status'],'input_uncertain')
+        self.assertFalse(self.b.program_clean_refusal)
+
+    def test_partial_verified_actions_only_clean_rebind_refusal_avoids_uncertainty(self):
+        self.b.observe=Mock(return_value=dict(frame_ref=frame()))
+        self.b.wender=self.root
+        args=SimpleNamespace(identity='alice',goal='Covered square',steps=2,timeout_ms=1000,
+            planner='rules',model_timeout_ms=120000)
+        for clean in (True,False):
+            def refused(*args):
+                self.b.program_moves=[dict(status='verified_move')]
+                self.b.program_attempts=[dict(status='refused_before_dispatch' if clean else 'input_uncertain')]
+                self.b.program_clean_refusal=clean
+                raise program.ProgramObservationChanged(frame(),frame(2),{})
+            with patch.dict(host.os.environ,{'XDG_STATE_HOME':str(self.root)}), \
+                 patch.object(host,'connect',return_value=contextlib.nullcontext(self.b.client)), \
+                 patch.object(program,'ProgramBackend',return_value=self.b), \
+                 patch.object(program,'VCorePerceptionAdapter'),patch.object(program,'WenderSubprocessAdapter'), \
+                 patch.object(program,'wait_for_publication',return_value=dict(frame_ref=frame(2))), \
+                 patch.object(program,'run_moves',side_effect=refused), \
+                 contextlib.redirect_stdout(io.StringIO()) as output,contextlib.redirect_stderr(io.StringIO()):
+                rc=program.run_entry(args)
+            self.assertEqual(rc,6 if clean else 5)
+            result=json.loads(output.getvalue())
+            self.assertEqual(result['verdict_code'],'MW_PROGRAM_OBSERVATION_CHANGED' if clean else 'INPUT_UNCERTAIN')
+            report=json.loads(Path(result['report']).read_text());self.assertEqual(len(report['moves']),1)
+
+    def test_partial_verified_rebind_journal_or_refresh_failure_remains_uncertain(self):
+        real_run_moves=program.run_moves
+        real_wait=program.wait_for_publication
+        real_write=program.atomic_journal
+        args=SimpleNamespace(identity='alice',goal='Covered square',steps=2,timeout_ms=1000,
+            planner='rules',model_timeout_ms=120000)
+        for failure in ('journal','observe','subscribe'):
+            with self.subTest(failure=failure):
+                self.b.observe=Mock(return_value=dict(frame_ref=frame()))
+                self.b.wender=self.root;self.b.pending={};self.b.frame_attempts=[]
+                self.b.client=Mock()
+                def run(*unused):
+                    fresh=[frame(1),frame(2),frame(3),frame(4),dict(frame(5),sha256='b'*64),
+                           dict(frame(6),sha256='b'*64)]
+                    planner=self.freshness_fixture(fresh)
+                    observe=self.b.observe.side_effect;count=[0]
+                    def acquire(timeout):
+                        count[0]+=1
+                        if failure=='observe' and count[0]==6:raise host.ClientError('UNAVAILABLE','refresh unavailable')
+                        return observe(timeout)
+                    self.b.observe.side_effect=acquire
+                    if failure=='subscribe':
+                        self.b.client.subscribe_frames.side_effect=[None,host.ClientError('UNAVAILABLE','refresh unavailable')]
+                    with patch.object(program,'wait_for_publication',side_effect=real_wait):
+                        return real_run_moves(self.b,planner,'Covered square',2,1000)
+                def journal(path,value):
+                    if failure=='journal' and path.name.startswith('rebind-refused-'):
+                        raise OSError('refusal receipt unavailable')
+                    return real_write(path,value)
+                def settle(pid,*unused,**kwargs):
+                    return dict(schema='action_receipt/v0.2',proposal_id=pid,executed_at_ns=2,
+                        after_frame=frame(3),verified=True,verification=dict(method='pixel',detail='changed'),error='',
+                        native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1))
+                with patch.dict(host.os.environ,{'XDG_STATE_HOME':str(self.root)}), \
+                     patch.object(host,'connect',return_value=contextlib.nullcontext(self.b.client)), \
+                     patch.object(program,'ProgramBackend',return_value=self.b), \
+                     patch.object(program,'VCorePerceptionAdapter'),patch.object(program,'WenderSubprocessAdapter'), \
+                     patch.object(program,'wait_for_publication',return_value=dict(frame_ref=frame(2))), \
+                     patch.object(program,'run_moves',side_effect=run), \
+                     patch.object(self.b,'ownership'),patch.object(self.b,'retain',return_value={}), \
+                     patch.object(program,'atomic_journal',side_effect=journal), \
+                     patch.object(host.tools,'propose',return_value=dict(status='admitted')) as submit, \
+                     patch.object(host.tools,'wait_verify',side_effect=settle), \
+                     contextlib.redirect_stdout(io.StringIO()) as output,contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(program.run_entry(args),5)
+                result=json.loads(output.getvalue());self.assertEqual(result['verdict_code'],'INPUT_UNCERTAIN')
+                report=json.loads(Path(result['report']).read_text())
+                self.assertEqual(submit.call_count,1,report)
+                self.assertEqual(len(report['moves']),1)
+                self.assertFalse(self.b.program_clean_refusal)
+
+    def test_invalid_rebind_identity_or_generation_does_not_request_replanning(self):
+        self.b.surface_id='surface-alice'
+        for fresh in (dict(frame(2),surface_id='foreign'),dict(frame(1),sha256='b'*64),frame(0)):
+            with self.subTest(fresh=fresh),patch.object(self.b,'ownership'), \
+                 patch.object(self.b,'observe',return_value=dict(frame_ref=fresh)), \
+                 patch.object(host.tools,'propose') as submit:
+                with self.assertRaises(host.OwnerRefused):
+                    self.b.propose(dict(frame=frame()),planner_reply(),1000)
+                submit.assert_not_called()
 
     def test_real_planner_boundary_and_core_receipt_without_browser_metadata(self):
         # A real pipe fixture exercises the existing Wender validator, including

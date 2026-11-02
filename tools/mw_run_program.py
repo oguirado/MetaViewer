@@ -29,6 +29,16 @@ from metaviewer_agents.perception.vcore import VCorePerceptionAdapter, project_e
 from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
 
 
+class ProgramObservationChanged(RuntimeError):
+    """A valid newer observation rejected rebind before any proposal exists."""
+    code = 'MW_PROGRAM_OBSERVATION_CHANGED'
+
+    def __init__(self, sensed, fresh, mismatches):
+        super().__init__(self.code)
+        self.detail = dict(sensed_frame=copy.deepcopy(sensed), fresh_frame=copy.deepcopy(fresh),
+                           mismatches=copy.deepcopy(mismatches))
+
+
 @contextmanager
 def marks_workspace():
     # Both frozen adapters admit marks only beneath this RAM namespace.
@@ -232,9 +242,14 @@ class ProgramBackend(host.HostBackend):
             fresh = wait_for_publication(self, baseline['generation'], remaining)['frame_ref']
         else:
             fresh = self.observe(remaining)['frame_ref']
-        host.need(all(fresh[k] == sensed['frame'][k] for k in
-                      ('surface_id', 'sha256', 'width', 'height')) and
+        mismatches = {k: dict(sensed=sensed['frame'][k], fresh=fresh[k])
+                      for k in ('surface_id', 'sha256', 'width', 'height')
+                      if fresh[k] != sensed['frame'][k]}
+        host.need(fresh['surface_id'] == sensed['frame']['surface_id'] == self.surface_id and
                   fresh['generation'] >= sensed['frame']['generation'], 'MW_REBIND_PIXELS')
+        if mismatches:
+            host.need(fresh['generation'] > sensed['frame']['generation'], 'MW_REBIND_PIXELS')
+            raise ProgramObservationChanged(sensed['frame'], fresh, mismatches)
         return dict(sensed, frame=fresh, frame_witness=self.retain(fresh))
 
     def network_context(self):
@@ -500,6 +515,7 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
     # Preserve partial evidence on refusal; a delivered action is not undone.
     backend.program_moves = moves
     backend.program_attempts = []
+    backend.program_clean_refusal = False
     settled_frame = None
     for _ in range(steps):
         next_observation = None
@@ -515,6 +531,7 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                 timeout_ms=remaining_budget(backend, timeout_ms))
             next_observation = wait_for_publication(backend, floor, remaining_budget(backend, timeout_ms))
         for retry in range(3):
+            backend.program_clean_refusal = False
             observed = (next_observation if next_observation is not None else
                         backend.observe(remaining_budget(backend, timeout_ms)))
             next_observation = None
@@ -568,6 +585,28 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
             except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError, host.ClientError,
                     host.tools.ToolRefusal, host.tools.VerificationFailed) as error:
                 rows = getattr(backend, 'frame_attempts', [])[start:]
+                if isinstance(error, ProgramObservationChanged):
+                    # Rebind emits this before the inherited propose seam creates
+                    # a proposal. Any contrary dispatch evidence forbids recovery.
+                    if rows or attempt.get('proposal_id') or attempt.get('dispatch_artifact'):
+                        attempt['status'] = 'input_uncertain'
+                        raise
+                    attempt.update(status='refused_before_dispatch', reason_code=error.code,
+                                   rebind=copy.deepcopy(error.detail))
+                    atomic_journal(backend.evidence / ('rebind-refused-' + journal_id + '.json'),
+                        dict(status='refused_before_dispatch', intent_artifact=attempt['intent_artifact'],
+                             reason_code=error.code, rebind=error.detail, submitted=False))
+                    if retry < 2:
+                        baseline = backend.observe(remaining_budget(backend, timeout_ms))['frame_ref']
+                        host.need(baseline['surface_id'] == backend.surface_id, 'MW_PROGRAM_SURFACE')
+                        backend.client.subscribe_frames(backend.surface_id,
+                            timeout_ms=remaining_budget(backend, timeout_ms))
+                        next_observation = wait_for_publication(backend,
+                            max(baseline['generation'], error.detail['fresh_frame']['generation']),
+                            remaining_budget(backend, timeout_ms))
+                        continue
+                    backend.program_clean_refusal = True
+                    raise
                 nonexecution = (isinstance(error, host.tools.ToolRefusal) and rows and
                                 rows[-1].get('status') == error.reason_code)
                 if isinstance(error, host.tools.VerificationFailed):
@@ -663,7 +702,8 @@ def run_entry(args):
             host.subprocess.SubprocessError) as error:
         result.update(rc=6, receipt=None,
                       verdict_code=getattr(error, 'code', getattr(error, 'reason_code', 'MW_PROGRAM_CONFIG')))
-        if (getattr(backend, 'program_moves', []) or any(a.get('status') in
+        clean_refusal = isinstance(error, ProgramObservationChanged) and getattr(backend, 'program_clean_refusal', False)
+        if ((getattr(backend, 'program_moves', []) and not clean_refusal) or any(a.get('status') in
                 ('input_uncertain','dispatch_or_settlement_pending','settlement_pending')
                 for a in getattr(backend, 'program_attempts', []))):
             result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
