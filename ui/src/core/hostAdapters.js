@@ -191,6 +191,11 @@ export function hostOutcomeFor(row) {
   if (Object.hasOwn(LAYOUT_REFUSAL_COPY, row.code)) return { code: row.code,
     message: LAYOUT_REFUSAL_COPY[/** @type {keyof typeof LAYOUT_REFUSAL_COPY} */ (row.code)], tone: 'refusal' };
   if (row.code === 'NO_BROWSER_CAPSULE') return {code:row.code,message:'No browser capsule with a live frame.',tone:'refusal'};
+  const rawReason = typeof (/** @type {any} */ (row)).reason === 'string' ? (/** @type {any} */ (row)).reason.trim() : '';
+  if (rawReason.length > 0 && rawReason.length <= 256 && !/[\x00-\x1f\x7f]/.test(rawReason)) {
+    const message = rawReason.startsWith(`${row.code}:`) ? rawReason : `${row.code}: ${rawReason}`;
+    return { code: row.code, message, tone: 'refusal' };
+  }
   const createReasons = {
     CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
     NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',

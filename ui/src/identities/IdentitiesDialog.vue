@@ -59,6 +59,7 @@ async function invoke(method,request) {
 /** @param {string} profileId @param {string} role */
 function openIdentity(profileId,role){
   if(isForeignIdentity(profileId)){error.value=identityErrorText('IDENTITY_PROTECTED',profileId);return;}
+  if(rows.value.find(r=>r.id===profileId)?.browser==='program')return;
   emit('open-identity',{profileId,role});emit('close');
 }
 function create(){if(form.value)void invoke('create',form.value);}
@@ -81,13 +82,13 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
     <ul class="identity-list" aria-label="Saved identities">
       <li v-for="row in rows" :key="row.id" class="identity-row">
         <div class="identity-summary"><code>{{ row.id }}</code><strong>{{ row.label }}</strong>
-          <span class="identity-mode">{{ modeFor(row.id)?.currentMode || 'closed' }}</span>
+          <span class="identity-mode">{{ row.browser === 'program' ? 'program' : (modeFor(row.id)?.currentMode || 'closed') }}</span>
           <span class="identity-last-login">Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded' }}</span>
         </div>
         <div class="identity-actions">
-        <UiButton v-if="!roleApi" label="Log in" :disabled="busy || isForeignIdentity(row.id)" @click="invoke('login',{id:row.id})" />
-        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'human')" />
-        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'agent')" />
+        <UiButton v-if="!roleApi" label="Log in" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program'" @click="invoke('login',{id:row.id})" />
+        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program' || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'human')" />
+        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program' || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'agent')" />
         <UiButton label="Delete" :disabled="busy || isProtectedIdentity(row.id)" :title="isProtectedIdentity(row.id) ? 'Managed outside MetaViewer' : undefined" @click="askDelete(row.id)" />
         </div>
       </li>

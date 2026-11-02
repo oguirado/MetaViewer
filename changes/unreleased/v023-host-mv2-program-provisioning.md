@@ -1,0 +1,1 @@
+- Provision `program` identities before starting a Program capsule, reuse existing unbound `program` identities while excluding them from browser choices, and keep exact refusal reasons naming the binary in the dialog and Activity.

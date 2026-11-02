@@ -164,6 +164,14 @@ export function normalizeActivityEntry(input) {
       text: `NO_IDENTITY: No free capsule profile has an identity yet. Create an identity (${missingMatch}) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.`,
     });
   }
+  const rawReason = typeof (/** @type {{reason?:unknown}} */ (record)).reason === 'string'
+    ? /** @type {string} */ ((/** @type {{reason?:unknown}} */ (record)).reason).trim()
+    : '';
+  if (rawReason.length > 0 && rawReason.length <= 256 && !/[\x00-\x1f\x7f]/.test(rawReason)
+      && /^[A-Z][A-Z0-9]*_[A-Z0-9_]+$/.test(code) && !code.startsWith('ERR_') && !code.startsWith('LAYOUT_')) {
+    const text = rawReason.startsWith(`${code}:`) ? rawReason : `${code}: ${rawReason}`;
+    return Object.freeze({ seq, type: 'request-refused', tone: 'refusal', text });
+  }
   if (Object.hasOwn(ACTIVITY_ROWS, code)) {
     const row = ACTIVITY_ROWS[/** @type {keyof typeof ACTIVITY_ROWS} */ (code)];
     return Object.freeze({ seq, type: row.type, tone: row.tone, text: row.text });

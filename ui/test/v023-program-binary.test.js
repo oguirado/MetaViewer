@@ -16,6 +16,9 @@ import vm from 'node:vm';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as catalogModel from '../src/catalog/catalogModel.js';
 import * as roleHostMod from '../electron/roleHost.js';
+import * as hostAdaptersMod from '../src/core/hostAdapters.js';
+import * as activityModelMod from '../src/activity/activityModel.js';
+import * as operatorBridgeMod from '../electron/operatorBridge.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CATALOG_MODEL_PATH = join(HERE, '../src/catalog/catalogModel.js');
@@ -23,6 +26,9 @@ const CATALOG_LAUNCHER_PATH = join(HERE, '../src/catalog/CatalogLauncher.vue');
 const APP_PATH = join(HERE, '../src/App.vue');
 const ROLE_HOST_PATH = join(HERE, '../electron/roleHost.js');
 const ROLE_PRELOAD_PATH = join(HERE, '../electron/rolePreload.cjs');
+const HOST_ADAPTERS_PATH = join(HERE, '../src/core/hostAdapters.js');
+const ACTIVITY_MODEL_PATH = join(HERE, '../src/activity/activityModel.js');
+const IDENTITIES_DIALOG_PATH = join(HERE, '../src/identities/IdentitiesDialog.vue');
 
 /**
  * Compile CatalogLauncher.vue scriptSetup functions into a VM context.
@@ -97,6 +103,10 @@ function createAppProgramHarness(appSource, rolesDouble) {
     rows: { value: [] },
     wallInputPending: { value: {} },
     hostOutcome: { value: null },
+    hostActive: true,
+    activitySeq: 0,
+    ACTIVITY_LIMIT: 8,
+    activityFeed: { value: [] },
     pendingModeSwitch: { value: null },
     capsuleModes: { value: {} },
     selectGlobalView: (v) => views.push(v),
@@ -104,21 +114,16 @@ function createAppProgramHarness(appSource, rolesDouble) {
     revealOpenedIdentity: async (id, mode) => { revealed.push({ id, mode }); return true; },
     applyWallControl: (id, verb) => { controlCalls.push({ id, verb }); },
     reopenLiveSurfaces: () => false,
-    recordActivity: (entry) => activities.push(entry),
-    submitHost: async (fn) => {
-      try {
-        return await fn();
-      } catch (err) {
-        const code = err?.code || 'HOST_REQUEST_REFUSED';
-        ctx.hostOutcome.value = { code, message: String(err?.message || code), tone: 'refusal' };
-        activities.push({ code });
-        return null;
-      }
-    },
     emit: () => {},
   };
   vm.createContext(ctx);
-  vm.runInContext([fnMap.createProgramCapsule, fnMap.onCreateCapsule].join('\n'), ctx);
+  vm.runInContext([fnMap.recordActivity, fnMap.submitHost, fnMap.createProgramCapsule, fnMap.onCreateCapsule].join('\n'), ctx);
+  const origRecord = ctx.recordActivity;
+  ctx.recordActivity = (entry) => {
+    origRecord(entry);
+    activities.length = 0;
+    activities.push(...ctx.activityFeed.value);
+  };
   return { ctx, revealed, controlCalls, activities, views };
 }
 
@@ -131,6 +136,8 @@ async function runProbes({
   appSource = readFileSync(APP_PATH, 'utf8'),
   roleHost = roleHostMod,
   roleHostSource = readFileSync(ROLE_HOST_PATH, 'utf8'),
+  hostAdapters = hostAdaptersMod,
+  activityModel = activityModelMod,
 } = {}) {
   const failed = [];
   const check = async (name, fn) => {
@@ -206,7 +213,7 @@ async function runProbes({
     }
   });
 
-  // 4. Refusal propagation to the dialog (never swallowed, dialog stays open).
+  // 4. Refusal propagation to the dialog and Activity (never swallowed, dialog stays open, exact reason in dialog, HostOutcome, and ActivityStrip).
   await check('refusal-propagates-to-dialog', async () => {
     const h = createLauncherHarness(launcherSource, model.buildCreateIntent);
     await h.ctx.onCreate({ type: { id: 'program' }, placement: 'tab' });
@@ -223,8 +230,15 @@ async function runProbes({
       if (event === 'create') appH.ctx.onCreateCapsule(payload, settle);
     };
     await h.ctx.confirmProgram();
+    await new Promise((r) => setTimeout(r, 0));
+    const expectedReason = 'host_program_unavailable: missing-editor: not found in PATH';
+    const expectedFull = `HOST_PROGRAM_UNAVAILABLE: ${expectedReason}`;
+    const outcomeRow = hostAdapters.hostOutcomeFor(appH.ctx.hostOutcome.value);
+    const activityRow = activityModel.normalizeActivityEntry(appH.ctx.activityFeed.value.at(-1));
     return h.ctx.choosingProgram.value === true
-      && h.ctx.programError.value === 'host_program_unavailable: missing-editor: not found in PATH';
+      && h.ctx.programError.value === expectedReason
+      && outcomeRow?.message === expectedFull
+      && activityRow?.text === expectedFull;
   });
 
   // 5. No shell anywhere (source + metacharacter refusal).
@@ -649,6 +663,151 @@ async function runProbes({
     return createSurfaceCalls === 0;
   });
 
+  // 13. V023-HOST-MV2: createProgram provisions program identity before create, reuses earlier program identity, refuses protected names, rolls back on provisioning failure, and preserves binary name + reason across roleHost.
+  await check('program-provisioning-and-reason-preservation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'v023-prov-probe-'));
+    try {
+      const binDir = join(root, 'bin');
+      await mkdir(binDir, { mode: 0o700 });
+      for (const name of ['gedit', 'gnome-calculator', 'notepad-1', 'cuentas-1', 'mv-live-1']) {
+        const p = join(binDir, name);
+        await writeFile(p, '#!/bin/sh\nexit 0\n');
+        await chmod(p, 0o755);
+      }
+      const handlers = new Map();
+      const states = new Map();
+      const parent = new EventEmitter();
+      parent.webContents = { session: { registerPreloadScript: () => 'p', unregisterPreloadScript() {} } };
+      const provisioned = new Map(); // id -> { browser: 'program', mode: 0o700, uid: 10001 }
+      const identityStore = new Map([
+        ['mv-live-1', { id: 'mv-live-1', label: 'Live 1', domains: [], logged_in: 'unknown' }],
+      ]);
+      let failProvision = false;
+      let surfaceRefusal = null;
+      let seq = 0;
+
+      const host = roleHost.installRoleHost({
+        electron: { ipcMain: { handle: (k, fn) => handlers.set(k, fn), removeHandler: (k) => handlers.delete(k) } },
+        window: parent,
+        env: {
+          PATH: binDir,
+          MV_SRF_PROFILES: JSON.stringify({
+            'mv-live-1': { Kind: 'browser', NativeKind: 'browser', Width: 1280, Height: 900, RAMRoot: '/dev/shm', Display: ':111' },
+          }),
+          MV_SRF_STATE_DIR: root,
+          MV_SRF_BIN_DIR: binDir,
+        },
+        capsuleStates: states,
+        core: {
+          getHumanSurface: (id) => states.get(id),
+          stopSurface: async (surfaceId) => {
+            const s = { ...states.get(surfaceId), state: 'destroyed' };
+            states.set(surfaceId, s);
+            return { schema: 'surface_event/v0.2', event: 'state_changed', data: { surface: s } };
+          },
+          request: async (req) => {
+            const pid = req.params.profile_id;
+            const prov = provisioned.get(pid);
+            if (!prov || prov.browser !== 'program' || prov.mode !== 0o700 || prov.uid !== 10001) {
+              return {
+                schema: 'surface_event/v0.2',
+                event: 'error',
+                data: {
+                  code: 'identity_unavailable',
+                  detail: 'native start reported the identity unavailable (exit status 4)',
+                },
+              };
+            }
+            if (surfaceRefusal) {
+              return {
+                schema: 'surface_event/v0.2',
+                event: 'error',
+                data: surfaceRefusal,
+              };
+            }
+            const surface = {
+              schema: 'surface/v0.2',
+              surface_id: `surface-prov-${++seq}`,
+              kind: 'desktop_capsule',
+              profile_id: pid,
+              state: 'active',
+              control: 'agent',
+            };
+            states.set(surface.surface_id, surface);
+            return { schema: 'surface_event/v0.2', event: 'created', data: { surface } };
+          },
+        },
+        admit: () => true,
+        listIdentities: async () => ({ ok: true, rows: [...identityStore.values()] }),
+        provisionProgramIdentity: async ({ id, label }) => {
+          if (failProvision) {
+            return { ok: false, code: 'PROFILE_NOT_PROVISIONED', reason: 'profile directory mode 0700 uid 10001 required' };
+          }
+          provisioned.set(id, { id, label, browser: 'program', mode: 0o700, uid: 10001 });
+          identityStore.set(id, { id, label, domains: [], logged_in: 'unknown', browser: 'program' });
+          return { ok: true, rows: [identityStore.get(id)] };
+        },
+      });
+      try {
+        const invoke = (op, extra = {}) => handlers.get('metaviewer:roles.v0.3')({}, { schema: 'metaviewer.roles/v0.3', op, ...extra });
+
+        // A: Protected names are refused before provisioning or surface start.
+        for (const badBin of ['notepad-1', 'cuentas-1', 'mv-live-1']) {
+          const prot = await invoke('create-program', { choice: { binary: badBin } });
+          if (prot?.ok !== false || prot.code !== 'IDENTITY_PROTECTED' || !String(prot.reason).includes(badBin)) {
+            return false;
+          }
+        }
+        if (provisioned.size !== 0) return false;
+
+        // B: Provisioning failure surfaces real code and reason naming the binary, and leaves no pending capsule.
+        failProvision = true;
+        const failedProv = await invoke('create-program', { choice: { binary: 'gedit' } });
+        failProvision = false;
+        if (failedProv?.ok !== false || failedProv.code !== 'PROFILE_NOT_PROVISIONED' || !String(failedProv.reason).includes('gedit') || !String(failedProv.reason).includes('0700')) {
+          return false;
+        }
+        if (states.size !== 0) return false;
+
+        // C: Normal launch provisions 'gedit' with browser 'program' before core.request and succeeds.
+        const first = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (first?.ok !== true || first.profileId !== 'gedit' || !provisioned.has('gedit')) {
+          return false;
+        }
+
+        // D: Program identity 'gedit' is NOT offered as a browser in choices(), create(), or open().
+        const browserChoices = await invoke('choices');
+        if (!Array.isArray(browserChoices) || browserChoices.some((c) => c.profileId === 'gedit')) {
+          return false;
+        }
+        const browserOpenAttempt = await invoke('open', { choice: { profileId: 'gedit', role: 'agent' } });
+        if (browserOpenAttempt?.ok === true) return false;
+
+        // E: Stop frees the capsule; a second launch of 'gedit' reuses the existing 'program' identity 'gedit' (not 'gedit-2' and not an error).
+        const stopped = await invoke('stop', { surfaceId: first.surfaceId });
+        if (stopped?.ok !== true) return false;
+        const reused = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (reused?.ok !== true || reused.profileId !== 'gedit') {
+          return false;
+        }
+
+        // F: Native exit-2 refusal preserves the binary name and exact detail in reply.reason.
+        surfaceRefusal = { code: 'HOST_PROGRAM_UNAVAILABLE', detail: 'host_program_unavailable: binary does not exist' };
+        const calcRefused = await invoke('create-program', { choice: { binary: 'gnome-calculator' } });
+        surfaceRefusal = null;
+        if (calcRefused?.ok !== false || calcRefused.code !== 'HOST_PROGRAM_UNAVAILABLE'
+            || calcRefused.reason !== 'host_program_unavailable: gnome-calculator: binary does not exist') {
+          return false;
+        }
+        return true;
+      } finally {
+        await host.dispose();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   return failed;
 }
 
@@ -782,6 +941,269 @@ test('V023-HOST-MV: multiple program capsules, immediate writable tile arming, t
   const stopped1 = await rolesBridge.stop('surface-pg-1');
   assert.deepEqual(stopped1, { ok: true, profileId: 'gedit' });
   assert.equal(states.get('surface-pg-1').state, 'destroyed');
+});
+
+test('V023-HOST-MV2: real sequence replay with CLI-like runner (unknown identity refused unless provisioned with browser program + 0700, reuse after stop, Identities panel filter + delete, and refusal reason in dialog + Activity)', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'v023-cli-replay-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const binDir = join(root, 'bin');
+  const storeRoot = join(root, 'store');
+  const stateDir = join(root, 'state');
+  const mwHome = join(root, 'mw-home');
+  await mkdir(binDir, { mode: 0o700 });
+  await mkdir(storeRoot, { mode: 0o700 });
+  await mkdir(stateDir, { mode: 0o700 });
+  await mkdir(mwHome, { mode: 0o700 });
+
+  for (const prog of ['gedit', 'gnome-calculator', 'broken-prog']) {
+    const p = join(binDir, prog);
+    await writeFile(p, '#!/bin/sh\nexit 0\n');
+    await chmod(p, 0o755);
+  }
+
+  // Fake srf-identity-admin: creates/shows metadata/<id>.json and profiles/<id> (0700).
+  const adminScript = `#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+a = sys.argv[1:]
+def arg(k): return a[a.index(k)+1]
+verb = a[0]
+root = Path(arg('--store-root'))
+ident = arg('--id')
+meta = root / 'metadata' / (ident + '.json')
+prof = root / 'profiles' / ident
+if verb == 'create':
+    for d in ('metadata', 'profiles', 'locks'):
+        (root / d).mkdir(mode=0o700, parents=True, exist_ok=True)
+    if meta.exists():
+        sys.exit(4)
+    prof.mkdir(mode=0o700, exist_ok=True)
+    browser = arg('--browser') if '--browser' in a else 'browser'
+    domains = [d for d in arg('--domains').split(',') if d] if '--domains' in a else []
+    rec = {'profile_id': ident, 'browser': browser, 'account_label': arg('--label'), 'allowed_domains': domains}
+    meta.write_text(json.dumps(rec))
+    meta.chmod(0o600)
+    print(json.dumps(rec))
+    sys.exit(0)
+elif verb == 'show':
+    if not meta.is_file():
+        sys.exit(4)
+    print(meta.read_text())
+    sys.exit(0)
+sys.exit(2)
+`;
+  const adminBin = join(binDir, 'srf-identity-admin');
+  await writeFile(adminBin, adminScript);
+  await chmod(adminBin, 0o755);
+
+  const env = {
+    PATH: `${binDir}:/usr/bin:/bin`,
+    MV_SRF_PROFILES: JSON.stringify({
+      'mv-live-1': { Kind: 'browser', NativeKind: 'browser', Width: 1280, Height: 900, RAMRoot: '/dev/shm', Display: ':111' },
+    }),
+    MV_SRF_STATE_DIR: stateDir,
+    MV_SRF_BIN_DIR: binDir,
+    SRF_IDENTITY_STORE_ROOT: storeRoot,
+    MV_MW_HOME: mwHome,
+  };
+
+  // Seed browser identity mv-live-1 in storeRoot.
+  await mkdir(join(storeRoot, 'metadata'), { mode: 0o700 });
+  await mkdir(join(storeRoot, 'profiles'), { mode: 0o700 });
+  await mkdir(join(storeRoot, 'profiles', 'mv-live-1'), { mode: 0o700 });
+  await mkdir(join(storeRoot, 'locks'), { mode: 0o700 });
+  await writeFile(
+    join(storeRoot, 'metadata', 'mv-live-1.json'),
+    JSON.stringify({ profile_id: 'mv-live-1', browser: 'browser', account_label: 'Live 1', allowed_domains: [] }),
+    { mode: 0o600 },
+  );
+
+  // Use a runner backed by tools/mv_identity.py with a stubbed profile_helper that sets mode 0700 and records uid 10001.
+  const toolWrapper = join(root, 'mv_identity_stub.py');
+  const realToolPath = operatorBridgeMod.defaultIdentityTool();
+  await writeFile(
+    toolWrapper,
+    `import importlib.util, os, shutil, stat, sys
+from pathlib import Path
+spec = importlib.util.spec_from_file_location("mv_identity", ${JSON.stringify(realToolPath)})
+mv = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mv)
+def stub_helper(self, identity, remove=False):
+    identity = mv.operational_id(identity)
+    target = self.profile_path(identity)
+    self.show(identity)
+    if remove:
+        shutil.rmtree(target, ignore_errors=True)
+    else:
+        target.mkdir(mode=0o700, exist_ok=True)
+        target.chmod(0o700)
+        (target / '.uid-10001').write_text('10001')
+mv.Identities.profile_helper = stub_helper
+sys.exit(mv.main())
+`,
+  );
+
+  const runIdentity = operatorBridgeMod.identityRunner({ tool: toolWrapper, env });
+  t.after(() => runIdentity.dispose());
+
+  const handlers = new Map();
+  const states = new Map();
+  const activeDisplays = new Set();
+  let seq = 0;
+
+  // Fake CLI surface runner: refuses unknown or unprovisioned identity with IDENTITY_UNAVAILABLE; refuses broken-prog with exit-2 detail.
+  const core = {
+    getHumanSurface: (id) => states.get(id),
+    stopSurface: (surfaceId) => core.request({ schema: 'surface_request/v0.2', op: 'destroy', params: { surface_id: surfaceId } }),
+    async request(req) {
+      if (req.op === 'destroy') {
+        const current = states.get(req.params.surface_id);
+        activeDisplays.delete(current.display);
+        const s = { ...current, state: 'destroyed' };
+        states.set(s.surface_id, s);
+        return { schema: 'surface_event/v0.2', event: 'state_changed', data: { surface: s } };
+      }
+      const pid = req.params.profile_id;
+      const metaPath = join(storeRoot, 'metadata', `${pid}.json`);
+      const profDir = join(storeRoot, 'profiles', pid);
+      const uidMarker = join(profDir, '.uid-10001');
+      let provisionedOk = false;
+      try {
+        const meta = JSON.parse(await readFile(metaPath, 'utf8'));
+        const st = await import('node:fs/promises').then((fs) => fs.stat(profDir));
+        const uidTxt = await readFile(uidMarker, 'utf8');
+        provisionedOk = meta.browser === 'program' && (st.mode & 0o777) === 0o700 && uidTxt === '10001';
+      } catch {
+        provisionedOk = false;
+      }
+      if (!provisionedOk) {
+        return {
+          schema: 'surface_event/v0.2',
+          event: 'error',
+          data: {
+            code: 'identity_unavailable',
+            detail: 'native start reported the identity unavailable (exit status 4)',
+          },
+        };
+      }
+      const staged = JSON.parse(await readFile(join(stateDir, 'opening-modes', `${pid}.json`), 'utf8'));
+      if (staged.host_binary.endsWith('/broken-prog')) {
+        return {
+          schema: 'surface_event/v0.2',
+          event: 'error',
+          data: {
+            code: 'HOST_PROGRAM_UNAVAILABLE',
+            detail: 'host_program_unavailable: binary does not exist',
+          },
+        };
+      }
+      const display = !activeDisplays.has(':111') ? ':111' : ':112';
+      activeDisplays.add(display);
+      const surface = {
+        schema: 'surface/v0.2',
+        surface_id: `surface-cli-${++seq}`,
+        kind: 'desktop_capsule',
+        profile_id: pid,
+        state: 'active',
+        control: 'agent',
+        visibility: 'unfolded',
+        display,
+        geometry: { w: 1280, h: 900 },
+      };
+      states.set(surface.surface_id, surface);
+      return { schema: 'surface_event/v0.2', event: 'created', data: { surface } };
+    },
+  };
+
+  const parent = new EventEmitter();
+  parent.webContents = { session: { registerPreloadScript: () => 'p', unregisterPreloadScript() {} } };
+  const host = roleHostMod.installRoleHost({
+    electron: { ipcMain: { handle: (k, fn) => handlers.set(k, fn), removeHandler: (k) => handlers.delete(k) } },
+    window: parent,
+    env,
+    capsuleStates: states,
+    core,
+    admit: () => true,
+    listIdentities: () => runIdentity('list', {}),
+    provisionProgramIdentity: ({ id, label }) => runIdentity('create', { id, label, domains: [], browser: 'program' }),
+  });
+  t.after(() => host.dispose());
+
+  const invoke = (op, body = {}) => handlers.get('metaviewer:roles.v0.3')({}, { schema: 'metaviewer.roles/v0.3', op, ...body });
+  const rolesBridge = {
+    choices: () => invoke('choices'),
+    createProgram: (choice) => invoke('create-program', { choice }),
+    status: (surfaceId) => invoke('status', { surfaceId }),
+    stop: (surfaceId) => invoke('stop', { surfaceId }),
+  };
+
+  const appH = createAppProgramHarness(readFileSync(APP_PATH, 'utf8'), rolesBridge);
+  const launcherH = createLauncherHarness(readFileSync(CATALOG_LAUNCHER_PATH, 'utf8'), catalogModel.buildCreateIntent, rolesBridge);
+  launcherH.ctx.emit = (event, payload, settle) => {
+    launcherH.events.push([event, payload]);
+    if (event === 'create') appH.ctx.onCreateCapsule(payload, settle);
+  };
+
+  // 1. Missing binary 'noexiste-xyz': dialog stays open with exact reason naming 'noexiste-xyz', and Activity shows the same reason.
+  await launcherH.ctx.onCreate({ type: { id: 'program' }, placement: 'tab' });
+  launcherH.ctx.programBinary.value = 'noexiste-xyz';
+  await launcherH.ctx.confirmProgram();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(launcherH.ctx.choosingProgram.value, true, 'dialog stays open on missing binary');
+  assert.equal(launcherH.ctx.programError.value, 'host_program_unavailable: noexiste-xyz: not found in PATH');
+  assert.equal(
+    activityModelMod.normalizeActivityEntry(appH.ctx.activityFeed.value.at(-1))?.text,
+    'HOST_PROGRAM_UNAVAILABLE: host_program_unavailable: noexiste-xyz: not found in PATH',
+  );
+
+  // 2. Native surface exit-2 refusal ('broken-prog'): dialog stays open with exact reason naming 'broken-prog', and Activity shows the same reason.
+  launcherH.ctx.programBinary.value = 'broken-prog';
+  await launcherH.ctx.confirmProgram();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(launcherH.ctx.choosingProgram.value, true, 'dialog stays open on native surface refusal');
+  assert.equal(launcherH.ctx.programError.value, 'host_program_unavailable: broken-prog: binary does not exist');
+  assert.equal(
+    activityModelMod.normalizeActivityEntry(appH.ctx.activityFeed.value.at(-1))?.text,
+    'HOST_PROGRAM_UNAVAILABLE: host_program_unavailable: broken-prog: binary does not exist',
+  );
+
+  // 3. Valid binary 'gedit': provisions program identity (mode 0700, uid 10001, browser 'program'), opens tile 'gedit', writable immediately.
+  launcherH.ctx.programBinary.value = 'gedit';
+  await launcherH.ctx.confirmProgram();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(launcherH.ctx.choosingProgram.value, false, 'dialog closes on successful gedit launch');
+  assert.equal(states.get('surface-cli-1')?.profile_id, 'gedit');
+  assert.equal(states.get('surface-cli-1')?.display, ':111');
+  assert.equal(appH.ctx.wallInputPending.value['surface-cli-1'], true);
+
+  // 4. Stop frees display (:111) and name ('gedit'); re-opening 'gedit' reuses the 'gedit' program identity and display :111.
+  const stopped1 = await rolesBridge.stop('surface-cli-1');
+  assert.deepEqual(stopped1, { ok: true, profileId: 'gedit' });
+
+  await launcherH.ctx.onCreate({ type: { id: 'program' }, placement: 'tab' });
+  launcherH.ctx.programBinary.value = 'gedit';
+  await launcherH.ctx.confirmProgram();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(launcherH.ctx.choosingProgram.value, false);
+  assert.equal(states.get('surface-cli-2')?.profile_id, 'gedit', 'reused gedit identity instead of gedit-2');
+  assert.equal(states.get('surface-cli-2')?.display, ':111', 'reused freed display :111');
+  await rolesBridge.stop('surface-cli-2');
+
+  // 5. Identity list & normal delete work on 'program' identities, and 'program' identities are never offered as browsers.
+  const listed = await runIdentity('list', {});
+  assert.equal(listed.ok, true);
+  const geditRow = listed.rows.find((r) => r.id === 'gedit');
+  assert.equal(geditRow?.browser, 'program');
+  const choices = await rolesBridge.choices();
+  assert.equal(choices.some((c) => c.profileId === 'gedit'), false, 'program identity never offered in browser choices');
+
+  const identDialogSrc = readFileSync(IDENTITIES_DIALOG_PATH, 'utf8');
+  assert.match(identDialogSrc, /row\.browser === 'program'/);
+
+  const deleted = await runIdentity('delete', { id: 'gedit' });
+  assert.deepEqual(deleted, { ok: true });
+  const listedAfterDelete = await runIdentity('list', {});
+  assert.equal(listedAfterDelete.rows.some((r) => r.id === 'gedit'), false);
 });
 
 test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
@@ -972,5 +1394,55 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     assert.notEqual(mutatedApp, appSrc);
     const failed = await runProbes({ appSource: mutatedApp });
     assert.ok(failed.includes('app-program-empty-binary-or-profile-refused'), `Mutant 13 survived: ${failed}`);
+  }
+
+  // Mutant 14 (V023-HOST-MV2): provisioning skipped in roleHost createProgram.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      'const provReply = await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});',
+      'const provReply = {ok:true};',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm14');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('program-provisioning-and-reason-preservation'), `Mutant 14 survived: ${failed}`);
+  }
+
+  // Mutant 15a (V023-HOST-MV2): refusal reason dropped in roleHost handler.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      'return reason ? {ok:false,code,reason} : {ok:false,code};',
+      'return {ok:false,code};',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm15a');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('program-provisioning-and-reason-preservation'), `Mutant 15a survived: ${failed}`);
+  }
+
+  // Mutant 15b (V023-HOST-MV2): refusal reason dropped in App.vue submitHost / Activity recording.
+  {
+    const mutatedApp = appSrc.replace(
+      'else if (safeReason) recordActivity({ code: activityCode, reason: safeReason });',
+      'else if (false) recordActivity({ code: activityCode, reason: safeReason });',
+    );
+    assert.notEqual(mutatedApp, appSrc);
+    const failed = await runProbes({ appSource: mutatedApp });
+    assert.ok(failed.includes('refusal-propagates-to-dialog'), `Mutant 15b survived: ${failed}`);
+  }
+
+  // Mutant 15c (V023-HOST-MV2): refusal reason dropped in activityModel.js normalizeActivityEntry.
+  {
+    const activitySrc = readFileSync(ACTIVITY_MODEL_PATH, 'utf8');
+    const mutatedActivitySrc = activitySrc.replace(
+      'if (rawReason.length > 0 && rawReason.length <= 256',
+      'if (false && rawReason.length > 0 && rawReason.length <= 256',
+    );
+    assert.notEqual(mutatedActivitySrc, activitySrc);
+    const f = join(tmp, 'activityModel-m15c.js');
+    await writeFile(f, mutatedActivitySrc);
+    const mutatedActivityMod = await import(`${pathToFileURL(f).href}?m=15c`);
+    const failed = await runProbes({ activityModel: mutatedActivityMod });
+    assert.ok(failed.includes('refusal-propagates-to-dialog'), `Mutant 15c survived: ${failed}`);
   }
 });

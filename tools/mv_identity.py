@@ -170,33 +170,47 @@ class Identities:
         return {k: result[k] for k in ("profile_id", "browser", "account_label", "allowed_domains",
                                      "created_unix", "last_login_unix") if k in result}
 
-    def create(self, identity, label, domains):
+    def create(self, identity, label, domains="", browser="browser"):
         fresh_id(identity, self.live_profile)
         if not label or label != label.strip() or len(label) > 128 or any(ord(c) < 32 for c in label):
             raise Refused("INVALID_LABEL")
+        if browser not in ("browser", "program"):
+            raise Refused("INVALID_ARGUMENTS")
         sites = domains.split(",") if domains else []
-        if len(sites) > 16 or sites != sorted(set(sites)) or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", d) for d in sites):
+        if browser == "program":
+            if domains:
+                raise Refused("INVALID_DOMAINS")
+        elif len(sites) > 16 or sites != sorted(set(sites)) or not all(re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", d) for d in sites):
             raise Refused("INVALID_DOMAINS")
-        self.native("srf-identity-admin", ["create", "--store-root", str(self.root), "--id", identity,
-                                          "--label", label, "--domains", domains])
+        created_new = True
+        if browser == "program" and (self.root / "metadata" / (identity + ".json")).exists():
+            existing = self.show(identity)
+            if existing.get("browser") != "program":
+                raise Refused("PROFILE_ALREADY_BOUND")
+            created_new = False
+        if created_new:
+            native_args = ["create", "--store-root", str(self.root), "--id", identity, "--label", label]
+            native_args.extend(["--browser", "program"] if browser == "program" else ["--domains", domains])
+            self.native("srf-identity-admin", native_args)
         try:
             result = self.show(identity)
             self.provision(identity)
             return result
         except Exception:
-            # Roll back only the entry this successful create introduced. The
-            # native per-id guard prevents deleting a concurrently bound entry.
-            locks = self.root / "locks"
-            private(locks)
-            fd = os.open(locks / (identity + ".guard"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-            with os.fdopen(fd, "r+") as guard:
-                fcntl.flock(guard, fcntl.LOCK_EX)
-                lease = self.lease(identity)
-                if lease is None or lease["active"] is False:
-                    metadata = self.root / "metadata" / (identity + ".json")
-                    if metadata.exists():
-                        private(metadata, directory=False)
-                        metadata.unlink()
+            if created_new:
+                # Roll back only the entry this successful create introduced. The
+                # native per-id guard prevents deleting a concurrently bound entry.
+                locks = self.root / "locks"
+                private(locks)
+                fd = os.open(locks / (identity + ".guard"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+                with os.fdopen(fd, "r+") as guard:
+                    fcntl.flock(guard, fcntl.LOCK_EX)
+                    lease = self.lease(identity)
+                    if lease is None or lease["active"] is False:
+                        metadata = self.root / "metadata" / (identity + ".json")
+                        if metadata.exists():
+                            private(metadata, directory=False)
+                            metadata.unlink()
             raise
 
     def list(self):
@@ -589,14 +603,17 @@ def main(argv=None):
             sub.add_argument("--holder", required=True)
         if verb == "create":
             sub.add_argument("--label", required=True)
-            sub.add_argument("--domains", required=True)
+            sub.add_argument("--domains", default=None)
+            sub.add_argument("--browser", choices=("browser", "program"), default="browser")
     try:
         args = parser.parse_args(argv)
         tool = Identities(args.store_root, args.memoryweb_home, os.environ.get("MV_SRF_BIN_DIR"),
                           os.environ.get("MV_SRF_STATE_DIR"),
                           live_profile=os.environ.get("MV_SRF_LIVE_PROFILE") or None)
         if args.verb == "create":
-            result = tool.create(args.id, args.label, args.domains)
+            if args.browser == "browser" and args.domains is None:
+                raise Refused("INVALID_ARGUMENTS")
+            result = tool.create(args.id, args.label, args.domains or "", browser=args.browser)
             if tool.profile_state(args.id) != "ok":
                 # stderr only: the JSON reply stays the closed public metadata shape.
                 print("NOTE: " + HINTS["PROFILE_NOT_PROVISIONED"], file=sys.stderr)

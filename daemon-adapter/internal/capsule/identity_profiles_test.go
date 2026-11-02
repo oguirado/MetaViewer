@@ -384,7 +384,7 @@ func TestProcessRunnerHostProgramUnavailableExit2ClearsQuarantine(t *testing.T) 
 	}
 	surfaceBin := filepath.Join(binDir, "srf-identity-surface")
 	script := "#!/bin/sh\n" +
-		"echo 'host_program_unavailable: gedit rejected by surface' >&2\n" +
+		"echo '{\"error\":{\"code\":2,\"detail\":\"host_program_unavailable: gedit rejected by surface\"}}' >&2\n" +
 		"exit 2\n"
 	if err := os.WriteFile(surfaceBin, []byte(script), 0700); err != nil {
 		t.Fatal(err)
@@ -415,8 +415,8 @@ func TestProcessRunnerHostProgramUnavailableExit2ClearsQuarantine(t *testing.T) 
 		t.Fatal(err)
 	}
 	_, err = m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"gedit","geometry":{"w":1280,"h":900}}`))
-	if err == nil || WireCode(err) != "HOST_PROGRAM_UNAVAILABLE" {
-		t.Fatalf("expected HOST_PROGRAM_UNAVAILABLE, got %v (wire=%s)", err, WireCode(err))
+	if err == nil || WireCode(err) != "HOST_PROGRAM_UNAVAILABLE" || err.Error() != "host_program_unavailable: host_program_unavailable: gedit rejected by surface" {
+		t.Fatalf("expected clean HOST_PROGRAM_UNAVAILABLE detail, got %v (wire=%s)", err, WireCode(err))
 	}
 	if m.quarantined["gedit"] || m.dynamicProfiles["gedit"] {
 		t.Fatalf("exit-2 pre-spawn refusal left profile quarantined or allocated: quarantined=%v dynamic=%v", m.quarantined, m.dynamicProfiles)

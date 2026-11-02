@@ -130,8 +130,17 @@ export function runHumanMode({tool, stateDir, container, readonly, env}) {
 /** Renderer gets only role, profile ids, state, and opaque success. */
 /** @param {any} options */
 export function installRoleHost({electron, window, core, env, capsuleStates, admit,
-  listIdentities, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
+  listIdentities, provisionProgramIdentity, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
   const {ipcMain} = electron;
+  const defaultProvisionProgramIdentity = async (/** @type {{id:string,label:string}} */ {id: profileId, label}) => {
+    if (typeof env?.SRF_IDENTITY_STORE_ROOT !== 'string' || !env.SRF_IDENTITY_STORE_ROOT) {
+      return {ok:true, rows:[{id:profileId, label, domains:[], logged_in:'unknown', browser:'program'}]};
+    }
+    const {defaultIdentityTool, identityEnvironment, identityRunner, resolveIdentityTool} = await import('./operatorBridge.js');
+    const tool = resolveIdentityTool({tool:env.MV_IDENTITY_TOOL || defaultIdentityTool(), env});
+    return identityRunner({tool, env:identityEnvironment(env, tool)})('create', {id:profileId, label, domains:[], browser:'program'});
+  };
+  const provisionIdentity = typeof provisionProgramIdentity === 'function' ? provisionProgramIdentity : defaultProvisionProgramIdentity;
   const traceBudget = {bytes:0,paused:false};
   const traceDirectory = recordingDestination(env);
   if (traceDirectory) {try {pruneHumanTraces(traceDirectory);} catch(error) {
@@ -309,7 +318,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const {bound} = summarizeSurfaces(capsuleStates);
     const reply = await listIdentities();
     if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
-    const names = new Set(reply.rows.map((/** @type {any} */ row) => row.id));
+    const names = new Set(reply.rows.filter((/** @type {any} */ row) => row?.browser !== 'program' && !programProfiles.has(row?.id)).map((/** @type {any} */ row) => row.id));
     if (template) {
       for (const name of names) {
         if (!identityAllowed(name) || profiles.some(p => p.id === name)) continue;
@@ -317,7 +326,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       }
       for (const name of dynamicProfiles.keys()) if (!names.has(name) && !bound.has(name)) dynamicProfiles.delete(name);
     }
-    return await Promise.all(browserProfiles().filter(p=>!isForeignIdentity(p.id)).map(async p => {
+    return await Promise.all(browserProfiles().filter(p=>!isForeignIdentity(p.id) && !programProfiles.has(p.id)).map(async p => {
       const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
       return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
         currentMode:entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
@@ -334,13 +343,13 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       throw Object.assign(refuse('PROGRAM_BINARY_REQUIRED'), {reason:'Binary name is required.'});
     }
     const resolved = resolveHostBinary(choice.binary, {...process.env, ...env});
-    if (creating) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:'Another capsule is currently starting.'});
+    if (creating) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:`host_program_unavailable: ${resolved.name}: another capsule is currently starting`});
     creating = true;
     let key, clearMode;
     try {
       pruneProgramProfiles();
       const {live,bound} = summarizeSurfaces(capsuleStates);
-      if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:'Capsule limit reached; stop a capsule first.'});
+      if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:`host_program_unavailable: ${resolved.name}: capsule limit reached; stop a capsule first`});
       let idReply;
       try {
         idReply = typeof listIdentities === 'function' ? await listIdentities() : null;
@@ -348,32 +357,59 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         idReply = null;
       }
       if (idReply?.ok !== true || !Array.isArray(idReply.rows) || !idReply.rows.every((/** @type {any} */ r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id.length > 0)) {
-        throw Object.assign(refuse('IDENTITY_LIST_UNAVAILABLE'), {reason:'Identity list is unavailable; cannot verify profile collisions.'});
+        throw Object.assign(refuse('IDENTITY_LIST_UNAVAILABLE'), {reason:`host_program_unavailable: ${resolved.name}: identity list is unavailable; cannot verify profile collisions`});
       }
       const knownIdentities = new Set(idReply.rows.map((/** @type {any} */ r) => r.id));
+      const programIdentities = new Set(Array.isArray(idReply?.rows) ? idReply.rows.filter((/** @type {any} */ r) => r?.browser === 'program').map((/** @type {any} */ r) => r.id) : []);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       let base = resolved.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
       if (base.length < 2) base = ('pg-' + (base || 'app')).slice(0, 30);
       const forbidden = new Set(['notepad-1','metaviewer-1','srf-egress-proxy','n8n','distil-box']);
+      if (isForeignIdentity(base) || forbidden.has(base) || base.startsWith('mv-') || base === env.MV_SRF_LIVE_PROFILE) {
+        throw Object.assign(refuse('IDENTITY_PROTECTED'), {reason:`host_program_unavailable: ${resolved.name}: protected identity name refused`});
+      }
       const canUse = (/** @type {string} */ candidate) => identityAllowed(candidate) && !forbidden.has(candidate)
+        && !candidate.startsWith('mv-') && candidate !== env.MV_SRF_LIVE_PROFILE
         && !raw[candidate] && !profiles.some(p => p.id === candidate)
-        && !dynamicProfiles.has(candidate) && !knownIdentities.has(candidate)
+        && !dynamicProfiles.has(candidate) && (!knownIdentities.has(candidate) || programIdentities.has(candidate))
         && !programProfiles.has(candidate) && !bound.has(candidate);
       let profileId = canUse(base) ? base : '';
       for (let n = 2; !profileId && n <= 99; n++) {
         const candidate = `${base.slice(0, 36)}-${n}`;
         if (canUse(candidate)) profileId = candidate;
       }
-      if (!profileId) throw Object.assign(refuse('CAPSULE_SLOT_UNAVAILABLE'), {reason:'No free program profile slot available.'});
+      if (!profileId) throw Object.assign(refuse('CAPSULE_SLOT_UNAVAILABLE'), {reason:`host_program_unavailable: ${resolved.name}: no free program profile slot available`});
       key = `pending:${profileId}`;
       capsuleStates.set(key, {profile_id:profileId, state:'creating'});
+      try {
+        const provReply = await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});
+        if (provReply && provReply.ok === false) {
+          const pCode = typeof provReply.code === 'string' && provReply.code ? provReply.code : 'PROFILE_NOT_PROVISIONED';
+          const pReason = typeof provReply.reason === 'string' && provReply.reason ? provReply.reason : pCode;
+          throw Object.assign(refuse(pCode), {reason:pReason.includes(resolved.name) ? pReason : `host_program_unavailable: ${resolved.name}: ${pReason}`});
+        }
+      } catch (provErr) {
+        const rawCode = typeof /** @type {any} */ (provErr)?.code === 'string' && /** @type {any} */ (provErr).code
+          ? /** @type {any} */ (provErr).code
+          : (typeof /** @type {any} */ (provErr)?.message === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(/** @type {any} */ (provErr).message)
+            ? /** @type {any} */ (provErr).message
+            : 'PROFILE_NOT_PROVISIONED');
+        const rawReason = typeof /** @type {any} */ (provErr)?.reason === 'string' && /** @type {any} */ (provErr).reason
+          ? /** @type {any} */ (provErr).reason
+          : (typeof /** @type {any} */ (provErr)?.message === 'string' && /** @type {any} */ (provErr).message
+            ? /** @type {any} */ (provErr).message
+            : rawCode);
+        const reason = rawReason.includes(resolved.name) ? rawReason : `host_program_unavailable: ${resolved.name}: ${rawReason}`;
+        throw Object.assign(refuse(rawCode), {reason});
+      }
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, 'agent', resolved.path);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:1280, h:900}}});
       if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {
         const code = surfaceCreateRefusal(reply);
         const rawDetail = typeof reply?.data?.detail === 'string' ? reply.data.detail : '';
-        const reason = rawDetail.includes('host_program_unavailable:') ? rawDetail : (rawDetail || code);
+        const baseReason = rawDetail.includes('host_program_unavailable:') ? rawDetail : (rawDetail ? `host_program_unavailable: ${rawDetail}` : `host_program_unavailable: ${code}`);
+        const reason = baseReason.includes(resolved.name) ? baseReason : baseReason.replace(/^host_program_unavailable:\s*/, `host_program_unavailable: ${resolved.name}: `);
         throw Object.assign(refuse(code), {reason});
       }
       const surface = reply.data.surface;
@@ -411,7 +447,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (live >= MAX_CAPSULES) throw refuse('CAPSULE_LIMIT_REACHED');
       const available = await choices();
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
-      const profile = allProfiles().find(p => p.id === choice.profileId);
+      const profile = browserProfiles().find(p => p.id === choice.profileId && !programProfiles.has(p.id));
       if (!profile || !available.find(p => p.profileId === profile.id)?.available) throw refuse('NO_IDENTITY');
       key = `pending:${profile.id}`;
       capsuleStates.set(key,{profile_id:profile.id,state:'creating'});
@@ -475,6 +511,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (!exact(choice,'profileId,role') || !['human','agent'].includes(choice.role) || !id(choice.profileId)) throw refuse('CAPSULE_ROLE_INVALID');
     if (isForeignIdentity(choice.profileId)) throw refuse('IDENTITY_PROTECTED');
     if (creating) throw refuse('SURFACE_CREATE_BUSY');
+    if (programProfiles.has(choice.profileId)) throw refuse('NO_IDENTITY');
     const surface = [...capsuleStates.values()].find(s => s.profile_id === choice.profileId && s.state !== 'destroyed');
     if (surface) {
       if (!surface.surface_id || surface.state !== 'active') throw refuse('PROFILE_ALREADY_BOUND');

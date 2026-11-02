@@ -10,6 +10,7 @@ import {createButtonService,OPERATOR_STOP_BUDGET_MS} from './buttonBridge.js';
  * No agent channel or credential operation is registered here. */
 import * as fs from 'node:fs';
 import { dirname, basename, join, isAbsolute, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { BUTTON_METHODS, OPERATOR_METHODS, assertOperatorCall, assertOperatorReply, operatorKeys, validEgress, validHandoff } from './preload.js';
@@ -57,7 +58,8 @@ export function publicIdentity(row) {
   if(!row || typeof row!=='object' || Array.isArray(row) || Object.keys(row).some(k=>!allowed.includes(k))) throw new Error('IDENTITY_REPLY');
   // [TARGET, unit decision] Login history cannot prove current authentication.
   // The native tool has no current-session witness; null is not a logged-out state.
-  const result={id:row.profile_id,label:row.account_label,domains:row.allowed_domains,logged_in:'unknown'};
+  const domains=row.allowed_domains===undefined || row.allowed_domains===null?[]:row.allowed_domains;
+  const result={id:row.profile_id,label:row.account_label,domains,logged_in:'unknown',...(row.browser==='program'?{browser:'program'}:{})};
   assertOperatorReply('identity.show',{ok:true,rows:[result]});
   return result;
 }
@@ -74,6 +76,7 @@ export function resolveIdentityTool({tool,env=process.env,exists=p=>fs.existsSyn
   }
   return tool;
 }
+export const defaultIdentityTool = () => fileURLToPath(new URL('../../tools/mv_identity.py', import.meta.url));
 /** [TARGET, unit decision] MV_MW_HOME is required by the tool only to prove
  * store separation; when the launcher does not set it, default to the tool
  * checkout's gitignored memoryweb/ directory. The runner still copies only its
@@ -111,7 +114,7 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
   /** @type {Set<()=>void>} */ const live=new Set();
   const run=(/** @type {string} */method,/** @type {any} */v)=>new Promise((accept,reject)=>{
     if(v?.id && (isForeignIdentity(v.id) || method==='delete' && isProtectedIdentity(v.id))){reject(new Error('IDENTITY_PROTECTED'));return;}
-    const argv=[tool,method,...(method==='list'?[]:['--id',v.id]),...(method==='create'?['--label',v.label,'--domains',v.domains.join(',')]:[])];
+    const argv=[tool,method,...(method==='list'?[]:['--id',v.id]),...(method==='create'?['--label',v.label,...(v.browser==='program'?['--browser','program']:['--domains',v.domains.join(',')])]:[])];
     const child=spawnTool('python3',argv,{shell:false,env:Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','MV_MW_HOME'].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]])),stdio:['ignore','pipe','pipe'],detached:true});
     let stdout='',stderr='',bytes=0,settled=false,opened=false;
     /** @type {ReturnType<typeof setTimeout>|undefined} */ let killTimer;

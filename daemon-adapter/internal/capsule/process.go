@@ -100,6 +100,9 @@ func extractHostProgramRefusal(outputs ...string) string {
 		if nl := strings.IndexAny(line, "\r\n"); nl >= 0 {
 			line = line[:nl]
 		}
+		if q := strings.IndexByte(line, '"'); q >= 0 {
+			line = line[:q]
+		}
 		line = strings.TrimSpace(line)
 		if len(line) > 256 {
 			line = line[:256]

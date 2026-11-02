@@ -92,8 +92,9 @@ export function assertOperatorCall(method,args) {
   if (!args.length) return;
   const v=args[0];
   if(method.startsWith('identity.')) {
-    if(!operatorKeys(v,method==='identity.create'?['id','label','domains']:['id']) || !identityId(v.id)) throw new Error('OPERATOR_PAYLOAD');
-    if(method==='identity.create' && (!identityLabel(v.label) || !Array.isArray(v.domains) || v.domains.length>16 || !v.domains.every((/** @type {any} */d,/** @type {number} */i)=>typeof d==='string' && d.length<=253 && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d) && (i===0 || v.domains[i-1]<d)))) throw new Error('OPERATOR_PAYLOAD');
+    const validCreateKeys=method==='identity.create' && (operatorKeys(v,['id','label','domains']) || (operatorKeys(v,['id','label','domains','browser']) && v.browser==='program'));
+    if(!(method==='identity.create'?validCreateKeys:operatorKeys(v,['id'])) || !identityId(v.id)) throw new Error('OPERATOR_PAYLOAD');
+    if(method==='identity.create' && (!identityLabel(v.label) || !Array.isArray(v.domains) || (v.browser==='program'?v.domains.length>0:v.domains.length>16) || !v.domains.every((/** @type {any} */d,/** @type {number} */i)=>typeof d==='string' && d.length<=253 && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d) && (i===0 || v.domains[i-1]<d)))) throw new Error('OPERATOR_PAYLOAD');
   } else if(method.startsWith('egress.')) {
     if(!(method==='egress.set'?(operatorKeys(v,['identity','record']) || (operatorKeys(v,['identity','record','confirm']) && typeof v.confirm==='boolean')):operatorKeys(v,['identity'])) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(v.identity) || typeof v.identity!=='string' || (method==='egress.set' && !validEgress(v.record))) throw new Error('OPERATOR_PAYLOAD');
   } else if(!operatorKeys(v,['surface_id','step_index','gesture']) || !validHandoff({schema:'metaviewer.handoff/v1',surface_id:v.surface_id,step_index:v.step_index,reason:'captcha_wall',confidence:100,evidence_kinds:[]}) || v.gesture!=='operator-acknowledge') throw new Error('OPERATOR_PAYLOAD');
@@ -110,7 +111,7 @@ export function assertOperatorReply(method,v) {
   } else if(['identity.delete','identity.login','handoff.ack'].includes(method)) {
     if(!operatorKeys(v,['ok'])) throw new Error('OPERATOR_REPLY');
   } else {
-    if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>256 || !v.rows.every((/** @type {any} */r)=>operatorKeys(r,['id','label','domains','logged_in']) && identityId(r.id) && identityLabel(r.label) && Array.isArray(r.domains) && r.domains.length<=256 && r.domains.every((/** @type {any} */d)=>typeof d==='string' && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d)) && ['unknown','yes','no'].includes(r.logged_in))) throw new Error('OPERATOR_REPLY');
+    if(!operatorKeys(v,['ok','rows']) || !Array.isArray(v.rows) || v.rows.length>256 || !v.rows.every((/** @type {any} */r)=>(operatorKeys(r,['id','label','domains','logged_in']) || (operatorKeys(r,['id','label','domains','logged_in','browser']) && r.browser==='program')) && identityId(r.id) && identityLabel(r.label) && Array.isArray(r.domains) && r.domains.length<=256 && r.domains.every((/** @type {any} */d)=>typeof d==='string' && /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(d)) && ['unknown','yes','no'].includes(r.logged_in))) throw new Error('OPERATOR_REPLY');
   }
   return v;
 }

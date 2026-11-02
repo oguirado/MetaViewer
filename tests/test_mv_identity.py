@@ -45,7 +45,9 @@ if verb == 'create':
     root.chmod(0o700)
     if meta.exists(): sys.exit(4)
     profile.mkdir(mode=0o700)
-    meta.write_text(json.dumps(dict(profile_id=identity, account_label=arg('--label'), allowed_domains=arg('--domains').split(','))))
+    browser = arg('--browser') if '--browser' in a else 'browser'
+    domains = [d for d in arg('--domains').split(',') if d] if '--domains' in a else []
+    meta.write_text(json.dumps(dict(profile_id=identity, browser=browser, account_label=arg('--label'), allowed_domains=domains)))
     meta.chmod(0o600)
 elif verb == 'start':
     if not profile.is_dir(): sys.exit(4)
@@ -632,6 +634,32 @@ class IdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(mv.Refused, "^LOGIN_TERMINATED$"):
                 self.tool.login("account-a")
         self.assertTrue((self.state / "views" / (self.holder() + ".login-pending")).exists())
+
+    def test_program_identity_create_reuse_collision_and_rollback(self):
+        created = self.tool.create("gedit", "gedit", "", browser="program")
+        self.assertEqual(created["profile_id"], "gedit")
+        self.assertEqual(created["browser"], "program")
+        self.assertEqual(created["allowed_domains"], [])
+        self.assertEqual([c.args[0] for c in self.tool.provision.call_args_list], ["gedit"])
+
+        # Reusing an existing program identity succeeds and re-provisions without calling native create twice.
+        reused = self.tool.create("gedit", "gedit", "", browser="program")
+        self.assertEqual(reused["profile_id"], "gedit")
+        self.assertEqual(reused["browser"], "program")
+        self.assertEqual([c.args[0] for c in self.tool.provision.call_args_list], ["gedit", "gedit"])
+
+        # Browser identity collision is refused for program create.
+        self.create("browser-id")
+        with self.assertRaisesRegex(mv.Refused, "^PROFILE_ALREADY_BOUND$"):
+            self.tool.create("browser-id", "browser-id", "", browser="program")
+
+        # Provisioning failure on a new program identity rolls back metadata.
+        def fail_prov(identity):
+            raise mv.Refused("PROFILE_NOT_PROVISIONED")
+        with patch.object(self.tool, "provision", side_effect=fail_prov):
+            with self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
+                self.tool.create("calc-app", "calc-app", "", browser="program")
+        self.assertFalse((self.root / "metadata" / "calc-app.json").exists())
 
 
 if __name__ == "__main__":

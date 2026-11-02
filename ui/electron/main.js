@@ -2597,6 +2597,13 @@ export async function bootProductionMain(handles) {
           const tool = resolveOperatorIdentityTool({tool:resolveIdentityTool({packaged:packagedLaunch,
             resourcesPath:process.resourcesPath,rendererRoot:paths.rendererRoot}),env});
           return identityRunner({tool,env:identityEnvironment(env,tool)})('list',{});
+        },
+        provisionProgramIdentity:async (/** @type {{id:string,label:string}} */ {id,label}) => {
+          const {identityEnvironment,identityRunner,resolveIdentityTool:resolveOperatorIdentityTool} = await import('./operatorBridge.js');
+          const env = /** @type {NodeJS.ProcessEnv} */ (typed.env);
+          const tool = resolveOperatorIdentityTool({tool:resolveIdentityTool({packaged:packagedLaunch,
+            resourcesPath:process.resourcesPath,rendererRoot:paths.rendererRoot}),env});
+          return identityRunner({tool,env:identityEnvironment(env,tool)})('create',{id,label,domains:[],browser:'program'});
         }});
     }
     if (packagedLaunch && envRec.MV_E2E_LIVE !== undefined && envRec.MV_E2E_LIVE !== '') {

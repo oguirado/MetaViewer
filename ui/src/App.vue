@@ -775,15 +775,15 @@ function onCreateCapsule(intent, settle) {
     if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id) {
       const reason = 'Renderer cannot select a profile for a program capsule.';
       settle?.({ ok: false, code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
-      hostOutcome.value = { code: 'PROGRAM_PROFILE_FORBIDDEN', message: reason, tone: 'refusal' };
-      recordActivity({ code: 'PROGRAM_PROFILE_FORBIDDEN' });
+      hostOutcome.value = /** @type {any} */ ({ code: 'PROGRAM_PROFILE_FORBIDDEN', reason, message: reason, tone: 'refusal' });
+      recordActivity({ code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
       return;
     }
     if (body.profile || body.choice?.profile || body.choice) {
       const reason = 'Renderer cannot select a profile for a program capsule.';
       settle?.({ ok: false, code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
-      hostOutcome.value = { code: 'PROGRAM_PROFILE_FORBIDDEN', message: reason, tone: 'refusal' };
-      recordActivity({ code: 'PROGRAM_PROFILE_FORBIDDEN' });
+      hostOutcome.value = /** @type {any} */ ({ code: 'PROGRAM_PROFILE_FORBIDDEN', reason, message: reason, tone: 'refusal' });
+      recordActivity({ code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
       return;
     }
     if (typeof body.binary !== 'string' || body.binary.trim().length === 0) {
@@ -791,15 +791,21 @@ function onCreateCapsule(intent, settle) {
       settle?.({ ok: false, code: 'PROGRAM_BINARY_REQUIRED', reason });
       const legacyNoBrowser = !('binary' in body) && !settle && !(/** @type {any} */ (globalThis).metaviewerRoles);
       const outcomeCode = legacyNoBrowser ? 'NO_BROWSER_CAPSULE' : 'PROGRAM_BINARY_REQUIRED';
-      hostOutcome.value = { code: outcomeCode, message: legacyNoBrowser ? 'NO_BROWSER_CAPSULE' : reason, tone: 'refusal' };
-      recordActivity({ code: outcomeCode });
+      hostOutcome.value = legacyNoBrowser
+        ? { code: outcomeCode, message: 'NO_BROWSER_CAPSULE', tone: 'refusal' }
+        : /** @type {any} */ ({ code: outcomeCode, reason, message: reason, tone: 'refusal' });
+      recordActivity(legacyNoBrowser ? { code: outcomeCode } : { code: outcomeCode, reason });
       return;
     }
     const promise = createProgramCapsule(body);
     settle?.(promise);
     void submitHost(async () => {
       const reply = await promise;
-      if (!reply?.ok) throw Object.assign(new Error(reply?.reason || reply?.code || 'HOST_PROGRAM_UNAVAILABLE'), { code: reply?.code || 'HOST_PROGRAM_UNAVAILABLE' });
+      if (!reply?.ok) {
+        const code = reply?.code || 'HOST_PROGRAM_UNAVAILABLE';
+        const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
+        throw Object.assign(new Error(reason), { code, reason });
+      }
       return null;
     });
     return;
@@ -876,9 +882,12 @@ let activitySeq = 0;
 function recordActivity(outcome) {
   if (!hostActive) return;
   activitySeq += 1;
-  const record = /** @type {{code?:unknown}} */ (outcome);
+  const record = /** @type {{code?:unknown,reason?:unknown}} */ (outcome);
   const code = typeof record?.code === 'string' ? record.code : '';
-  activityFeed.value = [...activityFeed.value, Object.freeze({ seq: activitySeq, code })].slice(-ACTIVITY_LIMIT);
+  const reason = typeof record?.reason === 'string' && record.reason.length > 0 && record.reason.length <= 256 && !/[\x00-\x1f\x7f]/.test(record.reason)
+    ? record.reason
+    : undefined;
+  activityFeed.value = [...activityFeed.value, Object.freeze(reason ? { seq: activitySeq, code, reason } : { seq: activitySeq, code })].slice(-ACTIVITY_LIMIT);
 }
 /**
  * MVUI26B lane M: human-input port provided by the entry (`inputPort`); null
@@ -993,15 +1002,22 @@ async function submitHost(action) {
       ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
     };
     const fallback = 'This request is unavailable. Please try again.';
-    const message = code === 'CAPSULE_SLOT_UNAVAILABLE' ? createReasons.CAPSULE_SLOT_UNAVAILABLE : Object.hasOwn(createReasons, code)
-      ? `${code}: ${createReasons[/** @type {keyof typeof createReasons} */ (code)]}`
-      : (code === 'HOST_REQUEST_REFUSED' || code.startsWith('LAYOUT_') || code.startsWith('ERR_') ? fallback : `${code}: ${fallback}`);
+    const rawReason = typeof (/** @type {{reason?:unknown}} */ (error))?.reason === 'string'
+      ? /** @type {string} */ ((/** @type {{reason?:unknown}} */ (error)).reason).trim()
+      : '';
+    const safeReason = rawReason.length > 0 && rawReason.length <= 256 && !/[\x00-\x1f\x7f]/.test(rawReason) ? rawReason : '';
+    const message = safeReason
+      ? (safeReason.startsWith(`${code}:`) ? safeReason : `${code}: ${safeReason}`)
+      : (code === 'CAPSULE_SLOT_UNAVAILABLE' ? createReasons.CAPSULE_SLOT_UNAVAILABLE : Object.hasOwn(createReasons, code)
+        ? `${code}: ${createReasons[/** @type {keyof typeof createReasons} */ (code)]}`
+        : (code === 'HOST_REQUEST_REFUSED' || code.startsWith('LAYOUT_') || code.startsWith('ERR_') ? fallback : `${code}: ${fallback}`));
     const activityCode = code === 'NO_IDENTITY' && missingId && missingId !== 'mv-live-2' ? `NO_IDENTITY:${missingId}` : code;
     if (hostActive) hostOutcome.value = code === 'NO_IDENTITY' && missingId && missingId !== 'mv-live-2'
       ? /** @type {any} */ ({ code, missingId, message, tone: 'refusal' })
-      : { code, message, tone: 'refusal' };
+      : (safeReason ? /** @type {any} */ ({ code, reason: safeReason, message, tone: 'refusal' }) : { code, message, tone: 'refusal' });
     if (hostActive) {
       if (code === 'HOST_REQUEST_REFUSED') recordActivity({ code: 'HOST_REQUEST_REFUSED' });
+      else if (safeReason) recordActivity({ code: activityCode, reason: safeReason });
       else recordActivity({ code: activityCode });
     }
   }
