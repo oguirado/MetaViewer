@@ -25,6 +25,8 @@ const profileMap = (ids, over = {}) => JSON.stringify(Object.fromEntries(ids.map
   Display: ':100', Width: 1280, Height: 900, TextInput: 'paste', ...over,
 }])));
 const four = ['mv-live-1', 'mv-live-2', 'mv-live-3', 'mv-live-4'];
+const sixteen = Array.from({ length: 16 }, (_, i) => `mv-live-${i + 1}`);
+const eighteen = Array.from({ length: 18 }, (_, i) => `p${i + 1}`);
 const envFor = (ids, extra = {}) => ({ MV_SRF_PROFILES: profileMap(ids), MV_SRF_LIVE_PROFILE: ids[0], ...extra });
 const surf = (profile_id, state = 'active') => ({ surface_id: `s-${profile_id}`, profile_id, state });
 
@@ -40,15 +42,36 @@ async function probes(m) {
     try { if ((await fn()) !== true) failed.push(name); } catch { failed.push(name); }
   };
   const ids = new Set(four);
-  await check('limit-at-4', () => {
-    const r = m.pickProfile({ env: envFor(['a', 'b', 'c', 'd', 'e', 'f']), live: 4, bound: new Set(['a', 'b', 'c', 'd']), identities: new Set(['e', 'f']) });
-    return r.ok === false && r.code === 'CAPSULE_LIMIT_REACHED';
+  const sixteenIds = new Set(sixteen);
+  await check('limit-at-16', () => {
+    const r = m.pickProfile({ env: envFor(eighteen), live: 16, bound: new Set(eighteen.slice(0, 16)), identities: new Set(eighteen) });
+    const msg = m.refusalReply(r).message;
+    return r.ok === false && r.code === 'CAPSULE_LIMIT_REACHED' && msg.includes('16 of 16 open') && !msg.includes('host_program_unavailable');
   });
-  await check('allow-at-3', () => {
-    const r = m.pickProfile({ env: envFor(four), live: 3, bound: new Set(four.slice(0, 3)), identities: ids });
-    return r.ok === true && r.profile_id === 'mv-live-4';
+  await check('allow-at-15', () => {
+    const r = m.pickProfile({ env: envFor(sixteen), live: 15, bound: new Set(sixteen.slice(0, 15)), identities: sixteenIds });
+    return r.ok === true && r.profile_id === 'mv-live-16';
   });
-  await check('max-constant', () => m.MAX_CAPSULES === 4);
+  await check('max-constant', () => m.MAX_CAPSULES === 16);
+  await check('memory-limit-constant', () => m.CAPSULE_MEMORY_LIMIT_BYTES === 6 * 1024 * 1024 * 1024);
+  await check('memory-admit-at-6gib', () => {
+    const r = m.pickProfile({ env: envFor(four), live: 0, bound: new Set(), identities: ids, freeMemoryBytes: 6 * 1024 * 1024 * 1024 });
+    return r.ok === true && r.profile_id === 'mv-live-1';
+  });
+  await check('memory-refuse-below-6gib', () => {
+    const r = m.pickProfile({ env: envFor(four), live: 2, bound: new Set(['mv-live-1', 'mv-live-2']), identities: ids, freeMemoryBytes: 6 * 1024 * 1024 * 1024 - 1 });
+    const msg = m.refusalReply(r).message;
+    return r.ok === false && r.code === 'RAM_ADMISSION_REFUSED' && msg.includes('one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm; 2 of 16 open') && msg.includes('Close an open capsule') && !msg.includes('host_program_unavailable');
+  });
+  await check('memory-read-failure-fails-closed', async () => {
+    const r = await m.pickCreateRequest({
+      env: envFor(four),
+      surfaces: [surf('mv-live-1')],
+      listIdentities: async () => ({ ok: true, rows: four.map((id) => ({ id })) }),
+      readFreeMemoryBytes: async () => { throw new Error('MEMINFO_UNAVAILABLE'); },
+    });
+    return r.ok === false && r.code === 'RAM_ADMISSION_REFUSED';
+  });
   await check('skip-bound', () => {
     const r = m.pickProfile({ env: envFor(four), live: 1, bound: new Set(['mv-live-1']), identities: ids });
     return r.ok === true && r.profile_id === 'mv-live-2';
@@ -110,35 +133,34 @@ describe('MULTI-CAPSULE profile picker behavior', () => {
     assert.deepEqual(await probes(picker), []);
   });
 
-  it('picks mv-live-1..4 in order as capsules open, then refuses the fifth', () => {
-    const identities = new Set(four);
+  it('picks mv-live-1..16 in order as capsules open, then refuses the 17th', () => {
+    const identities = new Set(sixteen);
     const bound = new Set();
-    for (const [index, id] of four.entries()) {
-      const r = picker.pickProfile({ env: envFor(four), live: index, bound: new Set(bound), identities });
+    for (const [index, id] of sixteen.entries()) {
+      const r = picker.pickProfile({ env: envFor(sixteen), live: index, bound: new Set(bound), identities });
       assert.equal(r.ok, true);
       assert.equal(r.profile_id, id);
       assert.equal(r.request.params.profile_id, id);
       bound.add(id);
     }
-    const full = picker.pickProfile({ env: envFor(four), live: 4, bound, identities });
+    const full = picker.pickProfile({ env: envFor(sixteen), live: 16, bound, identities });
     assert.equal(full.ok, false);
     assert.equal(full.code, 'CAPSULE_LIMIT_REACHED');
   });
 
-  it('caps at 4 even when more profiles are configured', () => {
-    const six = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6'];
-    const r = picker.pickProfile({ env: envFor(six), live: 4, bound: new Set(['p1', 'p2', 'p3', 'p4']), identities: new Set(six) });
+  it('caps at 16 even when more profiles are configured', () => {
+    const r = picker.pickProfile({ env: envFor(eighteen), live: 16, bound: new Set(eighteen.slice(0, 16)), identities: new Set(eighteen) });
     assert.equal(r.code, 'CAPSULE_LIMIT_REACHED');
-    assert.equal(r.configured, 6);
-    const room = picker.pickProfile({ env: envFor(six), live: 3, bound: new Set(['p1', 'p2', 'p3']), identities: new Set(six) });
+    assert.equal(r.configured, 18);
+    const room = picker.pickProfile({ env: envFor(eighteen), live: 15, bound: new Set(eighteen.slice(0, 15)), identities: new Set(eighteen) });
     assert.equal(room.ok, true);
-    assert.equal(room.profile_id, 'p4');
+    assert.equal(room.profile_id, 'p16');
   });
 
   it('counts a surface with no readable profile toward the ceiling', () => {
-    const states = [{ state: 'active' }, { state: 'active' }, { state: 'active', profile_id: 7 }, surf('mv-live-1')];
+    const states = [...Array.from({ length: 14 }, () => ({ state: 'active' })), { state: 'active', profile_id: 7 }, surf('mv-live-1')];
     const { live, bound } = picker.summarizeSurfaces(states);
-    assert.equal(live, 4);
+    assert.equal(live, 16);
     assert.deepEqual([...bound], ['mv-live-1']);
     const r = picker.pickProfile({ env: envFor(four), live, bound, identities: new Set(four) });
     assert.equal(r.code, 'CAPSULE_LIMIT_REACHED');
@@ -238,10 +260,16 @@ describe('MULTI-CAPSULE renderer copy', () => {
     assert.match(picker.refusalReply(refusal('NO_FREE_PROFILE', { configured: 1 })).message, /^1 configured capsule profile is all in use\./);
   });
 
-  it('CAPSULE_LIMIT_REACHED names the ceiling and the shared CPU', () => {
-    const reply = picker.refusalReply(refusal('CAPSULE_LIMIT_REACHED'));
-    assert.match(reply.message, /At most 4 capsules/);
-    assert.match(reply.message, /share the same CPU/);
+  it('CAPSULE_LIMIT_REACHED names the ceiling and open count, and RAM_ADMISSION_REFUSED names the 6 GiB limit and what to close', () => {
+    const reply = picker.refusalReply(refusal('CAPSULE_LIMIT_REACHED', { live: 16 }));
+    assert.match(reply.message, /At most 16 capsules run at once \(16 of 16 open\)/);
+    assert.match(reply.message, /Close a capsule to open another/);
+    assert.doesNotMatch(reply.message, /host_program_unavailable/);
+    const memReply = picker.refusalReply(refusal('RAM_ADMISSION_REFUSED', { live: 3, freeMemoryBytes: 3 * 1024 * 1024 * 1024 }));
+    assert.equal(memReply.code, 'RAM_ADMISSION_REFUSED');
+    assert.match(memReply.message, /3\.0 GiB available; one capsule needs 6 GiB: 4 GiB RAM \+ 2 GiB shm; 3 of 16 open/);
+    assert.match(memReply.message, /Close an open capsule or other applications/);
+    assert.doesNotMatch(memReply.message, /host_program_unavailable/);
   });
 
   it('NO_IDENTITY offers the Create identity action that opens Identities', () => {
@@ -252,7 +280,7 @@ describe('MULTI-CAPSULE renderer copy', () => {
   });
 
   it('every refusal code has copy, replies are frozen, and unknown codes collapse safely', () => {
-    for (const code of ['CAPSULE_LIMIT_REACHED', 'NO_FREE_PROFILE', 'NO_IDENTITY', 'IDENTITY_LIST_UNAVAILABLE', 'PICKER_INPUT_INVALID']) {
+    for (const code of ['CAPSULE_LIMIT_REACHED', 'RAM_ADMISSION_REFUSED', 'NO_FREE_PROFILE', 'NO_IDENTITY', 'IDENTITY_LIST_UNAVAILABLE', 'PICKER_INPUT_INVALID']) {
       const reply = picker.refusalReply(refusal(code));
       assert.equal(reply.code, code);
       assert.ok(reply.message.length > 20);
@@ -264,8 +292,8 @@ describe('MULTI-CAPSULE renderer copy', () => {
   });
 
   it('copy never echoes environment values', () => {
-    const env = { ...envFor(four), MV_SRF_STATE_DIR: '/home/x/secret-state', MV_SRF_LIVE_RAM_ROOT: '/dev/shm/secret-root' };
-    const r = picker.pickProfile({ env, live: 4, bound: new Set(four), identities: new Set(four) });
+    const env = { ...envFor(sixteen), MV_SRF_STATE_DIR: '/home/x/secret-state', MV_SRF_LIVE_RAM_ROOT: '/dev/shm/secret-root' };
+    const r = picker.pickProfile({ env, live: 16, bound: new Set(sixteen), identities: new Set(sixteen) });
     const text = JSON.stringify(picker.refusalReply(r));
     assert.ok(!text.includes('secret-state') && !text.includes('secret-root'));
   });
@@ -275,7 +303,11 @@ describe('MULTI-CAPSULE mutant evidence', () => {
   /** @type {Array<[string, Array<[string, string]>]>} */
   const mutants = [
     ['limit off by one', [['live >= MAX_CAPSULES', 'live > MAX_CAPSULES']]],
-    ['ceiling raised to 5', [['MAX_CAPSULES = 4;', 'MAX_CAPSULES = 5;']]],
+    ['ceiling raised to 17', [['MAX_CAPSULES = 16;', 'MAX_CAPSULES = 17;']]],
+    ['memory check removed', [['freeMemoryBytes < CAPSULE_MEMORY_LIMIT_BYTES', 'false && freeMemoryBytes < CAPSULE_MEMORY_LIMIT_BYTES']]],
+    ['memory boundary off by one', [['freeMemoryBytes < CAPSULE_MEMORY_LIMIT_BYTES', 'freeMemoryBytes <= CAPSULE_MEMORY_LIMIT_BYTES']]],
+    ['shm 2 GiB omitted from capsule limit', [['CAPSULE_DOCKER_MEMORY_BYTES + CAPSULE_DOCKER_SHM_BYTES', 'CAPSULE_DOCKER_MEMORY_BYTES']]],
+    ['failing readFreeMemoryBytes admitted', [['resolvedFreeBytes = null;', 'resolvedFreeBytes = undefined;']]],
     ['bound profiles still offered', [['profiles.filter((p) => !bound.has(p.id))', 'profiles.slice()']]],
     ['identity ignored', [['free.find((p) => identities.has(p.id))', 'free[0]']]],
     ['unknown identity list admitted', [
@@ -312,17 +344,19 @@ describe('MULTI-CAPSULE mutant evidence', () => {
 });
 
 it('authority create hook uses identities, reserves profiles, and enforces the ceiling', async () => {
-  const { installAuthorityWire, WIRE_CHANNELS } = await import('../electron/authorityWire.js');
+  const { installAuthorityWire } = await import('../electron/authorityWire.js');
   const { PRIVILEGED_ORIGIN } = await import('../electron/main.js');
   const handlers = new Map();
   const contents = {id:7, mainFrame:{origin:PRIVILEGED_ORIGIN,url:`${PRIVILEGED_ORIGIN}/index.html`},isDestroyed:()=>false};
   const states = new Map([['boot', surf('mv-live-1')]]);
   let available = false;
+  let freeBytes = 12 * 1024 * 1024 * 1024;
   const requests = [];
   const wire = installAuthorityWire({
     ipcMain:{handle:(ch,fn)=>handlers.set(ch,fn),removeHandler:ch=>handlers.delete(ch)},
-    contents, env:envFor(four), argv:[], capsuleStates:states,
-    listIdentities:async()=>({ok:true,rows:available ? four.map(id=>({id})) : []}),
+    contents, env:envFor(sixteen), argv:[], capsuleStates:states,
+    listIdentities:async()=>({ok:true,rows:available ? sixteen.map(id=>({id})) : []}),
+    readFreeMemoryBytes:async()=>freeBytes,
     core:{request:async request=>{
       requests.push(request);
       return {schema:'surface_event/v0.2',event:'created',data:{surface:surf(request.params.profile_id)}};
@@ -335,12 +369,16 @@ it('authority create hook uses identities, reserves profiles, and enforces the c
     assert.equal((await create()).code,'NO_IDENTITY');
     assert.equal(requests.length,0);
     available = true;
-    for (const expected of four.slice(1)) {
+    freeBytes = 6 * 1024 * 1024 * 1024 - 1;
+    assert.equal((await create()).code,'RAM_ADMISSION_REFUSED');
+    assert.equal(requests.length,0);
+    freeBytes = 6 * 1024 * 1024 * 1024;
+    for (const expected of sixteen.slice(1)) {
       assert.equal((await create()).ok,true);
       assert.equal(requests.at(-1).params.profile_id,expected);
     }
     assert.equal((await create()).code,'CAPSULE_LIMIT_REACHED');
-    assert.equal(requests.length,3);
+    assert.equal(requests.length,15);
   } finally {await wire.dispose();}
 });
 

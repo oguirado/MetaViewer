@@ -640,3 +640,107 @@ func TestHostExecProgramHumanModeAndBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLogicalDisplayPoolExpandsToAdapterCeilingWithMutantGuards(t *testing.T) {
+	// Launcher MV_SRF_PROFILES configures 4 entries (:100 to :103), while the
+	// adapter ceiling is MaxSurfaces = 16. Verify logical slots expand to 16
+	// without any launcher change, dynamic identities prefer non-static slots so
+	// idle static profiles stay openable in any order, all 16 slots admit
+	// distinct displays, and the 17th is refused.
+	profiles := map[string]Profile{}
+	for i := 1; i <= 4; i++ {
+		profiles[fmt.Sprintf("mv-live-%d", i)] = Profile{
+			Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900,
+			RAMRoot: "/dev/shm", Display: fmt.Sprintf(":%d", 99+i), TextInput: "paste",
+		}
+	}
+	known := map[string]bool{}
+	for i := 1; i <= 20; i++ {
+		known[fmt.Sprintf("dyn-id-%d", i)] = true
+	}
+	r := &identityProfileRunner{known: known, stopVerified: true}
+	m, err := NewManager(Config{
+		BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 16,
+		MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100,
+	}, r, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.identityDisplays) != 16 {
+		t.Fatalf("expected 16 logical display slots, got %d (%v)", len(m.identityDisplays), m.identityDisplays)
+	}
+
+	// Open mv-live-1 (:100), then open dynamic dyn-id-1 BEFORE mv-live-2..4:
+	// dyn-id-1 takes a logical slot (:104) so mv-live-2 (:101) still opens cleanly.
+	s1, err := identityCreate(t, m, "mv-live-1")
+	if err != nil || s1.Display != ":100" {
+		t.Fatalf("mv-live-1 create failed: surface=%+v err=%v", s1, err)
+	}
+	d1, err := identityCreate(t, m, "dyn-id-1")
+	if err != nil || d1.Display != ":104" {
+		t.Fatalf("expected dyn-id-1 to prefer logical slot :104 over static :101..:103, got %+v (err=%v)", d1, err)
+	}
+	s2, err := identityCreate(t, m, "mv-live-2")
+	if err != nil || s2.Display != ":101" {
+		t.Fatalf("mv-live-2 blocked by earlier dynamic profile: surface=%+v err=%v", s2, err)
+	}
+
+	// Fill remaining 13 slots up to the 16-capsule ceiling (total 16 active surfaces).
+	seenDisplays := map[string]bool{s1.Display: true, d1.Display: true, s2.Display: true}
+	activeSurfaces := []string{s1.SurfaceID, d1.SurfaceID, s2.SurfaceID}
+	for i := 2; i <= 14; i++ {
+		surf, cErr := identityCreate(t, m, fmt.Sprintf("dyn-id-%d", i))
+		if cErr != nil {
+			t.Fatalf("create #%d (dyn-id-%d) failed before ceiling 16: %v", len(activeSurfaces)+1, i, cErr)
+		}
+		if seenDisplays[surf.Display] {
+			t.Fatalf("duplicate logical display %s assigned to dyn-id-%d", surf.Display, i)
+		}
+		seenDisplays[surf.Display] = true
+		activeSurfaces = append(activeSurfaces, surf.SurfaceID)
+	}
+	if len(activeSurfaces) != 16 {
+		t.Fatalf("expected 16 active surfaces, got %d", len(activeSurfaces))
+	}
+
+	// 17th capsule is refused at the ceiling of 16.
+	if _, err := identityCreate(t, m, "dyn-id-15"); err == nil {
+		t.Fatal("17th capsule admitted past MaxSurfaces=16 ceiling")
+	}
+
+	// Stop one capsule and verify the 16th slot is recycled immediately.
+	if err := identityStop(t, m, activeSurfaces[len(activeSurfaces)-1]); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := identityCreate(t, m, "dyn-id-15")
+	if err != nil {
+		t.Fatalf("expected freed 16th slot to admit dyn-id-15, got %v", err)
+	}
+	activeSurfaces[len(activeSurfaces)-1] = reopened.SurfaceID
+	for _, sid := range activeSurfaces {
+		if err := identityStop(t, m, sid); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Mutant guard: if configureIdentityTemplate did not expand m.identityDisplays
+	// beyond the 4 static MV_SRF_PROFILES entries, the 5th dynamic capsule fails
+	// with "identity display pool exhausted; stop a capsule first".
+	m.identityDisplays = m.identityDisplays[:4]
+	var mutSurfaces []string
+	for i := 1; i <= 4; i++ {
+		surf, cErr := identityCreate(t, m, fmt.Sprintf("dyn-id-%d", i))
+		if cErr != nil {
+			t.Fatalf("mutant setup create %d failed: %v", i, cErr)
+		}
+		mutSurfaces = append(mutSurfaces, surf.SurfaceID)
+	}
+	_, mutErr := identityCreate(t, m, "dyn-id-5")
+	var f *cli.Fault
+	if !errors.As(mutErr, &f) || f.Code != "profile" || f.Detail != "identity display pool exhausted; stop a capsule first" {
+		t.Fatalf("mutant survived: expected pool exhaustion at 5th capsule when pool truncated to 4, got %v", mutErr)
+	}
+	for _, sid := range mutSurfaces {
+		_ = identityStop(t, m, sid)
+	}
+}

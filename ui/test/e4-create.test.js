@@ -615,23 +615,14 @@ test('E4-CREATE Goal 3: authorityWire createSurface emits exactly one [metaviewe
 
     {
       stderrLines.length = 0;
-      const fourRunning = new Map([
-        ['s1', { profile_id: 'mv-live-1', state: 'running' }],
-        ['s2', { profile_id: 'mv-live-2', state: 'running' }],
-        ['s3', { profile_id: 'mv-live-3', state: 'running' }],
-        ['s4', { profile_id: 'mv-live-4', state: 'running' }],
-      ]);
+      const sixteenIds = Array.from({ length: 16 }, (_, i) => `mv-live-${i + 1}`);
+      const sixteenRunning = new Map(sixteenIds.map((id, i) => [`s${i + 1}`, { profile_id: id, state: 'running' }]));
       const w = setupWire({
         env: {
           HOME: '/tmp/mv-e4-home',
-          MV_SRF_PROFILES: JSON.stringify({
-            'mv-live-1': { kind: 'browser' },
-            'mv-live-2': { kind: 'browser' },
-            'mv-live-3': { kind: 'browser' },
-            'mv-live-4': { kind: 'browser' },
-          }),
+          MV_SRF_PROFILES: JSON.stringify(Object.fromEntries(sixteenIds.map((id) => [id, { kind: 'browser' }]))),
         },
-        capsuleStates: fourRunning,
+        capsuleStates: sixteenRunning,
         listIdentities: async () => ({ ok: true, rows: [{ id: 'mv-live-1' }, { id: 'mv-live-2' }] }),
       });
       const res = await w.invokeCreate();

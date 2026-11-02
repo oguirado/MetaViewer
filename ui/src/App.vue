@@ -670,7 +670,7 @@ function onCapsuleStopped(surfaceId) {
 function onCapsuleLifecycle({surfaceId,completion}) {
   void submitHost(async () => {
     const result = await completion;
-    if (!result.ok) throw Object.assign(Error(result.code),{code:result.code});
+    if (!result.ok) throw Object.assign(Error(result.code),{code:result.code,...(typeof result.reason === 'string' && result.reason ? {reason:result.reason} : {})});
     onCapsuleStopped(surfaceId);
     if (result.surfaceId && !await revealOpenedIdentity(result.surfaceId,result.role)) throw Object.assign(Error('TILE_REVEAL_UNPROVEN'),{code:'TILE_REVEAL_UNPROVEN'});
     return true;
@@ -699,7 +699,7 @@ async function confirmModeSwitch() {
     const result = await /** @type {any} */(globalThis).metaviewerRoles.switchMode(current.surfaceId);
     if (!result.ok) {
       if (result.code === 'SURFACE_CREATE_BUSY' || result.busy) return null;
-      throw Object.assign(Error(result.code),{code:result.code});
+      throw Object.assign(Error(result.code),{code:result.code,...(typeof result.reason === 'string' && result.reason ? {reason:result.reason} : {})});
     }
     await revealOpenedIdentity(result.surfaceId,result.role);
     onCapsuleStopped(current.surfaceId);
@@ -860,7 +860,7 @@ function onCreateCapsule(intent, settle) {
             if (bound) { void revealOpenedIdentity(bound.id,capsuleModes.value[bound.id]); return null; }
           }
           if (!reply.ok && (reply.code === 'SURFACE_CREATE_BUSY' || reply.busy)) return null;
-          if (!reply.ok) throw Object.assign(new Error(reply.code), {code:reply.code});
+          if (!reply.ok) throw Object.assign(new Error(reply.code), {code:reply.code, ...(typeof reply.reason === 'string' && reply.reason ? {reason:reply.reason} : {})});
           if (reply.surfaceId) void revealOpenedIdentity(reply.surfaceId,reply.role || reply.currentMode);
           return null;
         }
@@ -995,19 +995,19 @@ async function submitHost(action) {
       normalizedCode === code || String(error).includes(code)) ?? (typeof normalizedCode === 'string' && normalizedCode.length > 0 ? normalizedCode : 'HOST_REQUEST_REFUSED');
     const createReasons = {
       NO_BROWSER_CAPSULE: 'No browser capsule with a live frame.',
-      CAPSULE_LIMIT_REACHED: 'At most 4 capsules run at once because they share the same CPU cores: frame rate drops as more run. Close a capsule to open another.',
-      NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 4 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
+      CAPSULE_LIMIT_REACHED: 'At most 16 capsules run at once (16 of 16 open). Close a capsule to open another.',
+      NO_FREE_PROFILE: 'Every configured capsule profile is already in use. To run more capsules, add profiles to MV_SRF_PROFILES (up to 16 in total) and restart MetaViewer; see "More than one capsule" in the User Guide.',
       NO_IDENTITY: `No free capsule profile has an identity yet. Create an identity (${missingId ?? 'mv-live-2'}) whose id matches a profile in MV_SRF_PROFILES, then press Add capsule again.`,
       IDENTITY_LIST_UNAVAILABLE: 'The identity list could not be read, so no new capsule was opened. Open Identities to check the identity tool, then try again.',
       PICKER_INPUT_INVALID: 'The capsule request could not be prepared. Please try again.',
       SURFACE_PROFILE_BOUND: 'Every configured capsule profile is already bound to a running capsule. Close or reuse the existing capsule, or add another profile to MV_SRF_PROFILES.',
-      CAPSULE_SLOT_UNAVAILABLE: 'No free capsule slot. Stop another capsule first (up to 4 run at once).',
+      CAPSULE_SLOT_UNAVAILABLE: 'No free capsule slot. Stop another capsule first (up to 16 run at once).',
       PROFILE_ALREADY_BOUND: 'The selected capsule profile is already bound to a running capsule. Close the running capsule or add another profile to MV_SRF_PROFILES.',
       SURFACE_CAPACITY_OR_QUARANTINE: 'No capsule slot is free or the profile is quarantined. Close a capsule or clear the quarantined profile before trying again.',
       SURFACE_PROFILE_QUARANTINED: 'The capsule profile is quarantined after a previous failure. Clear the quarantine before opening a new capsule.',
       IDENTITY_UNAVAILABLE: 'The capsule identity is unavailable or already held by another capsule. Check Identities and try again.',
       IDENTITY_REFUSED: 'The capsule identity was refused by the host. Check Identities and try again.',
-      RAM_ADMISSION_REFUSED: 'Not enough live RAM is free to start another capsule. Close a capsule or reclaim stale RAM reservations and try again.',
+      RAM_ADMISSION_REFUSED: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
       SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
       SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
       SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',

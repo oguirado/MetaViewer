@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Replace the fixed 4-capsule limit with admission up to the 16-capsule adapter ceiling, check host free memory against one capsule's 6 GiB Docker budget (4 GiB memory + 2 GiB shm) before each create, expand the logical display pool in the adapter to `MaxSurfaces` (`16`) without launcher changes, and report the limit, open count, and what to close on refusal instead of `host_program_unavailable`.
 - Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
 
 ## 0.2.3 (2026-11-02) [CITED: `VERSION`]

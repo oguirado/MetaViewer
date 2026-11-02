@@ -808,6 +808,112 @@ async function runProbes({
     }
   });
 
+  // 14. V024-CAPSULE-LIMIT: roleHost admits up to 16 capsules, checks 6 GiB free memory before create, and formats limit/slot/memory refusals without host_program_unavailable.
+  await check('capsule-limit-and-memory-check', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'v024-limit-probe-'));
+    try {
+      const binDir = join(root, 'bin');
+      await mkdir(binDir, { mode: 0o700 });
+      const gedit = join(binDir, 'gedit');
+      await writeFile(gedit, '#!/bin/sh\nexit 0\n');
+      await chmod(gedit, 0o755);
+      const handlers = new Map();
+      const states = new Map();
+      const parent = new EventEmitter();
+      parent.webContents = { session: { registerPreloadScript: () => 'p', unregisterPreloadScript() {} } };
+      let freeBytes = 12 * 1024 * 1024 * 1024;
+      let forceSlotRefusal = false;
+      let seq = 0;
+      const host = roleHost.installRoleHost({
+        electron: { ipcMain: { handle: (k, fn) => handlers.set(k, fn), removeHandler: (k) => handlers.delete(k) } },
+        window: parent,
+        env: {
+          PATH: binDir,
+          MV_SRF_PROFILES: JSON.stringify({
+            'mv-live-1': { Kind: 'browser', NativeKind: 'browser', Width: 1280, Height: 900, RAMRoot: '/dev/shm', Display: ':111' },
+          }),
+          MV_SRF_STATE_DIR: root,
+          MV_SRF_BIN_DIR: binDir,
+        },
+        capsuleStates: states,
+        readFreeMemoryBytes: async () => freeBytes,
+        core: {
+          getHumanSurface: (id) => states.get(id),
+          request: async (req) => {
+            if (forceSlotRefusal) {
+              return {
+                schema: 'surface_event/v0.2',
+                event: 'error',
+                data: { code: 'CAPSULE_SLOT_UNAVAILABLE', detail: 'identity display pool exhausted; stop a capsule first' },
+              };
+            }
+            const surface = {
+              schema: 'surface/v0.2',
+              surface_id: `surface-cap-${++seq}`,
+              kind: 'desktop_capsule',
+              profile_id: req.params.profile_id,
+              state: 'active',
+              control: 'agent',
+            };
+            states.set(surface.surface_id, surface);
+            return { schema: 'surface_event/v0.2', event: 'created', data: { surface } };
+          },
+        },
+        admit: () => true,
+        listIdentities: async () => ({ ok: true, rows: [{ id: 'mv-live-1' }] }),
+        provisionProgramIdentity: async () => ({ ok: true }),
+      });
+      try {
+        const invoke = (op, extra = {}) => handlers.get('metaviewer:roles.v0.3')({}, { schema: 'metaviewer.roles/v0.3', op, ...extra });
+
+        // Memory check refuses below 6 GiB (4 GiB RAM + 2 GiB shm) with clear reason and never host_program_unavailable.
+        freeBytes = 6 * 1024 * 1024 * 1024 - 1;
+        const lowMem = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (lowMem?.ok !== false || lowMem.code !== 'RAM_ADMISSION_REFUSED'
+            || typeof lowMem.reason !== 'string'
+            || !lowMem.reason.includes('one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm')
+            || !lowMem.reason.includes('Close an open capsule')
+            || lowMem.reason.includes('host_program_unavailable')) {
+          return false;
+        }
+
+        // Admits up to 16 concurrent capsules at >= 6 GiB free memory, and refuses the 17th with limit and open count.
+        freeBytes = 6 * 1024 * 1024 * 1024;
+        for (let i = 1; i <= 15; i++) {
+          states.set(`pre-${i}`, { surface_id: `pre-${i}`, profile_id: `mv-live-${i}`, state: 'active', control: 'agent' });
+        }
+        const sixteenth = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (sixteenth?.ok !== true || states.size !== 16) return false;
+
+        const seventeenth = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (seventeenth?.ok !== false || seventeenth.code !== 'CAPSULE_LIMIT_REACHED'
+            || typeof seventeenth.reason !== 'string'
+            || !seventeenth.reason.includes('At most 16 capsules run at once (16 of 16 open)')
+            || !seventeenth.reason.includes('Close a capsule')
+            || seventeenth.reason.includes('host_program_unavailable')) {
+          return false;
+        }
+
+        // Adapter slot exhaustion surfaces clear limit/open reason and never host_program_unavailable.
+        states.delete('pre-15');
+        forceSlotRefusal = true;
+        const slotRefused = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (slotRefused?.ok !== false || slotRefused.code !== 'CAPSULE_SLOT_UNAVAILABLE'
+            || typeof slotRefused.reason !== 'string'
+            || !slotRefused.reason.includes('15 of 16 open; limit is 16')
+            || !slotRefused.reason.includes('Stop another capsule first')
+            || slotRefused.reason.includes('host_program_unavailable')) {
+          return false;
+        }
+        return true;
+      } finally {
+        await host.dispose();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   return failed;
 }
 
@@ -1444,6 +1550,42 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     const mutatedActivityMod = await import(`${pathToFileURL(f).href}?m=15c`);
     const failed = await runProbes({ activityModel: mutatedActivityMod });
     assert.ok(failed.includes('refusal-propagates-to-dialog'), `Mutant 15c survived: ${failed}`);
+  }
+
+  // Mutant 16a (V024-CAPSULE-LIMIT): createProgram skips 16-capsule ceiling check.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      "if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:formatCapsuleLimitReason(live)});",
+      'if (false && live >= MAX_CAPSULES) {}',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16a');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16a survived: ${failed}`);
+  }
+
+  // Mutant 16b (V024-CAPSULE-LIMIT): createProgram skips 6 GiB host free memory check.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      'if (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {',
+      'if (false && (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES)) {',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16b');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16b survived: ${failed}`);
+  }
+
+  // Mutant 16c (V024-CAPSULE-LIMIT): createProgram prefixes non-binary refusal reasons with host_program_unavailable.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      '              : createRefusalReason(code);\n        throw Object.assign(refuse(code), {reason});',
+      '              : createRefusalReason(code);\n        throw Object.assign(refuse(code), {reason:`host_program_unavailable: ${reason}`});',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16c');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16c survived: ${failed}`);
   }
 });
 
