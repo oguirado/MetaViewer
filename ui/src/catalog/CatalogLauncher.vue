@@ -336,6 +336,10 @@ function onClose() {
       <li
         v-for="win in filteredWindows"
         :key="win.xid"
+        role="presentation"
+      >
+      <button
+        type="button"
         :id="`shell/new-capsule/window-row-${win.xid}`"
         :data-semantic-anchor="`dialog/new-capsule/window-row-${win.xid}`"
         role="option"
@@ -346,6 +350,7 @@ function onClose() {
       >
         <span class="mv-window-row__title">{{ win.title }}</span>
         <span class="mv-window-row__program">{{ win.program }}</span>
+      </button>
       </li>
     </ul>
     <p
@@ -404,4 +409,11 @@ function onClose() {
 
 <style scoped>
 .mv-role-dialog { position:fixed; z-index:100; inset:25% 25% auto; padding:1.5rem; background:Canvas; color:CanvasText; border:1px solid currentColor; border-radius:0.5rem; display:grid; gap:1rem; }
+.mv-window-list { list-style:none; margin:0; padding:0; display:grid; gap:0.5rem; max-height:40vh; overflow:auto; }
+.mv-window-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; width:100%; padding:0.75rem; border:2px solid transparent; border-radius:0.35rem; background:Canvas; color:CanvasText; font:inherit; text-align:left; cursor:pointer; }
+.mv-window-row:not(.mv-window-row--selected):hover { background:color-mix(in srgb, CanvasText 8%, Canvas); }
+.mv-window-row--selected { border-color:Highlight; background:Highlight; color:HighlightText; }
+.mv-window-row:focus-visible { outline:2px solid Highlight; outline-offset:2px; }
+.mv-window-row__title { font-weight:600; overflow-wrap:anywhere; }
+.mv-window-row__program { font-size:0.9em; overflow-wrap:anywhere; }
 </style>

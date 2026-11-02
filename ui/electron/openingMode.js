@@ -4,7 +4,7 @@ import { mkdir, lstat, realpath, open, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { constants } from 'node:fs';
 
-/** @param {string} stateDir @param {string} profileId @param {string} mode @param {string|{xid:number,witness:string,title:string,program:string,width?:number,height?:number}} [target] */
+/** @param {string} stateDir @param {string} profileId @param {string} mode @param {string|{xid:number,witness:string,title:string,program:string,width?:number,height?:number,display?:string,xauthority?:string}} [target] */
 export async function stageOpeningMode(stateDir, profileId, mode, target) {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profileId) || !['human','agent'].includes(mode)) throw Error('CAPSULE_MODE_INVALID');
   /** @type {any} */

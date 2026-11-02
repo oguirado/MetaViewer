@@ -1334,7 +1334,10 @@ const nativeApi = !props.fixture && !nestedMode.displayOnly ? /** @type {any} */
 const mergedRows = () => {
   const base = baseFeed.getProjection()?.rows || [];
   const ids = new Set(base.map(row => row.id));
-  return [...base,...nativeRows.value.filter(row => !ids.has(row.id))];
+  return [...base.map(row => {
+    const native = nativeRows.value.find(item => item.id === row.id && item.hostWindow);
+    return native ? {...row,title:native.title,hostWindow:native.hostWindow} : row;
+  }),...nativeRows.value.filter(row => !ids.has(row.id))];
 };
 const nativeSnapshot = () => {
   const base = baseFeed.getSnapshot();
@@ -1360,14 +1363,16 @@ async function pollNativeSurfaces() {
     if (!Array.isArray(listed)) throw Error('NATIVE_PROJECTION_UNAVAILABLE');
     const availabilityChanged = !nativeLoaded || nativePollFailed;
     nativeLoaded = true; nativePollFailed = false;
-    const admitted = listed.filter(item => item?.schema === 'metaviewer.role_surface/v0.3' && item.role === 'human'
-      && item.surface?.schema === 'surface/v0.2' && item.surface.state === 'active' && item.surface.control === 'human');
-    const next = admitted.map(({surface:s}) => ({id:s.surface_id,surfaceId:s.surface_id,title:s.profile_id,profile_id:s.profile_id,
+    const admitted = listed.filter(item => item?.schema === 'metaviewer.role_surface/v0.3'
+      && (item.role === 'human' || item.role === 'agent' && item.hostWindow)
+      && item.surface?.schema === 'surface/v0.2' && item.surface.state === 'active'
+      && (item.surface.control === 'human' || item.hostWindow && item.surface.control === 'agent'));
+    const next = admitted.map(({surface:s,hostWindow,role}) => ({id:s.surface_id,surfaceId:s.surface_id,title:hostWindow?.title || s.profile_id,profile_id:s.profile_id,hostWindow,role,
       backendLifecycle:s.state,generation:null,visibility:s.visibility,control:s.control,display:s.display,geometry:s.geometry,
       attachmentState:'live',refusal:null}));
     if (!availabilityChanged && JSON.stringify(next) === JSON.stringify(nativeRows.value)) return;
     nativeRows.value = next; nativeRevision++;
-    for (const row of next) onCapsuleMode({surfaceId:row.id,mode:'human'});
+    for (const row of next) onCapsuleMode({surfaceId:row.id,mode:row.role});
     for (const listener of nativeListeners) listener(nativeSnapshot());
   } catch {
     nativePollFailed = true;
@@ -1555,7 +1560,7 @@ onMounted(() => {
         <HostOutcome :row="hostOutcome" />
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
           <article v-for="surface in rows" :key="surface.id" :aria-label="surface.title || surface.id">
-            <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
+            <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :scroll-enabled="!surface.hostWindow" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </article>
         </section>
         <DesktopWorkspace v-else :hidden="creativeOpen || terminalDeckOpen" :clipboard="props.clipboard" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
@@ -1571,7 +1576,7 @@ onMounted(() => {
               <span v-else-if="wallInputState(surface) === 'unavailable'" class="mv-input-indicator__text" role="status">Input unavailable in this window</span>
               <template v-else-if="wallInputState(surface) !== 'view'"><span class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? (wallInputState(surface) === 'paused' ? 'Click the tile to type' : 'Interactive') }}</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-indicator__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
             </div>
-            <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" @canvas-escape="onCanvasEscape(capsuleId)" @canvas-focus="onCanvasFocus(capsuleId)" />
+            <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :scroll-enabled="!surface.hostWindow" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" @canvas-escape="onCanvasEscape(capsuleId)" @canvas-focus="onCanvasFocus(capsuleId)" />
             </RoleSurface>
             </template>
           </template>
@@ -1588,7 +1593,7 @@ onMounted(() => {
             :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
             :last-dock-group-id="selectedPlacement.lastDockGroupId" :last-dock-index="selectedPlacement.lastDockIndex"
             :surface-state="canvasStateFor(selectedSurface)" :layout-pending="placementPending[selectedSurface.id] === true" :agent-controlled="selectedSurface.control === 'agent'" v-model:input-mode="inputMode" @submit-intent="dispatchMultislot">
-            <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :frame-width="surfaceWitness(selectedSurface).width" :frame-height="surfaceWitness(selectedSurface).height" :state="canvasStateFor(selectedSurface)" :input-enabled="inputEnabledFor(selectedSurface)" :stream-id="surfaceStreamId(selectedSurface)" /></template>
+            <template #surface><SurfaceCanvas :surface-id="selectedSurface.id" :generation="selectedSurface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(selectedSurface).frame" :digest="surfaceWitness(selectedSurface).digest" :frame-width="surfaceWitness(selectedSurface).width" :frame-height="surfaceWitness(selectedSurface).height" :state="canvasStateFor(selectedSurface)" :scroll-enabled="!selectedSurface.hostWindow" :input-enabled="inputEnabledFor(selectedSurface)" :stream-id="surfaceStreamId(selectedSurface)" /></template>
             <template #record><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :phase="props.fixture?.key === 'recording' ? 'recording' : 'idle'" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></template>
           </MultislotHost>
         </section>

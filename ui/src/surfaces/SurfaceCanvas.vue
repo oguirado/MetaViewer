@@ -40,6 +40,8 @@ const props = defineProps({
   // app input mode is WRITE (computed by App.vue). Gates the focusable
   // canvas, the input capture handlers, and the strip READ-ONLY label.
   inputEnabled: { type: Boolean, default: false },
+  // [TARGET, unit decision] Desktop windows have no scroll CLI action.
+  scrollEnabled: { type: Boolean, default: true },
   // MVUI25 lane C: frame stream id the tile is bound to (the same value the
   // frame router uses); forwarded verbatim on every queued input event.
   streamId: { type: Number, default: 0 },
@@ -838,6 +840,7 @@ function onCanvasButtonDefault(event) {
  * @param {WheelEvent} event
  */
 function onCanvasWheel(event) {
+  if (!props.scrollEnabled) return;
   if (!inputGateOpen()) return;
   const point = clientToFramePoint(event);
   if (point === null) return;

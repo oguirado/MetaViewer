@@ -1,0 +1,1 @@
+- Show desktop window titles and program tooltips while preserving profile bindings; give window picker rows spacing, keyboard selection and visible selection. Keep unsupported wheel actions out of desktop window input while retaining ordinary capsule scrolling.

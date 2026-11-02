@@ -420,6 +420,11 @@ process.stdout.write(JSON.stringify(all));
         if (!st?.hostWindow || st.hostWindow.xid !== sampleWindows[0].xid || st.hostWindow.witness !== sampleWindows[0].witness) {
           return false;
         }
+        const projection = await invoke('surfaces');
+        const projected = projection.find(row => row.surface.surface_id === first.surfaceId);
+        if (projected?.role !== 'agent' || projected.hostWindow?.title !== sampleWindows[0].title
+          || projected.hostWindow?.program !== sampleWindows[0].program
+          || projected.surface.profile_id !== first.profileId) return false;
 
         // Detach stops the capsule binding immediately and frees the xid to be attached again later.
         const detached = await invoke('detach-window', { surfaceId: first.surfaceId });

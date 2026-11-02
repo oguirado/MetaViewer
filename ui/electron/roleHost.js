@@ -888,8 +888,12 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (op === 'list-windows') return await listHostWindowChoices();
       if (op === 'surfaces') {
         pruneProgramProfiles();
-        return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active' && roleFor(s) === 'human')
-          .map(s => ({schema:'metaviewer.role_surface/v0.3',role:'human',surface:rendererSurface(authoritative(s.surface_id))}));
+        // [TARGET, unit decision] Project window presentation metadata outside
+        // the frozen surface contract, including windows in the agent wall.
+        return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active'
+          && (roleFor(s) === 'human' || windowProfiles.has(s.profile_id)))
+          .map(s => ({schema:'metaviewer.role_surface/v0.3',role:roleFor(s),surface:rendererSurface(authoritative(s.surface_id)),
+            ...(windowProfiles.has(s.profile_id) ? {hostWindow:status(s.surface_id).hostWindow} : {})}));
       }
       if (op === 'create') return await create(message.choice);
       if (op === 'create-program') return await createProgram(message.choice);
