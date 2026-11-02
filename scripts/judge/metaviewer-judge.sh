@@ -566,10 +566,18 @@ cmd_run() {
             "MV_SRF_LIVE_RAM_ROOT=$ramroot" "MV_SRF_LIVE_TEXT_INPUT=paste" "MV_SRF_PROFILES=$profiles_json"
             "SRF_IDENTITY_STORE_ROOT=$STORE" "SRF_PROXY_REGISTRY=${SRF_PROXY_REGISTRY:-$STORE/proxies.json}")
         if [ -d "$JUDGE_HOME/deps/vision-engine" ]; then
-            envv+=("VQA_VE_ROOT=$JUDGE_HOME/deps/vision-engine" "MV_VISION_ENGINE_PATH=$JUDGE_HOME/deps/vision-engine")
+            if [ -x "$JUDGE_HOME/deps/vision-engine/vision-runtime" ]; then
+                envv+=("MV_VISION_EXECUTABLE=$JUDGE_HOME/deps/vision-engine/vision-runtime")
+            else
+                envv+=("VQA_VE_ROOT=$JUDGE_HOME/deps/vision-engine" "MV_VISION_ENGINE_PATH=$JUDGE_HOME/deps/vision-engine")
+            fi
         fi
         if [ -d "$JUDGE_HOME/deps/wender-agent" ]; then
-            envv+=("MV_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent" "MV_MW_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent")
+            if [ -x "$JUDGE_HOME/deps/wender-agent/wender-runtime" ]; then
+                envv+=("MV_WENDER_EXECUTABLE=$JUDGE_HOME/deps/wender-agent/wender-runtime")
+            else
+                envv+=("MV_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent" "MV_MW_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent")
+            fi
         fi
     fi
     mkdir -p "$JUDGE_HOME/run"

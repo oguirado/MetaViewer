@@ -187,6 +187,32 @@ Full table and sources: [INSTALL.md](INSTALL.md#hardware). Designed for a standa
 
 ## Troubleshooting
 
+The app includes public Python agents, tools, dependency locks and contracts in
+`resources/operator` [TARGET, unit decision]. Python remains a host prerequisite.
+`MV_OPERATOR_REPO` optionally selects a developer checkout; an installed runtime
+uses sealed public files and keeps MemoryWeb data outside the app directory.
+
+For the source-free Linux x64 kit, the judge launcher sets
+`MV_WENDER_EXECUTABLE` to `deps/wender-agent/wender-runtime` and
+`MV_VISION_EXECUTABLE` to `deps/vision-engine/vision-runtime` under its install
+directory. These paths are also exported in the app attachment environment.
+The public compiled lock pins every binary, shared library and schema and binds
+the distribution to the source commit in `deps.lock`. Missing files, modified
+hashes and unpinned additions refuse before execution. Checkout mode retains
+the existing `MV_WENDER_ROOT` / `VQA_VE_ROOT` provenance verification.
+
+The supplied compiled export supports program planning and perception. Stored
+browser workflows and browser goal state acquisition still need private APIs
+from a verified checkout and refuse `MW_COMPILED_BROWSER_UNAVAILABLE` or
+`MW_COMPILED_WORKFLOW_UNAVAILABLE` with this export. This limitation does not
+prevent displaying browser capsules. Arm64 compiled private assets are absent.
+The version labels in `deps.lock` are retained even where release tags disagree.
+
+Host program is optional. Preflight reports `xpra` absence with the install line
+`apt install xpra`; the Host program dialog refuses with that reason. Browser
+capsules and programs inside containers remain available. The kit never
+installs this optional host package automatically.
+
 | Code | Meaning and fix |
 | --- | --- |
 | `PKG_ARCH_MISMATCH` | Kit for the wrong architecture; download the other one |

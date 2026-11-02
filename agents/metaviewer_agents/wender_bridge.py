@@ -71,6 +71,9 @@ def _is_valid_argv_token(value: object) -> bool:
 def has_configured_wender_root(wender_root: str | Path | None = None) -> bool:
     """Return True when an explicit wender_root or MV_WENDER_ROOT is configured."""
     raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
+    if raw is None:
+        from .perception.compiled import compiled_executable
+        return compiled_executable("wender-agent") is not None
     return isinstance(raw, (str, Path)) and bool(str(raw).strip())
 
 
@@ -426,7 +429,10 @@ class WenderSubprocessAdapter:
         lock_path=None,
         model_backend=None,
     ):
-        raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
+        from .perception.compiled import compiled_executable
+        self.compiled = compiled_executable('wender-agent', root=wender_root, lock_path=lock_path)
+        raw = (self.compiled.parent if self.compiled is not None else
+               (wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")))
         if not isinstance(raw, (str, Path)) or not str(raw):
             raise ObservationError("unavailable", "MV_WENDER_ROOT or wender_root required")
         try:
@@ -463,6 +469,8 @@ class WenderSubprocessAdapter:
             if locked_root != self.wender_root:
                 raise ObservationError("commit_mismatch", "verified checkout differs from wender_root")
         self.command = resolve_planner_command(command)
+        if self.compiled is not None and self.command == DEFAULT_WENDER_PLANNER_CMD:
+            self.command = (str(self.compiled), 'plan')
         self.timeout = _validate_timeout(timeout)
         self.battery_state_sha256 = None
 

@@ -469,6 +469,11 @@ if [ "$MODE" = facts ]; then
     exit 0
 fi
 
+# Optional host capability: absence never gates browser or container programs.
+if ! command -v xpra >/dev/null 2>&1; then
+    note 'optional capability (JUDGE_HOST_PROGRAM): Host program disabled: xpra is absent; install with: apt install xpra'
+fi
+
 run_checks() {
     local c
     for c in "$@"; do "chk_$c"; done

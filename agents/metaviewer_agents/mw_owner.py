@@ -69,6 +69,7 @@ def sleep_ns(ns):
 def wender_api():
     from .perception.deps_lock import resolve_locked_component
     root = resolve_locked_component('wender-agent')
+    need(not (root / 'wender-runtime').exists(), 'MW_COMPILED_WORKFLOW_UNAVAILABLE')
     sys.path.insert(0, str(root))
     from tools import memoryweb_gate as gate
     from wender.learn import mw_workflow as mw

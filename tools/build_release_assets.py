@@ -354,6 +354,45 @@ def build_git_component_asset(
     return out_path
 
 
+def build_compiled_component_asset(comp_name: str, source_dir: Path,
+                                   out_dir: Path, arch: str) -> Path:
+    """[TARGET, unit decision] Export only the pinned, source-free distribution.
+
+    Pins live in the public runtime; export metadata cannot authorize new bytes.
+    Never synthesize Git metadata for compiled executables.
+    """
+    if arch != 'x64':
+        raise AssetBuildError('compiled private sidecars are available only for linux-x64')
+    pins = json.loads((REPO_ROOT / 'agents/metaviewer_agents/perception/compiled.lock.json').read_text())['components'][comp_name]
+    if load_deps_lock().get(comp_name, {}).get('commit') != pins['commit']:
+        raise AssetBuildError(f'{comp_name}: compiled source commit differs from deps.lock')
+    archive = source_dir / f'{comp_name}-linux-{arch}.tar.gz'
+    if not archive.is_file() or sha256_file(archive) != pins['archive_sha256']:
+        raise AssetBuildError(f'{comp_name}: compiled archive missing or hash mismatch')
+    seen = set()
+    with tarfile.open(archive, 'r:gz') as tf:
+        for member in tf:
+            path = Path(member.name)
+            if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] != comp_name:
+                raise AssetBuildError(f'{comp_name}: unsafe compiled member {member.name}')
+            if member.isdir():
+                continue
+            relative = path.relative_to(comp_name).as_posix()
+            if (not member.isfile() or relative not in pins['files'] or relative in seen or
+                    path.suffix.lower() in ('.py', '.pyc', '.pyo', '.pyi')):
+                raise AssetBuildError(f'{comp_name}: unpinned compiled member {member.name}')
+            stream = tf.extractfile(member)
+            if stream is None or hashlib.file_digest(stream, 'sha256').hexdigest() != pins['files'][relative]:
+                raise AssetBuildError(f'{comp_name}: compiled member hash mismatch: {relative}')
+            seen.add(relative)
+    if seen != set(pins['files']):
+        raise AssetBuildError(f'{comp_name}: missing compiled files')
+    dest = out_dir / f'{comp_name}.tar.gz'
+    if archive.resolve() != dest.resolve():
+        shutil.copyfile(archive, dest)
+    return dest
+
+
 def default_image_tags(arch: str, include_open_020: bool = False) -> list[str]:
     tags = [
         f"opensuperficies-identity-browser-{arch}:0.1.1",
@@ -442,8 +481,9 @@ def build_all_assets(
     node_bin: Path | None = None,
     srf_dir: Path,
     firewall_dir: Path | None = None,
-    vision_engine_dir: Path,
-    wender_agent_dir: Path,
+    vision_engine_dir: Path | None = None,
+    wender_agent_dir: Path | None = None,
+    compiled_sidecars_dir: Path | None = None,
     images_tar: Path | None = None,
     image_tags: list[str] | None = None,
     repo_root: Path = REPO_ROOT,
@@ -464,10 +504,16 @@ def build_all_assets(
     srf_asset = build_opensuperficies_asset(srf_dir, out_dir, arch, firewall_dir=firewall_dir)
     built.append(srf_asset)
 
-    ve_asset = build_git_component_asset("vision-engine", vision_engine_dir, out_dir, expected_commit=ve_commit)
+    if compiled_sidecars_dir is None and (vision_engine_dir is None or wender_agent_dir is None):
+        raise AssetBuildError('supply --compiled-sidecars-dir or both component checkout directories')
+    ve_asset = (build_compiled_component_asset('vision-engine', compiled_sidecars_dir, out_dir, arch)
+                if compiled_sidecars_dir is not None else
+                build_git_component_asset("vision-engine", vision_engine_dir, out_dir, expected_commit=ve_commit))
     built.append(ve_asset)
 
-    wa_asset = build_git_component_asset("wender-agent", wender_agent_dir, out_dir, expected_commit=wa_commit)
+    wa_asset = (build_compiled_component_asset('wender-agent', compiled_sidecars_dir, out_dir, arch)
+                if compiled_sidecars_dir is not None else
+                build_git_component_asset("wender-agent", wender_agent_dir, out_dir, expected_commit=wa_commit))
     built.append(wa_asset)
 
     img_asset = build_images_asset(out_dir, arch, images_tar=images_tar, image_tags=image_tags)
@@ -514,6 +560,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument("--out-dir", required=True, type=Path, help="Output directory for release assets and SHA256SUMS")
     ap.add_argument("--arch", default=os.environ.get("MV_RELEASE_ARCH"), help="Target architecture: x64 or arm64")
+    ap.add_argument('--compiled-sidecars-dir', type=Path,
+                    help='Directory containing pinned source-free linux-x64 component archives')
     ap.add_argument(
         "--app-dir",
         type=Path,
@@ -573,8 +621,6 @@ def main(argv: list[str] | None = None) -> int:
             for flag, val in (
                 ("--app-dir", args.app_dir),
                 ("--opensuperficies-dir", args.opensuperficies_dir),
-                ("--vision-engine-dir", args.vision_engine_dir),
-                ("--wender-agent-dir", args.wender_agent_dir),
             )
             if val is None
         ]
@@ -590,6 +636,7 @@ def main(argv: list[str] | None = None) -> int:
             firewall_dir=args.firewall_dir,
             vision_engine_dir=args.vision_engine_dir,
             wender_agent_dir=args.wender_agent_dir,
+            compiled_sidecars_dir=args.compiled_sidecars_dir,
             images_tar=args.images_tar,
         )
         print(json.dumps(summary, indent=2, sort_keys=True))
