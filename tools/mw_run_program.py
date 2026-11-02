@@ -221,12 +221,25 @@ class MuseProgramPlanner:
         return planned
 
 
+def stop_model_group(recorded_pid):
+    """Signal only the recorded separate session created for this provider."""
+    host.need(type(recorded_pid) is int and recorded_pid > 1,
+              'MW_PROGRAM_MODEL_PROCESS_TARGET')
+    host.need(recorded_pid not in (os.getpid(), os.getpgid(0)),
+              'MW_PROGRAM_MODEL_PROCESS_TARGET')
+    try:
+        os.killpg(recorded_pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def run_model_with_frames(client, command, *, cwd, env, request, timeout):
     """One actor drains authenticated frames and bounded provider pipes together."""
     host.need(len(request) <= 1024 * 1024 and timeout > 0, 'MW_PROGRAM_MODEL_BUDGET')
     deadline = time.monotonic() + timeout
     process = host.subprocess.Popen(command, cwd=cwd, env=env, stdin=host.subprocess.PIPE,
         stdout=host.subprocess.PIPE, stderr=host.subprocess.PIPE, start_new_session=True, close_fds=True)
+    recorded_pid = process.pid
     outputs = {process.stdout: bytearray(), process.stderr: bytearray()}
     limits = {process.stdout: 1024 * 1024, process.stderr: 65536}
     pending = memoryview(request)
@@ -269,21 +282,26 @@ def run_model_with_frames(client, command, *, cwd, env, request, timeout):
                         else:
                             buffer.extend(chunk)
                             host.need(len(buffer) <= limits[stream], 'MW_PROGRAM_MODEL_OUTPUT_LIMIT')
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise host.subprocess.TimeoutExpired(command, timeout)
-        process.wait(timeout=remaining)
-        return host.subprocess.CompletedProcess(command, process.returncode,
-            bytes(outputs[process.stdout]), bytes(outputs[process.stderr]))
+        # Keep the exited leader unreaped so its recorded id cannot be reused
+        # before the separate provider group has been cleaned up.
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise host.subprocess.TimeoutExpired(command, timeout)
+            exited = os.waitid(os.P_PID, recorded_pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+            if exited is not None:
+                host.need(exited.si_pid == recorded_pid, 'MW_PROGRAM_MODEL_PROCESS_TARGET')
+                break
+            client.drain_frames(timeout_ms=max(1, min(50, int(remaining * 1000))))
+            time.sleep(min(0.01, remaining))
     finally:
         # Only this recorded new process group belongs to the provider attempt.
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        stop_model_group(recorded_pid)
         process.wait()
         for stream in (process.stdin, process.stdout, process.stderr):
             stream.close()
+    return host.subprocess.CompletedProcess(command, process.returncode,
+        bytes(outputs[process.stdout]), bytes(outputs[process.stderr]))
 
 
 def remaining_budget(backend, maximum):
