@@ -6,10 +6,17 @@ was started with, and `$MV_WENDER_ROOT` is the wender-agent checkout at its
 
 ## Steps
 
-1. **Start MetaViewer** with your usual launcher. Start the browser capsule for
-   identity `mv-live-1`, sign in to Perplexity **by hand** inside the capsule, and
-   leave it on the Perplexity home page with an empty composer. Keep only one
-   MetaViewer app running.
+1. **Start MetaViewer** with your usual launcher. The top bar separates
+   **Humans** (default view, desktop `1`) and **Agents** (desktop `1`, toggled
+   with **Agents** or `Ctrl+Tab`). A cold start without a staged opening mode
+   auto-creates the first `mv-live-1` browser capsule in `agent` mode on the
+   **Agents** view. To sign in to Perplexity **by hand** first, open
+   `mv-live-1` in **Human (login & browse)** mode (or open the tile menu `⋮`
+   and choose **Switch to human mode**), sign in, optionally choose **Mark as
+   logged in** in the tile menu `⋮`, and then choose **Switch to agent mode**
+   in the tile menu `⋮` so `mv-live-1` is active on the **Agents** view on the
+   Perplexity home page with an empty composer. Keep only one MetaViewer app
+   running.
 2. **Check the MemoryWeb home** (from `$MV_OPERATOR_REPO`):
 
    ```bash
@@ -124,7 +131,12 @@ The packaged rehearsal driver is `tests/e2e/rehearse_e1_packaged.py`; supply
 `--launcher`, `--run-dir`, `--operator-repo`, `--wender-root`, and
 `--proxy-registry` (the launcher's explicit registry path, passed to native
 setup without reading its contents), and `--fixture-host` (a local host
-interface reachable from the capsule). It uses
+interface reachable from the capsule). With `--control-cycle`, it switches from
+the initial **Humans** view to **Agents** (`--agents-view-at`), opens the agent
+tile menu `⋮` (`--tile-menu-at`), clicks **Take control (emergency)**
+(`--take-control-at`), verifies core `human` ownership, and clicks the input
+indicator **Release** button (`--release-control-at`) to return ownership to
+`agent` without switching capsule role. It uses
 the dedicated rehearsal display, temporary fixture definitions, and the
 unmodified operator CLI. Its guard checks run with `--self-test`. A successful
 rehearsal must prove both the captured answer and a newly visible handoff notice.

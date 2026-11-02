@@ -229,6 +229,97 @@ def control_position(tsv, word):
             int(row['top']) + int(row['height']) // 2)
 
 
+def role_menu_position(tsv):
+    """Locate the agent tile menu button (⋮) from its header badge or glyph."""
+    rows = [r for r in csv.DictReader(io.StringIO(tsv), delimiter='\t') if r['text'].strip()]
+    menus = [r for r in rows if r['text'].strip() in ('⋮', '...')]
+    if len(menus) == 1:
+        row = menus[0]
+        return (int(row['left']) + int(row['width']) // 2,
+                int(row['top']) + int(row['height']) // 2)
+    badges = [r for r in rows if r['text'].strip().casefold() == 'agent']
+    require(len(badges) == 1, 'UI role menu badge ambiguous/absent: agent')
+    row = badges[0]
+    height = int(row['height'])
+    require(height > 0, 'invalid badge height')
+    x = int(row['left']) + int(row['width']) + max(14, int(round(height * 1.4)))
+    y = int(row['top']) + height // 2
+    require(0 <= x < 1600 and 0 <= y < 1000, 'role menu coordinates outside dedicated screen')
+    return x, y
+
+
+def emergency_take_position(tsv):
+    """Locate Take control (emergency) inside the open agent tile menu, never Switch mode."""
+    rows = [r for r in csv.DictReader(io.StringIO(tsv), delimiter='\t') if r['text'].strip()]
+    emergency = [r for r in rows if 'emergency' in r['text'].strip().casefold().strip('()')]
+    require(len(emergency) == 1, 'UI emergency control ambiguous/absent: Take control (emergency)')
+    target = emergency[0]
+    top = int(target['top'])
+    height = max(1, int(target['height']))
+    line = [r for r in rows if abs(int(r['top']) - top) <= height]
+    words = {r['text'].strip().casefold().strip('()') for r in line}
+    require({'take', 'control'} <= words and 'switch' not in words,
+            'UI emergency control line mismatch: ' + ' '.join(sorted(words)))
+    left = min(int(r['left']) for r in line)
+    right = max(int(r['left']) + int(r['width']) for r in line)
+    return (left + right) // 2, top + height // 2
+
+
+def run_control_cycle(work, display, attached, backend, surface_id, args, grab=None):
+    """Switch to Agents view, open tile menu, take emergency control, and release to agent."""
+    if grab is None:
+        from PIL import ImageGrab
+        grab = lambda path: ImageGrab.grab(xdisplay=display).save(path)
+
+    def snapshot_tsv(name):
+        image = work / (name + '.png')
+        grab(image)
+        tsv = command(['tesseract', image, 'stdout', 'tsv']).stdout
+        (work / (name + '.tsv')).write_text(tsv)
+        return tsv
+
+    def click(x, y):
+        command(['xdotool', 'mousemove', '--sync', str(x), str(y), 'click', '1'],
+                env=dict(os.environ, DISPLAY=display))
+
+    def owner(ownership):
+        with backend.connect(attached) as client:
+            rows = backend.tools.list_surfaces(cursor=None, limit=64,
+                       timeout_ms=5000, client=client)['surfaces']
+        return next((r for r in rows if r['surface_id'] == surface_id
+                     and r['control'] == ownership), None)
+
+    # Cold workspace boots on Humans view; switch to Agents view so the agent tile is visible.
+    view_tsv = snapshot_tsv('control-view')
+    vx, vy = (measured_position(args.agents_view_at) if getattr(args, 'agents_view_at', None)
+              else control_position(view_tsv, 'Agents'))
+    click(vx, vy)
+    time.sleep(0.5)
+
+    # Open the tile menu (tile-menu-<id>) unless an explicit take-control coordinate is supplied alone.
+    if getattr(args, 'tile_menu_at', None) or not getattr(args, 'take_control_at', None):
+        menu_tsv = snapshot_tsv('control-menu')
+        mx, my = (measured_position(args.tile_menu_at) if getattr(args, 'tile_menu_at', None)
+                  else role_menu_position(menu_tsv))
+        click(mx, my)
+        time.sleep(0.5)
+
+    take_tsv = snapshot_tsv('control-human')
+    tx, ty = (measured_position(args.take_control_at) if getattr(args, 'take_control_at', None)
+              else emergency_take_position(take_tsv))
+    click(tx, ty)
+    wait_for(lambda: owner('human'), 10, 'control transition absent: human')
+    time.sleep(1)
+
+    release_tsv = snapshot_tsv('control-agent')
+    rx, ry = (measured_position(args.release_control_at) if getattr(args, 'release_control_at', None)
+              else control_position(release_tsv, 'Release'))
+    click(rx, ry)
+    wait_for(lambda: owner('agent'), 10, 'control transition absent: agent')
+    time.sleep(1)
+    return True
+
+
 def bind_operator_repo(text, repo):
     """Override the single supplied launcher binding, without changing its source."""
     text, count = re.subn(r'MV_OPERATOR_REPO=\S+',
@@ -385,6 +476,8 @@ def main(argv=None):
     parser.add_argument('--focused-home', action='store_true')
     parser.add_argument('--home-only', action='store_true')
     parser.add_argument('--control-cycle', action='store_true')
+    parser.add_argument('--agents-view-at', help='screenshot-measured Xvfb x,y for Agents view button')
+    parser.add_argument('--tile-menu-at', help='screenshot-measured Xvfb x,y for tile menu button')
     parser.add_argument('--take-control-at', help='screenshot-measured Xvfb x,y')
     parser.add_argument('--release-control-at', help='screenshot-measured Xvfb x,y')
     parser.add_argument('--file-fixture', action='store_true', help='use owned local files directly')
@@ -584,30 +677,9 @@ def main(argv=None):
                         return True
                     stages.run('home.composer_focused', check_focus)
                 if args.control_cycle:
-                    def control_cycle():
-                        # Real UI buttons; core ownership is the independent oracle.
-                        from PIL import ImageGrab
-                        for word, ownership in (('Control', 'human'), ('Release', 'agent')):
-                            image = work / ('control-' + ownership + '.png')
-                            ImageGrab.grab(xdisplay=args.display).save(image)
-                            explicit = args.take_control_at if ownership == 'human' else args.release_control_at
-                            if explicit:
-                                x, y = measured_position(explicit)
-                            else:
-                                tsv = command(['tesseract', image, 'stdout', 'tsv']).stdout
-                                x, y = control_position(tsv, word)
-                            command(['xdotool', 'mousemove', '--sync', str(x), str(y), 'click', '1'],
-                                    env=dict(os.environ, DISPLAY=args.display))
-                            def owner():
-                                with backend.connect(attached) as client:
-                                    rows = backend.tools.list_surfaces(cursor=None, limit=64,
-                                               timeout_ms=5000, client=client)['surfaces']
-                                return next((r for r in rows if r['surface_id'] == surface['surface_id']
-                                             and r['control'] == ownership), None)
-                            wait_for(owner, 10, 'control transition absent: ' + ownership)
-                            time.sleep(1)
-                        return True
-                    cycled = stages.run('home.take_release_control', control_cycle)
+                    cycled = stages.run('home.take_release_control',
+                        lambda: run_control_cycle(work, args.display, attached, backend,
+                                                  surface['surface_id'], args))
                     require(cycled is True, 'required take/release cycle did not complete')
                     if args.focused_home:
                         stages.run('home.composer_focused_after_release', check_focus)
@@ -758,6 +830,75 @@ def self_test():
             for mutant in (header, header + row + row, header + row.replace('Release', 'Other')):
                 with self.assertRaisesRegex(RuntimeError, 'ambiguous/absent'):
                     control_position(mutant, 'Release')
+
+        def test_role_menu_and_emergency_take_positions_reject_mutants(self):
+            from types import SimpleNamespace
+            header = 'left\ttop\twidth\theight\ttext\n'
+            badge = '1200\t90\t36\t14\tagent\n'
+            glyph = '1250\t86\t20\t22\t⋮\n'
+            self.assertEqual(role_menu_position(header + badge + glyph), (1260, 97))
+            self.assertEqual(role_menu_position(header + badge), (1256, 97))
+            for mutant in (header, header + badge + badge, header + '1585\t90\t12\t14\tagent\n'):
+                with self.assertRaises(RuntimeError):
+                    role_menu_position(mutant)
+            menu_tsv = (header +
+                        '1100\t130\t150\t18\tSwitch\n1255\t130\t60\t18\thuman\n' +
+                        '1100\t240\t32\t18\tTake\n1136\t240\t48\t18\tcontrol\n1188\t240\t82\t18\t(emergency)\n')
+            self.assertEqual(emergency_take_position(menu_tsv), (1185, 249))
+            for mutant in (
+                header,
+                menu_tsv + '1188\t260\t82\t18\t(emergency)\n',
+                header + '1100\t240\t82\t18\t(emergency)\n',
+                header + '1100\t240\t32\t18\tTake\n1136\t240\t48\t18\tcontrol\n1188\t240\t82\t18\t(emergency)\n1275\t240\t45\t18\tSwitch\n',
+            ):
+                with self.assertRaisesRegex(RuntimeError, 'emergency control'):
+                    emergency_take_position(mutant)
+            with tempfile.TemporaryDirectory() as directory:
+                work = Path(directory)
+                tsvs = iter([
+                    header + '220\t24\t60\t24\tAgents\n',
+                    header + badge,
+                    menu_tsv,
+                    header + '1300\t130\t50\t20\tRelease\n',
+                ])
+                controls = iter(['human', 'agent'])
+                clicks = []
+                def fake_command(argv, **kwargs):
+                    if argv[0] == 'tesseract':
+                        return SimpleNamespace(returncode=0, stdout=next(tsvs), stderr='')
+                    if argv[0] == 'xdotool':
+                        clicks.append((int(argv[3]), int(argv[4])))
+                        return SimpleNamespace(returncode=0, stdout='', stderr='')
+                    raise AssertionError(argv)
+                class FakeBackend:
+                    class tools:
+                        @staticmethod
+                        def list_surfaces(**_kw):
+                            return {'surfaces': [{'surface_id': 'srf-1', 'control': next(controls)}]}
+                    @staticmethod
+                    def connect(_attached):
+                        from contextlib import nullcontext
+                        return nullcontext(object())
+                args = SimpleNamespace(agents_view_at=None, tile_menu_at=None,
+                                       take_control_at=None, release_control_at=None)
+                with patch(__name__ + '.command', side_effect=fake_command), \
+                     patch(__name__ + '.time.sleep'):
+                    self.assertTrue(run_control_cycle(work, ':98', {}, FakeBackend, 'srf-1', args,
+                                                      grab=lambda p: p.write_bytes(b'png')))
+                self.assertEqual(clicks, [(250, 36), (1256, 97), (1185, 249), (1325, 140)])
+                # Negative control: missing menu emergency item aborts before release.
+                bad_tsvs = iter([
+                    header + '220\t24\t60\t24\tAgents\n',
+                    header + badge,
+                    header + '1100\t130\t150\t18\tSwitch\n',
+                ])
+                with patch(__name__ + '.command', side_effect=lambda argv, **kw: (
+                        SimpleNamespace(returncode=0, stdout=next(bad_tsvs), stderr='')
+                        if argv[0] == 'tesseract' else SimpleNamespace(returncode=0, stdout='', stderr=''))), \
+                     patch(__name__ + '.time.sleep'), \
+                     self.assertRaisesRegex(RuntimeError, 'emergency control'):
+                    run_control_cycle(work, ':98', {}, FakeBackend, 'srf-1', args,
+                                      grab=lambda p: p.write_bytes(b'png'))
 
         def test_launcher_binding_exact_and_ambiguous_mutants(self):
             source = 'env MV_OPERATOR_REPO=/old/admin/path MV_MEMORYWEB_REPO=/keep app'
