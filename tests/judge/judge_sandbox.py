@@ -185,6 +185,12 @@ SRF_FAKE = (
     'D=${MV_FAKE_DIR:?}\necho "srf $*" >> "$D/srf.log"\n'
     'case "$1 ${2:-}" in\n'
     '  "capabilities ") printf "capabilities v1\\n"; cat "$D/caps";;\n'
+    '  "net up")\n'
+    '    [ -f "$D/net_up_fail" ] && exit 4\n'
+    '    registry=; while [ $# -gt 0 ]; do case $1 in --registry) registry=$2; shift 2;; *) shift;; esac; done\n'
+    '    printf "{}\\n" > "$registry"; chmod 0600 "$registry"\n'
+    '    docker network create --internal --subnet 172.30.80.0/24 srf-idnet >/dev/null\n'
+    '    echo true > "$D/proxy"; exit 0;;\n'
     '  "stop --container") sed -i "/^${3:-}$/d" "$D/containers" 2>/dev/null; exit 0;;\n'
     "esac\n"
 )
@@ -343,6 +349,7 @@ class Sandbox:
               "srf-open-egress6.rules": b"*filter\nCOMMIT\n", "srf-open-egress.service": b"[Unit]\n"}
         members = [("opensuperficies/", None, 0o755), ("opensuperficies/bin/", None, 0o755),
                    ("opensuperficies/bin/srf-identity-surface", SRF_FAKE.encode(), 0o755),
+                   ("opensuperficies/bin/srf-egress-proxy", b"#!/bin/sh\nexit 0\n", 0o755),
                    ("opensuperficies/firewall/", None, 0o755)]
         members += [("opensuperficies/firewall/" + n, d, 0o644) for n, d in fw.items()]
         make_tar(self.assets / f"opensuperficies-linux-{self.archn}.tar.gz", members)

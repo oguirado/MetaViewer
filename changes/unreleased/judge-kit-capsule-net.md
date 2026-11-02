@@ -1,0 +1,5 @@
+- Use the supported kit surface net up launcher and host proxy executable instead of the desktop entrypoint fallback.
+- Keep policy, registry and audit metadata private and separate under the judge home; pass the same registry to running capsules.
+- Cover x64 setup, launcher failure, a deciding-line mutant and the missing Open image with Docker and surface fakes.
+- Document that the upstream exact-host policy needs explicit approvals and cannot provide arbitrary public browsing.
+- Record the x64 Open image mismatch; browser image 0.1.1 cannot be relabelled as a proven Open-capable 0.2.0 image.
