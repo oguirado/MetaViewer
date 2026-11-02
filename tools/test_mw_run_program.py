@@ -11,6 +11,7 @@ import io
 import os
 import stat
 import time
+import socket
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -860,6 +861,217 @@ class ProgramTests(unittest.TestCase):
         with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_MODEL_OUTPUT_LIMIT'):
             program.run_model_with_frames(client,[sys.executable,'-c','print("x"*1048577)'],
                 cwd=self.root,env={'PATH':os.defpath},request=b'{}',timeout=2)
+
+    def model_socket_fixture(self, mode):
+        """A preauthenticated ToolClient channel and synthetic core process.
+
+        The core continuously sends frames but expires its inbound idle timer;
+        only an actual correlated observe request refreshes that timer.
+        """
+        self.b.surface_id='surface-alice'
+        self.b.program_binding=dict(surface_id='surface-alice')
+        current=self.publication()
+        local,remote=socket.socketpair()
+        client=host.ToolClient(self.root/'unused.sock',session_id='model-session',
+            local=dict(endpoint=dict(component='agent',instance='model-agent')),
+            core=dict(endpoint=dict(component='core',instance='model-core')),
+            dependency_pins=[],sequence_path=self.root/('seq-'+mode),timeout_s=1,
+            max_line_bytes=65536,max_reply_bytes=65536)
+        client.active._sock=local;client.active._hello_complete=True;client._ready=True
+        client._frame_surfaces.add('surface-alice')
+        self.b.client=client
+        script=r'''
+import json,select,socket,sys,time
+s=socket.socket(fileno=int(sys.argv[1]));frame=json.loads(sys.argv[2]);mode=sys.argv[3]
+seq=0;generation=0;last=time.monotonic();tick=last;buf=b'';muted=False
+def send(body):
+ global seq
+ seq+=1
+ e=dict(schema='envelope/v0.2',msg_id='fake-'+str(seq),ts_ns=seq,
+  **{'from':dict(component='core',instance='model-core'),'to':dict(component='agent',instance='model-agent')},
+  session_id='model-session',seq=seq,nonce='fake-nonce-'+str(seq),body=body)
+ s.sendall((json.dumps(e)+'\n').encode())
+try:
+ while True:
+  now=time.monotonic()
+  if not muted and now-last>0.18:break
+  if not muted and now>=tick:
+   generation+=1;frame['generation']=generation
+   send(dict(frame));tick=now+0.01
+  if not select.select([s],[],[],0.005)[0]:continue
+  data=s.recv(65536)
+  if not data:break
+  buf+=data
+  while b'\n' in buf:
+   line,buf=buf.split(b'\n',1);e=json.loads(line);b=e['body']
+   assert b['op']=='observe' and b['args']==dict(surface_id='surface-alice')
+   last=time.monotonic()
+   if mode=='eof':sys.exit(0)
+   if mode=='timeout':muted=True;continue
+   f=dict(frame)
+   if mode=='wrong_surface':f['surface_id']='foreign'
+   if mode=='malformed':f['width']=0
+   send(dict(schema='mv_tool_result/v0.2',request_id=b['request_id'],op='observe',status='ok',
+    observation=dict(schema='observation/v0.2',frame_ref=f,
+     vision=dict(summary='',changed_regions=[],elements=[]))))
+except (BrokenPipeError,ConnectionResetError):pass
+finally:s.close()
+'''
+        server=host.subprocess.Popen([sys.executable,'-c',script,str(remote.fileno()),json.dumps(current),mode],
+            pass_fds=(remote.fileno(),),stdin=host.subprocess.DEVNULL,stdout=host.subprocess.DEVNULL,
+            stderr=host.subprocess.PIPE)
+        remote.close()
+        def cleanup():
+            client.close()
+            try:server.wait(timeout=2)
+            except host.subprocess.TimeoutExpired:
+                server.terminate();server.wait(timeout=2)
+            error=server.stderr.read();server.stderr.close()
+            self.assertEqual(server.returncode,0,error.decode())
+        self.addCleanup(cleanup)
+        return client
+
+    def test_actual_socket_frames_alone_expire_but_observe_keeps_one_model_alive(self):
+        command=[sys.executable,'-c','import sys,time;sys.stdin.read();time.sleep(0.4);print("{}");']
+        for keep in (False,True):
+            with self.subTest(keepalive=keep):
+                client=self.model_socket_fixture('ok' if keep else 'idle')
+                popen=host.subprocess.Popen
+                with patch.object(program,'MODEL_KEEPALIVE_INTERVAL_S',0.04), \
+                     patch.object(self.b,'ownership') as ownership,patch.object(self.b,'native') as native, \
+                     patch.object(host.tools,'list_surfaces') as listing, \
+                     patch.object(host.subprocess,'Popen',wraps=popen) as spawn:
+                    if keep:
+                        result=program.run_model_with_frames(client,command,cwd=self.root,env={'PATH':os.defpath},
+                            request=b'{}',timeout=1,keepalive=self.b.keepalive_observe)
+                        self.assertEqual(result.returncode,0)
+                        self.assertEqual(json.loads(result.stdout),{})
+                    else:
+                        with self.assertRaisesRegex(host.ClientError,'peer closed'):
+                            program.run_model_with_frames(client,command,cwd=self.root,env={'PATH':os.defpath},
+                                request=b'{}',timeout=1)
+                    spawn.assert_called_once();ownership.assert_not_called();native.assert_not_called();listing.assert_not_called()
+
+    def test_keepalive_socket_failures_stop_owned_model_without_reconnect_or_input(self):
+        for mode in ('eof','timeout','wrong_surface','malformed'):
+            with self.subTest(mode=mode):
+                client=self.model_socket_fixture(mode);popen=host.subprocess.Popen;children=[]
+                def spawn(*args,**kwargs):
+                    p=popen(*args,**kwargs);children.append(p);return p
+                with patch.object(program,'MODEL_KEEPALIVE_INTERVAL_S',0.03), \
+                     patch.object(host.subprocess,'Popen',side_effect=spawn), \
+                     patch.object(client.active,'connect') as reconnect,patch.object(host.tools,'propose') as submit:
+                    with self.assertRaises((host.ClientError,host.tools.ToolValidationError,host.subprocess.TimeoutExpired)):
+                        program.run_model_with_frames(client,[sys.executable,'-c','import time;time.sleep(5)'],
+                            cwd=self.root,env={'PATH':os.defpath},request=b'{}',timeout=0.4,
+                            keepalive=self.b.keepalive_observe)
+                    self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
+                    reconnect.assert_not_called();submit.assert_not_called()
+
+    def test_aged_socket_gets_immediate_keepalive_before_original_idle_expiry(self):
+        client=self.model_socket_fixture('ok')
+        ready_until=time.monotonic()+1
+        while not client.drain_frames(timeout_ms=100):
+            self.assertLess(time.monotonic(),ready_until)
+            time.sleep(0.005)
+        time.sleep(0.1) # Core idle ceiling is 0.18; delayed +0.12 would lose it.
+        with patch.object(program,'MODEL_KEEPALIVE_INTERVAL_S',0.12):
+            result=program.run_model_with_frames(client,[sys.executable,'-c',
+                'import sys,time;sys.stdin.read();time.sleep(0.24);print("{}");'],
+                cwd=self.root,env={'PATH':os.defpath},request=b'{}',timeout=1,
+                keepalive=self.b.keepalive_observe)
+        self.assertEqual(result.returncode,0)
+
+    def test_initial_keepalive_failure_prevents_provider_request_delivery(self):
+        client=Mock();children=[];request_writes=[]
+        popen=host.subprocess.Popen;write=os.write
+        def spawn(*args,**kwargs):
+            child=popen(*args,**kwargs);children.append(child);return child
+        def traced_write(fd,data):
+            if children and fd==children[0].stdin.fileno():request_writes.append(bytes(data))
+            return write(fd,data)
+        heartbeat=Mock(side_effect=host.ClientError('socket','initial observation failed'))
+        with patch.object(host.subprocess,'Popen',side_effect=spawn), \
+             patch.object(program.os,'write',side_effect=traced_write):
+            with self.assertRaisesRegex(host.ClientError,'initial observation failed'):
+                program.run_model_with_frames(client,[sys.executable,'-c',
+                    'import sys;sys.stdin.read();print("{}");'],cwd=self.root,
+                    env={'PATH':os.defpath},request=b'not-delivered',timeout=1,keepalive=heartbeat)
+        heartbeat.assert_called_once();client.drain_frames.assert_not_called()
+        self.assertEqual(len(children),1);self.assertIsNotNone(children[0].returncode)
+        self.assertEqual(request_writes,[])
+
+    def test_continuous_slow_frame_drain_services_keepalive_inside_batch(self):
+        client=Mock();calls=[]
+        def drain(**kwargs):time.sleep(0.01);return True
+        client.drain_frames.side_effect=drain
+        start=time.monotonic()
+        def heartbeat(timeout_ms):calls.append((time.monotonic()-start,timeout_ms))
+        with patch.object(program,'MODEL_KEEPALIVE_INTERVAL_S',0.02):
+            result=program.run_model_with_frames(client,[sys.executable,'-c','print("{}");'],
+                cwd=self.root,env={'PATH':os.defpath},request=b'{}',timeout=1,keepalive=heartbeat)
+        self.assertEqual(result.returncode,0);self.assertGreater(len(calls),2)
+        self.assertLess(calls[0][0],0.1)
+        self.assertTrue(all(0<budget<=program.MODEL_KEEPALIVE_RPC_MS for _,budget in calls))
+
+    def test_keepalive_deadline_is_not_reset(self):
+        client=self.model_socket_fixture('ok')
+        with patch.object(program,'MODEL_KEEPALIVE_INTERVAL_S',0.02):
+            with self.assertRaises(host.subprocess.TimeoutExpired):
+                program.run_model_with_frames(client,[sys.executable,'-c','import time;time.sleep(5)'],
+                    cwd=self.root,env={'PATH':os.defpath},request=b'{}',timeout=0.15,
+                    keepalive=self.b.keepalive_observe)
+    def test_midmodel_control_revocation_still_blocks_original_target_proposal(self):
+        client=self.model_socket_fixture('ok');sensed=dict(frame=frame(),table=element_table())
+        original=copy.deepcopy(sensed);revoked=[False]
+        def heartbeat(timeout_ms):
+            value=self.b.keepalive_observe(timeout_ms);revoked[0]=True;return value
+        def ownership():
+            if revoked[0]:raise host.OwnerRefused('MW_PROGRAM_CONTROL')
+        with patch.object(program,'MODEL_KEEPALIVE_INTERVAL_S',0.02), \
+             patch.object(self.b,'ownership',side_effect=ownership) as own, \
+             patch.object(host.tools,'propose') as submit:
+            result=program.run_model_with_frames(client,[sys.executable,'-c',
+                'import sys,time;sys.stdin.read();time.sleep(0.12);print("{}");'],
+                cwd=self.root,env={'PATH':os.defpath},request=b'{}',timeout=1,keepalive=heartbeat)
+            self.assertEqual(result.returncode,0);self.assertTrue(revoked[0]);own.assert_not_called()
+            self.assertEqual(sensed,original)
+            with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_CONTROL'):
+                self.b.propose(sensed,planner_reply(),1000)
+            submit.assert_not_called();own.assert_called_once()
+
+    def test_muse_bridge_heartbeat_is_diagnostic_not_new_model_observation(self):
+        from metaviewer_agents.perception.base import Frame
+        from metaviewer_agents.perception.vcore import _png_bytes
+        current=self.publication();path=Path(current['ramws_path'])
+        raw=b'x'*(100*80*3);path.write_bytes(raw)
+        current['sha256']=host.hashlib.sha256(raw).hexdigest()
+        model_space=tempfile.TemporaryDirectory(dir='/dev/shm/vqa-cu');self.addCleanup(model_space.cleanup)
+        marks=Path(model_space.name)/'marks.png';marks.write_bytes(_png_bytes(Frame(100,80,raw)));marks.chmod(0o600)
+        table=element_table();table['frame_sha256']=current['sha256']
+        c2=dict(schema='ve.cu_describe/v1',frame_sha256=current['sha256'],width=100,height=80,
+            changed=None,changed_regions=[],crops=[],timing_us=1,marks_png=str(marks),
+            marks=[dict(id=1,x=10,y=20,w=30,h=20,kind='button',score=0.9,ocr_text='Covered square')])
+        record=dict(frame=copy.deepcopy(current),frame_witness=dict(artifact=str(path)),c2=c2)
+        self.b.program_observations=[record];self.b.wender=self.root
+        observed=dict(frame_ref=copy.deepcopy(current));before=copy.deepcopy(observed)
+        future=dict(current,generation=2)
+        custody=Mock(battery_state_sha256='d'*64);reply=planner_reply()
+        custody.plan_step.return_value=tuple(reply[k] for k in ('action','expectation','state','target_node'))
+        planner=program.MuseProgramPlanner(self.b,custody,1000)
+        decision=dict(c3=dict(schema='cu.action/v1',action=dict(kind='click',mark_id=1,x=25,y=30),
+            confidence=0.9,expectation=dict(kind='state_change'),need_reasoning=False,observation='synthetic'),
+            model_metadata={})
+        def helper(*args,**kwargs):
+            kwargs['keepalive'](20)
+            return SimpleNamespace(returncode=0,stdout=json.dumps(decision).encode())
+        with patch.object(self.b,'keepalive_observe',return_value=dict(frame_ref=future)) as heartbeat, \
+             patch.object(program,'run_model_with_frames',side_effect=helper):
+            planner.plan_step(observed,table,'Covered square')
+        heartbeat.assert_called_once_with(20)
+        self.assertEqual(observed,before);self.assertEqual(record['frame'],current)
+        self.assertEqual(record['keepalive_frame'],future)
+        self.assertEqual(custody.plan_step.call_args.args[0],before)
 
     def test_expired_program_budget_stops_before_observation_and_dispatch(self):
         self.b.run_deadline_ns = time.monotonic_ns() - 1
