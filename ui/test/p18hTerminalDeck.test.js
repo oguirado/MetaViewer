@@ -2732,13 +2732,16 @@ test('V024-WALL-FIXES: real broker refusal code (CLASS_LIMIT), dismissible error
     await tick();
     const ctrl = mounted.vm.controller;
 
-    // 1. Open 4 shells (fills Screen 1 with 2 slots and Screen 2 with 2 slots, hitting ptyBroker maxShellSessions = 4).
+    // 1. Open 16 shells: 2 per screen gives 8 screens, reaching ptyBroker maxShellSessions = 16.
     const slot1 = await ctrl.launchProfile('shell');
     const slot2 = await ctrl.launchProfile('shell');
     const slot3 = await ctrl.launchProfile('shell');
     const slot4 = await ctrl.launchProfile('shell');
+    for (let i = 5; i <= 16; i += 1) {
+      await ctrl.launchProfile('shell');
+    }
     await tick();
-    assert.equal(ctrl.state.screens.length, 2);
+    assert.equal(ctrl.state.screens.length, 8);
     assert.equal(ctrl.state.screens[0].slots.length, 2);
     assert.equal(ctrl.state.screens[1].slots.length, 2);
 
@@ -2749,7 +2752,7 @@ test('V024-WALL-FIXES: real broker refusal code (CLASS_LIMIT), dismissible error
     await sleep(30);
     assert.equal(slot1.status, 'running', 'Cumulative credit ack must keep session alive past 256 frames');
 
-    // 3. A 5th shell open hits ptyBroker handleOpen countLiveByClass('shell') >= 4 -> refuses with real code CLASS_LIMIT.
+    // 3. A 17th shell open hits ptyBroker handleOpen countLiveByClass('shell') >= 16 -> refuses with real code CLASS_LIMIT.
     await assert.rejects(() => ctrl.launchProfile('shell'));
     await tick();
     const errBanner = mounted.findById('terminal-deck-error');
@@ -2784,6 +2787,8 @@ test('V024-WALL-FIXES: real broker refusal code (CLASS_LIMIT), dismissible error
     );
 
     // 6. Because closing slot4 freed its broker session, opening a new shell now succeeds!
+    // Reaching the cap spent the whole spawn burst; one token refills per second.
+    await sleep(1100);
     const slot5 = await ctrl.launchProfile('shell');
     await tick();
     assert.equal(slot5.status, 'running');

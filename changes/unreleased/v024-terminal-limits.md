@@ -1,0 +1,1 @@
+- Terminals: raise the concurrent limits to 16 shell and 16 AI sessions, 32 in total.

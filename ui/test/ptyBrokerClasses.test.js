@@ -75,7 +75,7 @@ const tick = () => new Promise((resolveTick) => setImmediate(resolveTick));
  */
 function createClassBrokerHarness({
   runBrokerImpl = runBroker,
-  limits = {},
+  limits = { maxSessions: 8, maxShellSessions: 4, maxAiSessions: 4 },
   profiles = new Map([
     ['shell', SHELL_PROFILE],
     ['provider-ai', AI_PROFILE],
@@ -219,9 +219,9 @@ function createClassBrokerHarness({
 
 test('U3-1: per-class [TARGET] constants, refusal remedies, resolveSessionClass, assertSpawnProfile, and normalizeLimits', () => {
   // Verify [TARGET] and [CITED] defaults on DEFAULT_LIMITS.
-  assert.equal(MAX_SESSIONS, 8);
-  assert.equal(MAX_SHELL_SESSIONS, 4);
-  assert.equal(MAX_AI_SESSIONS, 4);
+  assert.equal(MAX_SESSIONS, 32);
+  assert.equal(MAX_SHELL_SESSIONS, 16);
+  assert.equal(MAX_AI_SESSIONS, 16);
   assert.equal(SESSION_BYTE_CAP, 8388608);
   assert.equal(AI_SESSION_BYTE_CAP, 67108864);
   assert.equal(MAX_LIFETIME_MS, 3600000);
@@ -233,9 +233,9 @@ test('U3-1: per-class [TARGET] constants, refusal remedies, resolveSessionClass,
   assert.equal(SPAWN_BRAKE_MAX_FAILURES, 3);
   assert.equal(SPAWN_BRAKE_COOLDOWN_MS, 60000);
 
-  assert.equal(DEFAULT_LIMITS.maxSessions, 8);
-  assert.equal(DEFAULT_LIMITS.maxShellSessions, 4);
-  assert.equal(DEFAULT_LIMITS.maxAiSessions, 4);
+  assert.equal(DEFAULT_LIMITS.maxSessions, 32);
+  assert.equal(DEFAULT_LIMITS.maxShellSessions, 16);
+  assert.equal(DEFAULT_LIMITS.maxAiSessions, 16);
   assert.equal(DEFAULT_LIMITS.shellSessionByteCap, 8388608);
   assert.equal(DEFAULT_LIMITS.aiSessionByteCap, 67108864);
   assert.equal(DEFAULT_LIMITS.shellLifetimeMs, 3600000);
@@ -295,11 +295,11 @@ test('U3-1: per-class [TARGET] constants, refusal remedies, resolveSessionClass,
   assert.equal(custom.closeSighupWaitMs, 50);
   assert.equal(custom.closeSigtermWaitMs, 120);
 
-  const scaled = normalizeLimits({ maxSessions: 12 });
-  assert.equal(scaled.maxSessions, 12);
-  assert.equal(scaled.maxShellSessions, 12);
-  assert.equal(scaled.maxAiSessions, 12);
-  assert.equal(scaled.spawnBrakeBurst, 16);
+  const scaled = normalizeLimits({ maxSessions: 48 });
+  assert.equal(scaled.maxSessions, 48);
+  assert.equal(scaled.maxShellSessions, 48);
+  assert.equal(scaled.maxAiSessions, 48);
+  assert.equal(scaled.spawnBrakeBurst, 48);
 
   assert.throws(() => normalizeLimits({ maxShellSessions: 0 }), { code: 'LIMITS_VALUE' });
   assert.throws(() => normalizeLimits({ aiSessionByteCap: -1 }), { code: 'LIMITS_VALUE' });
@@ -1384,15 +1384,15 @@ test('U3-8: packaged-path broker loading resolves resources/build-native/pty-run
       await host.setEnabled(true);
       /** @type {Array<{ session: string }>} */
       const opened = [];
-      for (let i = 1; i <= 4; i += 1) {
+      for (let i = 1; i <= MAX_SHELL_SESSIONS; i += 1) {
         const res = await host.open({ command: 'shell', cols: 80, rows: 24 });
         assert.equal(typeof res.session, 'string');
         opened.push(res);
       }
-      assert.equal(opened.length, 4);
-      assert.equal(spawnedPids.length, 4);
+      assert.equal(opened.length, MAX_SHELL_SESSIONS);
+      assert.equal(spawnedPids.length, MAX_SHELL_SESSIONS);
 
-      // 5th shell open through packaged terminalHost -> ptyBroker is refused by the 4-shell class cap.
+      // The next shell open through packaged terminalHost -> ptyBroker is refused by the shell class cap.
       await assert.rejects(
         () => host.open({ command: 'shell', cols: 80, rows: 24 }),
         { message: 'TERMINAL_IO_REFUSED' },
@@ -1414,6 +1414,8 @@ test('U3-8: packaged-path broker loading resolves resources/build-native/pty-run
       }
       assert.throws(() => process.kill(firstPid, 0), { code: 'ESRCH' });
 
+      // Reaching the cap spent the whole spawn burst; one token refills per second.
+      await new Promise((resolveTimer) => setTimeout(resolveTimer, 1100));
       const replacement = await host.open({ command: 'shell', cols: 80, rows: 24 });
       assert.equal(typeof replacement.session, 'string');
     } finally {

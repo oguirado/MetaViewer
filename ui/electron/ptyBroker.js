@@ -8,7 +8,7 @@
  * [TARGET, unit decision] U3-BROKER-CLASSES: per-class PTY limits for shell
  * and ai sessions (measured node-pty throughput 4194304 B in 20.96 ms
  * [MEASURED], SIGHUP exit 0.28 ms [MEASURED], SIGTERM exit 0.38 ms [MEASURED];
- * maxShellSessions 4 [TARGET], maxAiSessions 4 [TARGET], shellSessionByteCap
+ * maxShellSessions 16 [TARGET], maxAiSessions 16 [TARGET], shellSessionByteCap
  * 8388608 B [CITED], aiSessionByteCap 67108864 B [TARGET], shellLifetimeMs
  * 3600000 ms [CITED], aiLifetimeMs 14400000 ms [TARGET]), staged close
  * (SIGHUP -> 100 ms [TARGET] -> SIGTERM -> 250 ms [TARGET] -> SIGKILL), and
@@ -105,9 +105,9 @@ export const MAX_WRITE_BYTES = 65536;
 export const SESSION_BYTE_CAP = 8388608;
 export const AI_SESSION_BYTE_CAP = 67108864;
 export const MAX_LINE_BYTES = 262144;
-export const MAX_SESSIONS = 8;
-export const MAX_SHELL_SESSIONS = 4;
-export const MAX_AI_SESSIONS = 4;
+export const MAX_SESSIONS = 32;
+export const MAX_SHELL_SESSIONS = 16;
+export const MAX_AI_SESSIONS = 16;
 export const MAX_LIFETIME_MS = 3600000;
 export const AI_MAX_LIFETIME_MS = 14400000;
 export const CLOSE_SIGHUP_WAIT_MS = 100;
