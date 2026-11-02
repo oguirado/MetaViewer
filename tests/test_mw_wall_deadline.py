@@ -164,18 +164,18 @@ class WallDeadlineTests(unittest.TestCase):
         self.assertEqual(new_chat_budget, 95.0)
 
         # perplexity/ask fixture: site min_notice_s = 10, workflow min_notice_s = 0 -> 10 s;
-        # steps: 50000 + 50000 + 190000 = 290000 ms (290.0 s); + 30.0 s margin = 330.0 s.
+        # steps: 50000 + 70000 + 190000 = 310000 ms (310.0 s); + 30.0 s margin + 10 s notice = 350.0 s.
         perplexity_home = self.root / 'perplexity-home'
         shutil.copytree(ROOT / 'tests/e2e/fixtures/mw_perplexity/site', perplexity_home / 'sites/perplexity')
         perplexity_budget = mw_run.budget_from_workflow(perplexity_home, 'perplexity/ask')
-        self.assertEqual(perplexity_budget, 330.0)
+        self.assertEqual(perplexity_budget, 350.0)
 
         args = mw_run.build_parser().parse_args(
             ['--identity', 'mv-live-1', '--site', 'perplexity', '--workflow', 'ask']
         )
         self.assertEqual(
             mw_run.resolve_wall_deadline_s(args, env={}, home=perplexity_home, repo_root=ROOT),
-            330.0,
+            350.0,
         )
 
         # Missing workflow falls back to the conservative ceiling (360.0 s).
