@@ -660,6 +660,16 @@ cmd_stop() {
     done
     ram=$SHM/vqa-ramws/opensuperficies/os-cu-0
     if [ -d "$ram" ]; then
+        # A capsule's RAM directory outlives its container. Only an entry whose container
+        # is gone is safe to remove; anything else stays and is reported below.
+        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+            local live
+            live=$(docker ps -a --filter 'name=^srf-id-' --format '{{.Names}}' 2>/dev/null)
+            for f in "$ram"/srf-id-*; do
+                [ -d "$f" ] && [ ! -L "$f" ] || continue
+                printf '%s\n' "$live" | grep -qxF -- "${f##*/}" || rm -rf -- "$f"
+            done
+        fi
         while IFS= read -r name; do
             [ -n "$name" ] || continue
             leaks=$((leaks + 1))

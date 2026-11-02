@@ -498,6 +498,17 @@ class TestStop(FlowCase):
             self.assertIn("JUDGE_STOP_LEAK: " + what, res.err)
         self.assertNotIn("JUDGE_STOP_CLEAN", res.out)
 
+    def test_stop_removes_ram_of_a_gone_capsule_and_keeps_a_live_one(self):
+        sc.installed(self.sb)
+        self.sb.put("containers", "srf-id-live\n")
+        ram = self.sb.shm / "vqa-ramws" / "opensuperficies" / "os-cu-0"
+        (ram / "srf-id-gone").mkdir(parents=True)
+        (ram / "srf-id-live").mkdir()
+        res = self.sb.judge("stop")
+        self.assertFalse((ram / "srf-id-gone").exists())
+        self.assertTrue((ram / "srf-id-live").exists())
+        self.assertIn("JUDGE_STOP_LEAK: RAM entry", res.err)
+
     def test_stop_stops_scoped_capsules_without_global_net_down(self):
         sc.installed(self.sb, t2=True)
         self.sb.make_t2_ready()
