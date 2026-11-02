@@ -342,7 +342,7 @@ export function buildProviderSpawn(providerArgv, loginShell) {
  * @returns {Readonly<Record<string, string>>} Frozen child env.
  */
 export function validateProviderEnv(hostEnv, allowlist) {
-  if (!isRecord(hostEnv)) fail('ENV_SHAPE', 'host env must be a record');
+  if (!isRecord(hostEnv) && hostEnv !== process.env) fail('ENV_SHAPE', 'host env must be a record');
   if (!Array.isArray(allowlist)) fail('ENV_ALLOWLIST', 'allowlist must be an array');
   const host = /** @type {Record<string, unknown>} */ (hostEnv);
   const out = /** @type {Record<string, string>} */ ({});
@@ -401,7 +401,7 @@ export function validateSpawnEnv(env) {
  * @returns {string} Resolved node-pty directory.
  */
 export function resolveNodePtyDir(env = process.env, resourcesPath = undefined) {
-  if (!isRecord(env)) fail('NATIVE_ENV', 'env must be a record for native resolution');
+  if (!isRecord(env) && env !== process.env) fail('NATIVE_ENV', 'env must be a record for native resolution');
   const table = /** @type {Record<string, unknown>} */ (env);
   const override = table.METAVIEWER_NODE_PTY_DIR;
   if (typeof override === 'string' && override.length > 0) {

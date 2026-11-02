@@ -22,7 +22,24 @@ export function launchTerminalUtility({ utilityProcess, session, spec, port }) {
 import { userInfo } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
-import { runBroker, validateProviderArgv, validateProviderEnv } from './ptyBroker.js';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
+import { resolveNodePtyDir, runBroker, validateProviderArgv, validateProviderEnv } from './ptyBroker.js';
+
+/**
+ * Load node-pty through resolveNodePtyDir(env, resourcesPath) and createRequire.
+ * @param {unknown} [env]
+ * @param {unknown} [resourcesPath]
+ */
+export function loadNodePty(env = process.env, resourcesPath = process.resourcesPath) {
+  const dir = resolveNodePtyDir(env, resourcesPath);
+  const req = createRequire(join(dir, 'package.json'));
+  const mod = req('.');
+  if (!mod || typeof mod.spawn !== 'function') {
+    throw new Error('TERMINAL_UNAVAILABLE: node-pty spawn is unavailable');
+  }
+  return mod;
+}
 
 const SESSION_ID_RE = /^[A-Za-z0-9._-]{1,128}$/;
 const CAPSULE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -170,6 +187,7 @@ export function createTerminalHost({
   createMessageChannel,
   clipboard,
   env = process.env,
+  resourcesPath = process.resourcesPath,
   profiles = new Map(),
   nested = false,
   argv = [],
@@ -473,7 +491,7 @@ export function createTerminalHost({
         throw new Error('TERMINAL_DISABLED');
       }
       if (!resolvedPty) {
-        try { resolvedPty = await import('node-pty'); }
+        try { resolvedPty = loadNodePty(env, resourcesPath); }
         catch { return {ok:false, code:'TERMINAL_UNAVAILABLE', message:'TERMINAL_UNAVAILABLE: terminal support is not bundled in this package'}; }
       }
       const session = randomUUID();
@@ -648,7 +666,7 @@ export function createTerminalHost({
     },
     listProviders: async () => {
       if (isNested) throw createDisplayOnlyError();
-      if (!resolvedPty) { try { resolvedPty = await import('node-pty'); } catch {} }
+      if (!resolvedPty) { try { resolvedPty = loadNodePty(env, resourcesPath); } catch {} }
       return {
         entries: [...owned.keys()].map((id) => {
           const meta = providerMeta.get(id);

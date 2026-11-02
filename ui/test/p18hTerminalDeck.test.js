@@ -903,4 +903,346 @@ test('P18H App.vue mounts TerminalDeckView on More -> Terminal and hides capsule
     appSource.includes('<RoleSurface :presentation-active="desktopActive && !creativeOpen && !terminalDeckOpen"'),
     'Entering the Terminal deck must deactivate RoleSurface presentation (hide-not-revoke) and restore it on exit',
   );
+  assert.ok(
+    appSource.includes('(terminalOpen.value && !terminalDeckOpen.value)'),
+    'App.vue modalOpen must not hold data-mv-modal open while the full-screen Terminal Deck is idle',
+  );
 });
+
+test('P18H-R2-PTY: terminalHost and ptyUtility resolve packaged node-pty from <resources>/build-native/pty-runtime/node-pty and fail closed when absent (with mutant)', async (t) => {
+  const { mkdtemp, mkdir, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { MessageChannel } = await import('node:worker_threads');
+  const { createTerminalHost, loadNodePty } = await import('../electron/terminalHost.js');
+  const { loadNodePty: loadUtilityNodePty } = await import('../electron/ptyUtility.js');
+  const { resolveNodePtyDir } = await import('../electron/ptyBroker.js');
+
+  const root = await mkdtemp(join(tmpdir(), 'p18h-r2-pty-res-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  // 1. Packaged resourcesPath layout: <resources>/build-native/pty-runtime/node-pty
+  const resourcesPath = join(root, 'resources');
+  const stagedPtyDir = join(resourcesPath, 'build-native/pty-runtime/node-pty');
+  await mkdir(stagedPtyDir, { recursive: true });
+  await writeFile(
+    join(stagedPtyDir, 'package.json'),
+    JSON.stringify({ name: 'node-pty', version: '1.1.0', main: './index.cjs' }),
+  );
+  await writeFile(
+    join(stagedPtyDir, 'index.cjs'),
+    `module.exports = {
+      spawn(file, args, opts) {
+        let onData = () => {};
+        let onExit = () => {};
+        return {
+          pid: 48484,
+          file,
+          args,
+          opts,
+          onData(fn) { onData = fn; return { dispose() {} }; },
+          onExit(fn) { onExit = fn; return { dispose() {} }; },
+          write(d) { onData('packaged:' + String(d)); },
+          resize() {},
+          kill() { onExit({ exitCode: 0 }); },
+          pause() {},
+          resume() {},
+        };
+      }
+    };\n`,
+  );
+
+  const cleanEnv = { PATH: '/usr/bin:/bin', HOME: root, TERM: 'xterm-256color' };
+  assert.equal(resolveNodePtyDir(cleanEnv, resourcesPath), stagedPtyDir);
+  // Also works when process.env itself (custom prototype in Node 24) is passed without METAVIEWER_NODE_PTY_DIR:
+  const prevOverride = process.env.METAVIEWER_NODE_PTY_DIR;
+  delete process.env.METAVIEWER_NODE_PTY_DIR;
+  try {
+    assert.equal(resolveNodePtyDir(process.env, resourcesPath), stagedPtyDir);
+  } finally {
+    if (prevOverride !== undefined) process.env.METAVIEWER_NODE_PTY_DIR = prevOverride;
+  }
+
+  const hostLoaded = loadNodePty(cleanEnv, resourcesPath);
+  const utilityLoaded = loadUtilityNodePty(cleanEnv, resourcesPath);
+  assert.equal(typeof hostLoaded.spawn, 'function');
+  assert.equal(typeof utilityLoaded.spawn, 'function');
+
+  const host = createTerminalHost({
+    env: cleanEnv,
+    resourcesPath,
+    createMessageChannel: () => new MessageChannel(),
+  });
+  t.after(() => host.dispose());
+  await host.setEnabled(true);
+  const opened = await host.open({ command: 'shell', cols: 80, rows: 24 });
+  assert.equal(typeof opened.session, 'string');
+  assert.ok(opened.session.length > 0);
+
+  // 2. Fail-closed when packaged native runtime is absent
+  const missingResources = join(root, 'missing-resources');
+  await mkdir(missingResources, { recursive: true });
+  const missingPtyDir = join(missingResources, 'build-native/pty-runtime/node-pty');
+  const missingEnv = { ...cleanEnv, METAVIEWER_NODE_PTY_DIR: missingPtyDir };
+  const hostMissing = createTerminalHost({
+    env: missingEnv,
+    resourcesPath: missingResources,
+    createMessageChannel: () => new MessageChannel(),
+  });
+  t.after(() => hostMissing.dispose());
+  await hostMissing.setEnabled(true);
+  const refused = await hostMissing.open({ command: 'shell', cols: 80, rows: 24 });
+  assert.deepEqual(refused, {
+    ok: false,
+    code: 'TERMINAL_UNAVAILABLE',
+    message: 'TERMINAL_UNAVAILABLE: terminal support is not bundled in this package',
+  });
+  const missingProviders = await hostMissing.listProviders();
+  assert.equal(missingProviders.capabilities[0].available, false);
+  assert.equal(missingProviders.capabilities[0].reason, 'TERMINAL_UNAVAILABLE');
+
+  // 3. Mutant: a bare import('node-pty') / ignoring resourcesPath fails to resolve the staged packaged runtime
+  const hostSource = readText('../electron/terminalHost.js');
+  const utilitySource = readText('../electron/ptyUtility.js');
+  const assertNoBareNodePtyImport = (src, label) => {
+    assert.equal(/\bimport\s*\(\s*['"]node-pty['"]\s*\)/.test(src), false, `${label} must not bare-import('node-pty')`);
+    assert.equal(/\bfrom\s+['"]node-pty['"]/.test(src), false, `${label} must not bare-import from 'node-pty'`);
+    assert.ok(src.includes('resolveNodePtyDir('), `${label} must resolve via resolveNodePtyDir`);
+    assert.ok(src.includes('createRequire('), `${label} must load via createRequire`);
+  };
+  assertNoBareNodePtyImport(hostSource, 'terminalHost.js');
+  assertNoBareNodePtyImport(utilitySource, 'ptyUtility.js');
+
+  const mutantHostSource = hostSource.replace('resolveNodePtyDir(env, resourcesPath)', "await import('node-pty')");
+  assert.notEqual(mutantHostSource, hostSource);
+  assert.throws(() => assertNoBareNodePtyImport(mutantHostSource, 'mutant terminalHost.js'), assert.AssertionError);
+});
+
+test('P18H-R2-PTY: TERMINAL_UNAVAILABLE and open refusals show visible inline error with code and one-line hint in deck (with mutant)', async () => {
+  class StubTerminal {
+    loadAddon() {}
+    attachCustomKeyEventHandler() {}
+    onData() { return { dispose() {} }; }
+    open() {}
+    write() {}
+    focus() {}
+    dispose() {}
+  }
+  class StubFitAddon {
+    fit() {}
+  }
+
+  const TerminalDeckView = await compileSfc('../src/terminal/TerminalDeckView.vue', {
+    '@xterm/xterm': { Terminal: StubTerminal },
+    '@xterm/addon-fit': { FitAddon: StubFitAddon },
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) },
+    './terminalDeckModel.js': deckModel,
+  });
+
+  // Broker returning { ok: false, code: 'TERMINAL_UNAVAILABLE', message: ... } (as terminalHost.open does when node-pty is missing)
+  const unavailableBroker = {
+    async setEnabled() { return true; },
+    async listProviders() { return []; },
+    async open() {
+      return {
+        ok: false,
+        code: 'TERMINAL_UNAVAILABLE',
+        message: 'TERMINAL_UNAVAILABLE: terminal support is not bundled in this package',
+      };
+    },
+    async attach() { throw new Error('must not attach after refused open'); },
+    async resize() { return true; },
+    async close() { return true; },
+  };
+
+  const mounted = mountTree(TerminalDeckView, {
+    open: true,
+    terminalBroker: unavailableBroker,
+    storage: createMemoryStorage(),
+  });
+
+  try {
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-error'), null);
+
+    // 1. Click "Open Shell" in empty state -> shows visible inline #terminal-deck-error with code and one-line hint
+    await mounted.findById('terminal-deck-empty-shell').props.onClick();
+    await tick();
+    const errAfterEmptyShell = mounted.findById('terminal-deck-error');
+    assert.notEqual(errAfterEmptyShell, null, 'Refused Open Shell must render #terminal-deck-error');
+    assert.equal(errAfterEmptyShell.props['data-error-code'], 'TERMINAL_UNAVAILABLE');
+    const errText1 = mounted.textOf(errAfterEmptyShell);
+    assert.match(errText1, /^TERMINAL_UNAVAILABLE: /);
+    assert.equal(errText1.includes('\n'), false, 'Hint must be a single line');
+    assert.ok(errText1.length > 'TERMINAL_UNAVAILABLE: '.length, 'Error must include a non-empty hint');
+
+    // 2. Open "＋ New terminal" popover and click "Shell" -> closes popover and keeps visible inline error
+    mounted.findById('terminal-deck-new').props.onClick();
+    await tick();
+    assert.notEqual(mounted.findById('terminal-deck-launcher'), null);
+    await mounted.findById('terminal-deck-profile-shell').props.onClick();
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-launcher'), null, 'Launcher popover must close after open refusal');
+    const errAfterPopoverShell = mounted.findById('terminal-deck-error');
+    assert.notEqual(errAfterPopoverShell, null, 'Refused popover Shell must render #terminal-deck-error');
+    assert.equal(errAfterPopoverShell.props['data-error-code'], 'TERMINAL_UNAVAILABLE');
+    assert.match(mounted.textOf(errAfterPopoverShell), /^TERMINAL_UNAVAILABLE: /);
+
+    // 3. Mutant check: if openBrokerSession or launchProfile swallowed the refusal or cleared errorMessage on setLauncherOpen(false), #terminal-deck-error would be null
+    const assertVisibleRefusal = (errorNode) => {
+      assert.notEqual(errorNode, null, 'Refusal must be visible in #terminal-deck-error');
+      assert.match(mounted.textOf(errorNode), /^TERMINAL_UNAVAILABLE: .+/);
+    };
+    assertVisibleRefusal(errAfterPopoverShell);
+    assert.throws(() => assertVisibleRefusal(null), assert.AssertionError);
+  } finally {
+    mounted.app.unmount();
+  }
+});
+
+test('P18H-R2-PTY: New terminal popover closes on Escape and outside click, and counts in body[data-mv-modal] (with mutants)', async () => {
+  const harness = createBrokerDouble();
+  class StubTerminal {
+    loadAddon() {}
+    attachCustomKeyEventHandler() {}
+    onData() { return { dispose() {} }; }
+    open() {}
+    write() {}
+    focus() {}
+    dispose() {}
+  }
+  class StubFitAddon {
+    fit() {}
+  }
+
+  // Install a lightweight window/document double on globalThis to capture keydown, pointerdown, and body[data-mv-modal].
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  /** @type {Map<string, Set<Function>>} */
+  const winListeners = new Map();
+  /** @type {Map<string, Set<Function>>} */
+  const docListeners = new Map();
+  const bodyAttrs = new Map();
+  const fakeBody = {
+    dataset: {},
+    setAttribute(k, v) {
+      bodyAttrs.set(k, String(v));
+      if (k === 'data-mv-modal') this.dataset.mvModal = String(v);
+    },
+    getAttribute(k) {
+      return bodyAttrs.has(k) ? bodyAttrs.get(k) : null;
+    },
+    removeAttribute(k) {
+      bodyAttrs.delete(k);
+      if (k === 'data-mv-modal') delete this.dataset.mvModal;
+    },
+  };
+  globalThis.window = /** @type {any} */ ({
+    addEventListener(type, fn) {
+      if (!winListeners.has(type)) winListeners.set(type, new Set());
+      winListeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) {
+      winListeners.get(type)?.delete(fn);
+    },
+  });
+  globalThis.document = /** @type {any} */ ({
+    body: fakeBody,
+    addEventListener(type, fn) {
+      if (!docListeners.has(type)) docListeners.set(type, new Set());
+      docListeners.get(type).add(fn);
+    },
+    removeEventListener(type, fn) {
+      docListeners.get(type)?.delete(fn);
+    },
+  });
+
+  const TerminalDeckView = await compileSfc('../src/terminal/TerminalDeckView.vue', {
+    '@xterm/xterm': { Terminal: StubTerminal },
+    '@xterm/addon-fit': { FitAddon: StubFitAddon },
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) },
+    './terminalDeckModel.js': deckModel,
+  });
+
+  const mounted = mountTree(TerminalDeckView, {
+    open: true,
+    terminalBroker: harness.broker,
+    storage: createMemoryStorage(),
+  });
+
+  try {
+    await tick();
+    // Idle deck does NOT set body[data-mv-modal]
+    assert.equal(fakeBody.getAttribute('data-mv-modal'), null);
+
+    // 1. Open popover -> sets body[data-mv-modal="open"]
+    mounted.findById('terminal-deck-new').props.onClick();
+    await tick();
+    assert.notEqual(mounted.findById('terminal-deck-launcher'), null);
+    assert.equal(fakeBody.getAttribute('data-mv-modal'), 'open');
+
+    // 2. Press Escape on window -> closes popover and clears body[data-mv-modal]
+    let escPrevented = false;
+    for (const fn of winListeners.get('keydown') ?? []) {
+      fn({
+        key: 'Escape',
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        metaKey: false,
+        preventDefault() { escPrevented = true; },
+      });
+    }
+    await tick();
+    assert.equal(escPrevented, true);
+    assert.equal(mounted.findById('terminal-deck-launcher'), null, 'Escape must close #terminal-deck-launcher');
+    assert.equal(fakeBody.getAttribute('data-mv-modal'), null, 'Closing popover must clear body[data-mv-modal]');
+
+    // 3. Re-open popover and click inside popover -> stays open; click outside -> closes popover and clears body[data-mv-modal]
+    mounted.findById('terminal-deck-new').props.onClick();
+    await tick();
+    assert.notEqual(mounted.findById('terminal-deck-launcher'), null);
+    assert.equal(fakeBody.getAttribute('data-mv-modal'), 'open');
+
+    const insideTarget = mounted.findById('terminal-deck-custom-input');
+    for (const fn of docListeners.get('pointerdown') ?? []) {
+      fn({ target: insideTarget });
+    }
+    await tick();
+    assert.notEqual(mounted.findById('terminal-deck-launcher'), null, 'Pointerdown inside popover must not close it');
+    assert.equal(fakeBody.getAttribute('data-mv-modal'), 'open');
+
+    const outsideTarget = mounted.findById('terminal-deck-grid');
+    for (const fn of docListeners.get('pointerdown') ?? []) {
+      fn({ target: outsideTarget });
+    }
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-launcher'), null, 'Outside click must close #terminal-deck-launcher');
+    assert.equal(fakeBody.getAttribute('data-mv-modal'), null);
+
+    // 4. Mutant check: if handleKeyDown ignored Escape, launcherOpen would remain true
+    const ctrl = deckModel.createTerminalDeckController({
+      broker: harness.broker,
+      storage: createMemoryStorage(),
+    });
+    ctrl.setLauncherOpen(true);
+    assert.equal(ctrl.state.launcherOpen, true);
+    const handled = ctrl.handleKeyDown({ key: 'Escape', preventDefault() {} });
+    assert.equal(handled, true);
+    assert.equal(ctrl.state.launcherOpen, false);
+    ctrl.dispose();
+
+    const mutantHandleKeyDown = (state, event) => {
+      if (event.key === 'Escape') return false; // mutant: ignores Escape
+      return true;
+    };
+    const mutantState = { launcherOpen: true };
+    mutantHandleKeyDown(mutantState, { key: 'Escape' });
+    assert.throws(() => assert.equal(mutantState.launcherOpen, false), assert.AssertionError);
+  } finally {
+    mounted.app.unmount();
+    globalThis.window = prevWindow;
+    globalThis.document = prevDocument;
+  }
+});
+

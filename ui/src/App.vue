@@ -677,7 +677,7 @@ function onCapsuleLifecycle({surfaceId,completion}) {
   });
 }
 const pendingModeSwitch = ref(/** @type {any} */ (null));
-const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value || moreOpen.value || settingsOpen.value || multislotOpen.value || terminalOpen.value || railOpen.value));
+const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value || moreOpen.value || settingsOpen.value || multislotOpen.value || (terminalOpen.value && !terminalDeckOpen.value) || railOpen.value));
 function syncModalAttr(open = modalOpen.value) {
   if (overlayCoordinator) { overlayCoordinator.set(appOverlayOwner, open); return; }
   const body = /** @type {any} */ (globalThis.document)?.body;

@@ -8,7 +8,7 @@
  * equal-tile terminal grid with focus rings and SIGINT-then-close lifecycle,
  * and busy-close confirmation.
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, inject, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -98,9 +98,35 @@ const focusedSlotId = computed(() => deckState.value.focusedSlotId);
 const pendingCloseSlotId = computed(() => deckState.value.pendingCloseSlotId);
 const launcherOpen = computed(() => deckState.value.launcherOpen);
 const toastMessage = computed(() => deckState.value.toastMessage);
+const errorCode = computed(() => deckState.value.errorCode);
 const errorMessage = computed(() => deckState.value.errorMessage);
 const gridColumns = computed(() => String(deckState.value.gridColumns));
 const profiles = computed(() => deckState.value.profiles);
+const launcherWrap = ref(/** @type {any} */ (null));
+const overlayCoordinator = /** @type {{ set?: (owner: string, active: boolean) => void } | null} */ (inject('overlayCoordinator', null));
+const launcherOverlayOwner = 'terminal-deck-overlay';
+const overlayOpen = computed(() => Boolean(props.open && (launcherOpen.value || pendingCloseSlotId.value)));
+
+/**
+ * @param {boolean} [open]
+ */
+function syncOverlayAttr(open = overlayOpen.value) {
+  if (overlayCoordinator && typeof overlayCoordinator.set === 'function') {
+    overlayCoordinator.set(launcherOverlayOwner, open);
+    return;
+  }
+  const body = /** @type {any} */ (globalThis.document)?.body;
+  if (!body) return;
+  if (open) {
+    if (typeof body.setAttribute === 'function') body.setAttribute('data-mv-modal', 'open');
+    if (body.dataset) body.dataset.mvModal = 'open';
+  } else {
+    if (typeof body.removeAttribute === 'function') body.removeAttribute('data-mv-modal');
+    if (body.dataset) delete body.dataset.mvModal;
+  }
+}
+
+watch(overlayOpen, (open) => { syncOverlayAttr(open); }, { immediate: true, flush: 'sync' });
 
 /**
  * @param {string} slotId
@@ -221,6 +247,49 @@ function syncTerminals() {
 function onWindowKeyDown(event) {
   if (!props.open) return;
   controller.handleKeyDown(event);
+}
+
+/**
+ * @param {unknown} target
+ * @returns {boolean}
+ */
+function isInsideLauncherWrap(target) {
+  if (!target || typeof target !== 'object') return false;
+  const wrap = launcherWrap.value;
+  if (wrap && typeof wrap.contains === 'function') {
+    try {
+      if (wrap.contains(target)) return true;
+    } catch {
+      // Custom renderer nodes may not be native DOM nodes.
+    }
+  }
+  const el = /** @type {any} */ (target);
+  if (typeof el.closest === 'function') {
+    try {
+      if (el.closest('.mv-terminal-deck__launcher-wrap')) return true;
+    } catch {
+      // Fallback to ancestor walk.
+    }
+  }
+  let cur = el;
+  while (cur) {
+    if (wrap && cur === wrap) return true;
+    const id = cur.id ?? cur.props?.id;
+    if (id === 'terminal-deck-new' || id === 'terminal-deck-launcher') return true;
+    const cls = String(cur.className ?? cur.props?.class ?? '');
+    if (cls.includes('mv-terminal-deck__launcher-wrap') || cls.includes('mv-terminal-deck__popover')) return true;
+    cur = cur.parentNode ?? cur.parent ?? null;
+  }
+  return false;
+}
+
+/**
+ * @param {Event} event
+ */
+function onDocumentPointerDown(event) {
+  if (!props.open || !launcherOpen.value) return;
+  if (isInsideLauncherWrap(event?.target ?? null)) return;
+  controller.setLauncherOpen(false);
 }
 
 function toggleLauncher() {
@@ -353,6 +422,9 @@ function onTileKeyDown(slotId, event) {
 onMounted(() => {
   void controller.refreshProviders();
   globalThis.window?.addEventListener?.('keydown', onWindowKeyDown, true);
+  globalThis.document?.addEventListener?.('keydown', onWindowKeyDown, true);
+  globalThis.document?.addEventListener?.('pointerdown', onDocumentPointerDown, true);
+  globalThis.document?.addEventListener?.('mousedown', onDocumentPointerDown, true);
   void nextTick(() => syncTerminals());
 });
 
@@ -365,7 +437,11 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  syncOverlayAttr(false);
   globalThis.window?.removeEventListener?.('keydown', onWindowKeyDown, true);
+  globalThis.document?.removeEventListener?.('keydown', onWindowKeyDown, true);
+  globalThis.document?.removeEventListener?.('pointerdown', onDocumentPointerDown, true);
+  globalThis.document?.removeEventListener?.('mousedown', onDocumentPointerDown, true);
   for (const slotId of [...mountedTerminals.keys()]) {
     destroySlotTerminal(slotId);
   }
@@ -383,6 +459,7 @@ defineExpose({
     class="mv-terminal-deck"
     data-semantic-anchor="terminal/deck/root"
     aria-label="Terminal workspace"
+    @keydown="onWindowKeyDown"
   >
     <header class="mv-terminal-deck__bar" aria-label="Terminal operator bar">
       <div class="mv-terminal-deck__screens" role="tablist" aria-label="Terminal screens">
@@ -440,7 +517,11 @@ defineExpose({
           >{{ toastMessage }}</span>
         </span>
 
-        <div class="mv-terminal-deck__launcher-wrap">
+        <div
+          ref="launcherWrap"
+          class="mv-terminal-deck__launcher-wrap"
+          @keydown.esc.stop.prevent="controller.setLauncherOpen(false)"
+        >
           <button
             type="button"
             id="terminal-deck-new"
@@ -458,6 +539,7 @@ defineExpose({
             class="mv-terminal-deck__popover"
             role="dialog"
             aria-label="New terminal profiles"
+            @keydown.esc.stop.prevent="controller.setLauncherOpen(false)"
           >
             <div class="mv-terminal-deck__profile-list" role="group" aria-label="Launch profiles">
               <button
@@ -487,6 +569,7 @@ defineExpose({
                   aria-label="Custom CLI command"
                   @input="onCustomInput"
                   @keydown.enter.prevent="submitCustomCli"
+                  @keydown.esc.stop.prevent="controller.setLauncherOpen(false)"
                 />
                 <button
                   type="button"
@@ -507,6 +590,7 @@ defineExpose({
       v-if="errorMessage"
       id="terminal-deck-error"
       data-semantic-anchor="terminal/error"
+      :data-error-code="errorCode || undefined"
       class="mv-terminal-deck__error"
       role="alert"
     >{{ errorMessage }}</p>

@@ -677,6 +677,55 @@ Source it in a subshell, because it points XDG_RUNTIME_DIR at the private runtim
 export const OPERATOR_RESOURCES = Object.freeze(['docs/AGENT_ENTRY.md', 'docs/AUTOMATE_FROM_DEMO.md',
   'tools/mv_identity.py', 'tools/mv_ram_admission.py']);
 
+/** Packaged relative directory for the out-of-ASAR node-pty runtime (P18H-R2-PTY). */
+export const NODE_PTY_RUNTIME_REL_DIR = 'resources/build-native/pty-runtime/node-pty';
+
+/** @type {Readonly<Record<string, string>>} */
+export const LOCKED_NODE_PTY_FILES = Object.freeze({
+  'package.json': 'f8b6a14f7022c14f1cd5d109486f5dacd32bffb63a9a63e38eced37dacb47439',
+  'lib/conpty_console_list_agent.js': '0d010879bb6680a0253d44363183d53e631f42972594eb6dcb1fb842c8c85e52',
+  'lib/conpty_console_list_agent.js.map': 'e880507e8ebfcaf0fac8ffcb011a3bb3853847767c77bae744ad94ad096977c5',
+  'lib/eventEmitter2.js': 'f1c14613aa90c10def4ca7238329270871997eb26f919f7074dc25533e3e75dd',
+  'lib/eventEmitter2.js.map': '2300f735c0a048d5b56a2821362f33cc9a811746b8a5b9552854f91a51f52810',
+  'lib/eventEmitter2.test.js': '9cd06569c14d4cd180031ed4df914b817e75ceb104ac10ef65cae6815f46c568',
+  'lib/eventEmitter2.test.js.map': '8d3742445dfccf223be42de83015447fbdbcc858a325c061302904f301f503cf',
+  'lib/index.js': 'c1b82c92c4c63aaa8e8441fc5a291c4727cd3f3550666d2fec7250e0f6d4b173',
+  'lib/index.js.map': '829a1a1f145a27eaaf5a636afdedf3ce9746bce25fd489ae04b5721d16f70acc',
+  'lib/interfaces.js': '56e4173f09aad26173f9d4c79800fda0b808c34424f987ef8d671cc931119a0a',
+  'lib/interfaces.js.map': '8ad6939566c34a59f5b7e49307050b73102acce29eed11c12e02fc3d765cc276',
+  'lib/terminal.js': '5ed5cd66a766afba4a04093284e999f8516d41936501839055800b10eca5d304',
+  'lib/terminal.js.map': 'c9e670bcd71467bd461f9ed969e1e712471f2cd94287543601b7df11ce8c472a',
+  'lib/terminal.test.js': '6f6ae435c9c6e93d8146fa7a79fe155ec3291880aa4de68fbad7ed8891e4f87b',
+  'lib/terminal.test.js.map': 'b22c83d59bafc013e5ac5016efb262cff8cbe782b79b064d3ce0f12ce55b41c1',
+  'lib/testUtils.test.js': 'eb13d8ffc04ef385604b37170bafa9914736d5c5be8bca857c9f32958f6fe7ec',
+  'lib/testUtils.test.js.map': 'ac8686314d11e1d90b32f5eb7e753bcd4a184ab4441ff12ea2c586a3b58785e6',
+  'lib/types.js': '408bf8287717b6322cc380ea66caf1b5e366dcf697707ae2f3cc454e08f3b151',
+  'lib/types.js.map': '980a71159075a8183a9a7981ac504e6c277785c33a1fc17eb6908d4abbb128da',
+  'lib/unixTerminal.js': 'a62e3a60c3bc1b0e7261f58284856df748dcee6761a2bc7a5a5ba98b22660473',
+  'lib/unixTerminal.js.map': 'fdc9afe47387e19f74b843cd620c7516895c5c99eba1c1a6aea636f41f9dda2b',
+  'lib/unixTerminal.test.js': '608d6c9bcfa07873440ed813b499d347e3e79dace1cc58ea3bd61b53356f0937',
+  'lib/unixTerminal.test.js.map': '44fb7f386894ab2cf5b557ec5cf74ec5417bb75faae608f0f667c365955c5e85',
+  'lib/utils.js': 'f75ad341c13fbf1a9a6605d7ee42dff5bbc5d43b7b381e413fb97eb1b8300beb',
+  'lib/utils.js.map': 'e699109e178ec671819a99db007389b5b39c3ac31d148ddcb47d9aca250327da',
+  'lib/windowsConoutConnection.js': '1440f70908fb1f55911ac8e936a1230f68a9c00c03096fcef6788eac6aad9d62',
+  'lib/windowsConoutConnection.js.map': '621dd488e7f33a2f2084cdb3d3df6560209105730d54ae3414fbbc3ba34c07c6',
+  'lib/windowsPtyAgent.js': '8636d16b38266112204061a22b135734177c242837982fd3a4055be726efa64a',
+  'lib/windowsPtyAgent.js.map': '351a491b18e6ada481d318a93be7cc80af63f183e9c66f247f193e8bd4627106',
+  'lib/windowsPtyAgent.test.js': '4c83dd76ec446031876dc81869e4c204715f72c0ba7ba3389e10b390b6d08da1',
+  'lib/windowsPtyAgent.test.js.map': '1fbfffca813225c86f4a42b3e467a6b3c1a19885db5748d01e8b06d7df82ad94',
+  'lib/windowsTerminal.js': 'c3a65716f53fed0135a8a633373d5f9c2ab092544d651f27ef0a67096dd3bcd9',
+  'lib/windowsTerminal.js.map': 'ad8425423f7cb4b7c405e7275e02c628e2c9df21287413a7cfce1ffcbb997be8',
+  'lib/windowsTerminal.test.js': '325567d8d6b461df3d3b7990a51bac09f662733988df653de7ee9113880e67a3',
+  'lib/windowsTerminal.test.js.map': '2a3a29c938a8af86827bd1af33a34da1039f36559e68575ae734a07975a956d3',
+});
+
+/** @type {Readonly<Record<string, Readonly<Record<string, string>>>>} */
+export const PINNED_NODE_PTY_NATIVE_DIGESTS = Object.freeze({
+  arm64: Object.freeze({
+    'build/Release/pty.node': '2e3ad304a9d65608e07fb9159738b8b955daaec1c5a17c7c42c0d16ad9dea521',
+  }),
+});
+
 /**
  * Create a testable packaged boot and teardown lifecycle with injectable clock,
  * signal sender, child spawner, and environment scrubber (`R3-T4-008` / `T20`,
@@ -1320,6 +1369,140 @@ export async function verifyBinary(path, arch = architecture.arch) {
   } finally {await file.close();}
 }
 
+/**
+ * Verify the staged node-pty runtime under `<root>/resources/build-native/pty-runtime/node-pty`
+ * against the closed file inventory, ELF binary architecture, and sha256 pins (`P18H-R2-PTY`).
+ * @param {string} root
+ * @param {string} [arch]
+ * @param {Map<string, { digest: string, mode: number }> | null} [expectedManifest]
+ * @param {{ expectedPtyNodeSha256?: string | null }} [options]
+ */
+export async function verifyNodePtyRuntime(root, arch = architecture.arch, expectedManifest = null, options = {}) {
+  const buildNativeRoot = join(root, 'resources/build-native');
+  const stRoot = await fs.lstat(buildNativeRoot).catch(() => null);
+  if (!stRoot?.isDirectory() || stRoot.isSymbolicLink()) {
+    throw new Error('PKG_BINARY_MISSING: pty.node');
+  }
+  const ptyNodeRel = `${NODE_PTY_RUNTIME_REL_DIR}/build/Release/pty.node`;
+  const ptyNodePath = join(root, ptyNodeRel);
+  await verifyBinary(ptyNodePath, arch);
+  const pinnedPtySha = options.expectedPtyNodeSha256 !== undefined
+    ? options.expectedPtyNodeSha256
+    : PINNED_NODE_PTY_NATIVE_DIGESTS[arch]?.['build/Release/pty.node'];
+  if (typeof pinnedPtySha === 'string' && pinnedPtySha.length > 0) {
+    const actualPtySha = await digest(ptyNodePath);
+    if (actualPtySha !== pinnedPtySha) {
+      throw new Error(`PKG_MANIFEST_MISMATCH: ${ptyNodeRel}`);
+    }
+  }
+  const spawnHelperRel = `${NODE_PTY_RUNTIME_REL_DIR}/build/Release/spawn-helper`;
+  const spawnHelperPath = join(root, spawnHelperRel);
+  const spawnHelperStat = await fs.lstat(spawnHelperPath).catch(() => null);
+  if (spawnHelperStat) {
+    await verifyBinary(spawnHelperPath, arch);
+  }
+  /** @type {Set<string>} */
+  const allowedRelFiles = new Set([
+    ...Object.keys(LOCKED_NODE_PTY_FILES).map((entry) => `${NODE_PTY_RUNTIME_REL_DIR}/${entry}`),
+    ptyNodeRel,
+    ...(spawnHelperStat ? [spawnHelperRel] : []),
+  ]);
+  /** @type {Set<string>} */
+  const seenRelFiles = new Set();
+  /** @param {string} part */
+  async function walkNative(part) {
+    const dirPath = join(root, part);
+    const items = (await fs.readdir(dirPath, { withFileTypes: true })).slice().sort(compareEntryNames);
+    for (const item of items) {
+      const name = `${part}/${item.name}`;
+      if (item.isSymbolicLink()) throw new Error('PKG_ALIAS_FORBIDDEN');
+      if (item.isDirectory()) {
+        await walkNative(name);
+        continue;
+      }
+      if (!item.isFile()) throw new Error('PKG_ENTRY_INVALID');
+      if (!allowedRelFiles.has(name)) {
+        const err = /** @type {Error & { code?: string }} */ (new Error(`PKG_MANIFEST_MISMATCH: unpinned native ${name}`));
+        err.code = 'PKG_UNPINNED_NATIVE';
+        throw err;
+      }
+      if (expectedManifest) {
+        const record = expectedManifest.get(name);
+        const st = await fs.lstat(join(root, name));
+        const actualMode = st.mode & 0o777;
+        const modeMatches =
+          record !== undefined &&
+          (actualMode === record.mode ||
+            (record.mode === DEFAULT_UMASK_FILE_MODE && actualMode === 0o644));
+        if (!record || record.digest !== await digest(join(root, name)) || !modeMatches) {
+          throw new Error(`PKG_MANIFEST_MISMATCH: ${name}`);
+        }
+      }
+      seenRelFiles.add(name);
+    }
+  }
+  await walkNative('resources/build-native');
+  for (const [relFile, expectedSha] of Object.entries(LOCKED_NODE_PTY_FILES)) {
+    const fullRel = `${NODE_PTY_RUNTIME_REL_DIR}/${relFile}`;
+    if (!seenRelFiles.has(fullRel)) {
+      throw new Error(`PKG_MANIFEST_MISMATCH: ${fullRel}`);
+    }
+    const actualSha = await digest(join(root, fullRel));
+    if (actualSha !== expectedSha) {
+      throw new Error(`PKG_MANIFEST_MISMATCH: ${fullRel}`);
+    }
+  }
+}
+
+/**
+ * Stage the minimal node-pty runtime (`package.json`, `lib/`, `build/Release/pty.node`,
+ * and `build/Release/spawn-helper` when present) into `<packageRoot>/resources/build-native/pty-runtime/node-pty`
+ * outside `app.asar` (`P18H-R2-PTY`).
+ * @param {string} packageRoot
+ * @param {string} [arch]
+ * @param {{ sourceDir?: string, env?: NodeJS.ProcessEnv, expectedPtyNodeSha256?: string | null }} [options]
+ */
+export async function stageNodePtyRuntime(packageRoot, arch = architecture.arch, options = {}) {
+  const sourceDir = options.sourceDir ?? join(ui, 'node_modules/node-pty');
+  const env = options.env ?? process.env;
+  const srcPtyNode = join(sourceDir, 'build/Release/pty.node');
+  const existingPty = await fs.lstat(srcPtyNode).catch(() => null);
+  if (!existingPty?.isFile()) {
+    await execute(env.NPM || 'npm', ['rebuild', 'node-pty', '--offline'], {
+      cwd: ui,
+      env,
+      maxBuffer: 1024 * 1024,
+    });
+  }
+  await verifyBinary(srcPtyNode, arch);
+  const destRoot = join(packageRoot, NODE_PTY_RUNTIME_REL_DIR);
+  await fs.rm(join(packageRoot, 'resources/build-native'), { recursive: true, force: true });
+  await fs.mkdir(join(destRoot, 'lib'), { recursive: true, mode: 0o755 });
+  await fs.mkdir(join(destRoot, 'build/Release'), { recursive: true, mode: 0o755 });
+  for (const relFile of Object.keys(LOCKED_NODE_PTY_FILES)) {
+    const srcFile = join(sourceDir, relFile);
+    const dstFile = join(destRoot, relFile);
+    await fs.mkdir(dirname(dstFile), { recursive: true, mode: 0o755 });
+    await fs.copyFile(srcFile, dstFile);
+    await fs.chmod(dstFile, 0o644);
+  }
+  const dstPtyNode = join(destRoot, 'build/Release/pty.node');
+  await fs.copyFile(srcPtyNode, dstPtyNode);
+  await fs.chmod(dstPtyNode, 0o755);
+  const srcSpawnHelper = join(sourceDir, 'build/Release/spawn-helper');
+  const spawnStat = await fs.lstat(srcSpawnHelper).catch(() => null);
+  if (spawnStat?.isFile() && !spawnStat.isSymbolicLink()) {
+    await verifyBinary(srcSpawnHelper, arch);
+    const dstSpawnHelper = join(destRoot, 'build/Release/spawn-helper');
+    await fs.copyFile(srcSpawnHelper, dstSpawnHelper);
+    await fs.chmod(dstSpawnHelper, 0o755);
+  }
+  await verifyNodePtyRuntime(packageRoot, arch, null, {
+    expectedPtyNodeSha256: options.expectedPtyNodeSha256,
+  });
+  return destRoot;
+}
+
 /** Complete exact inventory: extras, aliases, mode drift and omissions all fail closed.
  * @param {string} root */
 export async function verifyInstall(root, arch = architecture.arch) {
@@ -1365,6 +1548,15 @@ export async function verifyInstall(root, arch = architecture.arch) {
     }
   }
   await walk('');
+  const hasBuildNativeOnDisk = Boolean(await fs.lstat(join(root, 'resources/build-native')).catch(() => null));
+  const hasBuildNativeInManifest = [...expected.keys()].some((key) => key.startsWith('resources/build-native/'));
+  const hasFullPackageResources = Boolean(
+    (await fs.lstat(join(root, 'resources/operator')).catch(() => null)) &&
+    (await fs.lstat(join(root, 'resources/deps.lock')).catch(() => null)),
+  );
+  if (hasBuildNativeOnDisk || hasBuildNativeInManifest || hasFullPackageResources) {
+    await verifyNodePtyRuntime(root, arch, expected);
+  }
   if (count !== expected.size) throw new Error('PKG_MANIFEST_MISSING');
   const asar=join(root,'resources/app.asar');
   uncache(asar);
@@ -2463,6 +2655,7 @@ export async function packageShell(env = process.env) {
       await fs.copyFile(join(repo,relative),join(operatorRoot,relative));
     }
     await fs.writeFile(join(operatorRoot,'ATTACH.md'),ATTACH_GUIDE);
+    await stageNodePtyRuntime(built[0], architecture.arch, { env });
 
     await fs.copyFile(join(ui,'kit.lock.json'),join(built[0],'resources/kit.lock.json'));
     await fs.writeFile(join(built[0],'INSTALL.md'), `# MetaViewer Linux ${architecture.arch}

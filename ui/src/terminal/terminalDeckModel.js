@@ -90,6 +90,66 @@ const CANONICAL_PROVIDER_LABELS = Object.freeze({
 });
 
 /**
+ * One-line operator hints keyed by terminal open refusal code.
+ *
+ * @type {Readonly<Record<string, string>>}
+ */
+export const TERMINAL_REFUSAL_HINTS = Object.freeze({
+  TERMINAL_UNAVAILABLE: 'Terminal support is unavailable in this package; verify the bundled node-pty native runtime and retry.',
+  NATIVE_ABSENT: 'Terminal native runtime is missing; stage node-pty in build-native/pty-runtime/node-pty and retry.',
+  TERMINAL_DISABLED: 'Enable terminal access before opening a terminal session.',
+  COMMAND_NOT_ALLOWED: 'Select an admitted terminal profile from the launcher and try again.',
+  SESSION_LIMIT: 'Close an existing terminal session to free a broker slot, then retry.',
+  CLASS_LIMIT: 'Close an existing terminal in this class to free a slot, then retry.',
+  SPAWN_BRAKE: 'Wait for the terminal spawn cooldown to expire before opening another session.',
+  TERMINAL_IO_REFUSED: 'Close an unused terminal session or wait for the spawn brake to reset, then retry.',
+  DISPLAY_ONLY: 'Nested display-only windows cannot open terminal sessions.',
+  TERMINAL_SESSION_INVALID: 'The terminal broker returned an invalid session identifier; retry opening the terminal.',
+  TERMINAL_OPEN_REFUSED: 'Check the terminal host configuration or close an existing session, then try again.',
+});
+
+/**
+ * Normalizes any terminal open refusal or error into a structured `{ code, hint, message }`
+ * where `message` is a single line containing the refusal code and a one-line hint.
+ *
+ * @param {unknown} reason
+ * @returns {{ code: string, hint: string, message: string }}
+ */
+export function formatTerminalRefusal(reason) {
+  const rec = reason && typeof reason === 'object' ? /** @type {Record<string, unknown>} */ (reason) : null;
+  const rawCode = typeof rec?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(rec.code)
+    ? rec.code
+    : typeof rec?.reason === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(rec.reason)
+      ? rec.reason
+      : '';
+  const rawMessage = typeof rec?.message === 'string'
+    ? rec.message
+    : typeof reason === 'string'
+      ? reason
+      : '';
+  let code = rawCode;
+  if (!code) {
+    const tokenMatch = /\b(TERMINAL_[A-Z0-9_]+|NATIVE_[A-Z0-9_]+|COMMAND_NOT_ALLOWED|SESSION_LIMIT|CLASS_LIMIT|SPAWN_BRAKE|DISPLAY_ONLY|[A-Z][A-Z0-9_]{2,63})\b/.exec(rawMessage);
+    if (tokenMatch) {
+      code = tokenMatch[1];
+    } else if (/unavailable|not bundled|node-pty/i.test(rawMessage)) {
+      code = 'TERMINAL_UNAVAILABLE';
+    } else if (/invalid terminal session/i.test(rawMessage)) {
+      code = 'TERMINAL_SESSION_INVALID';
+    } else {
+      code = 'TERMINAL_OPEN_REFUSED';
+    }
+  }
+  const customRemedy = typeof rec?.remedy === 'string' ? rec.remedy.replace(/[\r\n]+/g, ' ').trim() : '';
+  const hint = customRemedy || TERMINAL_REFUSAL_HINTS[code] || TERMINAL_REFUSAL_HINTS.TERMINAL_OPEN_REFUSED;
+  return {
+    code,
+    hint,
+    message: `${code}: ${hint}`,
+  };
+}
+
+/**
  * @typedef {object} DeckProfile
  * @property {string} id Broker profile id ('shell', 'claude', 'agy', etc.).
  * @property {string} label Operator-facing button label.
@@ -518,6 +578,7 @@ export function createTerminalDeckController(options = {}) {
   let launcherOpen = false;
   let customCommandInput = '';
   let toastMessage = '';
+  let errorCode = '';
   let errorMessage = '';
   /** @type {{ entries?: unknown, capabilities?: unknown } | null} */
   let providerListing = null;
@@ -695,19 +756,51 @@ export function createTerminalDeckController(options = {}) {
    * @returns {Promise<{ session: string, port?: MessagePort }>}
    */
   async function openBrokerSession(spec) {
-    if (brokerFacade) {
-      if (brokerFacade.canEnable && !brokerFacade.state.enabled) {
-        await brokerFacade.setEnabled(true);
+    try {
+      /** @type {any} */
+      let reply;
+      if (brokerFacade) {
+        if (brokerFacade.canEnable && !brokerFacade.state.enabled) {
+          await brokerFacade.setEnabled(true);
+        }
+        reply = await brokerFacade.open(spec);
+      } else if (options.broker && typeof options.broker.open === 'function') {
+        if (typeof options.broker.setEnabled === 'function') {
+          await options.broker.setEnabled(true);
+        }
+        reply = await options.broker.open(spec);
+      } else {
+        throw Object.assign(new Error('TERMINAL_UNAVAILABLE: Terminal launch unavailable'), {
+          code: 'TERMINAL_UNAVAILABLE',
+        });
       }
-      return await brokerFacade.open(spec);
-    }
-    if (options.broker && typeof options.broker.open === 'function') {
-      if (typeof options.broker.setEnabled === 'function') {
-        await options.broker.setEnabled(true);
+      if (
+        reply &&
+        typeof reply === 'object' &&
+        (reply.ok === false ||
+          (typeof reply.code === 'string' && typeof reply.session !== 'string') ||
+          (typeof reply.reason === 'string' && typeof reply.session !== 'string'))
+      ) {
+        const refusalCode = typeof reply.code === 'string' && reply.code
+          ? reply.code
+          : typeof reply.reason === 'string' && reply.reason
+            ? reply.reason
+            : 'TERMINAL_OPEN_REFUSED';
+        const refusalMsg = typeof reply.message === 'string' && reply.message ? reply.message : refusalCode;
+        throw Object.assign(new Error(refusalMsg), {
+          code: refusalCode,
+          remedy: typeof reply.remedy === 'string' ? reply.remedy : undefined,
+        });
       }
-      return await options.broker.open(spec);
+      return reply;
+    } catch (error) {
+      const formatted = formatTerminalRefusal(error);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw error;
     }
-    throw new Error('Terminal launch unavailable');
   }
 
   /**
@@ -722,25 +815,38 @@ export function createTerminalDeckController(options = {}) {
     const profiles = getProfiles();
     const profile = profiles.find((item) => item.id === profileId);
     if (!profile) {
-      errorMessage = 'Selected terminal profile is unavailable.';
+      errorCode = 'COMMAND_NOT_ALLOWED';
+      errorMessage = `COMMAND_NOT_ALLOWED: Selected terminal profile is unavailable (${String(profileId)}).`;
       notify();
       throw new Error(`Unknown or unavailable terminal profile: ${String(profileId)}`);
     }
     const cols = Number.isSafeInteger(launchOpts.cols) && Number(launchOpts.cols) > 0 ? Number(launchOpts.cols) : 80;
     const rows = Number.isSafeInteger(launchOpts.rows) && Number(launchOpts.rows) > 0 ? Number(launchOpts.rows) : 24;
 
+    errorCode = '';
     errorMessage = '';
-    const opened = await openBrokerSession({
-      command: profile.command,
-      args: [],
-      cols,
-      rows,
-    });
-    const sessionId = typeof opened?.session === 'string' ? opened.session : '';
-    if (!sessionId || !TERMINAL_SESSION_ID_RE.test(sessionId)) {
-      throw new Error('Invalid terminal session');
+    /** @type {string} */
+    let sessionId = '';
+    try {
+      const opened = await openBrokerSession({
+        command: profile.command,
+        args: [],
+        cols,
+        rows,
+      });
+      sessionId = typeof opened?.session === 'string' ? opened.session : '';
+      if (!sessionId || !TERMINAL_SESSION_ID_RE.test(sessionId)) {
+        throw Object.assign(new Error('Invalid terminal session'), { code: 'TERMINAL_SESSION_INVALID' });
+      }
+      await attachSession(sessionId, opened?.port);
+    } catch (error) {
+      const formatted = formatTerminalRefusal(error);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw error;
     }
-    await attachSession(sessionId, opened?.port);
 
     const existing = launchOpts.reuseSlotId ? findSlot(launchOpts.reuseSlotId) : null;
     if (existing) {
@@ -791,13 +897,15 @@ export function createTerminalDeckController(options = {}) {
   async function launchCustomCli(rawCommand, launchOpts = {}) {
     const commandText = typeof rawCommand === 'string' ? rawCommand.trim() : '';
     if (!commandText || commandText.includes('\0') || commandText.includes('\r') || commandText.includes('\n')) {
-      errorMessage = 'Enter a single-line command.';
+      errorCode = 'COMMAND_NOT_ALLOWED';
+      errorMessage = 'COMMAND_NOT_ALLOWED: Enter a single-line command.';
       notify();
       throw new Error('Custom command must be a non-empty single line');
     }
     const cols = Number.isSafeInteger(launchOpts.cols) && Number(launchOpts.cols) > 0 ? Number(launchOpts.cols) : 80;
     const rows = Number.isSafeInteger(launchOpts.rows) && Number(launchOpts.rows) > 0 ? Number(launchOpts.rows) : 24;
 
+    errorCode = '';
     errorMessage = '';
     const opened = await openBrokerSession({
       command: SHELL_COMMAND,
@@ -807,7 +915,13 @@ export function createTerminalDeckController(options = {}) {
     });
     const sessionId = typeof opened?.session === 'string' ? opened.session : '';
     if (!sessionId || !TERMINAL_SESSION_ID_RE.test(sessionId)) {
-      throw new Error('Invalid terminal session');
+      const err = Object.assign(new Error('Invalid terminal session'), { code: 'TERMINAL_SESSION_INVALID' });
+      const formatted = formatTerminalRefusal(err);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw err;
     }
     await attachSession(sessionId, opened?.port);
     const commandBytes = Array.from(encoder.encode(`${commandText}\n`));
@@ -1148,6 +1262,21 @@ export function createTerminalDeckController(options = {}) {
    * @returns {boolean}
    */
   function handleKeyDown(event) {
+    if (event && typeof event === 'object' && event.key === 'Escape' && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      if (launcherOpen) {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        setLauncherOpen(false);
+        return true;
+      }
+      if (pendingCloseSlotId) {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        cancelPendingClose();
+        return true;
+      }
+      return false;
+    }
     const action = matchDeckShortcut(event);
     if (!action) return false;
     event.preventDefault?.();
@@ -1179,7 +1308,6 @@ export function createTerminalDeckController(options = {}) {
    */
   function setLauncherOpen(open) {
     launcherOpen = Boolean(open);
-    if (!launcherOpen) errorMessage = '';
     notify();
   }
 
@@ -1254,6 +1382,7 @@ export function createTerminalDeckController(options = {}) {
         launcherOpen,
         customCommandInput,
         toastMessage,
+        errorCode,
         errorMessage,
         gridColumns: gridColumnsForCount(activeScreen?.slots.length ?? 0),
         profiles: getProfiles(),
