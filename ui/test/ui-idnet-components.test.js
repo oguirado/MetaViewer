@@ -89,12 +89,12 @@ test('identity first impression labels, placeholders, grammar and typed tool fai
   const field=label=>nodes(view.root).find(n=>n.props?.['aria-label']===label);
   for(const [label,value] of [['Display name','Account'],['Allowed sites','example.com']])field(label).props.onInput({target:{value}});
   // Names are normalised as typed (operator, 1 Nov): 'Bad-id' -> 'bad-id' and 'aa bb' -> 'aa-bb' are valid now.
-  for(const id of ['', 'a','!!','-account','perplexity-main','cuentas-new','mv-live-1','a'.repeat(41)]){
+  for(const id of ['', 'a','!!','-account','srf-id-perplexity-main','srf-id-cuentas-new','mv-live-1','a'.repeat(41)]){
     field('Name').props.onInput({target:{value:id}});await tick();
     const create=nodes(view.root).find(n=>n.tag==='button'&&n.text==='Add identity');
     assert.equal(create.props.disabled,true,id);create.props.onClick();await tick();assert.equal(creates,0);
   }
-  for(const id of ['aa','work-account','1-account','a'.repeat(40),'Bad-id','aa bb']){
+  for(const id of ['aa','work-account','1-account','cuentas-1','perplexity-1','a'.repeat(40),'Bad-id','aa bb']){
     field('Name').props.onInput({target:{value:id}});await tick();
     assert.equal(nodes(view.root).find(n=>n.tag==='button'&&n.text==='Add identity').props.disabled,false,id);
   }

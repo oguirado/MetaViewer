@@ -12,7 +12,7 @@ import {isProtectedIdentity,PROTECTED_HOLDERS,FOREIGN_PREFIXES} from '../electro
 import { fileURLToPath } from 'node:url';
 const MV_IDENTITY_PY=fileURLToPath(new URL('../../tools/mv_identity.py',import.meta.url));
 import {createHumanTraceFile} from '../electron/humanTrace.js';
-const foreign=['cuentas-other','perplexity-other','srf-id-cuentas-other','srf-id-perplexity-other','srf-pg-other','srf-egress-proxy','n8n','distil-box'];
+const foreign=['srf-id-cuentas-other','srf-id-perplexity-other','srf-pg-other','srf-egress-proxy','n8n','distil-box'];
 async function fixture(t, profiles=['demo'], install=installRoleHost) {
  const root=await mkdtemp(join(tmpdir(),'p18g-host-'));t.after(()=>rm(root,{recursive:true,force:true}));
  let handler;const stops=[];let reply={};const states=new Map();
@@ -28,7 +28,7 @@ async function fixture(t, profiles=['demo'], install=installRoleHost) {
 test('foreign staging refuses before filesystem access; own profiles remain openable',async t=>{
  const root=await mkdtemp(join(tmpdir(),'p18g-stage-'));t.after(()=>rm(root,{recursive:true,force:true}));
  for(const id of foreign) await assert.rejects(stageOpeningMode(root,id,'human'),/IDENTITY_PROTECTED/);
- await (await stageOpeningMode(root,'mv-live-3','human'))();
+ for(const normal of ['mv-live-3','cuentas-1','perplexity-1']) await (await stageOpeningMode(root,normal,'human'))();
 });
 test('foreign login/create/delete refuse both service and direct runner without dispatch',async()=>{
  let calls=0;const service=createOperatorService({env:{MV_HANDOFF_PATHS:'[]'},runIdentity:async()=>{calls++;return {ok:true};}});

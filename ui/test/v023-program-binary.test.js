@@ -669,7 +669,7 @@ async function runProbes({
     try {
       const binDir = join(root, 'bin');
       await mkdir(binDir, { mode: 0o700 });
-      for (const name of ['gedit', 'gnome-calculator', 'notepad-1', 'cuentas-1', 'mv-live-1']) {
+      for (const name of ['gedit', 'gnome-calculator', 'notepad-1', 'srf-id-cuentas-1', 'mv-live-1']) {
         const p = join(binDir, name);
         await writeFile(p, '#!/bin/sh\nexit 0\n');
         await chmod(p, 0o755);
@@ -752,7 +752,7 @@ async function runProbes({
         const invoke = (op, extra = {}) => handlers.get('metaviewer:roles.v0.3')({}, { schema: 'metaviewer.roles/v0.3', op, ...extra });
 
         // A: Protected names are refused before provisioning or surface start.
-        for (const badBin of ['notepad-1', 'cuentas-1', 'mv-live-1']) {
+        for (const badBin of ['notepad-1', 'srf-id-cuentas-1', 'mv-live-1']) {
           const prot = await invoke('create-program', { choice: { binary: badBin } });
           if (prot?.ok !== false || prot.code !== 'IDENTITY_PROTECTED' || !String(prot.reason).includes(badBin)) {
             return false;

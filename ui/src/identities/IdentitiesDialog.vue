@@ -5,12 +5,10 @@ import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.
 import { operatorHost } from '../operatorHost.js';
 import { identityErrorText, identityFormRequest, validLabel, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
 import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityProtection.js';
-const props=defineProps({hideForeign:{type:Boolean,default:false},open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
+const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
-// Identities owned by other projects stay in the store, untouched, and are simply not listed here.
-const visibleRows=computed(()=>props.hideForeign?rows.value.filter(row=>!isForeignIdentity(row.id)):rows.value);
 const typedName=ref(''), labelEdited=ref(false), nameInput=ref(/** @type {{ $el?: HTMLInputElement }|null} */(null));
 const displayName=computed({get:()=>labelEdited.value ? label.value : typedName.value,
   set:value=>{labelEdited.value=true;label.value=value;}});
@@ -80,9 +78,9 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
 <template>
   <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Keep a separate browser session for each account." confirm-label="Add identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
     <p v-if="login" role="status">Operator login view is open. Agent input stays refused until it closes.</p>
-    <p v-if="!visibleRows.length && !busy">No identities yet. Add your first identity below.</p>
+    <p v-if="!rows.length && !busy">No identities yet. Add your first identity below.</p>
     <ul class="identity-list" aria-label="Saved identities">
-      <li v-for="row in visibleRows" :key="row.id" class="identity-row">
+      <li v-for="row in rows" :key="row.id" class="identity-row">
         <div class="identity-summary"><code>{{ row.id }}</code><strong>{{ row.label }}</strong>
           <span class="identity-mode">{{ row.browser === 'program' ? 'program' : (modeFor(row.id)?.currentMode || 'closed') }}</span>
           <span class="identity-last-login">Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded' }}</span>

@@ -49,7 +49,7 @@ NATIVE_PROFILE_UID = 10001
 PROFILE_IMAGE = "opensuperficies-identity-browser-arm64:0.1.0"
 PROFILE_TIMEOUT = 15
 RESERVED_PREFIX = "mv-"
-FOREIGN_PREFIXES = ("cuentas-", "perplexity-", "srf-id-cuentas-", "srf-id-perplexity-", "srf-pg-")
+FOREIGN_PREFIXES = ("srf-id-cuentas-", "srf-id-perplexity-", "srf-pg-")
 # Mirror daemon-adapter/internal/capsule/protect.go RefuseProtectedContainer.
 PROTECTED_HOLDERS = frozenset({"srf-id-cuentas-1", "srf-id-perplexity-1", "srf-pg-notepad-1",
                                "srf-pg-metaviewer-1", "srf-egress-proxy", "n8n", "distil-box"})
@@ -529,10 +529,13 @@ class Identities:
             profile = self.profile_state(identity)
             if profile != "ok":
                 raise Refused("PROFILE_MISSING" if profile == "missing" else "PROFILE_NOT_PROVISIONED")
-            # Request the native-valid name explicitly; consume only validated
-            # native evidence for subsequent control paths (surface.go:184).
+            # Request a native-valid capsule name that avoids protected holders;
+            # consume only validated native evidence for subsequent control paths (surface.go:184).
+            requested = "srf-id-" + identity
+            if foreign_identity(requested):
+                requested = "srf-id-mv-" + uuid.uuid4().hex[:16]
             reply = self.native("srf-identity-surface", ["start", "--identity", identity, "--kind", "browser",
-                                                          "--capsule", "srf-id-" + identity, *args])
+                                                          "--capsule", requested, *args])
             container = reply.get("container")
             if not isinstance(container, str) or not CAPSULE.fullmatch(container):
                 raise Refused("NATIVE_ID_MISMATCH")

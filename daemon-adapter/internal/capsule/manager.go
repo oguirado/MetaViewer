@@ -651,7 +651,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if p.Kind == "desktop_capsule" && (p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.Program == "host-exec" && (static || hostBinary == "")) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720))) {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
-	// Refuse protected profile collisions before any create state or native call.
+	// Refuse protected program/vm profile collisions before any create state or
+	// native call. Browser starts generate fresh random container names and never
+	// pass --capsule, while b.Container and pendingCleanup refuse protected holders.
 	var profileContainer string
 	switch p.NativeKind {
 	case "browser":
@@ -661,8 +663,10 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	case "vm":
 		profileContainer = "srf-vm-" + q.ProfileID
 	}
-	if e := refuseProtectedContainer([]string{"--container", profileContainer}); e != nil {
-		return nil, e
+	if p.NativeKind != "browser" {
+		if e := refuseProtectedContainer([]string{"--container", profileContainer}); e != nil {
+			return nil, e
+		}
 	}
 	// Lost bindings retain their profile and capacity: native state may be orphaned.
 	// Only destroy with a verified stop receipt releases both; keep the old ID

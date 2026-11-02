@@ -67,7 +67,7 @@ test('P18E Name normalizes while retaining typed default Display name, including
   assert.deepEqual(requests,[{id:'prueba1',label:'Prueba1',domains:[]}]);
 });
 
-const protectedIds=['cuentas-1','cuentas-new','perplexity-1','perplexity-new',
+const protectedIds=[
   'srf-id-cuentas-1','srf-id-perplexity-1','srf-pg-notepad-1','srf-pg-metaviewer-1',
   'srf-egress-proxy','n8n','distil-box','mv-live-1'];
 async function protectionUiOracle(source) {
@@ -114,9 +114,12 @@ test('P18E host service and direct runner reject protected deletion before invok
 });
 
 test('P18D required name, optional display name, any-site and sorted unique sites cross IPC',()=>{
-  for(const name of ['', 'A-test', 'x', '-bad', 'a b', 'mv-live-1', 'cuentas-new', 'srf-pg-editor', 'a'.repeat(41)]){
+  for(const name of ['', 'A-test', 'x', '-bad', 'a b', 'mv-live-1', 'srf-id-cuentas-1', 'srf-pg-editor', 'a'.repeat(41)]){
     assert.equal(validIdentityName(name),false,name);
     assert.equal(identityFormRequest(name,'',''),null,name);
+  }
+  for(const normal of ['p18d-a', 'cuentas-1', 'cuentas-new', 'perplexity-1', 'perplexity-new']){
+    assert.equal(validIdentityName(normal),true,normal);
   }
   assert.deepEqual(identityFormRequest('p18d-a','',''),{id:'p18d-a',label:'p18d-a',domains:[]});
   const request=identityFormRequest('p18d-a','  Work  ',' Z.org, a.com, Z.ORG, , a.com');
@@ -184,13 +187,19 @@ test('P18D runtime names admitted in human and agent modes, unknown/protected re
   const host=installRoleHost({electron:{ipcMain:{handle:(k,v)=>handlers.set(k,v),removeHandler:k=>handlers.delete(k)}},window:parent,core,env:{MV_SRF_STATE_DIR:root,MV_SRF_PROFILES:JSON.stringify(profiles)},capsuleStates:states,admit:()=>true,listIdentities:async()=>({ok:true,rows}),stageMode:async(_root,_id,role)=>{mode=role;return async()=>{};}});
   t.after(()=>host.dispose());
   const request=(op,extra={})=>handlers.get('metaviewer:roles.v0.3')({}, {schema:'metaviewer.roles/v0.3',op,...extra});
-  rows=[{id:'p18d-a'},{id:'p18d-b'},{id:'cuentas-9'},...Object.keys(profiles).map(id=>({id}))];
+  rows=[{id:'p18d-a'},{id:'p18d-b'},{id:'cuentas-1'},{id:'perplexity-1'},{id:'srf-id-cuentas-1'},...Object.keys(profiles).map(id=>({id}))];
   const choices=await request('choices');assert.equal(choices.find(p=>p.profileId==='p18d-a').available,true);
-  assert.equal(choices.some(p=>p.profileId==='cuentas-9'),false);
+  assert.equal(choices.find(p=>p.profileId==='cuentas-1').available,true);
+  assert.equal(choices.find(p=>p.profileId==='perplexity-1').available,true);
+  assert.equal(choices.some(p=>p.profileId==='srf-id-cuentas-1'),false);
   const a=await request('open',{choice:{profileId:'p18d-a',role:'human'}});assert.equal(a.ok,true);
   const b=await request('open',{choice:{profileId:'p18d-b',role:'agent'}});assert.equal(b.ok,true);
+  const c1=await request('open',{choice:{profileId:'cuentas-1',role:'human'}});assert.equal(c1.ok,true);
+  const p1=await request('open',{choice:{profileId:'perplexity-1',role:'agent'}});assert.equal(p1.ok,true);
+  assert.equal((await request('stop',{surfaceId:c1.surfaceId})).ok,true);
+  assert.equal((await request('stop',{surfaceId:p1.surfaceId})).ok,true);
   assert.equal((await request('open',{choice:{profileId:'missing-id',role:'human'}})).ok,false);
-  assert.equal((await request('open',{choice:{profileId:'cuentas-9',role:'human'}})).ok,false);
+  assert.equal((await request('open',{choice:{profileId:'srf-id-cuentas-1',role:'human'}})).ok,false);
   const marked=await request('confirm-login',{surfaceId:a.surfaceId});assert.equal(marked.ok,true);assert.ok(marked.lastLogin>0);
   assert.equal((await request('confirm-login',{surfaceId:b.surfaceId})).ok,false);
   assert.equal((await request('choices')).find(p=>p.profileId==='p18d-a').lastLogin,marked.lastLogin);
@@ -248,12 +257,46 @@ test('H10 invalid auto-filled display names have a visible field error',async t=
  field(view.root,'Name').props.onInput({target:{value:'Work$'}});await tick();assert.equal(field(view.root,'Name').props.value,'work');assert.equal(button(view.root,'Add identity').props.disabled,true);assert.match(text(view.root),/Display name contains unsupported characters/);
 });
 
-test('V024 foreign identities are not listed when hidden, and stay refused by the host',async t=>{
- const rows=[{id:'cuentas-1',label:'Google + ChatGPT'},{id:'perplexity-1',label:'Perplexity'},{id:'prueba1',label:'Prueba1'}];
- const view=mount(await dialog(),{open:true,hideForeign:true,host:{identity:{list:async()=>({ok:true,rows})}}});
+test('V024 cuentas-1 and perplexity-1 are normal capsules (open as human/agent and delete with confirmation)',async t=>{
+ const previous=globalThis.metaviewerRoles;
+ globalThis.metaviewerRoles={choices:async()=>[
+   {profileId:'cuentas-1',available:true,currentMode:'closed'},
+   {profileId:'perplexity-1',available:true,currentMode:'closed'},
+ ]};
+ t.after(()=>{globalThis.metaviewerRoles=previous;});
+ const opened=[],deleted=[];
+ const rows=[{id:'cuentas-1',label:'Google + ChatGPT',domains:[]},{id:'perplexity-1',label:'Perplexity',domains:[]}];
+ const view=mount(await dialog(),{open:true,onOpenIdentity:v=>opened.push(v),host:{identity:{
+   list:async()=>({ok:true,rows}),
+   delete:async({id})=>{deleted.push(id);return {ok:true};},
+ }}});
  t.after(view.close);await tick();
  const shown=text(view.root);
- assert(shown.includes('prueba1'));assert(!shown.includes('cuentas-1'));assert(!shown.includes('perplexity-1'));
+ assert(shown.includes('cuentas-1'));assert(shown.includes('perplexity-1'));
+ const humanBtns=nodes(view.root).filter(n=>n.tag==='button' && n.text==='Open as human');
+ const agentBtns=nodes(view.root).filter(n=>n.tag==='button' && n.text==='Open as agent');
+ const delBtns=nodes(view.root).filter(n=>n.tag==='button' && n.text==='Delete');
+ assert.equal(humanBtns.length,2);assert.equal(agentBtns.length,2);assert.equal(delBtns.length,2);
+ for(const b of [...humanBtns,...agentBtns,...delBtns])assert.equal(b.props.disabled,false);
+ humanBtns[0].props.onClick();await tick();
+ agentBtns[1].props.onClick();await tick();
+ assert.deepEqual(opened,[{profileId:'cuentas-1',role:'human'},{profileId:'perplexity-1',role:'agent'}]);
+ delBtns[0].props.onClick();await tick();
+ assert.notEqual(button(view.root,'Delete identity'),undefined);
+ button(view.root,'Delete identity').props.onClick();await tick();
+ assert.deepEqual(deleted,['cuentas-1']);
  const app=readFileSync(new URL('../src/App.vue',import.meta.url),'utf8');
- assert.match(app,/<IdentitiesDialog hide-foreign /);
+ assert.doesNotMatch(app,/hide-foreign/);
+
+ // Mutant: restoring cuentas-/perplexity- to FOREIGN_PREFIXES in identityProtection.js makes this open/delete test fail.
+ const protUrl=new URL('../electron/identityProtection.js',import.meta.url);
+ const protSrc=readFileSync(protUrl,'utf8');
+ const mutantProtSrc=protSrc.replace(
+   "['srf-id-cuentas-', 'srf-id-perplexity-', 'srf-pg-']",
+   "['cuentas-', 'perplexity-', 'srf-id-cuentas-', 'srf-id-perplexity-', 'srf-pg-']",
+ );
+ assert.notEqual(protSrc,mutantProtSrc);
+ const mutantProtMod=await import(`data:text/javascript;base64,${Buffer.from(mutantProtSrc).toString('base64')}`);
+ assert.equal(mutantProtMod.isForeignIdentity('cuentas-1'),true,'restoring prefix blocks cuentas-1');
+ assert.equal(mutantProtMod.isProtectedIdentity('perplexity-1'),true,'restoring prefix blocks perplexity-1');
 });

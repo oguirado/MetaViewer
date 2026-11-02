@@ -497,7 +497,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_release_foreign_identities_never_spawn(self):
         with patch.object(self.tool, "native", side_effect=AssertionError("spawned")):
-            for identity in ("cuentas-1", "perplexity-1", "srf-pg-fixture", *mv.PROTECTED_HOLDERS):
+            for identity in ("srf-id-cuentas-1", "srf-id-perplexity-1", "srf-pg-fixture", *mv.PROTECTED_HOLDERS):
                 with self.subTest(identity=identity), self.assertRaisesRegex(mv.Refused, "^IDENTITY_PROTECTED$"):
                     self.tool.release(identity, "srf-id-safe")
 
@@ -701,8 +701,8 @@ class IdentityTests(unittest.TestCase):
                 self.tool.create("uid-owned", "Uid Owned", "example.com")
         self.assertTrue((self.root / "profiles" / "uid-owned").is_dir())
 
-        # 4. Never touch protected identities (cuentas-, perplexity-, mv-).
-        for protected in ("cuentas-main", "perplexity-pro", "mv-live-1"):
+        # 4. Never touch protected identities (srf-id-cuentas-*, srf-id-perplexity-*, srf-pg-*, mv-).
+        for protected in ("srf-id-cuentas-1", "srf-id-perplexity-1", "srf-pg-fixture", "mv-live-1"):
             expected = "^RESERVED_ID$" if protected.startswith("mv-") else "^IDENTITY_PROTECTED$"
             with self.assertRaisesRegex(mv.Refused, expected):
                 self.tool.reclaim_unprovisioned_profile(protected)

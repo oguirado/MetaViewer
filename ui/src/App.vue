@@ -1542,7 +1542,7 @@ onMounted(() => {
         </div>
       </div>
     </div>
-    <IdentitiesDialog hide-foreign v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
+    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>

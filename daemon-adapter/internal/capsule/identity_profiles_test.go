@@ -82,7 +82,7 @@ func identityStop(t *testing.T, m *Manager, id string) error {
 
 func TestIdentityRuntimeAdmissionAndNegativeControls(t *testing.T) {
 	m, r := identityProfileManager(t, 4)
-	for _, id := range []string{"missing-id", "cuentas-9", "perplexity-7", "srf-id-cuentas-2", "srf-pg-editor", "../p18d-a"} {
+	for _, id := range []string{"missing-id", "srf-id-cuentas-2", "srf-pg-editor", "../p18d-a"} {
 		if _, err := identityCreate(t, m, id); err == nil {
 			t.Fatalf("unproven identity admitted: %s", id)
 		}
@@ -90,15 +90,20 @@ func TestIdentityRuntimeAdmissionAndNegativeControls(t *testing.T) {
 	if r.starts != 0 {
 		t.Fatal("refusal performed native start")
 	}
-	s, err := identityCreate(t, m, "p18d-a")
-	if err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"p18d-a", "cuentas-9", "perplexity-7"} {
+		s, err := identityCreate(t, m, id)
+		if err != nil {
+			t.Fatalf("normal identity %s refused: %v", id, err)
+		}
+		p := m.cfg.Profiles[id]
+		if s.ProfileID != id || s.Kind != "browser" || s.Geometry != (Geometry{1280, 900}) || p.TextInput != "paste" || p.RAMRoot != "/dev/shm" {
+			t.Fatalf("template not inherited: %#v %#v", s, p)
+		}
+		if err := identityStop(t, m, s.SurfaceID); err != nil {
+			t.Fatal(err)
+		}
 	}
-	p := m.cfg.Profiles["p18d-a"]
-	if s.ProfileID != "p18d-a" || s.Kind != "browser" || s.Geometry != (Geometry{1280, 900}) || p.TextInput != "paste" || p.RAMRoot != "/dev/shm" {
-		t.Fatalf("template not inherited: %#v %#v", s, p)
-	}
-	if r.checks != 2 {
+	if r.checks != 4 {
 		t.Fatalf("existence gate bypassed: %d", r.checks)
 	}
 }
@@ -316,7 +321,7 @@ func TestHostExecProgramAdmissionAndBinaryResolution(t *testing.T) {
 	}
 
 	// Protected identities stay refused even with a valid binary.
-	for _, id := range []string{"cuentas-1", "perplexity-2", "srf-pg-gedit", "notepad-1", "metaviewer-1"} {
+	for _, id := range []string{"srf-id-cuentas-1", "srf-id-perplexity-1", "srf-pg-gedit", "notepad-1", "metaviewer-1"} {
 		r.binaries[id] = "gedit"
 		if _, err := m.Handle(context.Background(), req("create", fmt.Sprintf(`{"kind":"desktop_capsule","profile_id":%q,"geometry":{"w":1280,"h":900}}`, id))); err == nil {
 			t.Fatalf("protected identity admitted for program: %s", id)
@@ -501,5 +506,86 @@ func TestRunnerEmptySearchPathNeverFallsBackToAmbientPATH(t *testing.T) {
 	// Mutant guard: if runnerSearchPath fell back to os.Getenv("PATH"), ResolveHostBinary would succeed.
 	if resolved, mErr := ResolveHostBinary("gedit", os.Getenv("PATH")); mErr != nil || resolved != geditPath {
 		t.Fatalf("mutant setup invalid: ambient PATH should resolve gedit, got %q (%v)", resolved, mErr)
+	}
+}
+
+func TestCuentasAndPerplexityOpenNormallyWithoutTouchingProtectedContainer(t *testing.T) {
+	profiles := map[string]Profile{
+		"mv-live-1": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":111", TextInput: "paste"},
+		"mv-live-2": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":112", TextInput: "paste"},
+	}
+	var calls [][]string
+	r := &identityProfileRunner{
+		known:        map[string]bool{"cuentas-1": true, "perplexity-1": true},
+		stopVerified: true,
+	}
+	m, err := NewManager(Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 4, MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100}, r, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify opening cuentas-1 and perplexity-1 when foreign container srf-id-cuentas-1 is running:
+	// start never passes --container/--capsule srf-id-cuentas-1, and if a rogue native reply ever
+	// returned srf-id-cuentas-1, RefuseProtectedContainer refuses it without stopping srf-id-cuentas-1.
+	s1, err := identityCreate(t, m, "cuentas-1")
+	if err != nil || s1.ProfileID != "cuentas-1" {
+		t.Fatalf("expected cuentas-1 to open as normal browser capsule, got %v", err)
+	}
+	s2, err := identityCreate(t, m, "perplexity-1")
+	if err != nil || s2.ProfileID != "perplexity-1" {
+		t.Fatalf("expected perplexity-1 to open as normal browser capsule, got %v", err)
+	}
+	if err := identityStop(t, m, s1.SurfaceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := identityStop(t, m, s2.SurfaceID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now simulate a running foreign container srf-id-cuentas-1 returned or collided by native:
+	// opening cuentas-1 must refuse to bind or stop srf-id-cuentas-1.
+	stops := 0
+	m.cfg.Profiles["cuentas-1"] = profiles["mv-live-1"]
+	m.runner = a2Runner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		calls = append(calls, append([]string(nil), args...))
+		for _, a := range args {
+			if strings.Contains(a, "srf-id-cuentas-1") {
+				t.Fatalf("native command touched protected container srf-id-cuentas-1: %v", args)
+			}
+		}
+		if args[1] == "stop" {
+			stops++
+			return []byte(`{"stopped":"srf-id-cuentas-1","removed_verified":true}`), nil
+		}
+		return []byte(`{"container":"srf-id-cuentas-1","run_id":"run-foreign-1","windows":[{"id":"w1","x":0,"y":0,"w":1280,"h":900,"title":"","url":""}]}`), nil
+	})
+	_, err = m.Handle(context.Background(), req("create", `{"kind":"browser","profile_id":"cuentas-1","geometry":{"w":1280,"h":900}}`))
+	requireFault(t, err, "uncertain")
+	for _, b := range m.bindings {
+		if b.Surface.State != "destroyed" {
+			t.Fatalf("unexpected active binding: %+v", b)
+		}
+	}
+	if !strings.Contains(err.Error(), "protected_container") || stops != 0 {
+		t.Fatalf("protected container srf-id-cuentas-1 was stopped (%d times) or admitted: %v", stops, err)
+	}
+
+	// Mutant 1: restoring cuentas-/perplexity- to protectedIdentity makes the new open test fail.
+	oldProtectedIdentity := func(id string) bool {
+		return strings.HasPrefix(id, "cuentas-") || strings.HasPrefix(id, "perplexity-") || protectedIdentity(id)
+	}
+	if !oldProtectedIdentity("cuentas-1") || !oldProtectedIdentity("perplexity-1") {
+		t.Fatal("mutant 1 setup invalid")
+	}
+	if protectedIdentity("cuentas-1") || protectedIdentity("perplexity-1") {
+		t.Fatal("cuentas-1 and perplexity-1 must not be treated as protectedIdentity")
+	}
+
+	// Mutant 2: removing srf-id-cuentas-1 from RefuseProtectedContainer would allow touching the container.
+	if err := RefuseProtectedContainer([]string{"--container", "srf-id-cuentas-1"}); err == nil {
+		t.Fatal("holder guard removed: srf-id-cuentas-1 must stay refused by RefuseProtectedContainer")
+	}
+	if err := RefuseProtectedContainer([]string{"--container", "srf-id-perplexity-1"}); err == nil {
+		t.Fatal("holder guard removed: srf-id-perplexity-1 must stay refused by RefuseProtectedContainer")
 	}
 }

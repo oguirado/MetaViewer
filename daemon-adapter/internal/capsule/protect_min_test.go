@@ -156,7 +156,7 @@ func TestR3Variants(t *testing.T) {
 	}
 }
 func TestR3StartCollisions(t *testing.T) {
-	for _, tc := range []struct{ id, kind string }{{"cuentas-1", "browser"}, {"perplexity-1", "browser"}, {"notepad-1", "program"}, {"metaviewer-1", "program"}} {
+	for _, tc := range []struct{ id, kind string }{{"notepad-1", "program"}, {"metaviewer-1", "program"}} {
 		r := &scriptRunner{}
 		m := testManager(t, r)
 		p := m.cfg.Profiles["demo"]

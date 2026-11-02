@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 spec = importlib.util.spec_from_file_location('p18g_identity', os.environ.get('P18G_IDENTITY_SOURCE', str(Path(__file__).resolve().parents[1]/'tools/mv_identity.py')))
 mv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mv)
-FOREIGN = ['cuentas-new', 'perplexity-new', 'srf-id-cuentas-new', 'srf-id-perplexity-new', 'srf-pg-new', *mv.PROTECTED_HOLDERS]
+FOREIGN = ['srf-id-cuentas-new', 'srf-id-perplexity-new', 'srf-pg-new', *mv.PROTECTED_HOLDERS]
 
 class Hardening(unittest.TestCase):
     def test_foreign_operations_refuse_before_store_access(self):
@@ -39,6 +39,84 @@ class Hardening(unittest.TestCase):
                     tool.release('fixture-owned',holder)
         tool.native.assert_not_called()
         spawn.assert_not_called()
+
+    def test_cuentas_and_perplexity_are_operational_while_foreign_holders_stay_protected(self):
+        for identity in ('cuentas-1', 'perplexity-1', 'cuentas-new', 'perplexity-new'):
+            self.assertFalse(mv.foreign_identity(identity))
+            self.assertFalse(mv.protected_identity(identity))
+            self.assertEqual(mv.operational_id(identity), identity)
+            self.assertEqual(mv.fresh_id(identity), identity)
+        # Opening login on cuentas-1 when lease is inactive requests a non-colliding capsule name, never srf-id-cuentas-1.
+        tool, _, _ = self.fixture()
+        state = tool.root / 'state'
+        state.mkdir(mode=0o700)
+        tool.state_dir = str(state)
+        tool.bin_dir = tool.root
+        tool.show = Mock(return_value={'profile_id': 'cuentas-1'})
+        (tool.root / 'profiles/cuentas-1').mkdir(mode=0o700)
+        started_args = []
+        def fake_native(binary, args, **kwargs):
+            if args[0] == 'start':
+                started_args.append(list(args))
+                cap = args[args.index('--capsule') + 1]
+                return {'container': cap}
+            return {'profile_id': 'cuentas-1'}
+        tool.native = Mock(side_effect=fake_native)
+        child = Mock()
+        child.stdout.readline.return_value = b'{"url":"http://127.0.0.1:12345/"}'
+        child.wait.return_value = 0
+        child.poll.return_value = 0
+        with patch.object(mv.subprocess, 'Popen', return_value=child):
+            res = tool.login('cuentas-1')
+        self.assertEqual(len(started_args), 1)
+        cap_requested = started_args[0][started_args[0].index('--capsule') + 1]
+        self.assertNotEqual(cap_requested, 'srf-id-cuentas-1')
+        self.assertFalse(mv.foreign_identity(cap_requested))
+        self.assertEqual(res['profile_id'], 'cuentas-1')
+
+        # Mutant A: restoring cuentas-/perplexity- to FOREIGN_PREFIXES makes opening cuentas-1 fail with IDENTITY_PROTECTED.
+        source_path = Path(mv.__file__)
+        source = source_path.read_text()
+        target_prefixes = 'FOREIGN_PREFIXES = ("srf-id-cuentas-", "srf-id-perplexity-", "srf-pg-")'
+        self.assertIn(target_prefixes, source)
+        mutant_prefixes_src = source.replace(
+            target_prefixes,
+            'FOREIGN_PREFIXES = ("cuentas-", "perplexity-", "srf-id-cuentas-", "srf-id-perplexity-", "srf-pg-")',
+            1,
+        )
+        m1_spec = importlib.util.spec_from_loader('mv_mutant_prefixes', loader=None)
+        m1 = importlib.util.module_from_spec(m1_spec)
+        m1.__file__ = str(source_path)
+        exec(compile(mutant_prefixes_src, str(source_path), 'exec'), m1.__dict__)
+        with self.assertRaisesRegex(m1.Refused, '^IDENTITY_PROTECTED$'):
+            m1.operational_id('cuentas-1')
+
+        # Mutant B: removing the holder guard when lease holds srf-id-cuentas-1 lets login/release touch the foreign container.
+        target_holder_guard = 'if isinstance(container, str) and foreign_identity(container):\n                raise Refused("IDENTITY_PROTECTED")'
+        self.assertIn(target_holder_guard, source)
+        mutant_holder_src = source.replace(target_holder_guard, 'if False:\n                pass', 1)
+        m2_spec = importlib.util.spec_from_loader('mv_mutant_holder', loader=None)
+        m2 = importlib.util.module_from_spec(m2_spec)
+        m2.__file__ = str(source_path)
+        exec(compile(mutant_holder_src, str(source_path), 'exec'), m2.__dict__)
+        m2_tool = m2.Identities.__new__(m2.Identities)
+        m2_tool.root = tool.root
+        m2_tool.state_dir = str(state)
+        m2_tool.bin_dir = tool.root
+        m2_tool.live_profile = 'mv-live-3'
+        m2_tool.profile_uid = os.getuid()
+        m2_tool.show = Mock(return_value={'profile_id': 'cuentas-1'})
+        m2_tool.lease = Mock(return_value={'active': True, 'holder': 'srf-id-cuentas-1'})
+        m2_tool.native = Mock(side_effect=AssertionError('FOREIGN_HOLDER_TOUCHED'))
+        # Under the intact tool, login on cuentas-1 with active holder srf-id-cuentas-1 refuses before Popen/native:
+        tool.lease = Mock(return_value={'active': True, 'holder': 'srf-id-cuentas-1'})
+        with patch.object(mv.subprocess, 'Popen', side_effect=AssertionError('FOREIGN_HOLDER_TOUCHED')):
+            with self.assertRaisesRegex(mv.Refused, '^IDENTITY_PROTECTED$'):
+                tool.login('cuentas-1')
+        # Under Mutant B (holder guard removed), Popen is reached and touches the foreign container:
+        with patch.object(m2.subprocess, 'Popen', side_effect=AssertionError('FOREIGN_HOLDER_TOUCHED')):
+            with self.assertRaisesRegex(AssertionError, '^FOREIGN_HOLDER_TOUCHED$'):
+                m2_tool.login('cuentas-1')
 
     def test_failed_helper_creation_never_removes_an_unproven_container_name(self):
         tool,_,_=self.fixture()

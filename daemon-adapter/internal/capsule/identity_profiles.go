@@ -14,8 +14,7 @@ import (
 var storedIdentityID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,39}$`)
 
 func protectedIdentity(id string) bool {
-	return strings.HasPrefix(id, "cuentas-") || strings.HasPrefix(id, "perplexity-") ||
-		strings.HasPrefix(id, "srf-id-cuentas-") || strings.HasPrefix(id, "srf-id-perplexity-") || strings.HasPrefix(id, "srf-pg-")
+	return strings.HasPrefix(id, "srf-id-cuentas-") || strings.HasPrefix(id, "srf-id-perplexity-") || strings.HasPrefix(id, "srf-pg-")
 }
 
 // The template and finite display pool come exclusively from trusted startup
