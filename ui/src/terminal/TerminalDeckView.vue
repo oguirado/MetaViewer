@@ -88,7 +88,16 @@ const controller = createTerminalDeckController({
 
 const deckState = computed(() => {
   void revision.value;
-  return controller.state;
+  const st = controller.state;
+  const clonedScreens = st.screens.map((s) => ({
+    ...s,
+    slots: s.slots.map((slot) => ({ ...slot })),
+  }));
+  return {
+    ...st,
+    screens: clonedScreens,
+    activeScreen: clonedScreens[st.activeScreenIndex] ?? clonedScreens[0] ?? null,
+  };
 });
 
 const screens = computed(() => deckState.value.screens);
@@ -230,6 +239,13 @@ function syncTerminals() {
         fit,
         disposeData: () => disposable.dispose(),
       });
+      if (focusedSlotId.value === slot.id) {
+        try {
+          term.focus();
+        } catch {
+          // Best-effort focus in headless DOMs.
+        }
+      }
     } catch {
       mountedTerminals.set(slot.id, {
         sessionId: slot.sessionId,

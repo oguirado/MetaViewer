@@ -23,12 +23,16 @@ export function createSideTerminalFacade({ session, port }) {
   let client = null;
   function dispose() { detached = true; client?.dispose(); pending.clear(); }
   /** @param {string} id */
-  function requireSession(id) { if (id !== session || detached) throw new Error('Terminal binding refused'); }
+  function requireSession(id) {
+    if (id !== session || detached) {
+      throw Object.assign(new Error('Terminal binding refused'), { code: 'TERMINAL_BINDING_REFUSED' });
+    }
+  }
   return {
     capabilities: async () => ({ developerMode: true, commands: [] }),
     attach: async () => {
       requireSession(session);
-      if (client) throw new Error('Terminal already attached');
+      if (client) throw Object.assign(new Error('Terminal already attached'), { code: 'TERMINAL_ALREADY_ATTACHED' });
       client = createTerminalClient({ session, port,
         write(bytes, done) {
           totalBytes += bytes.length;
@@ -50,7 +54,9 @@ export function createSideTerminalFacade({ session, port }) {
     ack(ack) {
       requireSession(ack.session);
       const credit = pending.get(ack.seq);
-      if (!credit || credit.bytes !== ack.bytes) throw new Error('Terminal credit refused');
+      if (!credit || credit.bytes !== ack.bytes) {
+        throw Object.assign(new Error('Terminal credit refused'), { code: 'TERMINAL_CREDIT_REFUSED' });
+      }
       for (const [index, item] of pending) {
         if (index <= ack.seq) { item.done(); pending.delete(index); }
       }
@@ -81,17 +87,17 @@ export function createEmptySideTerminalFacade() {
     /** @param {(event:any)=>void} _receive */
     onExit(_receive) { return () => true; },
     /** @param {{session:string,seq:number,bytes:number}} _ack */
-    ack: async (_ack) => { throw new Error('Terminal session unavailable'); },
+    ack: async (_ack) => { throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' }); },
     /** @param {{session:string,bytes:number[]}} _input */
-    write: async (_input) => { throw new Error('Terminal session unavailable'); },
+    write: async (_input) => { throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' }); },
     /** @param {{session:string,cols:number,rows:number}} _size */
-    resize: async (_size) => { throw new Error('Terminal session unavailable'); },
+    resize: async (_size) => { throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' }); },
     /** @param {{session:string}} _request */
     close(_request) {},
     /** @param {boolean} _enabled */
-    setEnabled: async (_enabled) => { throw new Error('Terminal access unavailable'); },
+    setEnabled: async (_enabled) => { throw Object.assign(new Error('Terminal access unavailable'), { code: 'TERMINAL_ACCESS_UNAVAILABLE' }); },
     /** @param {{command:string,args:readonly string[],cols:number,rows:number}} _spec */
-    open: async (_spec) => { throw new Error('Terminal launch unavailable'); },
+    open: async (_spec) => { throw Object.assign(new Error('Terminal launch unavailable'), { code: 'TERMINAL_LAUNCH_UNAVAILABLE' }); },
     dispose() {},
   };
 }
@@ -119,14 +125,18 @@ export function createSideTerminalBrokerFacade(source) {
     canOpen: typeof broker.open === 'function',
     /** @param {boolean} enabled */
     async setEnabled(enabled) {
-      if (!broker.setEnabled || state.busy) throw new Error('Terminal access unavailable');
+      if (!broker.setEnabled || state.busy) {
+        throw Object.assign(new Error('Terminal access unavailable'), { code: 'TERMINAL_ACCESS_UNAVAILABLE' });
+      }
       state.busy = true;
       try { await broker.setEnabled(enabled); state.enabled = enabled; }
       finally { state.busy = false; }
     },
     /** @param {{command:string,args:readonly string[],cols:number,rows:number}} spec */
     async open(spec) {
-      if (!broker.open || !state.enabled || state.busy) throw new Error('Terminal launch unavailable');
+      if (!broker.open || !state.enabled || state.busy) {
+        throw Object.assign(new Error('Terminal launch unavailable'), { code: 'TERMINAL_LAUNCH_UNAVAILABLE' });
+      }
       state.busy = true;
       try { return await broker.open(spec); }
       finally { state.busy = false; }
@@ -346,13 +356,13 @@ export function createSessionTransport(source) {
     transport.attach = async (/** @type {{session:string}} */ request) => {
       if (!isTransportRecord(request) || typeof request.session !== 'string'
           || !TERMINAL_SESSION_ID_RE.test(request.session)) {
-        throw new Error('Terminal session unavailable');
+        throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_INVALID' });
       }
       const reply = await bound.attach({ session: request.session });
       const port = isTransportRecord(reply) ? reply.port : undefined;
       if (port === null || port === undefined || typeof port !== 'object'
           || typeof port.postMessage !== 'function') {
-        throw new Error('Terminal session unavailable');
+        throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_ATTACH_FAILED' });
       }
       return Object.freeze({ ...reply });
     };
@@ -362,10 +372,12 @@ export function createSessionTransport(source) {
       if (!isTransportRecord(size) || typeof size.session !== 'string'
           || !TERMINAL_SESSION_ID_RE.test(size.session)
           || !Number.isSafeInteger(size.cols) || !Number.isSafeInteger(size.rows)) {
-        throw new Error('Terminal session unavailable');
+        throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_RESIZE_REFUSED' });
       }
       const outcome = await bound.resize({ session: size.session, cols: size.cols, rows: size.rows });
-      if (outcome !== true) throw new Error('Terminal session unavailable');
+      if (outcome !== true) {
+        throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_RESIZE_REFUSED' });
+      }
       return true;
     };
   }
@@ -373,10 +385,12 @@ export function createSessionTransport(source) {
     transport.close = async (/** @type {{session:string}} */ request) => {
       if (!isTransportRecord(request) || typeof request.session !== 'string'
           || !TERMINAL_SESSION_ID_RE.test(request.session)) {
-        throw new Error('Terminal session unavailable');
+        throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_CLOSE_REFUSED' });
       }
       const outcome = await bound.close({ session: request.session });
-      if (outcome !== true) throw new Error('Terminal session unavailable');
+      if (outcome !== true) {
+        throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_CLOSE_REFUSED' });
+      }
       return true;
     };
   }
@@ -384,14 +398,14 @@ export function createSessionTransport(source) {
     transport.listProviders = async () => {
       const reply = await bound.listProviders();
       if (!isTransportRecord(reply) || !Array.isArray(reply.entries) || !Array.isArray(reply.capabilities)) {
-        throw new Error('Terminal providers unavailable');
+        throw Object.assign(new Error('Terminal providers unavailable'), { code: 'TERMINAL_PROVIDERS_UNAVAILABLE' });
       }
       /** @type {Array<{id:string,label:string,hint:string}>} */
       const entries = [];
       for (const entry of reply.entries) {
         if (!isTransportRecord(entry) || typeof entry.id !== 'string'
             || typeof entry.label !== 'string' || typeof entry.hint !== 'string') {
-          throw new Error('Terminal providers unavailable');
+          throw Object.assign(new Error('Terminal providers unavailable'), { code: 'TERMINAL_PROVIDERS_UNAVAILABLE' });
         }
         entries.push(Object.freeze({ id: entry.id, label: entry.label, hint: entry.hint }));
       }
@@ -400,7 +414,7 @@ export function createSessionTransport(source) {
       for (const capability of reply.capabilities) {
         if (!isTransportRecord(capability) || typeof capability.id !== 'string'
             || typeof capability.available !== 'boolean' || typeof capability.reason !== 'string') {
-          throw new Error('Terminal providers unavailable');
+          throw Object.assign(new Error('Terminal providers unavailable'), { code: 'TERMINAL_PROVIDERS_UNAVAILABLE' });
         }
         capabilities.push(Object.freeze({
           id: capability.id, available: capability.available, reason: capability.reason,
@@ -418,16 +432,18 @@ export function createSessionTransport(source) {
   if (has('copyText')) {
     transport.copyText = async (/** @type {{text:string}} */ request) => {
       if (!isTransportRecord(request) || typeof request.text !== 'string') {
-        throw new Error('Terminal clipboard unavailable');
+        throw Object.assign(new Error('Terminal clipboard unavailable'), { code: 'TERMINAL_CLIPBOARD_UNAVAILABLE' });
       }
       // MVUI29c lane T: the renderer checks the host grammar before
       // calling; off-grammar text projects the host's typed code, never a
       // round-trip and never visible text.
       if (!TERMINAL_COPYTEXT_TEXT_RE.test(request.text)) {
-        throw new Error('Terminal clipboard refused: ERR_CLIPBOARD_INVALID');
+        throw Object.assign(new Error('Terminal clipboard refused: ERR_CLIPBOARD_INVALID'), { code: 'ERR_CLIPBOARD_INVALID' });
       }
       const outcome = await bound.copyText({ text: request.text });
-      if (outcome !== true) throw new Error('Terminal clipboard unavailable');
+      if (outcome !== true) {
+        throw Object.assign(new Error('Terminal clipboard unavailable'), { code: 'TERMINAL_CLIPBOARD_UNAVAILABLE' });
+      }
       return true;
     };
   }
@@ -477,7 +493,7 @@ export function createPortSessionFacade({ transport }) {
    */
   function requireSession(session) {
     if (typeof session !== 'string' || !TERMINAL_SESSION_ID_RE.test(session)) {
-      throw new Error('Terminal session unavailable');
+      throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_INVALID' });
     }
     return session;
   }
@@ -549,7 +565,7 @@ export function createPortSessionFacade({ transport }) {
    * @returns {Promise<void>} Resolves once the client is bound.
    */
   async function ensureAttached(id) {
-    if (disposed) throw new Error('Terminal session unavailable');
+    if (disposed) throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
     const entry = entryFor(id);
     if (entry.client) return;
     if (!entry.attaching) {
@@ -558,7 +574,7 @@ export function createPortSessionFacade({ transport }) {
           const reply = await attachFn({ session: id });
           if (disposed || sessions.get(id) !== entry) {
             closePortLike(reply?.port);
-            throw new Error('Terminal session unavailable');
+            throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
           }
           entry.port = reply.port;
           entry.client = createTerminalClient({
@@ -603,7 +619,7 @@ export function createPortSessionFacade({ transport }) {
      */
     async attach(request) {
       const id = requireSession(request?.session);
-      if (disposed) throw new Error('Terminal session unavailable');
+      if (disposed) throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
       await ensureAttached(id);
       return Object.freeze({ session: id });
     },
@@ -624,8 +640,8 @@ export function createPortSessionFacade({ transport }) {
     /** @param {{session:string,bytes:number[]}} input */
     write(input) {
       const id = requireSession(input?.session);
-      if (disposed) throw new Error('Terminal session unavailable');
-      if (!Array.isArray(input.bytes)) throw new Error('Terminal session unavailable');
+      if (disposed) throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
+      if (!Array.isArray(input.bytes)) throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
       const bytes = Uint8Array.from(input.bytes);
       const entry = entryFor(id);
       if (entry.client) {
@@ -638,10 +654,12 @@ export function createPortSessionFacade({ transport }) {
     /** @param {{session:string,seq:number,bytes:number}} credit */
     ack(credit) {
       const id = requireSession(credit?.session);
-      if (disposed) throw new Error('Terminal session unavailable');
+      if (disposed) throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
       const entry = sessions.get(id);
       const item = entry?.pending.get(credit.seq);
-      if (!entry || !item || item.bytes !== credit.bytes) throw new Error('Terminal credit refused');
+      if (!entry || !item || item.bytes !== credit.bytes) {
+        throw Object.assign(new Error('Terminal credit refused'), { code: 'TERMINAL_CREDIT_REFUSED' });
+      }
       for (const [index, row] of entry.pending) {
         if (index <= credit.seq) { row.done(); entry.pending.delete(index); }
       }
@@ -649,11 +667,11 @@ export function createPortSessionFacade({ transport }) {
     /** @param {{session:string,cols:number,rows:number}} size */
     resize(size) {
       const id = requireSession(size?.session);
-      if (disposed) throw new Error('Terminal session unavailable');
+      if (disposed) throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
       const resizeFn = transport.resize;
-      if (typeof resizeFn !== 'function') throw new Error('Terminal session unavailable');
+      if (typeof resizeFn !== 'function') throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
       if (!Number.isSafeInteger(size.cols) || !Number.isSafeInteger(size.rows)) {
-        throw new Error('Terminal session unavailable');
+        throw Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_RESIZE_REFUSED' });
       }
       return resizeFn({ session: id, cols: size.cols, rows: size.rows });
     },

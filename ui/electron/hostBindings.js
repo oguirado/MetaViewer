@@ -191,7 +191,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     }
     const channelFactory = createMessageChannel;
     const clipboardMod = electronMod?.clipboard ?? { writeText() {} };
-    const terminal = createTerminalHost({ createMessageChannel: channelFactory, clipboard: clipboardMod, env });
+    const terminal = createTerminalHost({ createMessageChannel: channelFactory, clipboard: clipboardMod, env, resourcesPath: process.resourcesPath });
     const display = createDisplayHost({ root: displayBaseDir(env), env, createDisplayChannel: channelFactory });  // ring spec v1.1 base
     electronMod?.app?.once?.('before-quit', () => { void terminal.dispose(); void display.dispose(); });
     /** @type {Set<(entry:any)=>any>} */ const listeners = new Set();

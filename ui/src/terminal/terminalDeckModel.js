@@ -105,12 +105,25 @@ export const TERMINAL_REFUSAL_HINTS = Object.freeze({
   TERMINAL_IO_REFUSED: 'Close an unused terminal session or wait for the spawn brake to reset, then retry.',
   DISPLAY_ONLY: 'Nested display-only windows cannot open terminal sessions.',
   TERMINAL_SESSION_INVALID: 'The terminal broker returned an invalid session identifier; retry opening the terminal.',
+  TERMINAL_BROKER_UNAVAILABLE: 'The terminal broker is not connected in this view; retry after host initialization.',
+  TERMINAL_LAUNCH_UNAVAILABLE: 'Terminal launch is currently busy or disabled; wait for the active launch to settle and retry.',
+  TERMINAL_ACCESS_UNAVAILABLE: 'Terminal opt-in access could not be enabled; check host permissions and retry.',
+  TERMINAL_ATTACH_FAILED: 'The terminal session opened but its MessagePort could not be attached across the preload bridge.',
+  TERMINAL_SESSION_UNAVAILABLE: 'The terminal session transport is unavailable or has already closed; open a new session.',
+  TERMINAL_UNKNOWN_SESSION: 'The requested terminal session is no longer active on the host; open a new session.',
+  TERMINAL_BINDING_REFUSED: 'The terminal session port binding was refused; open a new terminal session.',
+  OUTCOME: 'The terminal host returned an unexpected IPC reply; retry opening the terminal.',
+  PAYLOAD: 'The terminal launch request payload was rejected by the wire contract.',
+  ARGS: 'The terminal launch arguments were rejected by the wire contract.',
+  SENDER: 'The terminal IPC sender frame is not authorized to control host terminals.',
+  CHANNEL: 'The terminal IPC channel is not registered on the host.',
   TERMINAL_OPEN_REFUSED: 'Check the terminal host configuration or close an existing session, then try again.',
 });
 
 /**
  * Normalizes any terminal open refusal or error into a structured `{ code, hint, message }`
  * where `message` is a single line containing the refusal code and a one-line hint.
+ * Never guesses `TERMINAL_UNAVAILABLE` from generic English words.
  *
  * @param {unknown} reason
  * @returns {{ code: string, hint: string, message: string }}
@@ -129,11 +142,19 @@ export function formatTerminalRefusal(reason) {
       : '';
   let code = rawCode;
   if (!code) {
-    const tokenMatch = /\b(TERMINAL_[A-Z0-9_]+|NATIVE_[A-Z0-9_]+|COMMAND_NOT_ALLOWED|SESSION_LIMIT|CLASS_LIMIT|SPAWN_BRAKE|DISPLAY_ONLY|[A-Z][A-Z0-9_]{2,63})\b/.exec(rawMessage);
+    const tokenMatch = /\b(TERMINAL_[A-Z0-9_]+|NATIVE_[A-Z0-9_]+|ERR_[A-Z0-9_]+|COMMAND_NOT_ALLOWED|SESSION_LIMIT|CLASS_LIMIT|SPAWN_BRAKE|DISPLAY_ONLY|OUTCOME|PAYLOAD|ARGS|SENDER|CHANNEL|[A-Z][A-Z0-9_]{2,63})\b/.exec(rawMessage);
     if (tokenMatch) {
       code = tokenMatch[1];
-    } else if (/unavailable|not bundled|node-pty/i.test(rawMessage)) {
-      code = 'TERMINAL_UNAVAILABLE';
+    } else if (/terminal launch unavailable/i.test(rawMessage)) {
+      code = 'TERMINAL_LAUNCH_UNAVAILABLE';
+    } else if (/terminal access unavailable/i.test(rawMessage)) {
+      code = 'TERMINAL_ACCESS_UNAVAILABLE';
+    } else if (/terminal session unavailable/i.test(rawMessage)) {
+      code = 'TERMINAL_SESSION_UNAVAILABLE';
+    } else if (/terminal providers unavailable/i.test(rawMessage)) {
+      code = 'TERMINAL_PROVIDERS_UNAVAILABLE';
+    } else if (/terminal binding refused/i.test(rawMessage)) {
+      code = 'TERMINAL_BINDING_REFUSED';
     } else if (/invalid terminal session/i.test(rawMessage)) {
       code = 'TERMINAL_SESSION_INVALID';
     } else {
@@ -770,8 +791,8 @@ export function createTerminalDeckController(options = {}) {
         }
         reply = await options.broker.open(spec);
       } else {
-        throw Object.assign(new Error('TERMINAL_UNAVAILABLE: Terminal launch unavailable'), {
-          code: 'TERMINAL_UNAVAILABLE',
+        throw Object.assign(new Error('TERMINAL_BROKER_UNAVAILABLE: Terminal broker is not configured'), {
+          code: 'TERMINAL_BROKER_UNAVAILABLE',
         });
       }
       if (
@@ -923,7 +944,16 @@ export function createTerminalDeckController(options = {}) {
       notify();
       throw err;
     }
-    await attachSession(sessionId, opened?.port);
+    try {
+      await attachSession(sessionId, opened?.port);
+    } catch (error) {
+      const formatted = formatTerminalRefusal(error);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw error;
+    }
     const commandBytes = Array.from(encoder.encode(`${commandText}\n`));
     writeSessionBytes(sessionId, commandBytes);
 

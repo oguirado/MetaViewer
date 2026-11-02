@@ -65,8 +65,18 @@ export function createTerminalBroker(port) {
     open: open ? async (/** @type {TerminalSpec} */ spec) => {
       // The API accepts exactly these keys, with one positional argument.
       const reply = await open({ command: spec.command, args: [...spec.args], cols: spec.cols, rows: spec.rows });
-      if (/** @type {any} */ (reply)?.code === 'TERMINAL_UNAVAILABLE') throw Object.assign(new Error('TERMINAL_UNAVAILABLE: terminal support is not bundled in this package'), {code:'TERMINAL_UNAVAILABLE'});
-      if (!reply || typeof reply.session !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(reply.session)) throw new Error('Invalid terminal session');
+      const refusalCode = typeof (/** @type {any} */ (reply))?.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test((/** @type {any} */ (reply)).code)
+        ? (/** @type {any} */ (reply)).code
+        : '';
+      if (refusalCode && (/** @type {any} */ (reply)?.ok === false || typeof reply?.session !== 'string')) {
+        const message = refusalCode === 'TERMINAL_UNAVAILABLE'
+          ? 'TERMINAL_UNAVAILABLE: terminal support is not bundled in this package'
+          : `${refusalCode}: terminal open refused`;
+        throw Object.assign(new Error(message), { code: refusalCode });
+      }
+      if (!reply || typeof reply.session !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(reply.session)) {
+        throw Object.assign(new Error('Invalid terminal session'), { code: 'TERMINAL_SESSION_INVALID' });
+      }
       return reply;
     } : null,
     close: close ? (/** @type {{session:string}} */ spec) => close({ session: spec.session }) : null,

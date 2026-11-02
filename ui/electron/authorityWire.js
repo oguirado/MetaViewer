@@ -945,7 +945,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
           : {command:'provider',provider:value.command,cols:value.cols,rows:value.rows},
         sender
       );
-      if (result?.ok === false && result.code === 'TERMINAL_UNAVAILABLE') return {ok:false,code:'TERMINAL_UNAVAILABLE'};
+      if (result?.ok === false && typeof result.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(result.code)) return {ok:false,code:result.code};
       if (!result || Object.keys(result).join(',') !== 'session' || typeof result.session !== 'string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(result.session)) throw new Error('OUTCOME');
       return {session:result.session};

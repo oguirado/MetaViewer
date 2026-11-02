@@ -1246,3 +1246,295 @@ test('P18H-R2-PTY: New terminal popover closes on Escape and outside click, and 
   }
 });
 
+// ---------------------------------------------------------------------------
+// 8. V022-TERMINAL-WIRING: Packaged boot wiring (host -> authorityWire ->
+//    preload across contextBridge -> renderer broker/transport -> deck)
+//    opens Shell ('echo MARK' -> 'MARK'), runs Custom CLI, and surfaces real
+//    refusal codes without guessing TERMINAL_UNAVAILABLE (+ mutants)
+// ---------------------------------------------------------------------------
+
+/**
+ * Simulates Electron's `contextIsolation: true` `contextBridge` boundary:
+ * plain objects copy only own enumerable properties (stripping prototype methods
+ * from non-plain objects such as raw Blink `MessagePort`), functions are wrapped
+ * so their return values and arguments also cross the bridge.
+ *
+ * @param {any} value
+ * @returns {any}
+ */
+function simulateContextBridgeClone(value) {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    if (typeof value === 'function') {
+      return (...args) => {
+        const res = value(...args.map((arg) => simulateContextBridgeClone(arg)));
+        if (res && typeof res.then === 'function') {
+          return res.then((resolved) => simulateContextBridgeClone(resolved));
+        }
+        return simulateContextBridgeClone(res);
+      };
+    }
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    return new Uint8Array(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => simulateContextBridgeClone(item));
+  }
+  const out = {};
+  for (const key of Object.keys(value)) {
+    out[key] = simulateContextBridgeClone(value[key]);
+  }
+  return Object.freeze(out);
+}
+
+test('V022-TERMINAL-WIRING: packaged boot wiring (host -> authorityWire -> preload contextBridge -> renderer broker) opens Shell and Custom CLI and preserves real refusal codes (with mutants)', async (t) => {
+  const { mkdtemp, mkdir, rm, writeFile } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { MessageChannel } = await import('node:worker_threads');
+  const { createTerminalHost } = await import('../electron/terminalHost.js');
+  const { installAuthorityWire } = await import('../electron/authorityWire.js');
+  const preloadMod = await import('../electron/preload.js');
+  const { createTerminalBroker } = await import('../src/core/hostAdapters.js');
+
+  const root = await mkdtemp(join(tmpdir(), 'v022-terminal-wiring-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  // Stage packaged node-pty under <resourcesPath>/build-native/pty-runtime/node-pty
+  const resourcesPath = join(root, 'resources');
+  const stagedPtyDir = join(resourcesPath, 'build-native/pty-runtime/node-pty');
+  await mkdir(stagedPtyDir, { recursive: true });
+  await writeFile(
+    join(stagedPtyDir, 'package.json'),
+    JSON.stringify({ name: 'node-pty', version: '1.1.0', main: './index.cjs' }),
+  );
+  await writeFile(
+    join(stagedPtyDir, 'index.cjs'),
+    `module.exports = {
+      spawn(file, args, opts) {
+        let onData = () => {};
+        let onExit = () => {};
+        return {
+          pid: 51515,
+          file,
+          args,
+          opts,
+          onData(fn) { onData = fn; return { dispose() {} }; },
+          onExit(fn) { onExit = fn; return { dispose() {} }; },
+          write(d) {
+            const text = String(d);
+            const m = /^echo\\s+([^\\r\\n]+)[\\r\\n]+$/.exec(text);
+            if (m) onData(m[1] + '\\r\\n');
+            else onData(text);
+          },
+          resize() {},
+          kill() { onExit({ exitCode: 0 }); },
+          pause() {},
+          resume() {},
+        };
+      }
+    };\n`,
+  );
+
+  async function runPackagedWiringOracle(preloadApi, deckApi) {
+    /** @type {Map<string, Function>} */
+    const ipcHandlers = new Map();
+    /** @type {Map<string, Set<Function>>} */
+    const ipcRendererListeners = new Map();
+    /** @type {Set<MessagePort>} */
+    const activePorts = new Set();
+
+    const ipcMain = {
+      handle(channel, fn) {
+        ipcHandlers.set(channel, fn);
+      },
+      removeHandler(channel) {
+        ipcHandlers.delete(channel);
+      },
+    };
+
+    const mainFrame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
+    const contents = {
+      id: 77,
+      mainFrame,
+      isDestroyed: () => false,
+      postMessage(channel, value, transfer) {
+        const listeners = ipcRendererListeners.get(channel);
+        if (!listeners) return;
+        for (const fn of [...listeners]) {
+          fn({ ports: transfer ?? [] }, value);
+        }
+      },
+    };
+    const senderEvent = { sender: contents, senderFrame: mainFrame };
+
+    const cleanEnv = { PATH: '/usr/bin:/bin', HOME: root, TERM: 'xterm-256color', XDG_CONFIG_HOME: root };
+    const terminalHost = createTerminalHost({
+      env: cleanEnv,
+      resourcesPath,
+      createMessageChannel: () => {
+        const { port1, port2 } = new MessageChannel();
+        activePorts.add(port1);
+        activePorts.add(port2);
+        return { port1, port2 };
+      },
+    });
+
+    const wire = installAuthorityWire({
+      ipcMain,
+      contents,
+      env: cleanEnv,
+      argv: ['--nested-depth=0'],
+      core: {
+        request: async () => ({
+          schema: 'action_verdict/v0.2',
+          proposal_id: 'p1',
+          core_seq: 1,
+          decision: 'admitted',
+        }),
+      },
+      profiles: new Map(),
+      terminal: terminalHost,
+    });
+
+    let rendererWindowMetaviewer = null;
+    const contextBridge = {
+      exposeInMainWorld(_name, api) {
+        rendererWindowMetaviewer = simulateContextBridgeClone(api);
+      },
+    };
+    const ipcRenderer = {
+      async invoke(channel, ...args) {
+        const handler = ipcHandlers.get(channel);
+        if (!handler) throw new Error(`CHANNEL: ${channel}`);
+        const res = await handler(senderEvent, ...args);
+        // Simulate Electron main where MessagePortMain is transferred via contents.postMessage('metaviewer:side-terminal.port')
+        // and omitted from the ipcRenderer.invoke return value.
+        if (channel === 'metaviewer:side-terminal.attach' && res && typeof res === 'object') {
+          return { session: res.session };
+        }
+        return res;
+      },
+      on(channel, fn) {
+        if (!ipcRendererListeners.has(channel)) ipcRendererListeners.set(channel, new Set());
+        ipcRendererListeners.get(channel).add(fn);
+      },
+      removeListener(channel, fn) {
+        ipcRendererListeners.get(channel)?.delete(fn);
+      },
+    };
+
+    preloadApi.installPreload({ contextBridge, ipcRenderer });
+    assert.ok(rendererWindowMetaviewer, 'preload must expose window.metaviewer via contextBridge');
+
+    const rendererBroker = createTerminalBroker(rendererWindowMetaviewer.sideTerminal);
+    const receivedFrames = [];
+    const controller = deckApi.createTerminalDeckController({
+      broker: rendererBroker,
+      sessionPort: rendererWindowMetaviewer.sideTerminal,
+      storage: createMemoryStorage(),
+      onSessionData(frame) {
+        receivedFrames.push({
+          session: frame.session,
+          text: new TextDecoder().decode(Uint8Array.from(frame.bytes)),
+        });
+      },
+    });
+
+    try {
+      // 1. Open Shell via packaged wiring and type 'echo MARK\n' -> receives 'MARK\r\n'
+      const shellSlot = await controller.launchProfile('shell', { cols: 80, rows: 24 });
+      assert.equal(shellSlot.status, 'running');
+      assert.equal(shellSlot.kind, 'shell');
+      assert.equal(controller.state.errorCode, '');
+      assert.equal(controller.state.errorMessage, '');
+
+      controller.writeSessionBytes(
+        shellSlot.sessionId,
+        Array.from(new TextEncoder().encode('echo MARK\n')),
+      );
+      await sleep(30);
+      const shellOutput = receivedFrames
+        .filter((f) => f.session === shellSlot.sessionId)
+        .map((f) => f.text)
+        .join('');
+      assert.equal(shellOutput, 'MARK\r\n');
+
+      // 2. Launch Custom CLI command 'echo CUSTOM_MARK' -> runs inside a shell and outputs 'CUSTOM_MARK\r\n'
+      const customSlot = await controller.launchCustomCli('  echo CUSTOM_MARK  ', { cols: 80, rows: 24 });
+      assert.equal(customSlot.status, 'running');
+      assert.equal(customSlot.kind, 'custom');
+      await sleep(30);
+      const customOutput = receivedFrames
+        .filter((f) => f.session === customSlot.sessionId)
+        .map((f) => f.text)
+        .join('');
+      assert.equal(customOutput, 'CUSTOM_MARK\r\n');
+    } finally {
+      controller.dispose();
+      await wire.dispose();
+      await terminalHost.dispose();
+      for (const p of activePorts) {
+        try { p.close(); } catch {}
+      }
+    }
+  }
+
+  // Real packaged wiring passes
+  await runPackagedWiringOracle(preloadMod, deckModel);
+
+  // Mutant 1: returning raw unbridged port across contextBridge strips prototype methods and fails attach
+  const mutatedPreload = await altered(
+    '../electron/preload.js',
+    'return Object.freeze({port:bridgeTerminalPort(port)});',
+    'return Object.freeze({port});',
+  );
+  await assert.rejects(
+    () => runPackagedWiringOracle(mutatedPreload, deckModel),
+    (err) => err && err.code === 'TERMINAL_ATTACH_FAILED',
+  );
+
+  // Verify every refusal carries its real code and never guesses TERMINAL_UNAVAILABLE
+  const refusalCases = [
+    [Object.assign(new Error('Terminal session unavailable'), { code: 'TERMINAL_ATTACH_FAILED' }), 'TERMINAL_ATTACH_FAILED'],
+    [new Error('Terminal session unavailable'), 'TERMINAL_SESSION_UNAVAILABLE'],
+    [new Error('Terminal launch unavailable'), 'TERMINAL_LAUNCH_UNAVAILABLE'],
+    [new Error('Terminal access unavailable'), 'TERMINAL_ACCESS_UNAVAILABLE'],
+    [Object.assign(new Error('OUTCOME: terminal port'), { code: 'OUTCOME' }), 'OUTCOME'],
+    [new Error('TERMINAL_IO_REFUSED'), 'TERMINAL_IO_REFUSED'],
+    [new Error('COMMAND_NOT_ALLOWED'), 'COMMAND_NOT_ALLOWED'],
+    [Object.assign(new Error('TERMINAL_UNAVAILABLE: not bundled'), { code: 'TERMINAL_UNAVAILABLE' }), 'TERMINAL_UNAVAILABLE'],
+  ];
+  for (const [err, expectedCode] of refusalCases) {
+    const formatted = deckModel.formatTerminalRefusal(err);
+    assert.equal(formatted.code, expectedCode, `Expected refusal code ${expectedCode}, got ${formatted.code}`);
+    assert.match(formatted.message, new RegExp(`^${expectedCode}: .+`));
+  }
+
+  // Missing broker reports TERMINAL_BROKER_UNAVAILABLE, never TERMINAL_UNAVAILABLE
+  const noBrokerCtrl = deckModel.createTerminalDeckController({ broker: null });
+  try {
+    await assert.rejects(
+      () => noBrokerCtrl.launchProfile('shell'),
+      (err) => err && err.code === 'TERMINAL_BROKER_UNAVAILABLE',
+    );
+    assert.equal(noBrokerCtrl.state.errorCode, 'TERMINAL_BROKER_UNAVAILABLE');
+    assert.match(noBrokerCtrl.state.errorMessage, /^TERMINAL_BROKER_UNAVAILABLE: /);
+  } finally {
+    noBrokerCtrl.dispose();
+  }
+
+  // Mutant 2: guessing TERMINAL_UNAVAILABLE from '/unavailable/i' in formatTerminalRefusal is rejected
+  const mutatedDeck = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    "} else if (/terminal session unavailable/i.test(rawMessage)) {\n      code = 'TERMINAL_SESSION_UNAVAILABLE';",
+    "} else if (/unavailable/i.test(rawMessage)) {\n      code = 'TERMINAL_UNAVAILABLE';",
+  );
+  assert.throws(() => {
+    const res = mutatedDeck.formatTerminalRefusal(new Error('Terminal session unavailable'));
+    assert.equal(res.code, 'TERMINAL_SESSION_UNAVAILABLE');
+  }, { code: 'ERR_ASSERTION' });
+});
+
+

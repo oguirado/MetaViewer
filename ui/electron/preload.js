@@ -876,6 +876,98 @@ function validFrameNotice(value) {
 }
 /** @type {Map<string, symbol>} */
 const TERMINAL_SESSION_SENDERS = new Map();
+/**
+ * Wraps a preload-realm MessagePort (Blink MessagePort or Node MessagePort) into a
+ * plain frozen object whose own-property methods survive Electron's `contextBridge`
+ * (`contextIsolation: true`) proxy boundary and normalizes `MessageEvent` / `Uint8Array`
+ * payloads across isolated worlds.
+ *
+ * @param {any} rawPort
+ */
+function bridgeTerminalPort(rawPort) {
+  if (!rawPort || typeof rawPort !== 'object') return rawPort;
+  /** @type {WeakMap<Function, Function>} */
+  const wrappedListeners = new WeakMap();
+  /** @param {any} payload */
+  const normalizePayload = (payload) => {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return payload;
+    const rawBytes = payload.bytes;
+    if (
+      rawBytes !== undefined &&
+      !(rawBytes instanceof Uint8Array) &&
+      ((ArrayBuffer.isView(rawBytes) && !(rawBytes instanceof DataView)) || Array.isArray(rawBytes))
+    ) {
+      const normalizedBytes = Array.isArray(rawBytes)
+        ? Uint8Array.from(rawBytes)
+        : new Uint8Array(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
+      return { ...payload, bytes: normalizedBytes };
+    }
+    return payload;
+  };
+  /** @param {Function} listener */
+  const getWrapped = (listener) => {
+    let wrapped = wrappedListeners.get(listener);
+    if (!wrapped) {
+      wrapped = (/** @type {any} */ ev) => {
+        const rawData =
+          ev !== null && typeof ev === 'object' && 'data' in ev && !('session' in ev)
+            ? ev.data
+            : ev;
+        listener({ data: normalizePayload(rawData) });
+      };
+      wrappedListeners.set(listener, wrapped);
+    }
+    return wrapped;
+  };
+  /** @param {string} type @param {Function} listener */
+  const attachListener = (type, listener) => {
+    if (typeof listener !== 'function') return;
+    const wrapped = getWrapped(listener);
+    if (typeof rawPort.addEventListener === 'function') {
+      rawPort.addEventListener(type, wrapped);
+    } else if (typeof rawPort.on === 'function') {
+      rawPort.on(type, wrapped);
+    }
+  };
+  /** @param {string} type @param {Function} listener */
+  const detachListener = (type, listener) => {
+    if (typeof listener !== 'function') return;
+    const wrapped = wrappedListeners.get(listener) ?? listener;
+    if (typeof rawPort.removeEventListener === 'function') {
+      rawPort.removeEventListener(type, wrapped);
+    } else if (typeof rawPort.off === 'function') {
+      rawPort.off(type, wrapped);
+    } else if (typeof rawPort.removeListener === 'function') {
+      rawPort.removeListener(type, wrapped);
+    }
+  };
+  return Object.freeze({
+    postMessage(/** @type {any} */ message) {
+      rawPort.postMessage(normalizePayload(message));
+    },
+    addEventListener(/** @type {string} */ type, /** @type {Function} */ listener) {
+      attachListener(type, listener);
+    },
+    removeEventListener(/** @type {string} */ type, /** @type {Function} */ listener) {
+      detachListener(type, listener);
+    },
+    on(/** @type {string} */ type, /** @type {Function} */ listener) {
+      attachListener(type, listener);
+    },
+    off(/** @type {string} */ type, /** @type {Function} */ listener) {
+      detachListener(type, listener);
+    },
+    removeListener(/** @type {string} */ type, /** @type {Function} */ listener) {
+      detachListener(type, listener);
+    },
+    start() {
+      if (typeof rawPort.start === 'function') rawPort.start();
+    },
+    close() {
+      if (typeof rawPort.close === 'function') rawPort.close();
+    },
+  });
+}
 /** @param {PreloadTransport} transport */
 function wireFacade(transport) {
   /** @type {Map<string, any>} */ const terminalPorts=new Map();
@@ -929,7 +1021,7 @@ function wireFacade(transport) {
       throw new ContractError('OUTCOME','create surface');
     }
     if (name==='terminalOpen') {
-      if (value?.ok === false && value.code === 'TERMINAL_UNAVAILABLE' && Object.keys(value).sort().join(',') === 'code,ok') return Object.freeze({ok:false,code:'TERMINAL_UNAVAILABLE'});
+      if (value?.ok === false && Object.keys(value).sort().join(',') === 'code,ok' && typeof value.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)) return Object.freeze({ok:false,code:value.code});
       if (!value || Object.keys(value).join(',')!=='session' || typeof value.session!=='string'
           || !/^[A-Za-z0-9._-]{1,128}$/.test(value.session)) throw new ContractError('OUTCOME','session');
       if (TERMINAL_SESSION_SENDERS.size>=256) {
@@ -941,11 +1033,17 @@ function wireFacade(transport) {
     }
     if (name==='terminalAttach') {
       const reqSession=/** @type {any} */(admitted.args[0]).session;
-      const queuedPort=terminalPorts.get(reqSession);
+      let queuedPort=terminalPorts.get(reqSession);
       terminalPorts.delete(reqSession);
-      const port=value?.port ?? queuedPort;
+      let port=value?.port ?? queuedPort;
+      if (!port && typeof queueMicrotask === 'function') {
+        await new Promise((resolve) => queueMicrotask(() => resolve(undefined)));
+        queuedPort=terminalPorts.get(reqSession);
+        terminalPorts.delete(reqSession);
+        port=value?.port ?? queuedPort;
+      }
       if (!port || typeof port !== 'object') throw new ContractError('OUTCOME','terminal port');
-      return Object.freeze({port});
+      return Object.freeze({port:bridgeTerminalPort(port)});
     }
     if (name==='terminalProviders') {
       if (!captureKeys(value,'capabilities,entries') || !Array.isArray(value.entries) || !Array.isArray(value.capabilities)
