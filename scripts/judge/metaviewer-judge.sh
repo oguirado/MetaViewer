@@ -28,14 +28,14 @@
 #     opensuperficies-linux-<arch>.tar.gz (opensuperficies/{bin,firewall}),
 #     images-linux-<arch>.tar (docker save), vision-engine.tar.gz and
 #     wender-agent.tar.gz (one top-level directory named after the component).
-#   - SHA256SUMS must ship inside the kit; it is never downloaded.
+#   - Install never downloads SHA256SUMS; fetch_assets.py provisions it explicitly.
 #   - State lives under MV_JUDGE_HOME (default $XDG_DATA_HOME/metaviewer-judge):
 #     app/, deps/, node/, run/, logs/ and judge_receipt.json. No timestamp, pid
 #     or host path is written to the receipt.
 #   - Network by default is open: install installs the egress firewall in ONE
 #     confirmed administrator step; if it is declined or unavailable, install
 #     falls back to the legacy network (`net up`, no administrator rights).
-#   - `stop` also runs `net down`, so no srf-* container is left behind.
+#   - `stop` stops scoped capsules; the shared proxy remains running.
 # Lines marked `# MUT:<code>` are deciding predicates that the offline
 # mutation tests negate.
 set -u
@@ -53,7 +53,7 @@ say() { printf '%s\n' "$*"; }
 note() { printf 'JUDGE_NOTE: %s\n' "$*" >&2; }
 
 usage() {
-    printf 'JUDGE_USAGE: metaviewer-judge.sh doctor|install|run|stop [--capsules] [--yes] [--no-firewall] -- fix: use one of the documented subcommands\n' >&2
+    printf 'JUDGE_USAGE: metaviewer-judge.sh doctor|install|run|stop [--before-install] [--capsules] [--yes] [--no-firewall] -- fix: use one of the documented subcommands\n' >&2
     exit 64
 }
 
@@ -64,8 +64,10 @@ SUB=${1:-}
 ASSUME_YES=0
 CAPSULES=0
 NO_FIREWALL=0
+BEFORE_INSTALL=0
 while [ $# -gt 0 ]; do
     case $1 in
+        --before-install) BEFORE_INSTALL=1 ;;
         --yes) ASSUME_YES=1 ;;
         --capsules) CAPSULES=1 ;;
         --no-firewall) NO_FIREWALL=1 ;;
@@ -223,9 +225,10 @@ verify_asset() { # name; removes it when this run downloaded it
 
 DOWNLOADED=
 ensure_assets() { # asset names
-    local n missing="" tmp
+    local n missing="" tmp fetch_flags=""
+    [ "$TIER" = T2 ] && fetch_flags=--capsules
     mkdir -p "$ASSET_DIR" 2>/dev/null || fail JUDGE_ASSET "cannot create $ASSET_DIR" "choose a writable MV_JUDGE_ASSET_DIR"
-    [ -f "$ASSET_DIR/SHA256SUMS" ] || fail JUDGE_ASSET "SHA256SUMS is missing from $ASSET_DIR" "extract the judge kit again; SHA256SUMS ships inside it and is never downloaded"
+    [ -f "$ASSET_DIR/SHA256SUMS" ] || fail JUDGE_ASSET "SHA256SUMS is missing from $ASSET_DIR" "python3 \"$SELF_DIR/fetch_assets.py\" --source <complete-release-directory> --dest \"$ASSET_DIR\" $fetch_flags"
     for n in "$@"; do
         [ -f "$ASSET_DIR/$n" ] || missing="$missing $n"
     done
@@ -296,8 +299,8 @@ step_node() {
     tar_names_ok "$ASSET_DIR/$asset" '^[^/]+/' || fail JUDGE_ASSET "$asset has unsafe or unexpected members" "download $asset again from $RELEASE_BASE"
     rm -rf -- "$work"
     mkdir -p "$work"
-    # Only the node binary is taken from the archive; links and other members are not extracted.
-    tar --no-same-owner -xf "$ASSET_DIR/$asset" -C "$work" --strip-components=1 --wildcards '*/bin/node' || fail JUDGE_ASSET "cannot unpack node from $asset" "download $asset again from $RELEASE_BASE"
+    # Copy regular members only; npm links are recreated as local wrappers.
+    python3 "$SELF_DIR/unpack_node.py" "$ASSET_DIR/$asset" "$work" || fail JUDGE_ASSET "cannot unpack node from $asset" "download $asset again from $RELEASE_BASE"
     rm -rf -- "$JUDGE_HOME/node"
     mv -- "$work" "$JUDGE_HOME/node"
     find_node
@@ -337,6 +340,8 @@ ensure_pkg_tool_deps() {
     ui=$KIT/ui
     [ -f "$ui/package-lock.json" ] || return 0
     [ ! -d "$ui/node_modules/@electron/asar" ] || return 0
+    PATH="$(dirname "$NODE_BIN"):$PATH" command -v npm >/dev/null 2>&1 ||
+        fail JUDGE_NPM "the Node asset has no npm and package verification needs it" "sudo apt-get install -y npm"
     if ! PATH="$(dirname "$NODE_BIN"):$PATH" npm --prefix "$ui" ci --ignore-scripts --no-audit --no-fund >"$log" 2>&1; then
         fail JUDGE_SMOKE "cannot install the package tool dependencies: $(tail -n 3 "$log" | tr '\n' ' ')" "check the network, then run: npm --prefix $ui ci --ignore-scripts"
     fi
@@ -519,6 +524,7 @@ cmd_install() {
     pf_or_exit --tier "$TIER" --phase static
     step_sysdeps
     step_node
+    pf_or_exit --tier "$TIER" --phase display
     step_extract_app
     assets_used="metaviewer-linux-$ARCHN.tar.gz"
     step_apparmor
@@ -528,10 +534,20 @@ cmd_install() {
         extract_dep vision-engine.tar.gz vision-engine
         extract_dep wender-agent.tar.gz wender-agent
         assets_used="$assets_used opensuperficies-linux-$ARCHN.tar.gz vision-engine.tar.gz wender-agent.tar.gz images-linux-$ARCHN.tar"
-        step_firewall || true
+        # Load the legacy-compatible set before deciding whether Open is available.
         step_images
+        if docker image inspect "opensuperficies-identity-browser-$ARCHN:0.2.0" >/dev/null 2>&1; then
+            step_firewall || true
+        elif [ -s "$WITNESS" ]; then
+            fail JUDGE_IMAGE "Open firewall is active but the kit lacks the Open browser image" "obtain a kit containing opensuperficies-identity-browser-$ARCHN:0.2.0"
+        else
+            note "Open browser image unavailable; using legacy network without installing a firewall"
+        fi
         step_profile
-        [ "$(net_mode_now)" = open ] || ensure_capsule_net
+        if [ "$(net_mode_now)" != open ]; then
+            ensure_capsule_net
+            say "JUDGE_NOTE: Legacy network reaches no public site today. Open mode requires a compatible browser image and firewall; see docs/JUDGE_QUICKSTART.md."
+        fi
     fi
     pf_or_exit --tier "$TIER" --phase all
     FACTS=$(pf --facts --tier "$TIER")
@@ -694,8 +710,13 @@ cmd_stop() {
 # ------------------------------------------------------------------- dispatch
 case $SUB in
     doctor)
-        pf_or_exit --tier "$TIER" --phase all
-        say "JUDGE_DOCTOR_OK tier=$TIER"
+        if [ "$BEFORE_INSTALL" = 1 ]; then
+            pf_or_exit --tier "$TIER" --phase static
+            say "JUDGE_DOCTOR_OK tier=$TIER phase=before-install (installed runtime not checked)"
+        else
+            pf_or_exit --tier "$TIER" --phase all
+            say "JUDGE_DOCTOR_OK tier=$TIER"
+        fi
         ;;
     install) cmd_install ;;
     run) cmd_run ;;

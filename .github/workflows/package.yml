@@ -243,6 +243,8 @@ jobs:
           assert node, 'setup-node binary missing'
           assets = (build_app_asset(app, out, arch),
                     build_node_asset(out, arch, node_bin=Path(node)))
+          (out / "SHA256SUMS").write_text(
+              "".join(f"{sha256_file(asset)}  {asset.name}\n" for asset in assets), encoding="utf-8")
           for asset in assets:
               asset.with_name(asset.name + '.sha256').write_text(
                   f'{sha256_file(asset)}  {asset.name}\n', encoding='utf-8')
@@ -254,6 +256,7 @@ jobs:
         with:
           name: metaviewer-judge-linux-${{ matrix.platform }}
           path: |
+            ${{ runner.temp }}/metaviewer-judge-assets/SHA256SUMS
             ${{ runner.temp }}/metaviewer-judge-assets/metaviewer-linux-${{ matrix.platform }}.tar.gz
             ${{ runner.temp }}/metaviewer-judge-assets/metaviewer-linux-${{ matrix.platform }}.tar.gz.sha256
             ${{ runner.temp }}/metaviewer-judge-assets/node-linux-${{ matrix.platform }}.tar.xz

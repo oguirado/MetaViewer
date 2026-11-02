@@ -18,6 +18,8 @@ import re
 import shutil
 import signal
 import stat
+import sys
+import shlex
 import subprocess
 import tarfile
 import time
@@ -92,7 +94,8 @@ FAKES = {
     "sysctl": '[ "$1" = -n ] && [ -f "$MV_FAKE_DIR/sysctl_$2" ] && { cat "$MV_FAKE_DIR/sysctl_$2"; exit 0; }\nexit 255\n',
     "ip": '[ "$1" = route ] && cat "$MV_FAKE_DIR/ip_route" 2>/dev/null\nexit 0\n',
     "xdpyinfo": 'exit "$(cat "$MV_FAKE_DIR/xdpyinfo_rc" 2>/dev/null || echo 0)"\n',
-    "python3": '[ "${1:-}" = -I ] && shift\nexec bash "$@"\n',
+    "python3": ('case "${1:-}" in */unpack_node.py) exec ' + shlex.quote(sys.executable) + ' "$@";; esac\n'
+                '[ "${1:-}" = -I ] && shift\nexec bash "$@"\n'),
     "apparmor_parser": 'echo "apparmor_parser $*" >> "$MV_FAKE_DIR/apparmor.log"\n',
     "iptables": "exit 0\n",
     "ip6tables": "exit 0\n",
@@ -230,6 +233,7 @@ class Sandbox:
                   self.kit / "judge" / "apparmor", self.kit / "ui" / "tools", self.kit / "tools",
                   self.runuser / str(os.getuid()), self.fake / "release", self.root / "libexec", self.root / "units"):
             d.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(JUDGE_SRC / "unpack_node.py", self.kit / "judge" / "unpack_node.py")
         (self.runuser / str(os.getuid())).chmod(0o700)
         for tool in BASE_TOOLS:
             (self.bin / tool).symlink_to(which(tool))
