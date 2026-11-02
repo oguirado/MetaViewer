@@ -348,6 +348,9 @@ def connect(env, trace=None):
 
 class HostBackend:
     surface_kind = 'browser'
+    # The stored workflow owner imports Wender state APIs in process; the compiled
+    # runtime exports plan and model only. A lane on those entries may opt in.
+    compiled_wender_ok = False
 
     def __init__(self, client, identity, evidence, env):
         from metaviewer_agents.perception.deps_lock import resolve_locked_component
@@ -364,7 +367,7 @@ class HostBackend:
         need(all(p.is_absolute() for p in (self.state, self.binary, self.store)), 'MW_RUN_CONFIG')
         self.wender = resolve_locked_component('wender-agent')
         from metaviewer_agents.perception.compiled import compiled_executable
-        if compiled_executable('wender-agent', root=self.wender) is not None:
+        if not self.compiled_wender_ok and compiled_executable('wender-agent', root=self.wender) is not None:
             raise refuse('MW_COMPILED_BROWSER_UNAVAILABLE',
                 'compiled Wender exports plan/model only; browser workflow/state APIs require '
                 'a verified checkout. Program automation supports the compiled runtime.')

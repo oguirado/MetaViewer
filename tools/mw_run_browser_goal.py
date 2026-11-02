@@ -26,9 +26,14 @@ from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
 
 
 class BrowserGoalBackend(host.HostBackend):
+    compiled_wender_ok = True  # planning goes through WenderSubprocessAdapter and the model entry.
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        sys.path.insert(0, str(self.wender))
+        # A compiled runtime directory holds its own extension modules: never import from it.
+        from metaviewer_agents.perception.compiled import compiled_executable
+        if compiled_executable('wender-agent', root=self.wender) is None:
+            sys.path.insert(0, str(self.wender))
         self.handoff = HandoffLatch(self.evidence / 'browser-goal.handoff.json')
         self.moves, self.attempts, self.program_observations = [], [], []
 
