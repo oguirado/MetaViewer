@@ -1,0 +1,1 @@
+- Fix Program capsule tiles that froze on the first frame: the live DISPLAY stream now serves program windows.

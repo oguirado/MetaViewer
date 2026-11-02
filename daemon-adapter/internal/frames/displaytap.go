@@ -67,7 +67,7 @@ func (e *DisplayTapRefusal) Is(target error) bool {
 var (
 	ErrDisplayMissing     = &DisplayTapRefusal{Code: "DISPLAY_MISSING", Detail: "invalid DISPLAY target: missing capsule display"}
 	ErrDisplayInvalid     = &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY target"}
-	ErrDisplayUnsupported = &DisplayTapRefusal{Code: "DISPLAY_UNSUPPORTED", Detail: "DISPLAY requires browser window"}
+	ErrDisplayUnsupported = &DisplayTapRefusal{Code: "DISPLAY_UNSUPPORTED", Detail: "DISPLAY requires browser or program window"}
 )
 
 // DisplayBaseDir selects the spec-v1.1 tmpfs base independently of the
@@ -444,8 +444,8 @@ func displayAck(w io.Writer, digest [32]byte, seq uint64) error {
 // an empty value keeps the native default <RAM root>/identity-state.
 func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, error) {
 	var t DisplayTarget
-	if b.NativeKind != "browser" || b.Window == "" {
-		return t, &DisplayTapRefusal{Code: "DISPLAY_UNSUPPORTED", Detail: "DISPLAY requires browser window"}
+	if (b.NativeKind != "browser" && b.NativeKind != "program") || b.Window == "" {
+		return t, &DisplayTapRefusal{Code: "DISPLAY_UNSUPPORTED", Detail: "DISPLAY requires browser or program window"}
 	}
 	if strings.TrimSpace(b.Surface.Display) == "" {
 		return t, &DisplayTapRefusal{Code: "DISPLAY_MISSING", Detail: "invalid DISPLAY target: missing capsule display"}
