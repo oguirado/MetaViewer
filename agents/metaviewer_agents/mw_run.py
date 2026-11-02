@@ -1,5 +1,9 @@
 """Engine entry for the Use MetaViewer button; host capabilities live in tools.
 
+Program capsules: --surface-kind program --identity ID --goal TEXT --steps N.
+This mode records bounded verified visual clicks, with no task-completion claim.
+Browser mode remains the default and requires --site and --workflow.
+
 [TARGET, unit decision] Run-level wall deadline formula:
   budget_s = max(site.execution_policy.min_notice_s,
                  workflow.execution_policy.min_notice_s)
@@ -29,6 +33,7 @@ import re
 import signal
 import stat
 import sys
+import time
 import uuid
 
 WALL_DEADLINE_CODE = 'MW_WALL_DEADLINE'
@@ -178,6 +183,12 @@ def resolve_wall_deadline_s(args, *, env=None, home=None, repo_root=None,
     workflow_id = getattr(args, 'workflow', None)
     budget_s = float(ceiling_s)
     active_env = env if env is not None else getattr(os, 'environ', {})
+    if getattr(args, 'surface_kind', None) == 'program':
+        steps = _strict_nonneg_int(args.steps, minimum=1, maximum=16)
+        action_ms = _strict_nonneg_int(args.timeout_ms, minimum=1, maximum=30000)
+        model_ms = (_strict_nonneg_int(args.model_timeout_ms, minimum=1, maximum=240000)
+                    if args.planner == 'muse' else 0)
+        budget_s = min(float(ceiling_s), steps * (3 * action_ms + model_ms) / 1000 + margin_s)
     if isinstance(site_id, str) and isinstance(workflow_id, str):
         if _ID_RE.fullmatch(site_id) and _ID_RE.fullmatch(workflow_id):
             try:
@@ -324,14 +335,32 @@ def _write_fallback_report(error):
 
 def build_parser():
     parser = argparse.ArgumentParser(description=__doc__, add_help=False, allow_abbrev=False)
-    for flag in ('identity', 'site', 'workflow'):
-        parser.add_argument('--' + flag, required=True)
+    parser.add_argument('--identity', required=True)
+    for flag in ('site', 'workflow'):
+        parser.add_argument('--' + flag)
+    parser.add_argument('--surface-kind', choices=('browser', 'program'), default='browser')
+    parser.add_argument('--goal')
+    parser.add_argument('--steps', type=int, default=1)
+    parser.add_argument('--timeout-ms', type=int, default=10000)
+    parser.add_argument('--planner', choices=('rules', 'muse'), default='rules')
+    parser.add_argument('--model-timeout-ms', type=int, default=120000)
     parser.add_argument('--slot', action='append', default=[])
     return parser
 
 
 def main(argv=None, *, runner=None):
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.surface_kind == 'program':
+        if args.site is not None or args.workflow is not None or args.slot:
+            parser.error('program mode does not accept --site, --workflow or --slot')
+        if not args.goal or not args.goal.strip() or not 1 <= args.steps <= 16 or not 1 <= args.timeout_ms <= 30000:
+            parser.error('program mode requires --goal, --steps within 1..16 and --timeout-ms within 1..30000')
+        if not 1 <= args.model_timeout_ms <= 240000:
+            parser.error('--model-timeout-ms must be within 1..240000')
+    elif (not args.site or not args.workflow or args.goal is not None or args.steps != 1 or
+          args.timeout_ms != 10000 or args.planner != 'rules' or args.model_timeout_ms != 120000):
+        parser.error('browser mode requires --site and --workflow; program options require --surface-kind program')
     if runner is None:
         path = Path(__file__).resolve().parents[2] / 'tools' / 'mw_run_backend.py'
         spec = importlib.util.spec_from_file_location('mv_mw_run_backend', path)
@@ -339,6 +368,7 @@ def main(argv=None, *, runner=None):
         spec.loader.exec_module(host)
         runner = host.run_entry
     budget_s = resolve_wall_deadline_s(args)
+    args.wall_deadline_mono_ns = time.monotonic_ns() + int(budget_s * 1e9)
     with wall_deadline(budget_s):
         try:
             return runner(args)

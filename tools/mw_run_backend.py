@@ -344,6 +344,8 @@ def connect(env, trace=None):
 
 
 class HostBackend:
+    surface_kind = 'browser'
+
     def __init__(self, client, identity, evidence, env):
         from metaviewer_agents.perception.deps_lock import resolve_locked_component
         self.client, self.identity, self.evidence = client, identity, Path(evidence)
@@ -389,7 +391,7 @@ class HostBackend:
         for _ in range(256):
             page = tools.list_surfaces(cursor=cursor, limit=256, client=self.client, timeout_ms=5000)
             found.extend(s for s in page['surfaces'] if s['profile_id'] == self.identity
-                         and s['state'] == 'active' and s['kind'] == 'browser')
+                         and s['state'] == 'active' and s['kind'] == self.surface_kind)
             cursor = page['next_cursor']
             if cursor is None:
                 return found
@@ -406,7 +408,9 @@ class HostBackend:
         leases = set()
         for path in self.state.glob('*.json'):
             receipt = private_json(path, self.state)
-            capsule = live.capsule_from_receipt(receipt, self.identity)
+            extract = (live.program_capsule_from_receipt if self.surface_kind == 'desktop_capsule'
+                       else live.capsule_from_receipt)
+            capsule = extract(receipt, self.identity)
             if capsule:
                 leases.add(capsule)
         inventory = command(['docker', 'ps', '--format', '{{.Names}}'])
@@ -418,6 +422,8 @@ class HostBackend:
         surface = surfaces[0]['surface_id']
         need(self.surface_id in (None, surface) and self.capsule in (None, capsule), 'MW_RUN_OWNERSHIP')
         self.surface_id, self.capsule = surface, capsule
+        if self.surface_kind == 'desktop_capsule':
+            need(surfaces[0].get('control') == 'agent', 'MW_PROGRAM_CONTROL')
         return dict(profile='mv-live-1', identity=self.identity, surface_id=surface, capsules=[capsule])
 
     def network_context(self):
@@ -712,7 +718,8 @@ class HostBackend:
 
     def propose(self, sensed, plan, max_ms):
         self.ownership()
-        self.network_context()
+        if self.surface_kind == 'browser':
+            self.network_context()
         deadline = time.monotonic_ns() + max_ms * 1_000_000
         self.frame_attempts = getattr(self, 'frame_attempts', [])
         for attempt in range(3 if 'ax' in sensed else 1):
@@ -721,7 +728,8 @@ class HostBackend:
             # Older assembly callers supply only a frame: retain their single-shot
             # core path; fresh-target retry requires the owner's AX evidence.
             try:
-                fresh = self.rebind(sensed, plan, remaining) if 'ax' in sensed else sensed
+                fresh = (self.rebind(sensed, plan, remaining)
+                         if 'ax' in sensed or self.surface_kind == 'desktop_capsule' else sensed)
             except OwnerRefused as error:
                 # No proposal was sent. Reacquire after a caret/pixel race;
                 # changed targets and human handoff still refuse immediately.
@@ -738,8 +746,13 @@ class HostBackend:
             if binding is None:
                 binding = {k: fresh['frame'][k] for k in ('sha256', 'generation') if k in fresh['frame']}
             row = dict(attempt=attempt + 1, based_on_frame=binding,
-                       observed_generation=sensed['frame']['generation'], submit_mono_ns=time.monotonic_ns())
+                       observed_generation=sensed['frame']['generation'], submit_mono_ns=time.monotonic_ns(),
+                       status='intent_pending')
             self.frame_attempts.append(row)
+            before_propose = getattr(self, 'before_propose', None)
+            if callable(before_propose):
+                before_propose(copy.deepcopy(proposal), fresh)
+            row['status'] = 'dispatch_pending'
             try:
                 verdict = tools.propose(proposal, client=self.client, timeout_ms=remaining)
                 row['status'] = 'admitted'
@@ -871,6 +884,9 @@ def execute(args, home, evidence, backend, *, corpus_factory=Corpus, owner_facto
 
 
 def run_entry(args):
+    if getattr(args, 'surface_kind', 'browser') == 'program':
+        program = module('mv_mw_run_program', ROOT / 'tools/mw_run_program.py')
+        return program.run_entry(args)
     receipt, report = None, None
     rc, code = 6, 'MW_RUN_CONFIG'
     backend, message, trace = None, None, {}

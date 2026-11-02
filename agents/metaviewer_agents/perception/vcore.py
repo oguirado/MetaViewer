@@ -44,6 +44,7 @@ import errno
 import grp
 import hashlib
 import json
+import copy
 import math
 import os
 import pwd
@@ -825,6 +826,7 @@ def _parse_c2_payload(stdout: bytes, *, width: int, height: int,
         "marks": marks,
         "timing_us": payload["timing_us"],
         "mark_cap_reached": bool(cap_reached),
+        "validated_payload": copy.deepcopy(payload),
     }
 
 
@@ -1560,6 +1562,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         self.last_timing_us: int | None = None
         self.last_latency_us: int | None = None
         self.last_transport: str | None = None
+        self._last_c2_payload: dict[str, Any] | None = None
         self.last_vserve_error: PerceptionError | None = None
         self.last_fallback_error: PerceptionError | None = None
         self._vserve_queue = _BoundedRequestQueue(capacity=queue_cap)
@@ -1623,6 +1626,11 @@ class VCorePerceptionAdapter(PerceptionAdapter):
     def diagnostics(self) -> _AdapterDiagnostics:
         """Return adapter diagnostics (usable as dict or 0-arg callable)."""
         return self._build_diagnostics()
+
+    @property
+    def last_c2_payload(self) -> dict[str, Any] | None:
+        """Defensive snapshot of the latest validated, pixel-bound C2 result."""
+        return copy.deepcopy(self._last_c2_payload)
 
     @contextmanager
     def _vserve_lock_scope(self, deadline: float | None = None):
@@ -2044,11 +2052,13 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         self.last_fallback_error = None
         vision = _vision_from_c2(parsed, width, height)
         check_vision(vision, width=width, height=height)
+        self._last_c2_payload = copy.deepcopy(parsed['validated_payload'])
         return _BoundVision(vision, frame_ref["sha256"])
 
     def perceive(self, frame_ref: Mapping[str, Any],
                  frame: Frame | str | Path | None = None, *,
                  prev: Frame | str | Path | None = None) -> dict[str, Any]:
+        self._last_c2_payload = None
         started_at = time.monotonic()
         _validate_timeout(self.timeout)
         deadline = time.monotonic() + self.timeout
@@ -2170,6 +2180,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         self.last_transport = "oneshot"
         vision = _vision_from_c2(parsed, width, height)
         check_vision(vision, width=width, height=height)
+        self._last_c2_payload = copy.deepcopy(parsed['validated_payload'])
         return _BoundVision(vision, frame_ref["sha256"])
 
     def run_vcore(self, verb: str,

@@ -57,10 +57,10 @@ func subscriptionHandler(m *capsule.Manager, profiles map[string]capsule.Profile
 		}
 		profile, ok := profiles[b.Surface.ProfileID]
 		if !ok {
-			profile, _ = m.ProfileFor(b.Surface.ProfileID)
+			profile, ok = m.ProfileFor(b.Surface.ProfileID)
 		}
 		sub := subs[profile.RAMRoot]
-		if sub == nil {
+		if !ok || sub == nil {
 			return fail(configuration("subscription publisher required"))
 		}
 		if err := sub.Subscribe(ctx, p.SurfaceID); err != nil {
