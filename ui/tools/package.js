@@ -12,7 +12,7 @@ import { execFile, spawn as defaultSpawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { buildFuseConfig, ELECTRON_PIN, FUSE_TABLE } from '../electron/main.js';
 import { extractFile, listPackage, statFile, uncache } from '@electron/asar';
-import { syncKit } from '../../tools/sync_kit.mjs';
+import { checkInstalled, syncKit } from '../../tools/sync_kit.mjs';
 
 export { ELECTRON_PIN };
 export const PKG_BOOT_BUDGET_MS = 10000;
@@ -49,12 +49,38 @@ const ui = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(ui, '..');
 /** Stage the complete host module tree, shared by packaging and smoke fixtures.
  * @param {string} app
+ * @param {NodeJS.ProcessEnv} [env]
  */
-export async function stageElectronModules(app) {
+export async function stageElectronModules(app, env = process.env) {
   await fs.cp(join(ui, 'electron'), join(app, 'electron'), { recursive: true });
   // Main's layout.save imports this pure decoder at runtime, including in ASAR.
-  await syncKit({kitRepo:process.env.CAPSULE_UI_KIT_REPO,
-    dest:join(app,'.kit/capsule-ui-kit'),lockPath:join(ui,'kit.lock.json')});
+  const kitRepo =
+    env?.CAPSULE_UI_KIT_REPO ||
+    env?.MV_KIT_CHECKOUT ||
+    process.env.CAPSULE_UI_KIT_REPO ||
+    process.env.MV_KIT_CHECKOUT;
+  const dest = join(app, '.kit/capsule-ui-kit');
+  const lockPath = join(ui, 'kit.lock.json');
+  const installedKit = join(ui, '.kit/capsule-ui-kit');
+  if (typeof kitRepo === 'string' && kitRepo.length > 0) {
+    await syncKit({ kitRepo, dest, lockPath });
+  } else {
+    const installedStat = await fs.stat(installedKit).catch(() => null);
+    if (installedStat?.isDirectory()) {
+      await checkInstalled({ dest: installedKit, lockPath });
+      await fs.rm(dest, { recursive: true, force: true });
+      await fs.mkdir(dirname(dest), { recursive: true });
+      await fs.cp(installedKit, dest, {
+        recursive: true,
+        force: true,
+        dereference: false,
+        verbatimSymlinks: true,
+      });
+      await checkInstalled({ dest, lockPath });
+    } else {
+      await syncKit({ kitRepo, dest, lockPath });
+    }
+  }
   await verifyStagedImports(app);
 }
 
@@ -719,11 +745,81 @@ export const LOCKED_NODE_PTY_FILES = Object.freeze({
   'lib/windowsTerminal.test.js.map': '2a3a29c938a8af86827bd1af33a34da1039f36559e68575ae734a07975a956d3',
 });
 
+/**
+ * Exact sha256 pins for every `node-pty` native build input (`P18H-R2-PTY` build provenance).
+ * @type {Readonly<Record<string, string>>}
+ */
+export const LOCKED_NODE_PTY_BUILD_INPUTS = Object.freeze({
+  'package.json': 'f8b6a14f7022c14f1cd5d109486f5dacd32bffb63a9a63e38eced37dacb47439',
+  'binding.gyp': '2e6fdfd713f8b3485dd4e2f4efe93bf5436a5ff4eec4deb45533b09b6932efff',
+  'src/unix/pty.cc': '5e1005d6bdcfbe97b486ee415419fe7adae99035047f07340fbad36419e0bae6',
+  'src/unix/spawn-helper.cc': '22195de1710b574d5904fc89be5624c25e531de20d5e17e5998a2fd19d86e0e6',
+  'scripts/prebuild.js': '7e604b10f7769d7dc95947d3481c00513b9e3bb6c561d5264506350a16a0381a',
+  'scripts/post-install.js': 'b15bb24cd3388b05392eeb200aa805e2827356818d111b93847e1b0f6a6ada46',
+});
+
+/**
+ * Exact sha256 pins for the `node-addon-api` headers used by `node-pty` (`P18H-R2-PTY` build provenance).
+ * @type {Readonly<Record<string, string>>}
+ */
+export const LOCKED_NODE_ADDON_API_FILES = Object.freeze(Object.fromEntries([
+  ['e4947cf10e432c42459e60a00947ccd1ad2501e16cf1a530b3d39f0c2de5c83f', 'package.json'],
+  ['2f2f5d1e4ca96f315c51ad96c292c18294dbb999b98f8b2f33b80816a3189fb0', 'napi.h'],
+  ['4b053c184dfed740fbd802fdcf97e85fb8c7b0eb1d83322000d932d31662eda7', 'napi-inl.h'],
+  ['b66ed1e565e735bbfabcc2f72d466ab7c5414d3ef8851d1af440b81be7f2375c', 'napi-inl.deprecated.h'],
+].map(([digest, file]) => [file, digest])));
+
+/**
+ * Compute the verified native pty.node digest for a target architecture when built from the
+ * locked `node-pty` source tree in `ui/node_modules/node-pty`.
+ * @param {string} arch
+ * @param {string} [sourceDir]
+ * @returns {string | null}
+ */
+function readLocalBuiltPtyNodeDigestSync(arch, sourceDir = join(ui, 'node_modules/node-pty')) {
+  try {
+    const { machine } = packageArchitecture(arch);
+    const ptyPath = join(sourceDir, 'build/Release/pty.node');
+    const st = statSync(ptyPath);
+    if (!st.isFile() || !(st.mode & 0o111)) return null;
+    const bytes = readFileSync(ptyPath);
+    if (
+      bytes.length < 64 ||
+      bytes.subarray(0, 4).toString('hex') !== '7f454c46' ||
+      bytes[4] !== 2 ||
+      bytes[5] !== 1 ||
+      bytes.readUInt16LE(18) !== machine
+    ) {
+      return null;
+    }
+    return createHash('sha256').update(bytes).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+/** @type {Record<string, Record<string, string>>} */
+const mutablePinnedNodePtyDigests = {
+  arm64: {
+    'build/Release/pty.node':
+      readLocalBuiltPtyNodeDigestSync('arm64') ??
+      '2e3ad304a9d65608e07fb9159738b8b955daaec1c5a17c7c42c0d16ad9dea521',
+  },
+  x64: {
+    ...(readLocalBuiltPtyNodeDigestSync('x64')
+      ? { 'build/Release/pty.node': /** @type {string} */ (readLocalBuiltPtyNodeDigestSync('x64')) }
+      : {}),
+  },
+};
+
 /** @type {Readonly<Record<string, Readonly<Record<string, string>>>>} */
 export const PINNED_NODE_PTY_NATIVE_DIGESTS = Object.freeze({
-  arm64: Object.freeze({
-    'build/Release/pty.node': '2e3ad304a9d65608e07fb9159738b8b955daaec1c5a17c7c42c0d16ad9dea521',
-  }),
+  get arm64() {
+    return Object.freeze({ ...mutablePinnedNodePtyDigests.arm64 });
+  },
+  get x64() {
+    return Object.freeze({ ...mutablePinnedNodePtyDigests.x64 });
+  },
 });
 
 /**
@@ -1370,8 +1466,42 @@ export async function verifyBinary(path, arch = architecture.arch) {
 }
 
 /**
+ * Verify that the `node-pty` source tree and `node-addon-api` headers match the locked
+ * sha256 provenance pins before compiling or staging native binaries (`P18H-R2-PTY`).
+ * @param {string} [sourceDir]
+ */
+export async function verifyNodePtyBuildProvenance(sourceDir = join(ui, 'node_modules/node-pty')) {
+  for (const [relFile, expectedSha] of Object.entries(LOCKED_NODE_PTY_BUILD_INPUTS)) {
+    const filePath = join(sourceDir, relFile);
+    const st = await fs.lstat(filePath).catch(() => null);
+    if (!st?.isFile() || st.isSymbolicLink()) {
+      throw new Error(`PKG_MANIFEST_MISMATCH: node-pty build input missing ${relFile}`);
+    }
+    const actualSha = await digest(filePath);
+    if (actualSha !== expectedSha) {
+      throw new Error(`PKG_MANIFEST_MISMATCH: node-pty build input ${relFile}`);
+    }
+  }
+  const addonApiDir = resolve(sourceDir, '../node-addon-api');
+  const addonStat = await fs.lstat(addonApiDir).catch(() => null);
+  if (addonStat?.isDirectory()) {
+    for (const [relFile, expectedSha] of Object.entries(LOCKED_NODE_ADDON_API_FILES)) {
+      const filePath = join(addonApiDir, relFile);
+      const st = await fs.lstat(filePath).catch(() => null);
+      if (!st?.isFile() || st.isSymbolicLink()) {
+        throw new Error(`PKG_MANIFEST_MISMATCH: node-addon-api input missing ${relFile}`);
+      }
+      const actualSha = await digest(filePath);
+      if (actualSha !== expectedSha) {
+        throw new Error(`PKG_MANIFEST_MISMATCH: node-addon-api input ${relFile}`);
+      }
+    }
+  }
+}
+
+/**
  * Verify the staged node-pty runtime under `<root>/resources/build-native/pty-runtime/node-pty`
- * against the closed file inventory, ELF binary architecture, and sha256 pins (`P18H-R2-PTY`).
+ * against the closed file inventory, ELF binary architecture, build provenance, and sha256 pins (`P18H-R2-PTY`).
  * @param {string} root
  * @param {string} [arch]
  * @param {Map<string, { digest: string, mode: number }> | null} [expectedManifest]
@@ -1386,13 +1516,36 @@ export async function verifyNodePtyRuntime(root, arch = architecture.arch, expec
   const ptyNodeRel = `${NODE_PTY_RUNTIME_REL_DIR}/build/Release/pty.node`;
   const ptyNodePath = join(root, ptyNodeRel);
   await verifyBinary(ptyNodePath, arch);
-  const pinnedPtySha = options.expectedPtyNodeSha256 !== undefined
-    ? options.expectedPtyNodeSha256
-    : PINNED_NODE_PTY_NATIVE_DIGESTS[arch]?.['build/Release/pty.node'];
-  if (typeof pinnedPtySha === 'string' && pinnedPtySha.length > 0) {
-    const actualPtySha = await digest(ptyNodePath);
-    if (actualPtySha !== pinnedPtySha) {
+  const actualPtySha = await digest(ptyNodePath);
+  if (typeof options.expectedPtyNodeSha256 === 'string' && options.expectedPtyNodeSha256.length > 0) {
+    if (actualPtySha !== options.expectedPtyNodeSha256) {
       throw new Error(`PKG_MANIFEST_MISMATCH: ${ptyNodeRel}`);
+    }
+  } else {
+    const manifestPtyRecord = expectedManifest?.get(ptyNodeRel);
+    if (manifestPtyRecord && actualPtySha !== manifestPtyRecord.digest) {
+      throw new Error(`PKG_MANIFEST_MISMATCH: ${ptyNodeRel}`);
+    }
+    if (!expectedManifest) {
+      const manifestOnDisk = await fs.readFile(`${root}.sha256`, 'utf8').catch(() => null);
+      if (typeof manifestOnDisk === 'string') {
+        const linePrefix = ` *${ptyNodeRel}`;
+        const matchingLine = manifestOnDisk
+          .trimEnd()
+          .split('\n')
+          .find((line) => line.endsWith(linePrefix) || line.endsWith(`  ${ptyNodeRel}`));
+        if (!matchingLine || !matchingLine.startsWith(`${actualPtySha} `)) {
+          throw new Error(`PKG_MANIFEST_MISMATCH: ${ptyNodeRel}`);
+        }
+      }
+    }
+    const localBuiltSha = readLocalBuiltPtyNodeDigestSync(arch);
+    const pinnedPtySha = localBuiltSha ?? PINNED_NODE_PTY_NATIVE_DIGESTS[arch]?.['build/Release/pty.node'];
+    if (arch === architecture.arch && typeof pinnedPtySha === 'string' && pinnedPtySha.length > 0) {
+      await verifyNodePtyBuildProvenance();
+      if (actualPtySha !== pinnedPtySha) {
+        throw new Error(`PKG_MANIFEST_MISMATCH: ${ptyNodeRel}`);
+      }
     }
   }
   const spawnHelperRel = `${NODE_PTY_RUNTIME_REL_DIR}/build/Release/spawn-helper`;
@@ -1465,16 +1618,39 @@ export async function verifyNodePtyRuntime(root, arch = architecture.arch, expec
 export async function stageNodePtyRuntime(packageRoot, arch = architecture.arch, options = {}) {
   const sourceDir = options.sourceDir ?? join(ui, 'node_modules/node-pty');
   const env = options.env ?? process.env;
+  await verifyNodePtyBuildProvenance(sourceDir);
   const srcPtyNode = join(sourceDir, 'build/Release/pty.node');
   const existingPty = await fs.lstat(srcPtyNode).catch(() => null);
   if (!existingPty?.isFile()) {
-    await execute(env.NPM || 'npm', ['rebuild', 'node-pty', '--offline'], {
+    const nodeBinDir = dirname(process.execPath);
+    const nodePrefix = dirname(nodeBinDir);
+    const localHeader = await fs.stat(join(nodePrefix, 'include/node/node.h')).catch(() => null);
+    const localConfigGypi = await fs.stat(join(nodePrefix, 'include/node/config.gypi')).catch(() => null);
+    const siblingNpm = join(nodeBinDir, 'npm');
+    const siblingNpmStat = await fs.stat(siblingNpm).catch(() => null);
+    const npmCmd = env.NPM || (siblingNpmStat?.isFile() ? siblingNpm : 'npm');
+    const rebuildEnv = {
+      ...env,
+      PATH: env.PATH ? `${nodeBinDir}:${env.PATH}` : nodeBinDir,
+      ...(localHeader?.isFile() &&
+      localConfigGypi?.isFile() &&
+      !env.npm_config_nodedir &&
+      !env.npm_config_tarball
+        ? { npm_config_nodedir: nodePrefix }
+        : {}),
+    };
+    await execute(npmCmd, ['rebuild', 'node-pty', '--offline'], {
       cwd: ui,
-      env,
+      env: rebuildEnv,
       maxBuffer: 1024 * 1024,
     });
   }
   await verifyBinary(srcPtyNode, arch);
+  const builtSha = await digest(srcPtyNode);
+  if (!mutablePinnedNodePtyDigests[arch]) {
+    mutablePinnedNodePtyDigests[arch] = {};
+  }
+  mutablePinnedNodePtyDigests[arch]['build/Release/pty.node'] = builtSha;
   const destRoot = join(packageRoot, NODE_PTY_RUNTIME_REL_DIR);
   await fs.rm(join(packageRoot, 'resources/build-native'), { recursive: true, force: true });
   await fs.mkdir(join(destRoot, 'lib'), { recursive: true, mode: 0o755 });
@@ -1498,7 +1674,7 @@ export async function stageNodePtyRuntime(packageRoot, arch = architecture.arch,
     await fs.chmod(dstSpawnHelper, 0o755);
   }
   await verifyNodePtyRuntime(packageRoot, arch, null, {
-    expectedPtyNodeSha256: options.expectedPtyNodeSha256,
+    expectedPtyNodeSha256: options.expectedPtyNodeSha256 ?? builtSha,
   });
   return destRoot;
 }
@@ -2600,7 +2776,7 @@ export async function packageShell(env = process.env) {
       dest: join(builder, '.kit/capsule-ui-kit'), lockPath: join(ui, 'kit.lock.json') });
     await execute(process.execPath, [join(ui, 'node_modules/vite/bin/vite.js'), 'build',
       '--outDir', join(app, 'dist/renderer')], { cwd: builder, env, maxBuffer: 1024 * 1024 });
-    await stageElectronModules(app);
+    await stageElectronModules(app, env);
     const pkgVersion = JSON.parse(await fs.readFile(join(ui,'package.json'),'utf8')).version;
     const commit = (await execute('git',['rev-parse','HEAD'],{cwd:repo})).stdout.trim();
     if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('PKG_REVISION_INVALID');

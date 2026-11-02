@@ -116,9 +116,21 @@ async function e2e25ProductionProbe(config) {
             if (cmd.op === 'sampleSlot') {
               const selectorJson = JSON.stringify(String(cmd.selector));
               const result = await wc.executeJavaScript(
-                `(() => {
-                  const slot = document.querySelector(${selectorJson});
+                `(async () => {
                   const multislotScreen = document.querySelector('.mv-multislot-screen');
+                  if (!multislotScreen) {
+                    const agentViewBtn = document.querySelector('[data-semantic-anchor="wall/view/agent"]');
+                    if (agentViewBtn && agentViewBtn.getAttribute('aria-selected') !== 'true') {
+                      agentViewBtn.click();
+                      await new Promise((r) => setTimeout(r, 0));
+                    }
+                    const agentDesktop1Btn = document.querySelector('[data-semantic-anchor="wall/desktop/agent/1"]');
+                    if (agentDesktop1Btn && agentDesktop1Btn.getAttribute('aria-selected') !== 'true') {
+                      agentDesktop1Btn.click();
+                      await new Promise((r) => setTimeout(r, 0));
+                    }
+                  }
+                  const slot = document.querySelector(${selectorJson});
                   const openBtn = document.querySelector('[data-semantic-anchor="capsule/open-multislot"]');
                   const backBtn = document.querySelector('[data-semantic-anchor="multislot/back"]');
                   if (!slot) {
@@ -512,6 +524,7 @@ async function runProductionFrameJourney({
       XDG_CONFIG_HOME: join(root, 'config'),
       XDG_STATE_HOME: join(root, 'state'),
       MV_CORE_CONFIG: configPath,
+      MV_SRF_LIVE_PROFILE: surfaceState.profile_id,
       MV_FRAME_DIAG_DIR: diagDir,
     };
     for (const name of findForbiddenEnv(env)) delete env[name];

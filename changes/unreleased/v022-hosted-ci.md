@@ -1,0 +1,1 @@
+- Hosted CI: e2e suites follow the Humans/Agents views and role menus, packaging stages Electron modules with the checked-out kit, and the node-pty runtime verifies across architectures.

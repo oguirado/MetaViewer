@@ -117,12 +117,23 @@ async function e2e26ProductionProbe(config) {
             if (cmd.op === 'sampleControlState') {
               const sidJson = JSON.stringify(String(cmd.surfaceId));
               const result = await wc.executeJavaScript(
-                `(() => {
+                `(async () => {
                   const sid = ${sidJson};
-                  const slot = document.querySelector('[data-capsule-id="' + sid + '"] [data-anchor="capsule/' + sid + '/slot"]');
-                  const tile = slot ? slot.closest('.mv-tile') : document.querySelector('.mv-tile');
-                  const controlBtn = document.querySelector(
-                    '[data-semantic-anchor="capsule/' + sid + '/control"], [data-anchor="capsule/' + sid + '/control"]',
+                  const agentViewBtn = document.querySelector('[data-semantic-anchor="wall/view/agent"]');
+                  if (agentViewBtn && agentViewBtn.getAttribute('aria-selected') !== 'true') {
+                    agentViewBtn.click();
+                    await new Promise((r) => setTimeout(r, 0));
+                  }
+                  const agentDesktop1Btn = document.querySelector('[data-semantic-anchor="wall/desktop/agent/1"]');
+                  if (agentDesktop1Btn && agentDesktop1Btn.getAttribute('aria-selected') !== 'true') {
+                    agentDesktop1Btn.click();
+                    await new Promise((r) => setTimeout(r, 0));
+                  }
+                  const root = document.querySelector('[data-desktop="agent-1"]') || document;
+                  const slot = root.querySelector('[data-capsule-id="' + sid + '"] [data-anchor="capsule/' + sid + '/slot"]');
+                  const tile = slot ? slot.closest('.mv-tile') : root.querySelector('.mv-tile');
+                  const controlBtn = root.querySelector(
+                    '[data-semantic-anchor="capsule/' + sid + '/input/release"], [data-semantic-anchor="capsule/' + sid + '/menu"], [data-semantic-anchor="capsule/' + sid + '/control"], [data-anchor="capsule/' + sid + '/control"]',
                   );
                   const activityEl = document.querySelector('.mv-activity');
                   const canvas = slot ? slot.querySelector('canvas.mv-surface__canvas') : null;
@@ -151,9 +162,37 @@ async function e2e26ProductionProbe(config) {
             } else if (cmd.op === 'clickControl') {
               const sidJson = JSON.stringify(String(cmd.surfaceId));
               const result = await wc.executeJavaScript(
-                `(() => {
+                `(async () => {
                   const sid = ${sidJson};
-                  const el = document.querySelector(
+                  const agentViewBtn = document.querySelector('[data-semantic-anchor="wall/view/agent"]');
+                  if (agentViewBtn && agentViewBtn.getAttribute('aria-selected') !== 'true') {
+                    agentViewBtn.click();
+                    await new Promise((r) => setTimeout(r, 0));
+                  }
+                  const agentDesktop1Btn = document.querySelector('[data-semantic-anchor="wall/desktop/agent/1"]');
+                  if (agentDesktop1Btn && agentDesktop1Btn.getAttribute('aria-selected') !== 'true') {
+                    agentDesktop1Btn.click();
+                    await new Promise((r) => setTimeout(r, 0));
+                  }
+                  const root = document.querySelector('[data-desktop="agent-1"]') || document;
+                  const releaseBtn = root.querySelector('[data-semantic-anchor="capsule/' + sid + '/input/release"]');
+                  if (releaseBtn && !releaseBtn.disabled) {
+                    releaseBtn.click();
+                    return { clicked: true };
+                  }
+                  const menuBtn = root.querySelector('[data-semantic-anchor="capsule/' + sid + '/menu"]');
+                  if (menuBtn && !menuBtn.disabled) {
+                    if (menuBtn.getAttribute('aria-expanded') !== 'true') {
+                      menuBtn.click();
+                      await new Promise((r) => setTimeout(r, 0));
+                    }
+                    const emergencyBtn = document.querySelector('[data-semantic-anchor="capsule/' + sid + '/control/emergency"]');
+                    if (emergencyBtn && !emergencyBtn.disabled) {
+                      emergencyBtn.click();
+                      return { clicked: true };
+                    }
+                  }
+                  const el = root.querySelector(
                     '[data-semantic-anchor="capsule/' + sid + '/control"], [data-anchor="capsule/' + sid + '/control"]',
                   );
                   if (!el) return { clicked: false, reason: 'ELEMENT_NOT_FOUND' };
@@ -561,6 +600,7 @@ async function runControlWithFramesJourney() {
       XDG_CONFIG_HOME: join(root, 'config'),
       XDG_STATE_HOME: join(root, 'state'),
       MV_CORE_CONFIG: configPath,
+      MV_SRF_LIVE_PROFILE: surfaceState.profile_id,
       MV_FRAME_DIAG: '1',
       MV_FRAME_DIAG_DIR: diagDir,
     };

@@ -484,6 +484,13 @@ def distribution_errors(receipt, product_root, revision, expected_arch=None):
                 binary = archive.extractfile(actual_files[full_name]).read(64)
                 if binary[:6] != b'\x7fELF\x02\x01' or int.from_bytes(binary[18:20], 'little') != (183 if arch == 'arm64' else 62):
                     return ['wrong product architecture']
+            for name in ('resources/build-native/pty-runtime/node-pty/build/Release/pty.node',
+                         'resources/build-native/pty-runtime/node-pty/build/Release/spawn-helper'):
+                full_name = prefix + name
+                if full_name in actual_files:
+                    binary = archive.extractfile(actual_files[full_name]).read(64)
+                    if binary[:6] != b'\x7fELF\x02\x01' or int.from_bytes(binary[18:20], 'little') != (183 if arch == 'arm64' else 62):
+                        return ['wrong product architecture']
     except (OSError, ValueError, KeyError, tarfile.TarError):
         return ['local manifest or smoke evidence absent']
     return []
