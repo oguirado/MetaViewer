@@ -33,6 +33,14 @@ fn main() {
                 slot: 1,
             },
         ),
+        (
+            "desktop-window",
+            Kind::DesktopCapsule,
+            LaunchTarget::Desktop {
+                class: "fixture-window".into(),
+                slot: 2,
+            },
+        ),
     ];
     let registrations = cases
         .iter()

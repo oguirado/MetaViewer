@@ -36,6 +36,8 @@ import (
 )
 
 var displaySpec = regexp.MustCompile(`^:[0-9]+$`)
+var hostDisplaySpec = regexp.MustCompile(`^:[0-9]+(\.[0-9]+)?$`)
+var errDisplayResized = errors.New("DISPLAY host window resized")
 
 // DisplayTapRefusal is the typed refusal returned when DISPLAY tap resolution
 // or validation rejects a surface target, leaving VERIFIED capture available
@@ -83,6 +85,8 @@ type DisplayTarget struct {
 	Container, Run, Window, Display string
 	XID                             uint32
 	Width, Height                   int
+	HostWindow                      bool
+	Witness, BinDir                 string
 }
 type DisplayTapConfig struct {
 	RuntimeDir  string
@@ -90,7 +94,10 @@ type DisplayTapConfig struct {
 	Admit       func() error
 	Diagnostics io.Writer
 	// Command is a deterministic test seam; production always uses docker exec.
-	Command func(context.Context, DisplayTarget) *exec.Cmd
+	Command     func(context.Context, DisplayTarget) *exec.Cmd
+	OnResize    func(string, int, int)
+	OnMinimized func(string, bool)
+	OnTerminal  func(string, string)
 }
 type displayTask struct {
 	cancel context.CancelFunc
@@ -260,9 +267,27 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 			return
 		}
 		d.setErr(id, nil)
-		if err = d.session(ctx, id, path, target); err != nil && ctx.Err() == nil {
+		err = d.session(ctx, id, path, target)
+		if errors.Is(err, errDisplayResized) && ctx.Err() == nil {
+			delay = 100 * time.Millisecond
+			continue
+		}
+		if err != nil && ctx.Err() == nil {
 			d.setErr(id, err)
 			d.diag("adapter: DISPLAY tap %s: session ended: %v", id, err)
+			if target.HostWindow {
+				errText := err.Error()
+				if isHostTapMinimized(errText) {
+					if d.cfg.OnMinimized != nil {
+						d.cfg.OnMinimized(id, true)
+					}
+				} else if isHostTapTerminal(errText) {
+					if d.cfg.OnTerminal != nil {
+						d.cfg.OnTerminal(id, extractHostTapReason(errText))
+					}
+					return
+				}
+			}
 		}
 		if ctx.Err() != nil {
 			return
@@ -277,11 +302,48 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 		delay = min(2*time.Second, delay*2)
 	}
 }
+func isHostTapMinimized(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "minimized") || strings.Contains(lower, "iconic") || strings.Contains(lower, "unmapped")
+}
+func isHostTapTerminal(s string) bool {
+	lower := strings.ToLower(s)
+	if isHostTapMinimized(lower) {
+		return false
+	}
+	return strings.Contains(lower, "host_window_unavailable:") ||
+		strings.Contains(lower, "witness") ||
+		strings.Contains(lower, "closed") ||
+		strings.Contains(lower, "no such window") ||
+		strings.Contains(lower, "badwindow") ||
+		strings.Contains(lower, "baddrawable") ||
+		strings.Contains(lower, "destroyed") ||
+		strings.Contains(lower, "not found") ||
+		strings.Contains(lower, "gone")
+}
+func extractHostTapReason(s string) string {
+	if idx := strings.Index(s, "host_window_unavailable:"); idx >= 0 {
+		line := s[idx:]
+		if nl := strings.IndexAny(line, "\r\n)"); nl >= 0 {
+			line = line[:nl]
+		}
+		line = strings.TrimSpace(line)
+		if len(line) > 256 {
+			line = line[:256]
+		}
+		return line
+	}
+	return "host_window_unavailable: window closed or witness changed"
+}
 func validDisplayTarget(t DisplayTarget) error {
 	if strings.TrimSpace(t.Display) == "" {
 		return &DisplayTapRefusal{Code: "DISPLAY_MISSING", Detail: "invalid DISPLAY target: missing capsule display"}
 	}
-	if !displaySpec.MatchString(t.Display) {
+	if t.HostWindow {
+		if !hostDisplaySpec.MatchString(t.Display) || strings.TrimSpace(t.Witness) == "" || !filepath.IsAbs(t.BinDir) {
+			return &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY target: invalid host window"}
+		}
+	} else if !displaySpec.MatchString(t.Display) {
 		return &DisplayTapRefusal{Code: "DISPLAY_INVALID", Detail: "invalid DISPLAY target: invalid capsule display"}
 	}
 	if !ringComponent.MatchString(t.Container) || !ringComponent.MatchString(t.Run) || t.XID == 0 || t.Width < 1 || t.Height < 1 || t.Width > 4096 || t.Height > 4096 {
@@ -302,12 +364,14 @@ func (d *DisplayTaps) session(parent context.Context, id, path string, target Di
 	processCtx, kill := context.WithCancel(context.WithoutCancel(parent))
 	defer kill()
 	ring := &displayRing{path: path, generation: uint64(time.Now().UnixNano()) + displayGeneration.Add(1)}
-	if err := ring.open(target); err != nil {
-		return err
+	if !target.HostWindow {
+		if err := ring.open(target); err != nil {
+			return err
+		}
 	}
 	defer ring.close()
 	cmd := (*exec.Cmd)(nil)
-	xwdMode := false
+	xwdMode := target.HostWindow
 	if d.cfg.Command != nil {
 		cmd = d.cfg.Command(processCtx, target)
 	} else {
@@ -342,9 +406,23 @@ func (d *DisplayTaps) session(parent context.Context, id, path string, target Di
 	}
 	body, digest := displayBinding(target)
 	decodeDone := make(chan error, 1)
+	publishFrame := func(rgb []byte, mono uint64, frameTarget DisplayTarget) error {
+		if target.HostWindow {
+			if frameTarget.Width != target.Width || frameTarget.Height != target.Height {
+				if d.cfg.OnResize != nil {
+					d.cfg.OnResize(id, frameTarget.Width, frameTarget.Height)
+				}
+				return errDisplayResized
+			}
+			if d.cfg.OnMinimized != nil {
+				d.cfg.OnMinimized(id, false)
+			}
+		}
+		return ring.publish(rgb, mono, frameTarget)
+	}
 	go func() {
 		if xwdMode {
-			decodeDone <- displayDecodeXWD(output, target, ring.publish)
+			decodeDone <- displayDecodeXWD(output, target, publishFrame)
 			return
 		}
 		e := displayWriteControl(input, 1, digest, body)
@@ -406,6 +484,9 @@ loop:
 const capsuleXDisplay = ":100"
 
 func displayGetimageCommand(ctx context.Context, target DisplayTarget) *exec.Cmd {
+	if target.HostWindow {
+		return exec.CommandContext(ctx, filepath.Join(target.BinDir, "srf-host-window"), "capture", "--xid", strconv.FormatUint(uint64(target.XID), 10), "--witness", target.Witness)
+	}
 	// Every capsule runs its own Xvfb on :100 and srf-fbread admits only that value; target.Display
 	// is the adapter's logical pool slot, which differs from :100 for every capsule but the first.
 	loop := "while :; do /usr/local/libexec/srf-fbread getimage " + capsuleXDisplay + " " + strconv.FormatUint(uint64(target.XID), 10) + " 2>/dev/null || exit 9; sleep 0.03; done"
@@ -448,6 +529,21 @@ func displayAck(w io.Writer, digest [32]byte, seq uint64) error {
 // an empty value keeps the native default <RAM root>/identity-state.
 func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, error) {
 	var t DisplayTarget
+	if b.NativeKind == "host-window" && b.Window != "" {
+		t = DisplayTarget{
+			Container:  b.Container,
+			Run:        b.RunID,
+			Window:     b.Window,
+			Display:    b.Surface.Display,
+			XID:        b.HostXID,
+			Width:      b.Surface.Geometry.W,
+			Height:     b.Surface.Geometry.H,
+			HostWindow: true,
+			Witness:    b.HostWitness,
+			BinDir:     b.BinDir,
+		}
+		return t, validDisplayTarget(t)
+	}
 	if (b.NativeKind != "browser" && b.NativeKind != "program") || b.Window == "" {
 		return t, &DisplayTapRefusal{Code: "DISPLAY_UNSUPPORTED", Detail: "DISPLAY requires browser or program window"}
 	}
@@ -660,7 +756,8 @@ func displayDecodeXWD(r io.Reader, t DisplayTarget, publish func([]byte, uint64,
 		size := int(be.Uint32(h[0:]))
 		w, ht := int(be.Uint32(h[16:])), int(be.Uint32(h[20:]))
 		order, bpp, bpl, ncolors := be.Uint32(h[28:]), be.Uint32(h[44:]), int(be.Uint32(h[48:])), int(be.Uint32(h[76:]))
-		if size < 100 || size > 4096 || be.Uint32(h[4:]) != 7 || be.Uint32(h[8:]) != 2 || order > 1 || bpp != 32 || w != t.Width || ht != t.Height || bpl < 4*w || bpl > 4*w+64 || ncolors < 0 || ncolors > 256 {
+		geomOK := (w == t.Width && ht == t.Height) || (t.HostWindow && w >= 1 && ht >= 1 && w <= 4096 && ht <= 4096)
+		if size < 100 || size > 4096 || be.Uint32(h[4:]) != 7 || be.Uint32(h[8:]) != 2 || order > 1 || bpp != 32 || !geomOK || bpl < 4*w || bpl > 4*w+64 || ncolors < 0 || ncolors > 256 {
 			return errors.New("DISPLAY XWD header")
 		}
 		if _, e := io.CopyN(io.Discard, r, int64(size-100+ncolors*12)); e != nil {
@@ -671,6 +768,9 @@ func displayDecodeXWD(r io.Reader, t DisplayTarget, publish func([]byte, uint64,
 		}
 		if _, e := io.ReadFull(r, pix); e != nil {
 			return e
+		}
+		if len(rgb) != w*ht*3 {
+			rgb = make([]byte, w*ht*3)
 		}
 		mono := uint64(time.Now().UnixNano())
 		for y := 0; y < ht; y++ {
@@ -684,7 +784,10 @@ func displayDecodeXWD(r io.Reader, t DisplayTarget, publish func([]byte, uint64,
 				}
 			}
 		}
-		if e := publish(rgb, mono, t); e != nil {
+		frameTarget := t
+		frameTarget.Width = w
+		frameTarget.Height = ht
+		if e := publish(rgb, mono, frameTarget); e != nil {
 			return e
 		}
 	}

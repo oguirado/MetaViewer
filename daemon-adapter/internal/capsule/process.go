@@ -3,7 +3,9 @@ package capsule
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -114,6 +116,53 @@ func extractHostProgramRefusal(outputs ...string) string {
 	return ""
 }
 
+func extractHostWindowRefusal(outputs ...string) string {
+	for _, s := range outputs {
+		idx := strings.Index(s, "host_window_unavailable:")
+		if idx < 0 {
+			continue
+		}
+		line := s[idx:]
+		if nl := strings.IndexAny(line, "\r\n"); nl >= 0 {
+			line = line[:nl]
+		}
+		if q := strings.IndexByte(line, '"'); q >= 0 {
+			line = line[:q]
+		}
+		line = strings.TrimSpace(line)
+		if len(line) > 256 {
+			line = line[:256]
+		}
+		if len(line) > len("host_window_unavailable:") {
+			return line
+		}
+	}
+	return ""
+}
+
+func readOneXWDStream(r io.Reader) ([]byte, string, error) {
+	h := make([]byte, 100)
+	n, err := io.ReadFull(r, h)
+	if err != nil {
+		return nil, string(h[:n]), err
+	}
+	be := binary.BigEndian
+	size := int(be.Uint32(h[0:]))
+	w, ht := int(be.Uint32(h[16:])), int(be.Uint32(h[20:]))
+	order, bpp, bpl, ncolors := be.Uint32(h[28:]), be.Uint32(h[44:]), int(be.Uint32(h[48:])), int(be.Uint32(h[76:]))
+	if size < 100 || size > 4096 || be.Uint32(h[4:]) != 7 || be.Uint32(h[8:]) != 2 || order > 1 || bpp != 32 || w < 1 || ht < 1 || w > 4096 || ht > 4096 || bpl < 4*w || bpl > 4*w+64 || ncolors < 0 || ncolors > 256 {
+		tail, _ := io.ReadAll(io.LimitReader(r, 1024))
+		return nil, string(h) + string(tail), errors.New("invalid XWD header")
+	}
+	restLen := (size - 100) + ncolors*12 + bpl*ht
+	buf := make([]byte, 100+restLen)
+	copy(buf, h)
+	if _, err := io.ReadFull(r, buf[100:]); err != nil {
+		return nil, "", err
+	}
+	return buf, "", nil
+}
+
 func extractExitReason(stderr string) string {
 	for _, rawLine := range strings.Split(stderr, "\n") {
 		var b strings.Builder
@@ -145,7 +194,8 @@ func (r *ProcessRunner) SearchPath() string {
 
 func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([]byte, error) {
 	adminShow := len(argv) == 4 && filepath.Base(argv[0]) == "srf-identity-admin" && argv[1] == "show" && argv[2] == "--id" && storedIdentityID.MatchString(argv[3]) && !protectedIdentity(argv[3]) && len(stdin) == 0
-	if len(argv) < 2 || filepath.Dir(argv[0]) != r.root || (!adminShow && filepath.Base(argv[0]) != "srf-identity-surface" && filepath.Base(argv[0]) != "srf-holdings-capsule") {
+	hostWin := len(argv) >= 2 && filepath.Base(argv[0]) == "srf-host-window" && (argv[1] == "list" || argv[1] == "capture" || argv[1] == "input")
+	if len(argv) < 2 || filepath.Dir(argv[0]) != r.root || (!adminShow && !hostWin && filepath.Base(argv[0]) != "srf-identity-surface" && filepath.Base(argv[0]) != "srf-holdings-capsule") {
 		return nil, fault("execution", "unadmitted executable")
 	}
 	if filepath.Base(argv[0]) == "srf-identity-surface" {
@@ -176,11 +226,52 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 	}
 	cmd.Env = append([]string(nil), r.env...)
 	cmd.Stdin = bytes.NewReader(stdin)
-	out := &cappedBuffer{limit: r.limit}
 	errBuf := &cappedBuffer{limit: min(r.limit, 4096)}
-	cmd.Stdout = out
 	cmd.Stderr = errBuf
 	cmd.WaitDelay = time.Second
+	if hostWin && argv[1] == "capture" {
+		stdoutPipe, err := cmd.StdoutPipe()
+		if err != nil {
+			return nil, &preSpawnRefusal{fault("execution", "native pipe failed before start")}
+		}
+		if e := cmd.Start(); e != nil {
+			stdoutPipe.Close()
+			if ctx.Err() != nil {
+				return nil, fault("uncertain", "native command deadline or cancellation")
+			}
+			if cmd.Process == nil {
+				return nil, &preSpawnRefusal{fault("execution", "native executable failed before start")}
+			}
+			return nil, fault("uncertain", "native command failed without a verified result")
+		}
+		xwd, outSample, readErr := readOneXWDStream(stdoutPipe)
+		_ = stdoutPipe.Close()
+		if readErr == nil && cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		waitErr := cmd.Wait()
+		if readErr == nil {
+			return xwd, nil
+		}
+		if ctx.Err() != nil {
+			return nil, fault("uncertain", "native command deadline or cancellation")
+		}
+		if reason := extractHostWindowRefusal(errBuf.buffer.String(), outSample); reason != "" {
+			return nil, &preSpawnRefusal{fault("host_window_unavailable", reason)}
+		}
+		if reason := extractExitReason(errBuf.buffer.String()); reason != "" {
+			return nil, &preSpawnRefusal{fault("host_window_unavailable", "host_window_unavailable: "+reason)}
+		}
+		if waitErr != nil {
+			var exit *exec.ExitError
+			if errors.As(waitErr, &exit) {
+				return nil, &preSpawnRefusal{cli.ExitFault("srf-host-window", exit.ExitCode(), "")}
+			}
+		}
+		return nil, &preSpawnRefusal{fault("host_window_unavailable", "host_window_unavailable: invalid or truncated XWD capture")}
+	}
+	out := &cappedBuffer{limit: r.limit}
+	cmd.Stdout = out
 	if e := cmd.Start(); e != nil {
 		if ctx.Err() != nil {
 			return nil, fault("uncertain", "native command deadline or cancellation")
@@ -199,6 +290,14 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 			if exit.ExitCode() == 2 && filepath.Base(argv[0]) == "srf-identity-surface" {
 				if reason := extractHostProgramRefusal(errBuf.buffer.String(), out.buffer.String()); reason != "" {
 					return nil, &preSpawnRefusal{fault("host_program_unavailable", reason)}
+				}
+			}
+			if filepath.Base(argv[0]) == "srf-host-window" {
+				if reason := extractHostWindowRefusal(errBuf.buffer.String(), out.buffer.String()); reason != "" {
+					return nil, &preSpawnRefusal{fault("host_window_unavailable", reason)}
+				}
+				if reason := extractExitReason(errBuf.buffer.String()); reason != "" {
+					return nil, &preSpawnRefusal{fault("host_window_unavailable", "host_window_unavailable: "+reason)}
 				}
 			}
 			errFault := cli.ExitFault(filepath.Base(argv[0]), exit.ExitCode(), "")

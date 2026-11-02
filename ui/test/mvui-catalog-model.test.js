@@ -24,12 +24,12 @@ import {
   normalizeCapsuleCatalog,
 } from '../.kit/capsule-ui-kit/src/shell/NewCapsuleModel.js';
 
-test('closed kind set carries the four roadmap kinds in display order', () => {
+test('closed kind set carries the three kinds in display order', () => {
   assert.deepEqual([...CATALOG_KIND_IDS],
-    ['identity-browser', 'program']);
+    ['identity-browser', 'program', 'desktop-window']);
   assert.deepEqual(CATALOG_KINDS.map((entry) => entry.label),
-    ['Identity browser', 'Program']);
-  // Negative control: a third or reordered id breaks the contract.
+    ['Identity browser', 'Program', 'Desktop window']);
+  // Negative control: a fourth or reordered id breaks the contract.
   assert.throws(() => assert.deepEqual([...CATALOG_KIND_IDS, 'extra'], [...CATALOG_KIND_IDS]),
     assert.AssertionError);
 });
@@ -187,16 +187,17 @@ test('invoker focus never touches disconnected or unfocusable nodes', () => {
   assert.equal(createInvokerFocus().restore(), false);
 });
 
-test('catalog lists exactly the two kinds and kills mutants that re-add removed kinds', async () => {
-  function assertExactTwoKindCatalog(mod) {
-    assert.deepEqual([...mod.CATALOG_KIND_IDS], ['identity-browser', 'program']);
-    assert.deepEqual(mod.CATALOG_KINDS.map((entry) => entry.kind), ['identity-browser', 'program']);
+test('catalog lists_exact_three_kinds and kills mutants that re-add removed kinds', async () => {
+  function assertExactThreeKindCatalog(mod) {
+    assert.deepEqual([...mod.CATALOG_KIND_IDS], ['identity-browser', 'program', 'desktop-window']);
+    assert.deepEqual(mod.CATALOG_KINDS.map((entry) => entry.kind), ['identity-browser', 'program', 'desktop-window']);
     const normalized = mod.normalizeCatalogEntries(mod.CATALOG_KIND_IDS);
     assert.deepEqual(
       capsuleCategories([...normalized.types]),
       [
         { id: 'browse', label: 'Browse', count: 1 },
         { id: 'programs', label: 'Programs', count: 1 },
+        { id: 'windows', label: 'Windows', count: 1 },
       ],
     );
     for (const removed of ['holdings-app', 'desktop']) {
@@ -210,7 +211,7 @@ test('catalog lists exactly the two kinds and kills mutants that re-add removed 
     }
   }
 
-  assertExactTwoKindCatalog({
+  assertExactThreeKindCatalog({
     CATALOG_KIND_IDS,
     CATALOG_KINDS,
     normalizeCatalogEntries,
@@ -231,7 +232,7 @@ test('catalog lists exactly the two kinds and kills mutants that re-add removed 
   const mutantHoldings = await import(
     `data:text/javascript;base64,${Buffer.from(readdedHoldings).toString('base64')}#mutant-holdings`
   );
-  assert.throws(() => assertExactTwoKindCatalog(mutantHoldings), assert.AssertionError);
+  assert.throws(() => assertExactThreeKindCatalog(mutantHoldings), assert.AssertionError);
 
   const readdedDesktop = source.replace(
     "kind: 'program',",
@@ -241,5 +242,5 @@ test('catalog lists exactly the two kinds and kills mutants that re-add removed 
   const mutantDesktop = await import(
     `data:text/javascript;base64,${Buffer.from(readdedDesktop).toString('base64')}#mutant-desktop`
   );
-  assert.throws(() => assertExactTwoKindCatalog(mutantDesktop), assert.AssertionError);
+  assert.throws(() => assertExactThreeKindCatalog(mutantDesktop), assert.AssertionError);
 });

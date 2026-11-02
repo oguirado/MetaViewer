@@ -44,11 +44,14 @@ func ExitFault(family string, exitCode int, _ string) error {
 	if exitCode == 0 {
 		return nil
 	}
-	if family != "srf-identity-surface" && family != "srf-holdings-capsule" && family != "srfd" {
+	if family != "srf-identity-surface" && family != "srf-holdings-capsule" && family != "srf-host-window" && family != "srfd" {
 		return &Fault{Code: "unknown_family", Detail: fmt.Sprintf("CLI failed with exit status %d", exitCode)}
 	}
 	if exitCode < 0 {
 		return &Fault{Code: "uncertain", Detail: "native killed by signal, effect unverified"}
+	}
+	if family == "srf-host-window" {
+		return &Fault{Code: "host_window_unavailable", Detail: fmt.Sprintf("host_window_unavailable: exit status %d", exitCode)}
 	}
 	code := "cli_failed"
 	if family == "srf-identity-surface" || family == "srf-holdings-capsule" {

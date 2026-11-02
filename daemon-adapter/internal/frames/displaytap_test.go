@@ -1048,3 +1048,202 @@ func TestResolveDisplayTargetRefusesOtherNativeKinds(t *testing.T) {
 		t.Fatalf("holdings must stay unsupported: %v", err)
 	}
 }
+
+func TestHostWindowCaptureCommandUsesSrfHostWindowNotDocker(t *testing.T) {
+	cmd := displayGetimageCommand(context.Background(), DisplayTarget{
+		HostWindow: true,
+		Container:  "hw-77594627",
+		Run:        "run-1",
+		Window:     "w1",
+		Display:    ":0",
+		XID:        77594627,
+		Witness:    "0x04a00003:1730541000",
+		BinDir:     "/opt/srf/bin",
+		Width:      4,
+		Height:     2,
+	})
+	want := "/opt/srf/bin/srf-host-window capture --xid 77594627 --witness 0x04a00003:1730541000"
+	if got := strings.Join(cmd.Args, " "); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if strings.Contains(strings.Join(cmd.Args, " "), "docker") {
+		t.Fatalf("host window capture must never use docker: %v", cmd.Args)
+	}
+}
+
+func TestHostWindowSenderHelper(t *testing.T) {
+	if os.Getenv("MV_HW_CAPTURE_HELPER") != "1" {
+		return
+	}
+	modeFile := os.Getenv("MV_HW_MODE_FILE")
+	modeBytes, _ := os.ReadFile(modeFile)
+	mode := strings.TrimSpace(string(modeBytes))
+	switch mode {
+	case "minimized":
+		fmt.Fprintln(os.Stderr, "host_window_unavailable: window minimized")
+		os.Exit(2)
+	case "closed":
+		fmt.Fprintln(os.Stderr, "host_window_unavailable: window closed")
+		os.Exit(2)
+	case "resized":
+		// Emit a 2x1 frame first, then a 4x2 frame to trigger resize restart, then hold on 4x2.
+		_ = os.WriteFile(modeFile, []byte("resized-steady"), 0600)
+		xwdSmall := displayTestXWD(DisplayTarget{Width: 2, Height: 1}, 10)
+		_, _ = os.Stdout.Write(xwdSmall)
+		xwdLarge := displayTestXWD(DisplayTarget{Width: 4, Height: 2}, 20)
+		_, _ = os.Stdout.Write(xwdLarge)
+		select {}
+	case "resized-steady":
+		for i := byte(1); i < 50; i++ {
+			xwdLarge := displayTestXWD(DisplayTarget{Width: 4, Height: 2}, 30+i)
+			if _, err := os.Stdout.Write(xwdLarge); err != nil {
+				os.Exit(0)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	default:
+		for i := byte(1); i < 50; i++ {
+			xwd := displayTestXWD(DisplayTarget{Width: 2, Height: 1}, i)
+			if _, err := os.Stdout.Write(xwd); err != nil {
+				os.Exit(0)
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+}
+
+func TestHostWindowDisplayTapResizeMinimizeAndClose(t *testing.T) {
+	root, err := os.MkdirTemp("/dev/shm", "mv-hw-display-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if err := os.Mkdir(filepath.Join(root, "metaviewer"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	modeFile := filepath.Join(root, "mode")
+	if err := os.WriteFile(modeFile, []byte("normal"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	var mu sync.Mutex
+	target := DisplayTarget{
+		HostWindow: true,
+		Container:  "hw-77594627",
+		Run:        "run-1",
+		Window:     "w1",
+		Display:    ":0",
+		XID:        77594627,
+		Witness:    "0x04a00003:1730541000",
+		BinDir:     "/opt/srf/bin",
+		Width:      2,
+		Height:     1,
+	}
+	var resizes [][2]int
+	var minimizedStates []bool
+	var fatalReasons []string
+	var activeCmds []*exec.Cmd
+
+	tap := NewDisplayTaps(context.Background(), DisplayTapConfig{
+		RuntimeDir: root,
+		Admit:      func() error { return nil },
+		Resolve: func(id string) (DisplayTarget, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return target, nil
+		},
+		OnResize: func(id string, w, h int) {
+			mu.Lock()
+			defer mu.Unlock()
+			target.Width = w
+			target.Height = h
+			resizes = append(resizes, [2]int{w, h})
+		},
+		OnMinimized: func(id string, min bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			minimizedStates = append(minimizedStates, min)
+		},
+		OnTerminal: func(id string, reason string) {
+			mu.Lock()
+			defer mu.Unlock()
+			fatalReasons = append(fatalReasons, reason)
+		},
+		Command: func(ctx context.Context, tgt DisplayTarget) *exec.Cmd {
+			cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestHostWindowSenderHelper$")
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			cmd.Env = append(os.Environ(), "MV_HW_CAPTURE_HELPER=1", "MV_HW_MODE_FILE="+modeFile)
+			mu.Lock()
+			activeCmds = append(activeCmds, cmd)
+			mu.Unlock()
+			return cmd
+		},
+	})
+	t.Cleanup(func() { _ = tap.Stop(context.Background(), "hw-surface") })
+
+	ringPath, err := DisplayRingPath(root, "hw-surface")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tap.Start("hw-surface")
+	displayEventually(t, func() bool {
+		b, _, _, e := displaySnapshot(ringPath)
+		return e == nil && len(b) == 2*1*3
+	})
+
+	// Trigger resize to 4x2: tap must update target via OnResize and reopen ring at 4x2.
+	if err := os.WriteFile(modeFile, []byte("resized"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	for _, c := range activeCmds {
+		if c.Process != nil {
+			_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+		}
+	}
+	mu.Unlock()
+	displayEventually(t, func() bool {
+		mu.Lock()
+		gotResize := len(resizes) > 0 && resizes[0] == [2]int{4, 2}
+		mu.Unlock()
+		if !gotResize {
+			return false
+		}
+		b, _, _, e := displaySnapshot(ringPath)
+		return e == nil && len(b) == 4*2*3
+	})
+
+	// Trigger minimized state: ring must be removed (closed) so no old frame is served as live, and OnMinimized(true) called.
+	if err := os.WriteFile(modeFile, []byte("minimized"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	for _, c := range activeCmds {
+		if c.Process != nil {
+			_ = syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+		}
+	}
+	mu.Unlock()
+	displayEventually(t, func() bool {
+		mu.Lock()
+		gotMin := false
+		for _, m := range minimizedStates {
+			if m {
+				gotMin = true
+			}
+		}
+		mu.Unlock()
+		_, e := os.Stat(ringPath)
+		return gotMin && os.IsNotExist(e)
+	})
+
+	// Trigger closed window: OnTerminal must be called with the refusal line and task must finish.
+	if err := os.WriteFile(modeFile, []byte("closed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	displayEventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(fatalReasons) == 1 && strings.Contains(fatalReasons[0], "host_window_unavailable: window closed")
+	})
+}

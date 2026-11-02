@@ -771,6 +771,37 @@ async function createProgramCapsule(body) {
   }
   return reply;
 }
+/** @param {any} body */
+async function createWindowCapsule(body) {
+  const roles = /** @type {any} */ (globalThis).metaviewerRoles;
+  if (!roles?.createWindow) {
+    return {
+      ok: false,
+      code: 'HOST_WINDOW_UNAVAILABLE',
+      reason: 'host_window_unavailable: desktop window attaching is not available on this host',
+    };
+  }
+  const reply = await roles.createWindow(body.window);
+  if (!reply?.ok) {
+    const code = typeof reply?.code === 'string' && reply.code.length > 0 ? reply.code : 'HOST_WINDOW_UNAVAILABLE';
+    const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
+    return { ok: false, code, reason };
+  }
+  try {
+    selectGlobalView('agent');
+    await nextTick();
+    if (reply.surfaceId) {
+      await revealOpenedIdentity(reply.surfaceId, 'agent');
+      if (props.runtime?.intentBuilders) {
+        wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
+        applyWallControl(reply.surfaceId, 'take_control');
+      }
+    }
+  } catch {
+    // Post-attach view, reveal, or wall-control errors must not report the attach as failed.
+  }
+  return reply;
+}
 /** @param {unknown} intent @param {((outcome: any) => void)|undefined} [settle] */
 function onCreateCapsule(intent, settle) {
   if (nestedMode.displayOnly) {
@@ -818,6 +849,43 @@ function onCreateCapsule(intent, settle) {
       const reply = await promise;
       if (!reply?.ok) {
         const code = reply?.code || 'HOST_PROGRAM_UNAVAILABLE';
+        const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
+        throw Object.assign(new Error(reason), { code, reason });
+      }
+      return null;
+    });
+    return;
+  }
+  if (body?.kind === 'desktop-window') {
+    if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id || body.profile || body.choice?.profile || body.choice) {
+      const reason = 'Renderer cannot select a profile for a desktop window capsule.';
+      settle?.({ ok: false, code: 'WINDOW_PROFILE_FORBIDDEN', reason });
+      hostOutcome.value = /** @type {any} */ ({ code: 'WINDOW_PROFILE_FORBIDDEN', reason, message: reason, tone: 'refusal' });
+      recordActivity({ code: 'WINDOW_PROFILE_FORBIDDEN', reason });
+      return;
+    }
+    const win = body.window;
+    const xid = Number(win?.xid);
+    const witness = typeof win?.witness === 'string' ? win.witness.trim() : '';
+    const title = typeof win?.title === 'string' ? win.title.trim() : '';
+    const program = typeof win?.program === 'string' ? win.program.trim() : '';
+    if (!win || typeof win !== 'object' || !Number.isInteger(xid) || xid <= 0 || !witness || !title || !program) {
+      const reason = 'Desktop window selection is required.';
+      settle?.({ ok: false, code: 'WINDOW_CHOICE_REQUIRED', reason });
+      const legacyNoBrowser = !('window' in body) && !settle && !(/** @type {any} */ (globalThis).metaviewerRoles);
+      const outcomeCode = legacyNoBrowser ? 'NO_BROWSER_CAPSULE' : 'WINDOW_CHOICE_REQUIRED';
+      hostOutcome.value = legacyNoBrowser
+        ? { code: outcomeCode, message: 'NO_BROWSER_CAPSULE', tone: 'refusal' }
+        : /** @type {any} */ ({ code: outcomeCode, reason, message: reason, tone: 'refusal' });
+      recordActivity(legacyNoBrowser ? { code: outcomeCode } : { code: outcomeCode, reason });
+      return;
+    }
+    const promise = createWindowCapsule(body);
+    settle?.(promise);
+    void submitHost(async () => {
+      const reply = await promise;
+      if (!reply?.ok) {
+        const code = reply?.code || 'HOST_WINDOW_UNAVAILABLE';
         const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
         throw Object.assign(new Error(reason), { code, reason });
       }

@@ -114,6 +114,15 @@ export const CATALOG_KINDS = Object.freeze([
     footprint: '',
     keywords: Object.freeze(['program', 'run', 'app']),
   }),
+  Object.freeze({
+    kind: 'desktop-window',
+    label: 'Desktop window',
+    category: 'Windows',
+    description: 'Attach an open desktop window into a capsule tile.',
+    opensAs: 'tab',
+    footprint: '',
+    keywords: Object.freeze(['window', 'desktop', 'host', 'attach']),
+  }),
 ]);
 
 /**
@@ -277,6 +286,104 @@ export function resolveCatalogPlacement(value) {
 }
 
 /**
+ * Normalize one desktop window candidate from `srf-host-window list`.
+ * Rejects missing/invalid xid, empty/>128-byte/NUL/whitespace witness,
+ * >512-char or NUL title, and empty/>256-char or NUL program.
+ * @param {unknown} raw
+ * @returns {Readonly<{ xid: number, witness: string, title: string, program: string, width: number, height: number }> | null}
+ */
+export function normalizeWindowCandidate(raw) {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = /** @type {Record<string, unknown>} */ (raw);
+  let xid = 0;
+  if (typeof r.xid === 'number' && Number.isInteger(r.xid)) {
+    xid = r.xid;
+  } else if (typeof r.xid === 'string' && /^(?:0x[0-9a-fA-F]+|[0-9]+)$/.test(r.xid.trim())) {
+    xid = Number.parseInt(r.xid.trim(), r.xid.trim().toLowerCase().startsWith('0x') ? 16 : 10);
+  }
+  if (!Number.isInteger(xid) || xid < 1 || xid > 0xffffffff) return null;
+  const rawWitness = typeof r.witness === 'string' ? r.witness : (typeof r.generation === 'string' ? r.generation : '');
+  if (
+    rawWitness.length < 1 ||
+    rawWitness.length > 128 ||
+    /[\0-\x20\x7f;|&$`<>(){}[\]!#*?~"'\\]/.test(rawWitness)
+  ) {
+    return null;
+  }
+  const rawTitle = typeof r.title === 'string' ? r.title : '';
+  if (rawTitle.length > 512 || rawTitle.includes('\0')) return null;
+  const trimmedTitle = rawTitle.trim();
+  const title = trimmedTitle.length > 0 ? trimmedTitle : 'Untitled window';
+  const rawProgram =
+    typeof r.program === 'string'
+      ? r.program
+      : typeof r.executable === 'string'
+        ? r.executable
+        : typeof r.class === 'string'
+          ? r.class
+          : '';
+  const program = rawProgram.trim();
+  if (program.length < 1 || program.length > 256 || program.includes('\0')) return null;
+  const rawW = typeof r.width === 'number' ? r.width : (typeof r.w === 'number' ? r.w : 1280);
+  const rawH = typeof r.height === 'number' ? r.height : (typeof r.h === 'number' ? r.h : 900);
+  if (!Number.isInteger(rawW) || rawW < 1 || rawW > 4096 || !Number.isInteger(rawH) || rawH < 1 || rawH > 4096) {
+    return null;
+  }
+  return Object.freeze({
+    xid,
+    witness: rawWitness,
+    title,
+    program,
+    width: rawW,
+    height: rawH,
+  });
+}
+
+/**
+ * Whole-list fail-closed admission for desktop window candidates (Cafe select flow):
+ * any invalid row or duplicate xid/witness rejects the entire list.
+ * @param {unknown} entries
+ * @returns {Readonly<{ ok: boolean, windows: ReadonlyArray<Readonly<{ xid: number, witness: string, title: string, program: string, width: number, height: number }>> }>}
+ */
+export function normalizeWindowList(entries) {
+  if (!Array.isArray(entries)) {
+    return Object.freeze({ ok: false, windows: Object.freeze([]) });
+  }
+  const windows = [];
+  const seenXids = new Set();
+  const seenWitnesses = new Set();
+  for (const entry of entries) {
+    const normalized = normalizeWindowCandidate(entry);
+    if (!normalized || seenXids.has(normalized.xid) || seenWitnesses.has(normalized.witness)) {
+      return Object.freeze({ ok: false, windows: Object.freeze([]) });
+    }
+    seenXids.add(normalized.xid);
+    seenWitnesses.add(normalized.witness);
+    windows.push(normalized);
+  }
+  return Object.freeze({ ok: true, windows: Object.freeze(windows) });
+}
+
+/**
+ * Filter normalized window candidates by title or program search query.
+ * @param {ReadonlyArray<{ xid: number, witness: string, title: string, program: string, width: number, height: number }>} windows
+ * @param {unknown} query
+ */
+export function filterWindowCandidates(windows, query) {
+  if (!Array.isArray(windows)) return Object.freeze([]);
+  const needle = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!needle) return Object.freeze([...windows]);
+  return Object.freeze(
+    windows.filter(
+      (w) =>
+        w &&
+        (String(w.title || '').toLowerCase().includes(needle) ||
+          String(w.program || '').toLowerCase().includes(needle)),
+    ),
+  );
+}
+
+/**
  * Build the create intent payload for one launcher choice. Unknown kinds
  * and malformed inputs resolve to frozen typed errors, never throws.
  * @param {unknown} input Raw `{ kind, placement }` choice.
@@ -310,6 +417,21 @@ export function buildCreateIntent(input) {
         placement,
         binary,
         ...(record.role !== undefined ? { role: record.role } : {}),
+      }),
+    });
+  }
+  if (record.kind === 'desktop-window') {
+    const win = normalizeWindowCandidate(record.window);
+    if (!win) {
+      return Object.freeze({ ok: false, error: invalidIntentRow() });
+    }
+    return Object.freeze({
+      ok: true,
+      intent: Object.freeze({
+        type: 'create-capsule',
+        kind: 'desktop-window',
+        placement,
+         window: win,
       }),
     });
   }
