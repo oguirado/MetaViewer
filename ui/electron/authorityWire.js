@@ -767,11 +767,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     RAM_ADMISSION_REFUSED: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
     SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
     SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
-    SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+    SURFACE_CREATE_FAILED: 'The host could not start the capsule. If this is a core-only installation, install and configure the surface runtime, then restart MetaViewer. Otherwise check the host logs and choose Add capsule to try again.',
     SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
     SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
     DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
-    ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+    ADAPTER_ERROR: 'The surface runtime could not open the capsule. Check that it is installed and configured, then choose Add capsule to try again. A core-only installation cannot run capsules.',
   };
   const resolveCreateFailureCode = (/** @type {any} */ replyOrError) => {
     const detail = replyOrError?.data?.detail ?? replyOrError?.message;
