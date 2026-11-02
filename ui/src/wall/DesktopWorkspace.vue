@@ -295,7 +295,7 @@ defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,appl
   <div class="mv-desktop-workspace" :hidden="$attrs.hidden === true">
     <template v-if="loaded">
       <WallWorkspace v-for="{view,desktop,key} in desktops" :key="key" :ref="el => el ? walls.set(key,el) : walls.delete(key)"
-        :hidden="!isActive(view,desktop.id)" :data-desktop="key" v-bind="$attrs"
+        v-bind="$attrs" :hidden="!isActive(view,desktop.id)" :data-desktop="key"
         :intent-builders="/** @type {any} */ (intentBuilders)" :control-registry="controlRegistry" :scheduler="scheduler" :tile-scheduler="/** @type {any} */ (tileScheduler)"
         :scope="scope" :default-profile="adapter(view,desktop.id).defaultProfile" :storage="adapter(view,desktop.id).storage"
         :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"

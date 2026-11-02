@@ -1,0 +1,1 @@
+- Fix the views: the inactive desktop now stays hidden, so a human tile no longer appears under the agent wall.
