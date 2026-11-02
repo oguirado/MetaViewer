@@ -41,6 +41,28 @@ class TestDoctor(FlowCase):
         self.assertEqual(res.rc, 2)
         self.assertIn("JUDGE_IMAGE", res.codes)
 
+    def test_doctor_eight_core_16gib_laptop_and_negative_controls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sb = Sandbox(tmp, arch="x86_64")
+            self.addCleanup(sb.cleanup)
+            sb.put("nproc", "8\n")
+            sb.set_cpuset("0-7")
+            sb.make_t2_ready()
+            sc.fake_installed_app(sb, 62)
+            sb.set_meminfo(16 * 1024 * 1024, 6 * 1024 * 1024)
+            sb.set_df(shm=("tmpfs", 1_500_000_000), home=20_000_000_000, docker=20_000_000_000)
+            res = self.ok(sb.judge("doctor", "--capsules"))
+            self.assertIn("JUDGE_DOCTOR_OK tier=T2", res.out)
+            self.assertEqual(res.codes, set())
+            self.assertIn("warning (JUDGE_RAM)", res.err)
+            self.assertIn("warning (JUDGE_SHM)", res.err)
+            # Negative control: 8-core laptop with < 4.5 GiB free RAM is refused by doctor --capsules.
+            sb.set_meminfo(16 * 1024 * 1024, 4 * 1024 * 1024)
+            bad_ram = sb.judge("doctor", "--capsules")
+            self.assertEqual(bad_ram.rc, 2)
+            self.assertIn("JUDGE_RAM", bad_ram.codes)
+            self.assertNotIn("JUDGE_DOCTOR_OK", bad_ram.out)
+
     def test_doctor_failure_prints_every_refusal(self):
         self.sb.drop_tool("zip")
         res = self.sb.judge("doctor", env={"DISPLAY": None})
@@ -283,14 +305,17 @@ class TestInstallT2(FlowCase):
 
     def test_confirmed_firewall_gives_open_network_in_one_sudo_step(self):
         self._kit()
-        # Prompts in order: profile directory, firewall.
-        res = self.ok(self.sb.judge("install", "--capsules", stdin="y\ny\n"))
+        # Only the optional firewall step prompts for sudo; profile provisioning is sudo-free via Docker.
+        res = self.ok(self.sb.judge("install", "--capsules", stdin="y\n"))
         sudo = self.sb.log("sudo.log")
-        self.assertEqual(sudo.count("sudo "), 2, sudo)
-        self.assertIn("install -d -m 0700 -o 10001 -g 10001", sudo)
+        self.assertEqual(sudo.count("sudo "), 1, sudo)
         self.assertIn("systemctl enable --now srf-open-egress.service", sudo)
         self.assertIn("sha256sum -c -", sudo, "root script re-hashes its inputs")
         self.assertIn("network=open", res.out)
+        self.assertIn("chown 10001:10001", self.sb.log("docker.log"))
+        for pid in ("judge", "mv-live-1", "mv-live-2", "mv-live-3", "mv-live-4"):
+            self.assertTrue((self.sb.home / "store" / "profiles" / pid).is_dir(), pid)
+            self.assertTrue((self.sb.home / "store" / "identities" / f"{pid}.json").is_file(), pid)
         data = json.loads((self.sb.jh / "judge_receipt.json").read_text())
         self.assertEqual(data["network_mode"], "open")
         self.assertEqual(data["tier"], "T2")
@@ -301,38 +326,39 @@ class TestInstallT2(FlowCase):
 
     def test_declined_firewall_falls_back_to_legacy_network(self):
         self._kit()
-        res = self.ok(self.sb.judge("install", "--capsules", stdin="y\nn\n"))
-        self.assertNotIn("systemctl", self.sb.log("sudo.log"))
+        res = self.ok(self.sb.judge("install", "--capsules", stdin="n\n"))
+        self.assertEqual(self.sb.log("sudo.log"), "")
         self.assertIn("falling back to the legacy network", res.err)
         self.assertIn("network=legacy", res.out)
         self.assertIn("docker network create --internal --subnet 172.30.80.0/24 srf-idnet", self.sb.log("docker.log"))
 
     def test_no_firewall_flag_never_asks(self):
         self._kit()
-        res = self.ok(self.sb.judge("install", "--capsules", "--no-firewall", stdin="y\n"))
-        self.assertNotIn("firewall", self.sb.log("sudo.log"))
+        res = self.ok(self.sb.judge("install", "--capsules", "--no-firewall", stdin=""))
+        self.assertEqual(self.sb.log("sudo.log"), "")
         self.assertIn("network=legacy", res.out)
 
     def test_failed_firewall_step_falls_back_instead_of_failing(self):
         self._kit()
         self.sb.put("fw_fail", "1\n")
-        res = self.ok(self.sb.judge("install", "--capsules", stdin="y\ny\n"))
+        res = self.ok(self.sb.judge("install", "--capsules", stdin="y\n"))
         self.assertIn("firewall step failed", res.err)
         self.assertIn("falling back to the legacy network", res.err)
         self.assertIn("network=legacy", res.out)
 
-    def test_profile_step_declined_is_a_typed_refusal(self):
+    def test_profile_step_failure_is_a_typed_refusal(self):
         self._kit()
-        res = self.sb.judge("install", "--capsules", stdin="n\n")
+        self.sb.put("docker_profile_fail", "1\n")
+        res = self.sb.judge("install", "--capsules", "--no-firewall")
         self.assertEqual(res.rc, 2)
-        self.assertIn("JUDGE_SUDO", res.codes)
+        self.assertIn("JUDGE_PROFILE", res.codes)
         self.assertEqual(self.sb.log("sudo.log"), "")
 
     def test_images_are_loaded_from_the_kit_only_when_missing(self):
         self._kit()
-        self.ok(self.sb.judge("install", "--capsules", "--no-firewall", stdin="y\n"))
+        self.ok(self.sb.judge("install", "--capsules", "--no-firewall"))
         self.assertEqual(self.sb.log("docker.log").count("docker load"), 1)
-        self.ok(self.sb.judge("install", "--capsules", "--no-firewall", stdin="y\n"))
+        self.ok(self.sb.judge("install", "--capsules", "--no-firewall"))
         self.assertEqual(self.sb.log("docker.log").count("docker load"), 1)
 
     def test_rootless_docker_blocks_t2_install_before_any_change(self):
@@ -357,7 +383,7 @@ class TestRun(FlowCase):
         self.assertIn("--ozone-platform=x11", env)
         self.assertIn("DISPLAY=:99", env)
         self.assertIn(f"MV_RECORDING_DESTINATION={self.sb.home}/state/metaviewer/recordings", env)
-        self.assertIn("PATH=/usr/local/bin:/usr/bin:/bin", env)
+        self.assertIn("PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games", env)
         self.assertNotIn("SECRET_PARENT_VAR", env, "env -i must not leak the parent environment")
         self.assertNotIn("MV_SRF_BIN_DIR", env, "T1 starts the core in its degraded, capsule-free state")
         self.assertNotIn("MV_FAKE_DIR", env)
@@ -371,10 +397,18 @@ class TestRun(FlowCase):
         self.assertEqual(env["MV_SRF_LIVE_PROFILE"], "judge")
         self.assertEqual(env["MV_SRF_LIVE_TEXT_INPUT"], "paste")
         self.assertTrue(env["MV_SRF_LIVE_RAM_ROOT"].endswith("/vqa-ramws/opensuperficies/os-cu-0"))
+        profiles = json.loads(env["MV_SRF_PROFILES"])
+        self.assertEqual(sorted(profiles.keys()), ["judge", "mv-live-2", "mv-live-3", "mv-live-4"])
+        self.assertEqual(profiles["judge"]["Display"], ":100")
+        self.assertEqual(profiles["mv-live-2"]["Display"], ":101")
+        self.assertEqual(profiles["mv-live-3"]["Display"], ":102")
+        self.assertEqual(profiles["mv-live-4"]["Display"], ":103")
         self.assertEqual(env["MV_SRF_BIN_DIR"], str(self.sb.jh / "deps" / "opensuperficies" / "bin"))
         self.assertEqual(env["SRF_IDENTITY_STORE_ROOT"], str(self.sb.home / "store"))
         self.assertEqual(env["VQA_VE_ROOT"], str(self.sb.jh / "deps" / "vision-engine"))
+        self.assertEqual(env["MV_VISION_ENGINE_PATH"], str(self.sb.jh / "deps" / "vision-engine"))
         self.assertEqual(env["MV_WENDER_ROOT"], str(self.sb.jh / "deps" / "wender-agent"))
+        self.assertEqual(env["MV_MW_WENDER_ROOT"], str(self.sb.jh / "deps" / "wender-agent"))
         self.assertNotIn("SECRET_PARENT_VAR", env)
 
     def test_run_refuses_when_preflight_fails_and_does_not_launch(self):

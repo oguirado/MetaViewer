@@ -180,6 +180,8 @@ git config core.hooksPath .githooks
 | `tools/`, `tests/`, `.githooks/` | Checkers, unit suites, budget gate (`tools/budget_gate.py`), commit hook |
 | `.github/workflows/` | `6` CI workflow files (`ci.yml`, `secrets.yml`, `package.yml`, `build-other.yml`, `volume.yml`, `assembly.yml`) [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] |
 | `scripts/bootstrap.sh` | Deterministic Linux packaging bootstrap |
+| [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) | Complete AI and human operator guide for installing, configuring, and operating every MetaViewer feature |
+| [docs/JUDGE_QUICKSTART.md](docs/JUDGE_QUICKSTART.md) | Laptop-ready judge quickstart (`doctor`, `install`, `run`, `stop`) |
 | [docs/INSTALL.md](docs/INSTALL.md) | Linux (`arm64` and `x64`) installation, packaging, and troubleshooting guide |
 | [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Operator guide for the wall, control handoff, multislot, recording, `mvctl`, and replay |
 | [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) | Live demo launch, screen recording, stop and known issues |
@@ -200,7 +202,7 @@ Everything runnable in this repository is built during the event; the v0.1 scaff
 
 ## Evaluation by hackathon judges
 
-The licensor (the maintainer, `oguirado`) permits the hackathon judges to install and evaluate MetaViewer for the purpose of judging. This permission is stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); the [LICENSE](LICENSE) text is unchanged. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md).
+The licensor (the maintainer, `oguirado`) permits the hackathon judges to install and evaluate MetaViewer for the purpose of judging. This permission is stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); the [LICENSE](LICENSE) text is unchanged. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md) and give [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) to their own AI to configure and explain the full program.
 
 ## License
 

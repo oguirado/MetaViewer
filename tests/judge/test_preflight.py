@@ -174,31 +174,99 @@ class TestRefusals(PreflightCase):
         self.sb.set_df(shm=("tmpfs", 1_000_000_000), home=500_000_000_000, docker=500_000_000_000)
         self.assertEqual(self.pf("--tier", "T1").rc, 0)
         self.assertIn("JUDGE_SHM", self.pf("--tier", "T2").codes)
+        # Between 1 GiB and 2.5 GiB on T2 warns instead of refusing.
+        self.sb.set_df(shm=("tmpfs", 1_500_000_000), home=500_000_000_000, docker=500_000_000_000)
+        res = self.pf("--tier", "T2")
+        self.assertEqual(res.rc, 0, res.text)
+        self.assertNotIn("JUDGE_SHM", res.codes)
+        self.assertIn("warning (JUDGE_SHM)", res.err)
 
     def test_ram_threshold_is_floor_plus_one_capsule(self):
         self.sb.make_t2_ready()
-        # total 32 GiB -> floor 8 GiB, plus 4 GiB per capsule = 12 GiB needed.
-        self.sb.set_meminfo(32 * 1024 * 1024, 12 * 1024 * 1024 - 1)
+        # total 32 GiB -> floor 8 GiB, plus 512 MiB per-capsule minimum = 8.5 GiB hard floor;
+        # between 8.5 GiB and 12 GiB (floor + 4 GiB) warns instead of refusing.
+        min_kib = 8 * 1024 * 1024 + 512 * 1024
+        rec_kib = 12 * 1024 * 1024
+        self.sb.set_meminfo(32 * 1024 * 1024, min_kib - 1)
         self.assertIn("JUDGE_RAM", self.pf("--tier", "T2").codes)
-        self.sb.set_meminfo(32 * 1024 * 1024, 12 * 1024 * 1024)
-        self.assertNotIn("JUDGE_RAM", self.pf("--tier", "T2").codes)
+        self.sb.set_meminfo(32 * 1024 * 1024, min_kib)
+        warn_res = self.pf("--tier", "T2")
+        self.assertEqual(warn_res.rc, 0, warn_res.text)
+        self.assertNotIn("JUDGE_RAM", warn_res.codes)
+        self.assertIn("warning (JUDGE_RAM)", warn_res.err)
+        self.sb.set_meminfo(32 * 1024 * 1024, rec_kib)
+        ok_res = self.pf("--tier", "T2")
+        self.assertNotIn("JUDGE_RAM", ok_res.codes)
+        self.assertNotIn("warning (JUDGE_RAM)", ok_res.err)
 
     def test_ram_floor_is_capped_at_20_gib(self):
         self.sb.make_t2_ready()
-        self.sb.set_meminfo(512 * 1024 * 1024, 23 * 1024 * 1024)
+        min_kib = 20 * 1024 * 1024 + 512 * 1024
+        self.sb.set_meminfo(512 * 1024 * 1024, min_kib - 1)
         self.assertIn("JUDGE_RAM", self.pf("--tier", "T2").codes)
+        self.sb.set_meminfo(512 * 1024 * 1024, 23 * 1024 * 1024)
+        warn_res = self.pf("--tier", "T2")
+        self.assertEqual(warn_res.rc, 0, warn_res.text)
+        self.assertNotIn("JUDGE_RAM", warn_res.codes)
+        self.assertIn("warning (JUDGE_RAM)", warn_res.err)
         self.sb.set_meminfo(512 * 1024 * 1024, 24 * 1024 * 1024)
-        self.assertNotIn("JUDGE_RAM", self.pf("--tier", "T2").codes)
+        ok_res = self.pf("--tier", "T2")
+        self.assertNotIn("JUDGE_RAM", ok_res.codes)
+        self.assertNotIn("warning (JUDGE_RAM)", ok_res.err)
 
     def test_cpuset_accepts_lists_and_can_be_switched_off(self):
         self.sb.make_t2_ready()
-        self.sb.set_cpuset("0-9,10,11-14,15")
+        # Default MV_JUDGE_REQUIRE_CPUSET is none: 8-core (0-7) passes out of the box.
+        self.sb.set_cpuset("0-7")
         self.assertNotIn("JUDGE_CPUSET", self.pf("--tier", "T2").codes)
+        self.sb.set_cpuset("0-9,10,11-14,15")
+        self.assertNotIn("JUDGE_CPUSET", self.pf("--tier", "T2", env={"MV_JUDGE_REQUIRE_CPUSET": "10-14"}).codes)
         self.sb.set_cpuset("0-9,11-19")
-        res = self.pf("--tier", "T2")
+        res = self.pf("--tier", "T2", env={"MV_JUDGE_REQUIRE_CPUSET": "10-14"})
         self.assertIn("JUDGE_CPUSET", res.codes)
         self.assertIn("cpus 10 ", res.err)
         self.assertNotIn("JUDGE_CPUSET", self.pf("--tier", "T2", env={"MV_JUDGE_REQUIRE_CPUSET": "none"}).codes)
+
+    def test_eight_core_16gib_laptop_passes_with_warnings_and_negative_controls_refuse(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sb = Sandbox(tmp, arch="x86_64")
+            self.addCleanup(sb.cleanup)
+            sb.put("nproc", "8\n")
+            sb.set_cpuset("0-7")
+            sb.make_t2_ready()
+            sc.fake_installed_app(sb, 62)
+            # 16 GiB total, 6 GiB available; 1.5 GiB /dev/shm; 20 GB disk.
+            sb.set_meminfo(16 * 1024 * 1024, 6 * 1024 * 1024)
+            sb.set_df(shm=("tmpfs", 1_500_000_000), home=20_000_000_000, docker=20_000_000_000)
+            res = sb.preflight("--tier", "T2")
+            self.assertEqual(res.rc, 0, res.text)
+            self.assertEqual(res.codes, set())
+            self.assertIn("warning (JUDGE_RAM)", res.err)
+            self.assertIn("warning (JUDGE_SHM)", res.err)
+            self.assertIn("warning (JUDGE_DISK)", res.err)
+            # Negative control 1: RAM below 4.5 GiB hard floor on 16 GiB laptop refuses.
+            sb.set_meminfo(16 * 1024 * 1024, 4 * 1024 * 1024)
+            r_ram = sb.preflight("--tier", "T2")
+            self.assertEqual(r_ram.rc, 2)
+            self.assertIn("JUDGE_RAM", r_ram.codes)
+            sb.set_meminfo(16 * 1024 * 1024, 6 * 1024 * 1024)
+            # Negative control 2: /dev/shm below 1 GiB hard floor on T2 refuses.
+            sb.set_df(shm=("tmpfs", 900_000_000), home=20_000_000_000, docker=20_000_000_000)
+            r_shm = sb.preflight("--tier", "T2")
+            self.assertEqual(r_shm.rc, 2)
+            self.assertIn("JUDGE_SHM", r_shm.codes)
+            sb.set_df(shm=("tmpfs", 1_500_000_000), home=20_000_000_000, docker=20_000_000_000)
+            # Negative control 3: missing program-host:0.1.0 image refuses JUDGE_IMAGE.
+            sb.put("images", "opensuperficies-identity-browser-x64:0.1.1\nopensuperficies-desktop-x64:1.1.0\n")
+            r_img = sb.preflight("--tier", "T2")
+            self.assertEqual(r_img.rc, 2)
+            self.assertIn("JUDGE_IMAGE", r_img.codes)
+            self.assertIn("opensuperficies-program-host-x64:0.1.0", r_img.err)
+            sb.make_t2_ready()
+            # Negative control 4: explicit MV_JUDGE_REQUIRE_CPUSET=10-14 on 8-core host refuses JUDGE_CPUSET.
+            r_cpu = sb.preflight("--tier", "T2", env={"MV_JUDGE_REQUIRE_CPUSET": "10-14"})
+            self.assertEqual(r_cpu.rc, 2)
+            self.assertIn("JUDGE_CPUSET", r_cpu.codes)
 
     def test_net_overlap_names_the_conflicting_route(self):
         self.sb.make_t2_ready()

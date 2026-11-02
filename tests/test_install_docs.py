@@ -486,5 +486,241 @@ class InstallDocsTests(unittest.TestCase):
         )
 
 
+AI_GUIDE_DOC = ROOT / "docs/AI_OPERATOR_GUIDE.md"
+JUDGE_QUICKSTART_DOC = ROOT / "docs/JUDGE_QUICKSTART.md"
+
+
+def split_logical_commands_with_heredocs(block: str) -> list[list[str]]:
+    """Parse a shell block into logical argv lists, skipping heredoc bodies."""
+    cleaned_lines: list[str] = []
+    heredoc_delim: str | None = None
+    for raw_line in block.splitlines():
+        if heredoc_delim is not None:
+            if raw_line.strip() == heredoc_delim:
+                heredoc_delim = None
+            continue
+        m = re.search(r"<<-?\s*['\"]?([A-Za-z0-9_]+)['\"]?", raw_line)
+        if m:
+            heredoc_delim = m.group(1)
+            raw_line = raw_line[: m.start()].rstrip()
+        cleaned_lines.append(raw_line)
+    return split_logical_commands("\n".join(cleaned_lines))
+
+
+def validate_operator_guide_doc(markdown: str, root: Path = ROOT, doc_name: str = "AI_OPERATOR_GUIDE.md") -> list[str]:
+    """Validate docs/AI_OPERATOR_GUIDE.md or docs/JUDGE_QUICKSTART.md against repo truth."""
+    errors: list[str] = []
+    truth = load_sources_of_truth(root)
+
+    lower = markdown.lower()
+    for word in FORBIDDEN_TERMS:
+        if word in lower:
+            errors.append(f"forbidden term in {doc_name}: {word}")
+
+    for pattern in HOST_PATH_PATTERNS:
+        match = pattern.search(markdown)
+        if match:
+            errors.append(f"host path in {doc_name}: {match.group(0)}")
+
+    for rel_path in sorted(extract_inline_repo_paths(markdown)):
+        clean = rel_path.rstrip("/")
+        if "*" in clean or "<" in clean:
+            continue
+        if not (root / clean).exists():
+            errors.append(f"missing repository path referenced in {doc_name}: {rel_path}")
+
+    blocks = extract_fenced_bash_blocks(markdown)
+    if not blocks:
+        errors.append(f"{doc_name} contains no fenced bash blocks")
+
+    judge_subs = {"doctor", "install", "run", "stop"}
+    judge_flags = {"--capsules", "--yes", "--no-firewall"}
+
+    for block in blocks:
+        cwd_rel = ""
+        for tokens in split_logical_commands_with_heredocs(block):
+            while tokens and tokens[0] in ("sudo", "env"):
+                tokens = tokens[1:]
+                while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]):
+                    tokens = tokens[1:]
+            if tokens and tokens[0] == "systemd-run":
+                if "--" in tokens:
+                    tokens = tokens[tokens.index("--") + 1 :]
+                    while tokens and tokens[0] == "env":
+                        tokens = tokens[1:]
+                        while tokens and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0]):
+                            tokens = tokens[1:]
+                else:
+                    continue
+            if not tokens or tokens[0] in (".", "mount"):
+                continue
+            if tokens[0] == "python3" and len(tokens) >= 2 and tokens[1] == "-":
+                continue
+            if tokens[0] == "bash" and len(tokens) >= 2 and tokens[1] == "scripts/judge/metaviewer-judge.sh":
+                if len(tokens) < 3 or tokens[2] not in judge_subs:
+                    errors.append(f"invalid metaviewer-judge.sh subcommand in {doc_name}: {tokens!r}")
+                for flag in tokens[3:]:
+                    if flag not in judge_flags:
+                        errors.append(f"unknown metaviewer-judge.sh flag in {doc_name}: {flag}")
+                continue
+            cwd_rel, cmd_errors = validate_command_in_tree(tokens, cwd_rel, root, truth)
+            errors.extend(cmd_errors)
+
+    return errors
+
+
+class AiOperatorGuideAndJudgeQuickstartTests(unittest.TestCase):
+    """Verify docs/AI_OPERATOR_GUIDE.md, docs/JUDGE_QUICKSTART.md, and links."""
+
+    def setUp(self) -> None:
+        self.guide = AI_GUIDE_DOC.read_text(encoding="utf-8")
+        self.quickstart = JUDGE_QUICKSTART_DOC.read_text(encoding="utf-8")
+        self.install = INSTALL_DOC.read_text(encoding="utf-8")
+        self.readme = README_DOC.read_text(encoding="utf-8")
+
+    def test_ai_operator_guide_passes_all_validation_checks(self) -> None:
+        errors = validate_operator_guide_doc(self.guide, ROOT, "AI_OPERATOR_GUIDE.md")
+        self.assertEqual(errors, [], "\n".join(errors))
+
+    def test_judge_quickstart_passes_all_validation_checks(self) -> None:
+        errors = validate_operator_guide_doc(self.quickstart, ROOT, "JUDGE_QUICKSTART.md")
+        self.assertEqual(errors, [], "\n".join(errors))
+        self.assertNotIn("are being finished", self.quickstart)
+        self.assertNotIn("at least 15 logical CPUs", self.quickstart)
+        self.assertNotIn("at least 15 logical CPUs", self.install)
+        self.assertIn("[AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md)", self.quickstart)
+        self.assertIn("[docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md)", self.readme)
+
+    def test_ai_operator_guide_covers_all_required_features_and_limitations(self) -> None:
+        required_items = (
+            "Humans",
+            "Agents",
+            "Ctrl+Tab",
+            "Ctrl+1",
+            "Single",
+            "Side by side",
+            "Grid",
+            "Focus + strip",
+            "Floating",
+            "Manual",
+            "Add capsule",
+            "Identity browser",
+            "Program",
+            "Desktop window",
+            "Mark as logged in",
+            "Take control (emergency)",
+            "Watch read-only",
+            "Switch to agent mode",
+            "Switch to human mode",
+            "Copy ID for AI",
+            "🚀 Bootstrap",
+            "＋ New terminal",
+            "Open in multislot",
+            "Identities",
+            "Use MetaViewer",
+            "docs/AGENT_ENTRY.md",
+            "Automate from a demo",
+            "metaviewer_agents.mw_run",
+            "MemoryWeb",
+            "tools/build_release_assets.py",
+            "opensuperficies-identity-browser-",
+            "opensuperficies-program-host-",
+            "macOS",
+            "X11",
+        )
+        for item in required_items:
+            with self.subTest(item=item):
+                self.assertIn(item, self.guide)
+
+    def test_negative_control_unknown_judge_flag_or_missing_script_in_guide_fails(self) -> None:
+        bad_flag = self.guide + "\n```bash\nbash scripts/judge/metaviewer-judge.sh install --invented-flag\n```\n"
+        errors = validate_operator_guide_doc(bad_flag, ROOT, "AI_OPERATOR_GUIDE.md")
+        self.assertTrue(any("unknown metaviewer-judge.sh flag" in e for e in errors), errors)
+
+        bad_script = self.guide + "\n```bash\npython3 tools/invented_nonexistent_tool.py\n```\n"
+        errors2 = validate_operator_guide_doc(bad_script, ROOT, "AI_OPERATOR_GUIDE.md")
+        self.assertTrue(any("missing python3 script in tree" in e for e in errors2), errors2)
+
+
+class BuildReleaseAssetsToolTests(unittest.TestCase):
+    """Verify tools/build_release_assets.py builds clean archives and refuses unsafe inputs."""
+
+    def test_build_all_assets_and_negative_controls(self) -> None:
+        import sys
+        import tarfile
+        import tempfile
+
+        sys.path.insert(0, str(ROOT / "tools"))
+        import build_release_assets as bra
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            app_dir = base / "MetaViewer-linux-x64"
+            app_dir.mkdir()
+            exe = app_dir / "metaviewer"
+            exe.write_bytes(b"#!/bin/sh\nexit 0\n")
+            exe.chmod(0o755)
+
+            node_bin = base / "node"
+            node_bin.write_bytes(b"#!/bin/sh\necho v24.14.0\n")
+            node_bin.chmod(0o755)
+
+            srf_dir = base / "srf-bin"
+            srf_dir.mkdir()
+            for name in ("srf-identity-surface", "srf-identity-admin"):
+                p = srf_dir / name
+                p.write_bytes(b"#!/bin/sh\nexit 0\n")
+                p.chmod(0o755)
+
+            fw_dir = base / "fw"
+            fw_dir.mkdir()
+            for name in ("apply.sh", "srf-open-egress.rules", "srf-open-egress6.rules", "srf-open-egress.service"):
+                (fw_dir / name).write_bytes(b"# fixture\n")
+
+            ve_dir = base / "ve"
+            ve_dir.mkdir()
+            (ve_dir / "README.md").write_text("vision-engine\n", encoding="utf-8")
+
+            wa_dir = base / "wa"
+            wa_dir.mkdir()
+            (wa_dir / "README.md").write_text("wender-agent\n", encoding="utf-8")
+
+            img_tar = base / "images.tar"
+            with tarfile.open(img_tar, "w") as tf:
+                bra._add_bytes(tf, "manifest.json", b"[]\n", 0o644)
+
+            out_dir = base / "out"
+            summary = bra.build_all_assets(
+                out_dir=out_dir,
+                arch="x64",
+                app_dir=app_dir,
+                node_bin=node_bin,
+                srf_dir=srf_dir,
+                firewall_dir=fw_dir,
+                vision_engine_dir=ve_dir,
+                wender_agent_dir=wa_dir,
+                images_tar=img_tar,
+            )
+            self.assertEqual(summary["arch"], "x64")
+            names = [a["name"] for a in summary["assets"]]
+            self.assertEqual(
+                names,
+                [
+                    "images-linux-x64.tar",
+                    "metaviewer-linux-x64.tar.gz",
+                    "node-linux-x64.tar.xz",
+                    "opensuperficies-linux-x64.tar.gz",
+                    "vision-engine.tar.gz",
+                    "wender-agent.tar.gz",
+                ],
+            )
+            self.assertTrue((out_dir / "SHA256SUMS").is_file())
+
+            # Negative control: symlink inside app_dir must be refused.
+            (app_dir / "bad-link").symlink_to(exe)
+            with self.assertRaises(bra.AssetBuildError):
+                bra.build_app_asset(app_dir, out_dir, "x64")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -34,15 +34,14 @@ RAM admission serializes native creates across daemons and reserves 512 MiB per 
 
 ### Hardware
 
-No hardware profile has been measured on a small machine; every figure is [TARGET] unless a source is cited. MetaViewer needs 64-bit Linux (`x86_64` or `aarch64`, Ubuntu 24.04 recommended) [CITED: `ui/tools/package.js`]. No GPU or CUDA is required: the pinned vision component is integer/CPU only [CITED: vision-engine README at the pinned commit]. A judge-oriented walkthrough is in [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md).
+No hardware profile has been measured on a small machine; every figure is [TARGET] unless a source is cited. MetaViewer needs 64-bit Linux (`x86_64` or `aarch64`, Ubuntu 24.04 recommended) [CITED: `ui/tools/package.js`]. No GPU or CUDA is required: the pinned vision component is integer/CPU only [CITED: vision-engine README at the pinned commit]. A judge-oriented walkthrough is in [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md) and a complete AI operator guide is in [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md).
 
 | Profile | CPU | RAM | `/dev/shm` free | Free disk | Other |
 | --- | --- | --- | --- | --- | --- |
 | Offline fixture | 2 cores [TARGET] | 4 GiB [TARGET] | n/a | 2 GB [TARGET] | Node `>=24` [CITED: `ui/package.json`] |
-| App without capsules | 2 cores [TARGET] | 4 GiB [TARGET]; resident size of Electron, core and adapter: ABSENT — do not invent | 512 MiB [CITED: frame budget] | 2 GB [TARGET]; tarball size: ABSENT — do not invent | X11 or XWayland; unprivileged user namespaces |
-| One live browser capsule, current pin | at least 15 logical CPUs [CITED: native runtime pins capsules to CPUs `10-14`] | 16 GiB [TARGET]: floor of min(20 GiB, 25 percent of `MemTotal`) [CITED], plus 4 GiB per capsule [CITED], plus 256 MiB proxy [CITED] | 2.5 GiB [CITED: 2 GiB plus 512 MiB] | 30 GB [TARGET]; about 1.12 GB per image [MEASURED, operator host] times 3-4 plus build layers | rootful Docker, `docker` group; one `sudo` step for the capsule profile (uid `10001`) |
-| One live capsule, after the CPU pinning is relaxed | 4 cores [TARGET] | 8 GiB marginal, 16 GiB recommended [TARGET] | 1.5 GiB [TARGET] | 30 GB [TARGET] | as above |
-| Up to 4 capsules | 8 cores [TARGET] | 32 GiB [TARGET] | 9 GiB [TARGET] | 30 GB [TARGET] | as above |
+| App without capsules | 2 cores [TARGET] | 4 GiB (`floor + 512 MiB` admission minimum) [TARGET]; resident size of Electron, core and adapter: ABSENT — do not invent | 512 MiB [CITED: frame budget] | 2 GB [TARGET]; tarball size: ABSENT — do not invent | X11 or XWayland; unprivileged user namespaces |
+| Live browser and program capsules, current pin (laptop-ready) | 8 logical CPUs recommended, no CPU pinning required (`MV_JUDGE_REQUIRE_CPUSET=none`) [TARGET] | 16 GiB recommended [TARGET]: floor of min(20 GiB, 25 percent of `MemTotal`) plus 512 MiB admission minimum (`4.5 GiB` on a 16 GiB host) [CITED: `daemon-adapter/internal/daemon/ram_admission.go`]; warns below `floor + 4 GiB` [TARGET] | 1 GiB minimum, 2.5 GiB recommended [TARGET] | 15 GB minimum, 30 GB recommended [TARGET]; about 1.09 GiB deduplicated image archive (`opensuperficies-identity-browser:0.1.1`, `opensuperficies-program-host:0.1.0`, `opensuperficies-desktop:1.1.0`) [MEASURED, operator host] | rootful Docker, `docker` group; sudo-free Docker profile provisioning (uid `10001`) |
+| Up to 4 concurrent capsules | 8 cores [TARGET] | 16–32 GiB [TARGET] | 2.5–9 GiB [TARGET] | 15–30 GB [TARGET] | as above (4-slot default `MV_SRF_PROFILES` pool on `:100`..`:103`) |
 
 Capsule RAM admission is described under [Concurrent identities and RAM admission](#concurrent-identities-and-ram-admission). VM-kind capsules are outside the judge matrix: they need `/dev/kvm` and at least 16 GiB of `MemAvailable` [CITED: operator strategy note].
 
