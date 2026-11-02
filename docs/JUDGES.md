@@ -1,3 +1,10 @@
+# First run of the packaged judge kit
+
+Start with [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md): fetch verified assets, run
+`doctor --before-install`, install, then run full doctor and the app. T0 below is
+a separate checkout fixture. Legacy capsule networking reaches no public site today;
+public browsing requires the compatible Open image and firewall.
+
 # Judge the offline conversation
 
 From the repository root, with Node on PATH and the locked Wender checkout

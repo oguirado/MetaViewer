@@ -1,5 +1,12 @@
 # MetaViewer
 
+For a fresh Linux judge machine, follow [Judge Quickstart](docs/JUDGE_QUICKSTART.md).
+Fetch verified assets with `python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules`,
+then run `doctor --before-install`, install, and full doctor through the judge launcher.
+A complete public release URL is not established here; obtain the asset directory or
+release URL and checksum digest from the maintainer. Legacy networking reaches no
+public site today; public browsing requires a compatible Open image and firewall.
+
 I build MetaViewer as a Linux-first desktop wall of live, isolated application surfaces. I fold, unfold, move, tab, float, hide, show, and take control of surfaces through closed intents admitted and journaled by a Rust authority core (`core/`, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)), while `pin` stays a UI-local presentation state and an agent observes, proposes, and verifies actions through the same core; the Electron renderer paints frames and submits intents, and never injects input directly. I have not measured live wall fps or latency after the current assembly changes; I keep the earlier results in [historical live evidence](#historical-live-evidence). Multi-capsule soak to `>= 4` [TARGET] capsules at `>= 10` [TARGET] fps for `10` [TARGET] min remains a target.
 
 ## Status

@@ -231,6 +231,14 @@ def build_node_asset(
             _add_dir(tf, top, 0o755)
             _add_dir(tf, f"{top}/bin", 0o755)
             _add_file_from_disk(tf, f"{top}/bin/node", node_bin.resolve(), mode=0o755)
+            npm_root = node_bin.resolve().parent.parent / "lib/node_modules/npm"
+            if npm_root.is_dir():
+                for source in sorted(npm_root.rglob("*")):
+                    if source.is_file() and not source.is_symlink():
+                        relative = source.relative_to(npm_root).as_posix()
+                        _add_file_from_disk(tf, f"{top}/lib/node_modules/npm/{relative}",
+                                            source, mode=0o755 if source.stat().st_mode & 0o111 else 0o644)
+
     return out_path
 
 
