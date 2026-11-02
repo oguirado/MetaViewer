@@ -311,6 +311,344 @@ async function runProbes({
     }
   });
 
+  // 7. Review Fix 1: failed or malformed listIdentities in createProgram fails closed with no capsule started.
+  await check('listIdentities-fail-closed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'v023-idlist-'));
+    try {
+      const binDir = join(root, 'bin');
+      await mkdir(binDir, { mode: 0o700 });
+      const gedit = join(binDir, 'gedit');
+      await writeFile(gedit, '#!/bin/sh\nexit 0\n');
+      await chmod(gedit, 0o755);
+      const env = {
+        PATH: binDir,
+        MV_SRF_PROFILES: JSON.stringify({
+          'mv-live-1': { Kind: 'browser', NativeKind: 'browser', Width: 1280, Height: 900, RAMRoot: '/dev/shm', Display: ':111' },
+        }),
+        MV_SRF_STATE_DIR: root,
+        MV_SRF_BIN_DIR: binDir,
+      };
+      for (const badList of [
+        async () => { throw new Error('store down'); },
+        async () => ({ ok: false, code: 'STORE_ERR' }),
+        async () => ({ ok: true, rows: 'not-an-array' }),
+        async () => ({ ok: true, rows: [{}] }),
+        null,
+      ]) {
+        const handlers = new Map();
+        const states = new Map();
+        let started = 0;
+        let staged = 0;
+        const parent = new EventEmitter();
+        parent.webContents = { session: { registerPreloadScript: () => 'p', unregisterPreloadScript() {} } };
+        const host = roleHost.installRoleHost({
+          electron: { ipcMain: { handle: (k, fn) => handlers.set(k, fn), removeHandler: (k) => handlers.delete(k) } },
+          window: parent,
+          env,
+          capsuleStates: states,
+          core: {
+            getHumanSurface: (id) => states.get(id),
+            request: async () => {
+              started++;
+              return {
+                schema: 'surface_event/v0.2',
+                event: 'created',
+                data: { surface: { schema: 'surface/v0.2', surface_id: 'surface-bad', profile_id: 'gedit', state: 'active', control: 'agent' } },
+              };
+            },
+          },
+          admit: () => true,
+          listIdentities: badList,
+          stageMode: async () => { staged++; return async () => {}; },
+        });
+        try {
+          const reply = await handlers.get('metaviewer:roles.v0.3')({}, {
+            schema: 'metaviewer.roles/v0.3',
+            op: 'create-program',
+            choice: { binary: 'gedit' },
+          });
+          if (!reply || reply.ok !== false || reply.code !== 'IDENTITY_LIST_UNAVAILABLE' || typeof reply.reason !== 'string' || !reply.reason.length) {
+            return false;
+          }
+          if (started !== 0 || staged !== 0 || states.size !== 0) return false;
+        } finally {
+          await host.dispose();
+        }
+      }
+      return true;
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // 8. Review Fix 2: rejecting clearMode in finally still resets creating and preserves the original error.
+  await check('clearMode-reject-resets-creating-and-keeps-error', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'v023-clearmode-'));
+    try {
+      const binDir = join(root, 'bin');
+      await mkdir(binDir, { mode: 0o700 });
+      const gedit = join(binDir, 'gedit');
+      await writeFile(gedit, '#!/bin/sh\nexit 0\n');
+      await chmod(gedit, 0o755);
+      const handlers = new Map();
+      const states = new Map();
+      const parent = new EventEmitter();
+      parent.webContents = { session: { registerPreloadScript: () => 'p', unregisterPreloadScript() {} } };
+      let shouldFailCreate = true;
+      const host = roleHost.installRoleHost({
+        electron: { ipcMain: { handle: (k, fn) => handlers.set(k, fn), removeHandler: (k) => handlers.delete(k) } },
+        window: parent,
+        env: {
+          PATH: binDir,
+          MV_SRF_PROFILES: JSON.stringify({
+            'mv-live-1': { Kind: 'browser', NativeKind: 'browser', Width: 1280, Height: 900, RAMRoot: '/dev/shm', Display: ':111' },
+          }),
+          MV_SRF_STATE_DIR: root,
+          MV_SRF_BIN_DIR: binDir,
+        },
+        capsuleStates: states,
+        core: {
+          getHumanSurface: (id) => states.get(id),
+          request: async (req) => {
+            if (shouldFailCreate) {
+              return {
+                schema: 'surface_event/v0.2',
+                event: 'error',
+                data: { code: 'HOST_PROGRAM_UNAVAILABLE', detail: 'host_program_unavailable: gedit rejected by surface' },
+              };
+            }
+            const surface = {
+              schema: 'surface/v0.2',
+              surface_id: 'surface-pg-recovered',
+              kind: 'desktop_capsule',
+              profile_id: req.params.profile_id,
+              state: 'active',
+              control: 'agent',
+            };
+            states.set(surface.surface_id, surface);
+            return { schema: 'surface_event/v0.2', event: 'created', data: { surface } };
+          },
+        },
+        admit: () => true,
+        listIdentities: async () => ({ ok: true, rows: [{ id: 'mv-live-1' }] }),
+        stageMode: async () => async () => {
+          throw Object.assign(new Error('CLEAR_MODE_BOOM'), { code: 'CLEAR_MODE_BOOM', reason: 'clearMode failed' });
+        },
+      });
+      try {
+        const invoke = () => handlers.get('metaviewer:roles.v0.3')({}, {
+          schema: 'metaviewer.roles/v0.3',
+          op: 'create-program',
+          choice: { binary: 'gedit' },
+        });
+        const first = await invoke();
+        if (first.ok !== false || first.code !== 'HOST_PROGRAM_UNAVAILABLE' || !String(first.reason).includes('gedit rejected by surface')) {
+          return false;
+        }
+        shouldFailCreate = false;
+        const second = await invoke();
+        return second.ok === true && second.surfaceId === 'surface-pg-recovered' && second.profileId === 'gedit';
+      } finally {
+        await host.dispose();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // 9. Review Fix 3: programProfiles pruned when surface is destroyed or lost by any route.
+  await check('programProfiles-pruned-on-destroy-or-loss', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'v023-prune-'));
+    try {
+      const binDir = join(root, 'bin');
+      await mkdir(binDir, { mode: 0o700 });
+      const gedit = join(binDir, 'gedit');
+      await writeFile(gedit, '#!/bin/sh\nexit 0\n');
+      await chmod(gedit, 0o755);
+      const handlers = new Map();
+      const states = new Map();
+      let seq = 0;
+      const parent = new EventEmitter();
+      parent.webContents = { session: { registerPreloadScript: () => 'p', unregisterPreloadScript() {} } };
+      const host = roleHost.installRoleHost({
+        electron: { ipcMain: { handle: (k, fn) => handlers.set(k, fn), removeHandler: (k) => handlers.delete(k) } },
+        window: parent,
+        env: {
+          PATH: binDir,
+          MV_SRF_PROFILES: JSON.stringify({
+            'mv-live-1': { Kind: 'browser', NativeKind: 'browser', Width: 1280, Height: 900, RAMRoot: '/dev/shm', Display: ':111' },
+          }),
+          MV_SRF_STATE_DIR: root,
+          MV_SRF_BIN_DIR: binDir,
+        },
+        capsuleStates: states,
+        core: {
+          getHumanSurface: (id) => states.get(id),
+          request: async (req) => {
+            const surface = {
+              schema: 'surface/v0.2',
+              surface_id: `surface-pg-${++seq}`,
+              kind: 'desktop_capsule',
+              profile_id: req.params.profile_id,
+              state: 'active',
+              control: 'agent',
+            };
+            states.set(surface.surface_id, surface);
+            return { schema: 'surface_event/v0.2', event: 'created', data: { surface } };
+          },
+        },
+        admit: () => true,
+        listIdentities: async () => ({ ok: true, rows: [{ id: 'mv-live-1' }] }),
+      });
+      try {
+        const invoke = (op, extra = {}) => handlers.get('metaviewer:roles.v0.3')({}, { schema: 'metaviewer.roles/v0.3', op, ...extra });
+        const first = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (!first.ok || first.profileId !== 'gedit') return false;
+
+        // Route A: surface transitions to 'lost' outside roleHost.stop()
+        states.set(first.surfaceId, { ...states.get(first.surfaceId), state: 'lost' });
+        const staleStatus = await invoke('status', { surfaceId: first.surfaceId });
+        if (staleStatus.ok !== false || staleStatus.code !== 'SURFACE_UNKNOWN') return false;
+
+        // Name 'gedit' is immediately reusable again (not 'gedit-2')
+        const second = await invoke('create-program', { choice: { binary: 'gedit' } });
+        if (!second.ok || second.profileId !== 'gedit') return false;
+
+        // Route B: surface is deleted / destroyed externally
+        states.delete(second.surfaceId);
+        const third = await invoke('create-program', { choice: { binary: 'gedit' } });
+        return third.ok === true && third.profileId === 'gedit';
+      } finally {
+        await host.dispose();
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // 10. Review Fix 4: CatalogLauncher never calls api.createProgram when parent does not settle; App displayOnly settles.
+  await check('launcher-no-unsettled-bypass-and-displayOnly-settles', async () => {
+    let directCalls = 0;
+    const h = createLauncherHarness(launcherSource, model.buildCreateIntent, {
+      createProgram: async () => {
+        directCalls++;
+        return { ok: true, surfaceId: 'bypassed' };
+      },
+    });
+    await h.ctx.onCreate({ type: { id: 'program' }, placement: 'tab' });
+    h.ctx.programBinary.value = 'gedit';
+    // Parent listener ignores settle completely:
+    h.ctx.emit = (event, payload) => {
+      h.events.push([event, payload]);
+    };
+    await h.ctx.confirmProgram();
+    if (directCalls !== 0 || h.ctx.choosingProgram.value !== true || !h.ctx.programError.value) {
+      return false;
+    }
+
+    // Now wire to App with nestedMode.displayOnly = true: App must settle so Launcher shows the refusal and never hangs or bypasses.
+    let roleCalls = 0;
+    const appH = createAppProgramHarness(appSource, {
+      createProgram: async () => {
+        roleCalls++;
+        return { ok: true, surfaceId: 'should-not-run' };
+      },
+    });
+    appH.ctx.nestedMode.displayOnly = true;
+    const h2 = createLauncherHarness(launcherSource, model.buildCreateIntent, {
+      createProgram: async () => {
+        directCalls++;
+        return { ok: true };
+      },
+    });
+    await h2.ctx.onCreate({ type: { id: 'program' }, placement: 'tab' });
+    h2.ctx.programBinary.value = 'gedit';
+    let settledOutcome = null;
+    h2.ctx.emit = (event, payload, settle) => {
+      h2.events.push([event, payload]);
+      if (event === 'create') {
+        appH.ctx.onCreateCapsule(payload, (res) => {
+          settledOutcome = res;
+          settle(res);
+        });
+      }
+    };
+    await h2.ctx.confirmProgram();
+    return directCalls === 0
+      && roleCalls === 0
+      && settledOutcome?.ok === false
+      && settledOutcome?.code === 'DISPLAY_ONLY'
+      && h2.ctx.choosingProgram.value === true
+      && h2.ctx.programError.value.includes('display-only');
+  });
+
+  // 11. Review Fix 5: App switches view to 'agent' only on success, and post-launch reveal/wall-control throws do not report launch as failed.
+  await check('app-view-on-success-only-and-post-launch-throw-safe', async () => {
+    // Part A: Failed createProgram must NOT switch global view to 'agent'.
+    const failH = createAppProgramHarness(appSource, {
+      createProgram: async () => ({ ok: false, code: 'HOST_PROGRAM_UNAVAILABLE', reason: 'missing binary' }),
+    });
+    let failSettled = null;
+    failH.ctx.onCreateCapsule({ kind: 'program', binary: 'missing' }, (p) => { failSettled = p; });
+    const failReply = await failSettled;
+    if (failReply?.ok !== false || failH.views.length !== 0) return false;
+
+    // Part B: Successful createProgram switches view to 'agent'; a throw in revealOpenedIdentity or applyWallControl does not fail the launch.
+    const okH = createAppProgramHarness(appSource, {
+      createProgram: async () => ({ ok: true, surfaceId: 'surface-pg-ok', profileId: 'gedit', binary: 'gedit' }),
+    });
+    okH.ctx.revealOpenedIdentity = async () => {
+      throw new Error('REVEAL_EXPLODED');
+    };
+    let okSettled = null;
+    okH.ctx.onCreateCapsule({ kind: 'program', binary: 'gedit' }, (p) => { okSettled = p; });
+    const okReply = await okSettled;
+    await new Promise((r) => setTimeout(r, 0));
+    return okReply?.ok === true
+      && okReply?.surfaceId === 'surface-pg-ok'
+      && okH.views.includes('agent')
+      && okH.ctx.hostOutcome.value === null;
+  });
+
+  // 12. Review Fix 6: intent with kind 'program' and empty binary or naming a profile is refused, never passed to identity branch.
+  await check('app-program-empty-binary-or-profile-refused', async () => {
+    let createSurfaceCalls = 0;
+    const appH = createAppProgramHarness(appSource, {
+      createProgram: async () => ({ ok: true, surfaceId: 's1' }),
+    });
+    appH.ctx.props.authorityHost.createSurface = async () => {
+      createSurfaceCalls++;
+      return { code: 'INTENT_ACKNOWLEDGED', message: 'Request sent.', tone: 'success' };
+    };
+
+    for (const emptyIntent of [
+      { kind: 'program' },
+      { kind: 'program', binary: '' },
+      { kind: 'program', binary: '   ' },
+      { kind: 'program', binary: null },
+    ]) {
+      let settled = null;
+      appH.ctx.hostOutcome.value = null;
+      appH.ctx.onCreateCapsule(emptyIntent, (res) => { settled = res; });
+      if (!settled || settled.ok !== false || settled.code !== 'PROGRAM_BINARY_REQUIRED') return false;
+      if (appH.ctx.hostOutcome.value?.code !== 'PROGRAM_BINARY_REQUIRED') return false;
+    }
+
+    for (const profileIntent of [
+      { kind: 'program', binary: '', profileId: 'mv-live-1' },
+      { kind: 'program', binary: 'gedit', profile: 'mv-live-1' },
+      { kind: 'program', choice: { profileId: 'mv-live-1', role: 'agent' } },
+    ]) {
+      let settled = null;
+      appH.ctx.hostOutcome.value = null;
+      appH.ctx.onCreateCapsule(profileIntent, (res) => { settled = res; });
+      if (!settled || settled.ok !== false || settled.code !== 'PROGRAM_PROFILE_FORBIDDEN') return false;
+      if (appH.ctx.hostOutcome.value?.code !== 'PROGRAM_PROFILE_FORBIDDEN') return false;
+    }
+
+    return createSurfaceCalls === 0;
+  });
+
   return failed;
 }
 
@@ -529,5 +867,110 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     assert.notEqual(mutatedApp, appSrc);
     const failed = await runProbes({ appSource: mutatedApp });
     assert.ok(failed.includes('renderer-cannot-pick-profile'), `Mutant 7 survived: ${failed}`);
+  }
+
+  const electronBaseHref = pathToFileURL(join(HERE, '../electron/')).href;
+  const importMutatedRoleHost = async (mutatedSrc, tag) => {
+    const rewritten = mutatedSrc
+      .replace(/from\s+'\.\/([^']+)'/g, `from '${electronBaseHref}$1'`)
+      .replace(/import\('\.\/([^']+)'\)/g, `import('${electronBaseHref}$1')`)
+      .replace("new URL('./rolePreload.cjs',import.meta.url)", `new URL('${electronBaseHref}rolePreload.cjs')`);
+    const f = join(tmp, `roleHost-${tag}.js`);
+    await writeFile(f, rewritten);
+    return await import(`${pathToFileURL(f).href}?m=${tag}`);
+  };
+
+  // Mutant 8 (Fix 1): createProgram ignores failed/malformed listIdentities and proceeds with empty knownIdentities.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      "if (idReply?.ok !== true || !Array.isArray(idReply.rows) || !idReply.rows.every((/** @type {any} */ r) => r && typeof r === 'object' && typeof r.id === 'string' && r.id.length > 0)) {",
+      'if (false) {',
+    ).replace(
+      'const knownIdentities = new Set(idReply.rows.map((/** @type {any} */ r) => r.id));',
+      'const knownIdentities = new Set(Array.isArray(idReply?.rows) ? idReply.rows.map((r) => r?.id) : []);',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm8');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('listIdentities-fail-closed'), `Mutant 8 survived: ${failed}`);
+  }
+
+  // Mutant 9 (Fix 2): clearMode() awaited unguarded before creating = false in createProgram finally block.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      'try { await clearMode?.(); } catch { /* keep original error and always reset creating */ }\n      creating = false;',
+      'await clearMode?.(); creating = false;',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm9');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('clearMode-reject-resets-creating-and-keeps-error'), `Mutant 9 survived: ${failed}`);
+  }
+
+  // Mutant 10 (Fix 3): pruneProgramProfiles does not prune destroyed or lost surfaces.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      'if (csDead || hsDead) {',
+      'if (false && (csDead || hsDead)) {',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm10');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('programProfiles-pruned-on-destroy-or-loss'), `Mutant 10 survived: ${failed}`);
+  }
+
+  // Mutant 11a (Fix 4 Launcher): CatalogLauncher falls back to api.createProgram when parent does not settle.
+  {
+    const mutatedLauncher = launcherSrc.replace(
+      "if (!settledByListener) {\n      programError.value = 'Program launch was not handled by the host.';\n      return;\n    }",
+      "if (!settledByListener && api?.createProgram) {\n      outcome = await api.createProgram({ binary: result.intent.binary });\n    }",
+    );
+    assert.notEqual(mutatedLauncher, launcherSrc);
+    const failed = await runProbes({ launcherSource: mutatedLauncher });
+    assert.ok(failed.includes('launcher-no-unsettled-bypass-and-displayOnly-settles'), `Mutant 11a survived: ${failed}`);
+  }
+
+  // Mutant 11b (Fix 4 App): App.vue returns early on nestedMode.displayOnly without settling.
+  {
+    const mutatedApp = appSrc.replace(
+      "if (nestedMode.displayOnly) {\n    settle?.({ ok: false, code: 'DISPLAY_ONLY', reason: 'Nested walls are display-only and cannot open new capsules.' });\n    return;\n  }",
+      'if (nestedMode.displayOnly) return;',
+    );
+    assert.notEqual(mutatedApp, appSrc);
+    const failed = await runProbes({ appSource: mutatedApp });
+    assert.ok(failed.includes('launcher-no-unsettled-bypass-and-displayOnly-settles'), `Mutant 11b survived: ${failed}`);
+  }
+
+  // Mutant 12a (Fix 5 view order): selectGlobalView('agent') called before roles.createProgram.
+  {
+    const mutatedApp = appSrc.replace(
+      'const reply = await roles.createProgram({ binary: body.binary.trim() });',
+      "selectGlobalView('agent');\n  const reply = await roles.createProgram({ binary: body.binary.trim() });",
+    );
+    assert.notEqual(mutatedApp, appSrc);
+    const failed = await runProbes({ appSource: mutatedApp });
+    assert.ok(failed.includes('app-view-on-success-only-and-post-launch-throw-safe'), `Mutant 12a survived: ${failed}`);
+  }
+
+  // Mutant 12b (Fix 5 post-launch throw): post-launch reveal/wall-control throw is not caught.
+  {
+    const mutatedApp = appSrc.replace(
+      '  } catch {\n    // Post-launch view, reveal, or wall-control errors must not report the launch as failed.\n  }',
+      '  } catch (err) { throw err; }',
+    );
+    assert.notEqual(mutatedApp, appSrc);
+    const failed = await runProbes({ appSource: mutatedApp });
+    assert.ok(failed.includes('app-view-on-success-only-and-post-launch-throw-safe'), `Mutant 12b survived: ${failed}`);
+  }
+
+  // Mutant 13 (Fix 6): onCreateCapsule only enters program branch when binary is non-empty string.
+  {
+    const mutatedApp = appSrc.replace(
+      "if (body?.kind === 'program') {",
+      "if (body?.kind === 'program' && typeof body?.binary === 'string' && body.binary.trim().length > 0) {",
+    );
+    assert.notEqual(mutatedApp, appSrc);
+    const failed = await runProbes({ appSource: mutatedApp });
+    assert.ok(failed.includes('app-program-empty-binary-or-profile-refused'), `Mutant 13 survived: ${failed}`);
   }
 });

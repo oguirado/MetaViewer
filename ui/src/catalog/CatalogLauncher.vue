@@ -64,13 +64,19 @@ async function confirmProgram() {
   };
   try {
     emit('create', result.intent, settle);
+    if (!settledByListener) {
+      programError.value = 'Program launch was not handled by the host.';
+      return;
+    }
     if (outcome && typeof outcome.then === 'function') {
       outcome = await outcome;
-    } else if (!settledByListener && api?.createProgram) {
-      outcome = await api.createProgram({ binary: result.intent.binary });
     }
     if (outcome && outcome.ok === false) {
       programError.value = outcome.reason || outcome.message || outcome.code || 'Program could not be started.';
+      return;
+    }
+    if (!outcome || outcome.ok !== true) {
+      programError.value = 'Program could not be started.';
       return;
     }
     choosingProgram.value = false;

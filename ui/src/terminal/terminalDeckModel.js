@@ -641,7 +641,6 @@ export function createTerminalDeckController(options = {}) {
   let errorMessage = '';
   /** @type {{ entries?: unknown, capabilities?: unknown } | null} */
   let providerListing = null;
-  let lastWrittenClipboardText = '';
   let lastPastedText = '';
   /** @type {Map<string, { getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void } | null>} */
   const registeredTerminals = new Map();
@@ -694,7 +693,6 @@ export function createTerminalDeckController(options = {}) {
     if (clip && typeof clip.writeText === 'function') {
       try {
         await clip.writeText(str);
-        lastWrittenClipboardText = str;
         return true;
       } catch {
         return false;
@@ -707,30 +705,50 @@ export function createTerminalDeckController(options = {}) {
    * @returns {Promise<string>}
    */
   async function readClipboardText() {
+    let failed = false;
     const clip = resolveClipboardBinding();
     if (clip && typeof clip.readText === 'function') {
       try {
         const res = await clip.readText();
         if (typeof res === 'string') return res;
-        if (res && typeof res === 'object' && typeof (/** @type {{ text?: unknown }} */ (res)).text === 'string') {
-          return /** @type {{ text: string }} */ (res).text;
+        if (res && typeof res === 'object') {
+          if ((/** @type {{ ok?: unknown }} */ (res)).ok === false) {
+            failed = true;
+          } else if (typeof (/** @type {{ text?: unknown }} */ (res)).text === 'string') {
+            return /** @type {{ text: string }} */ (res).text;
+          } else {
+            failed = true;
+          }
+        } else {
+          failed = true;
         }
       } catch {
-        // Fall through to navigator or last written text.
+        failed = true;
       }
     }
     const navClip = /** @type {{ readText?: () => Promise<string> | string } | undefined} */ (
       globalThis.navigator?.clipboard
     );
-    if (navClip && navClip !== clip && typeof navClip.readText === 'function') {
+    if (!failed && navClip && navClip !== clip && typeof navClip.readText === 'function') {
       try {
         const res = await navClip.readText();
         if (typeof res === 'string') return res;
+        failed = true;
       } catch {
-        // Fall through to in-memory fallback.
+        failed = true;
       }
     }
-    return lastWrittenClipboardText;
+    const hasReader = Boolean(
+      (clip && typeof clip.readText === 'function') ||
+      (navClip && typeof navClip.readText === 'function'),
+    );
+    if (failed || !hasReader) {
+      errorCode = 'TERMINAL_PASTE_FAILED';
+      errorMessage = 'TERMINAL_PASTE_FAILED: Clipboard read failed; nothing was pasted.';
+      toastMessage = 'Paste failed';
+      notify();
+    }
+    return '';
   }
 
   function notify() {
@@ -887,16 +905,19 @@ export function createTerminalDeckController(options = {}) {
    * @param {number[]|Uint8Array} bytes
    */
   function writeSessionBytes(sessionId, bytes) {
-    if (typeof sessionId !== 'string' || !TERMINAL_SESSION_ID_RE.test(sessionId)) return;
+    if (typeof sessionId !== 'string' || !TERMINAL_SESSION_ID_RE.test(sessionId)) return false;
     const byteArray = Array.isArray(bytes) ? bytes : Array.from(bytes);
+    if (byteArray.length === 0) return false;
     if (sessionFacade && typeof sessionFacade.write === 'function') {
       sessionFacade.write({ session: sessionId, bytes: byteArray });
-      return;
+      return true;
     }
     const direct = directPortFacades.get(sessionId);
     if (direct) {
       direct.write({ session: sessionId, bytes: byteArray });
+      return true;
     }
+    return false;
   }
 
   /**
@@ -1382,7 +1403,6 @@ export function createTerminalDeckController(options = {}) {
     if (clip && typeof clip.writeText === 'function') {
       try {
         await clip.writeText(AGENT_ENTRY_PROMPT);
-        lastWrittenClipboardText = AGENT_ENTRY_PROMPT;
         copied = true;
       } catch {
         copied = false;
@@ -1392,7 +1412,6 @@ export function createTerminalDeckController(options = {}) {
       try {
         const res = await opEntry.copy();
         if (res && typeof res === 'object' && /** @type {{ ok?: unknown }} */ (res).ok === true) {
-          lastWrittenClipboardText = AGENT_ENTRY_PROMPT;
           copied = true;
         }
       } catch {
@@ -1468,12 +1487,12 @@ export function createTerminalDeckController(options = {}) {
     if (typeof text !== 'string' || text.length === 0) {
       return { pasted: false, text: '', usedTermPaste: false };
     }
-    lastPastedText = text;
     const slotId = targetSlotId ?? focusedSlotId ?? screens[activeScreenIndex]?.slots[0]?.id ?? null;
     if (typeof options.onPasteText === 'function') {
       try {
         const handled = options.onPasteText(slotId, text);
         if (handled === true) {
+          lastPastedText = text;
           notify();
           return { pasted: true, text, usedTermPaste: false };
         }
@@ -1483,14 +1502,26 @@ export function createTerminalDeckController(options = {}) {
     }
     const found = slotId ? findSlot(slotId) : null;
     const slot = found?.slot ?? null;
+    if (!slot || slot.status !== 'running' || !slot.sessionId) {
+      notify();
+      return { pasted: false, text: '', usedTermPaste: false };
+    }
     const term = slotId ? registeredTerminals.get(slotId) : null;
     if (term && typeof term.paste === 'function') {
       let wroteViaOnData = false;
       const origWrite = sessionFacade?.write;
+      const direct = directPortFacades.get(slot.sessionId);
+      const origDirectWrite = direct?.write;
       if (sessionFacade && typeof origWrite === 'function') {
         sessionFacade.write = (req) => {
-          wroteViaOnData = true;
+          if (Array.isArray(req?.bytes) && req.bytes.length > 0) wroteViaOnData = true;
           return origWrite.call(sessionFacade, req);
+        };
+      }
+      if (direct && typeof origDirectWrite === 'function') {
+        direct.write = (req) => {
+          if (Array.isArray(req?.bytes) && req.bytes.length > 0) wroteViaOnData = true;
+          return origDirectWrite.call(direct, req);
         };
       }
       try {
@@ -1499,18 +1530,28 @@ export function createTerminalDeckController(options = {}) {
         if (sessionFacade && typeof origWrite === 'function') {
           sessionFacade.write = origWrite;
         }
+        if (direct && typeof origDirectWrite === 'function') {
+          direct.write = origDirectWrite;
+        }
       }
-      if (!wroteViaOnData && slot && slot.status === 'running' && slot.sessionId) {
-        writeSessionBytes(slot.sessionId, Array.from(encoder.encode(text)));
+      let wroteFallback = false;
+      if (!wroteViaOnData) {
+        wroteFallback = writeSessionBytes(slot.sessionId, Array.from(encoder.encode(text)));
       }
+      if (!wroteViaOnData && !wroteFallback) {
+        notify();
+        return { pasted: false, text: '', usedTermPaste: false };
+      }
+      lastPastedText = text;
       notify();
       return { pasted: true, text, usedTermPaste: true };
     }
-    if (slot && slot.status === 'running' && slot.sessionId) {
-      writeSessionBytes(slot.sessionId, Array.from(encoder.encode(text)));
+    const wrote = writeSessionBytes(slot.sessionId, Array.from(encoder.encode(text)));
+    if (!wrote) {
       notify();
-      return { pasted: true, text, usedTermPaste: false };
+      return { pasted: false, text: '', usedTermPaste: false };
     }
+    lastPastedText = text;
     notify();
     return { pasted: true, text, usedTermPaste: false };
   }

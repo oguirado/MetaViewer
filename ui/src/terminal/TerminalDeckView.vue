@@ -122,15 +122,20 @@ const controller = createTerminalDeckController({
     const activeEl = /** @type {any} */ (globalThis.document)?.activeElement;
     const activeId = activeEl?.id ?? activeEl?.props?.id ?? '';
     if (activeId === 'terminal-deck-custom-input') {
+      lastBootstrapFocused.value = false;
       customCommand.value = `${customCommand.value}${text}`;
       controller.setCustomCommandInput(customCommand.value);
       return true;
     }
-    if (
-      lastBootstrapFocused.value ||
+    const isBootstrapActive =
       activeId === 'terminal-deck-bootstrap' ||
-      activeId === 'terminal-deck-bootstrap-paste-target'
-    ) {
+      activeId === 'terminal-deck-bootstrap-panel' ||
+      activeId === 'terminal-deck-bootstrap-paste-target';
+    if (activeEl && !isBootstrapActive) {
+      lastBootstrapFocused.value = false;
+      return false;
+    }
+    if (lastBootstrapFocused.value || isBootstrapActive) {
       pastedBootstrapText.value = text;
       return true;
     }
@@ -456,11 +461,53 @@ function isInsideContextMenu(target) {
 }
 
 /**
+ * @param {unknown} target
+ * @returns {boolean}
+ */
+function isInsideBootstrapWrap(target) {
+  if (!target || typeof target !== 'object') return false;
+  const wrap = bootstrapWrap.value;
+  if (wrap && typeof wrap.contains === 'function') {
+    try {
+      if (wrap.contains(target)) return true;
+    } catch {
+      // Custom renderer nodes may not be native DOM nodes.
+    }
+  }
+  let cur = /** @type {any} */ (target);
+  while (cur) {
+    if (wrap && cur === wrap) return true;
+    const id = cur.id ?? cur.props?.id;
+    if (
+      id === 'terminal-deck-bootstrap' ||
+      id === 'terminal-deck-bootstrap-panel' ||
+      id === 'terminal-deck-bootstrap-paste-target'
+    ) {
+      return true;
+    }
+    cur = cur.parentNode ?? cur.parent ?? null;
+  }
+  return false;
+}
+
+/**
+ * @param {{ relatedTarget?: unknown } | undefined} [event]
+ */
+function onBootstrapFocusOut(event) {
+  if (!isInsideBootstrapWrap(event?.relatedTarget)) {
+    lastBootstrapFocused.value = false;
+  }
+}
+
+/**
  * @param {Event} event
  */
 function onDocumentPointerDown(event) {
   if (!props.open) return;
   const target = event?.target ?? null;
+  if (lastBootstrapFocused.value && !isInsideBootstrapWrap(target)) {
+    lastBootstrapFocused.value = false;
+  }
   if (contextMenu.value.open && !isInsideContextMenu(target)) {
     closeContextMenu();
   }
@@ -538,6 +585,7 @@ function onBootstrapKeyDown(event) {
 }
 
 function toggleLauncher() {
+  lastBootstrapFocused.value = false;
   controller.setLauncherOpen(!launcherOpen.value);
 }
 
@@ -556,6 +604,7 @@ async function onLaunchProfile(profileId) {
  * @param {Event} event
  */
 function onCustomInput(event) {
+  lastBootstrapFocused.value = false;
   const target = /** @type {HTMLInputElement | null} */ (event?.target ?? null);
   customCommand.value = typeof target?.value === 'string' ? target.value : '';
   controller.setCustomCommandInput(customCommand.value);
@@ -606,10 +655,14 @@ async function onBootstrap() {
  * @param {number} index
  */
 function selectScreen(index) {
+  closeContextMenu();
+  lastBootstrapFocused.value = false;
   controller.selectScreen(index);
 }
 
 function addScreen() {
+  closeContextMenu();
+  lastBootstrapFocused.value = false;
   controller.addScreen();
 }
 
@@ -617,6 +670,8 @@ function addScreen() {
  * @param {number} index
  */
 function removeScreen(index) {
+  closeContextMenu();
+  lastBootstrapFocused.value = false;
   controller.removeScreen(index);
 }
 
@@ -679,9 +734,14 @@ function onTileKeyDown(slotId, event) {
 
 watch(
   () => [props.open, activeScreenIndex.value],
-  ([isOpen]) => {
+  ([isOpen, screenIdx], prev) => {
+    if (prev && screenIdx !== prev[1]) {
+      closeContextMenu();
+      lastBootstrapFocused.value = false;
+    }
     if (!isOpen) {
       closeContextMenu();
+      lastBootstrapFocused.value = false;
       if (launcherOpen.value) {
         controller.setLauncherOpen(false);
       }
@@ -798,6 +858,7 @@ defineExpose({
           class="mv-terminal-deck__bootstrap-wrap"
           tabindex="-1"
           @focusin="lastBootstrapFocused = true"
+          @focusout="onBootstrapFocusOut"
           @mousedown="lastBootstrapFocused = true"
           @paste="onBootstrapPaste"
           @keydown="onBootstrapKeyDown"
@@ -808,6 +869,7 @@ defineExpose({
             data-semantic-anchor="terminal/bootstrap"
             class="mv-terminal-deck__action-btn"
             @focus="lastBootstrapFocused = true"
+            @blur="onBootstrapFocusOut"
             @paste="onBootstrapPaste"
             @keydown="onBootstrapKeyDown"
             @click="onBootstrap"

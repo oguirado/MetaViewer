@@ -1,0 +1,1 @@
+- Fix review findings in program capsules and terminal paste: fail closed on identity list errors, keep refusal reasons, prune stale program entries, and report paste failures.

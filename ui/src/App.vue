@@ -742,34 +742,57 @@ async function createProgramCapsule(body) {
       reason: 'host_program_unavailable: program launching is not available on this host',
     };
   }
-  selectGlobalView('agent');
-  await nextTick();
   const reply = await roles.createProgram({ binary: body.binary.trim() });
   if (!reply?.ok) {
     const code = typeof reply?.code === 'string' && reply.code.length > 0 ? reply.code : 'HOST_PROGRAM_UNAVAILABLE';
     const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
     return { ok: false, code, reason };
   }
-  if (reply.surfaceId) {
-    await revealOpenedIdentity(reply.surfaceId, 'agent');
-    if (props.runtime?.intentBuilders) {
-      wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
-      applyWallControl(reply.surfaceId, 'take_control');
+  try {
+    selectGlobalView('agent');
+    await nextTick();
+    if (reply.surfaceId) {
+      await revealOpenedIdentity(reply.surfaceId, 'agent');
+      if (props.runtime?.intentBuilders) {
+        wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
+        applyWallControl(reply.surfaceId, 'take_control');
+      }
     }
+  } catch {
+    // Post-launch view, reveal, or wall-control errors must not report the launch as failed.
   }
   return reply;
 }
 /** @param {unknown} intent @param {((outcome: any) => void)|undefined} [settle] */
 function onCreateCapsule(intent, settle) {
-  if (nestedMode.displayOnly) return;
+  if (nestedMode.displayOnly) {
+    settle?.({ ok: false, code: 'DISPLAY_ONLY', reason: 'Nested walls are display-only and cannot open new capsules.' });
+    return;
+  }
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
-  if (body?.kind === 'program' && typeof body?.binary === 'string' && body.binary.trim().length > 0) {
+  if (body?.kind === 'program') {
     if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id) {
       const reason = 'Renderer cannot select a profile for a program capsule.';
       settle?.({ ok: false, code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
       hostOutcome.value = { code: 'PROGRAM_PROFILE_FORBIDDEN', message: reason, tone: 'refusal' };
       recordActivity({ code: 'PROGRAM_PROFILE_FORBIDDEN' });
+      return;
+    }
+    if (body.profile || body.choice?.profile || body.choice) {
+      const reason = 'Renderer cannot select a profile for a program capsule.';
+      settle?.({ ok: false, code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
+      hostOutcome.value = { code: 'PROGRAM_PROFILE_FORBIDDEN', message: reason, tone: 'refusal' };
+      recordActivity({ code: 'PROGRAM_PROFILE_FORBIDDEN' });
+      return;
+    }
+    if (typeof body.binary !== 'string' || body.binary.trim().length === 0) {
+      const reason = 'Binary name is required.';
+      settle?.({ ok: false, code: 'PROGRAM_BINARY_REQUIRED', reason });
+      const legacyNoBrowser = !('binary' in body) && !settle && !(/** @type {any} */ (globalThis).metaviewerRoles);
+      const outcomeCode = legacyNoBrowser ? 'NO_BROWSER_CAPSULE' : 'PROGRAM_BINARY_REQUIRED';
+      hostOutcome.value = { code: outcomeCode, message: legacyNoBrowser ? 'NO_BROWSER_CAPSULE' : reason, tone: 'refusal' };
+      recordActivity({ code: outcomeCode });
       return;
     }
     const promise = createProgramCapsule(body);

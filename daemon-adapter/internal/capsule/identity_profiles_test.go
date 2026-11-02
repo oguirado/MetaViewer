@@ -3,11 +3,15 @@ package capsule
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"metaviewer/daemon-adapter/internal/cli"
 )
 
 type identityProfileRunner struct {
@@ -416,5 +420,86 @@ func TestProcessRunnerHostProgramUnavailableExit2ClearsQuarantine(t *testing.T) 
 	}
 	if m.quarantined["gedit"] || m.dynamicProfiles["gedit"] {
 		t.Fatalf("exit-2 pre-spawn refusal left profile quarantined or allocated: quarantined=%v dynamic=%v", m.quarantined, m.dynamicProfiles)
+	}
+}
+
+func TestProcessRunnerPreservesBoundedStderrReasonOnNonZeroExit(t *testing.T) {
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	if err := os.Chmod(stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	surfaceBin := filepath.Join(binDir, "srf-identity-surface")
+	longReason := "surface-setup-rejected-" + strings.Repeat("x", 300)
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"long\" ]; then\n" +
+		"  printf '%s\\nsecond-line\\n' " + fmt.Sprintf("%q", longReason) + " >&2\n" +
+		"  exit 3\n" +
+		"fi\n" +
+		"echo 'display :111 Xpra socket failed to bind' >&2\n" +
+		"exit 6\n"
+	if err := os.WriteFile(surfaceBin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(binDir, []string{"PATH=" + binDir, "MV_SRF_STATE_DIR=" + stateDir}, 4096, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = r.Run(context.Background(), []string{surfaceBin, "start"}, nil)
+	var f *cli.Fault
+	if !errors.As(err, &f) || f.Code != "refused" || !strings.Contains(f.Detail, "display :111 Xpra socket failed to bind") {
+		t.Fatalf("expected refused fault preserving stderr reason, got %v", err)
+	}
+
+	_, err = r.Run(context.Background(), []string{surfaceBin, "long"}, nil)
+	if !errors.As(err, &f) || f.Code != "setup" {
+		t.Fatalf("expected setup fault, got %v", err)
+	}
+	wantBounded := longReason[:256]
+	if !strings.HasSuffix(f.Detail, ": "+wantBounded) || strings.Contains(f.Detail, "second-line") {
+		t.Fatalf("expected bounded 256-byte single-line reason, got %q", f.Detail)
+	}
+
+	// Mutant guard: stripping extractExitReason loses the surface stderr reason.
+	bare := cli.ExitFault("srf-identity-surface", 6, "")
+	if strings.Contains(bare.Error(), "display :111 Xpra socket failed to bind") {
+		t.Fatal("mutant guard failed: bare ExitFault unexpectedly contained stderr reason")
+	}
+}
+
+func TestRunnerEmptySearchPathNeverFallsBackToAmbientPATH(t *testing.T) {
+	ambientDir := t.TempDir()
+	geditPath := filepath.Join(ambientDir, "gedit")
+	if err := os.WriteFile(geditPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", ambientDir)
+
+	r := &hostExecRunner{
+		binaries:     map[string]string{"gedit": "gedit"},
+		searchPath:   "",
+		stopVerified: true,
+	}
+	m, err := NewManager(Config{
+		BinDir: t.TempDir(),
+		Profiles: map[string]Profile{
+			"mv-live-1": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":111", TextInput: "paste"},
+		},
+		MaxSurfaces: 2, MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100,
+	}, r, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.runnerSearchPath(); got != "" {
+		t.Fatalf("runner with empty SearchPath fell back to %q", got)
+	}
+	_, err = m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"gedit","geometry":{"w":1280,"h":900}}`))
+	if err == nil || WireCode(err) != "HOST_PROGRAM_UNAVAILABLE" || r.starts != 0 {
+		t.Fatalf("empty runner SearchPath resolved binary from daemon PATH: err=%v starts=%d", err, r.starts)
+	}
+
+	// Mutant guard: if runnerSearchPath fell back to os.Getenv("PATH"), ResolveHostBinary would succeed.
+	if resolved, mErr := ResolveHostBinary("gedit", os.Getenv("PATH")); mErr != nil || resolved != geditPath {
+		t.Fatalf("mutant setup invalid: ambient PATH should resolve gedit, got %q (%v)", resolved, mErr)
 	}
 }

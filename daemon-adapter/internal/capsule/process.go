@@ -111,6 +111,26 @@ func extractHostProgramRefusal(outputs ...string) string {
 	return ""
 }
 
+func extractExitReason(stderr string) string {
+	for _, rawLine := range strings.Split(stderr, "\n") {
+		var b strings.Builder
+		for _, r := range strings.TrimSpace(strings.TrimSuffix(rawLine, "\r")) {
+			if r >= 0x20 && r != 0x7f {
+				b.WriteRune(r)
+			}
+		}
+		line := strings.TrimSpace(b.String())
+		if line == "" {
+			continue
+		}
+		if len(line) > 256 {
+			line = line[:256]
+		}
+		return line
+	}
+	return ""
+}
+
 func (r *ProcessRunner) SearchPath() string {
 	for _, entry := range r.env {
 		if k, v, ok := strings.Cut(entry, "="); ok && k == "PATH" {
@@ -178,7 +198,14 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 					return nil, &preSpawnRefusal{fault("host_program_unavailable", reason)}
 				}
 			}
-			return nil, cli.ExitFault(filepath.Base(argv[0]), exit.ExitCode(), "")
+			errFault := cli.ExitFault(filepath.Base(argv[0]), exit.ExitCode(), "")
+			if reason := extractExitReason(errBuf.buffer.String()); reason != "" {
+				var f *cli.Fault
+				if errors.As(errFault, &f) {
+					f.Detail = f.Detail + ": " + reason
+				}
+			}
+			return nil, errFault
 		}
 		return nil, fault("uncertain", "native command failed without a verified result")
 	}

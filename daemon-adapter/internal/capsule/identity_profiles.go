@@ -3,7 +3,6 @@ package capsule
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -106,11 +105,9 @@ func (m *Manager) admitProgramProfile(id string, p *Profile) error {
 
 func (m *Manager) runnerSearchPath() string {
 	if sp, ok := m.runner.(interface{ SearchPath() string }); ok {
-		if path := sp.SearchPath(); path != "" {
-			return path
-		}
+		return sp.SearchPath()
 	}
-	return os.Getenv("PATH")
+	return ""
 }
 
 func (m *Manager) displayOccupied(root, display, except string) bool {

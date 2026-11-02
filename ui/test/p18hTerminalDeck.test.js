@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as vue from 'vue';
 import * as deckModel from '../src/terminal/terminalDeckModel.js';
@@ -716,27 +717,32 @@ test('P18H keyboard shortcuts handle Ctrl+Shift+T, Ctrl+Shift+W, Ctrl+PgUp/PgDn 
   }
 });
 
-async function compileSfc(relPath, deps = {}) {
-  const source = readText(relPath);
+async function compileSfc(relPath, deps = {}, mutateSource = null) {
+  let source = readText(relPath);
+  if (typeof mutateSource === 'function') {
+    const next = mutateSource(source);
+    assert.notEqual(next, source, `SFC mutation did not change ${relPath}`);
+    source = next;
+  }
   const { descriptor } = parse(source);
   let code = compileScript(descriptor, { id: `p18h-${++serial}`, inlineTemplate: true }).content;
   const key = `__p18hDeps_${serial}`;
-  globalThis[key] = deps;
+  globalThis[key] = { ...deps, vue };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '');
-  code = code.replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (line, binding, _q, spec) => {
-    if (spec === 'vue') {
-      return line.replace(/(['"])vue\1/, JSON.stringify(import.meta.resolve('vue')));
-    }
+  code = code.replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_line, binding, _q, spec) => {
     const normalized = binding
       .replace(/^\{\s*/, '{ ')
       .replace(/\s*\}$/, ' }')
       .replace(/\bas\b/g, ':');
     return `const ${normalized} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`;
   });
-  const encoded = Buffer.from(code, 'utf8').toString('base64');
-  const mod = await import(`data:text/javascript;base64,${encoded}#sfc-${serial}`);
+  code = code.replace(/^export\s+default\s+/m, 'globalThis.__p18hOut = ');
+  delete globalThis.__p18hOut;
+  vm.runInThisContext(`{\n${code}\n}`, { filename: `p18h-${serial}.js` });
+  const out = globalThis.__p18hOut;
+  delete globalThis.__p18hOut;
   delete globalThis[key];
-  return mod.default;
+  return out;
 }
 
 function mountTree(Component, props = {}) {
@@ -2189,4 +2195,278 @@ test('the wall gets the host clipboard so Copy ID for AI never depends on the am
   // DesktopWorkspace forwards attrs to each wall, which hands the clipboard to the tile panel.
   assert.match(readText('../src/wall/DesktopWorkspace.vue'), /v-bind="\$attrs"/);
   assert.match(readText('../src/wall/WallWorkspace.vue'), /clipboard: props\.clipboard/);
+});
+
+test('V023-REVIEW-FIX-8: clipboard read failure shows visible paste failure and writes nothing; pasteClipboard returns pasted:false when no bytes are written (with mutants)', async () => {
+  async function runPasteFailureAndNoBytesOracle(deckApi) {
+    const harness = createBrokerDouble();
+    let shouldFailRead = false;
+    let hostClip = 'initial';
+    const clipboard = {
+      async writeText(text) {
+        hostClip = String(text);
+      },
+      async readText() {
+        if (shouldFailRead) {
+          throw new Error('CLIPBOARD_READ_DENIED');
+        }
+        return hostClip;
+      },
+    };
+
+    // 1. pasteClipboard when no terminal slot exists must return pasted: false and write 0 bytes.
+    const emptyController = deckApi.createTerminalDeckController({
+      broker: harness.broker,
+      sessionFacade: harness.sessionFacade,
+      clipboard,
+      storage: createMemoryStorage(),
+      toastDurationMs: 0,
+    });
+    try {
+      const noTargetRes = await emptyController.pasteClipboard('orphan-payload');
+      assert.equal(noTargetRes.pasted, false, 'pasteClipboard must return pasted:false when no slot exists');
+      assert.equal(harness.writeCalls.length, 0);
+    } finally {
+      emptyController.dispose();
+    }
+
+    // 2. Host clipboard read failure after a prior copySelection must NOT fall back to last written text,
+    //    must write 0 bytes, and must surface a visible paste failure.
+    const controller = deckApi.createTerminalDeckController({
+      broker: harness.broker,
+      sessionFacade: harness.sessionFacade,
+      clipboard,
+      storage: createMemoryStorage(),
+      toastDurationMs: 0,
+    });
+    try {
+      const slot = await controller.launchProfile('shell', { cols: 80, rows: 24 });
+      const copied = await controller.copySelection('stale-secret-copied-earlier', slot.id);
+      assert.equal(copied.copied, true);
+
+      shouldFailRead = true;
+      const writesBefore = harness.writeCalls.length;
+      const failedPaste = await controller.pasteClipboard(undefined, slot.id);
+      assert.equal(failedPaste.pasted, false, 'Failed clipboard read must return pasted:false');
+      assert.equal(failedPaste.text, '', 'Failed clipboard read must not return stale text');
+      assert.equal(harness.writeCalls.length, writesBefore, 'Failed clipboard read must write 0 bytes to PTY');
+      assert.equal(controller.state.errorCode, 'TERMINAL_PASTE_FAILED');
+      assert.match(controller.state.errorMessage, /TERMINAL_PASTE_FAILED/);
+      assert.equal(controller.state.toastMessage, 'Paste failed');
+
+      // 3. Exited slot must also return pasted:false when no bytes can be written.
+      shouldFailRead = false;
+      hostClip = 'after-exit';
+      harness.sessionFacade.emitExit(slot.sessionId, { code: 0 });
+      await tick();
+      assert.equal(controller.findSlot(slot.id)?.slot.status, 'exited');
+      const exitedPaste = await controller.pasteClipboard('after-exit', slot.id);
+      assert.equal(exitedPaste.pasted, false, 'Pasting into an exited slot must return pasted:false');
+      assert.equal(harness.writeCalls.length, writesBefore);
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  await runPasteFailureAndNoBytesOracle(deckModel);
+
+  // Mutant 8a: readClipboardText falls back to stale in-memory text instead of failing closed.
+  const mutatedFallbackToStale = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    "    if (failed || !hasReader) {\n      errorCode = 'TERMINAL_PASTE_FAILED';\n      errorMessage = 'TERMINAL_PASTE_FAILED: Clipboard read failed; nothing was pasted.';\n      toastMessage = 'Paste failed';\n      notify();\n    }\n    return '';",
+    "    return 'stale-secret-copied-earlier';",
+  );
+  await assert.rejects(
+    () => runPasteFailureAndNoBytesOracle(mutatedFallbackToStale),
+    assert.AssertionError,
+  );
+
+  // Mutant 8b: pasteClipboard reports pasted:true even when no slot is running / no bytes were written.
+  const mutatedAlwaysPastedTrue = await altered(
+    '../src/terminal/terminalDeckModel.js',
+    "    if (!slot || slot.status !== 'running' || !slot.sessionId) {\n      notify();\n      return { pasted: false, text: '', usedTermPaste: false };\n    }",
+    "    if (!slot || slot.status !== 'running' || !slot.sessionId) {\n      notify();\n      return { pasted: true, text, usedTermPaste: false };\n    }",
+  );
+  await assert.rejects(
+    () => runPasteFailureAndNoBytesOracle(mutatedAlwaysPastedTrue),
+    assert.AssertionError,
+  );
+});
+
+test('V023-REVIEW-FIX-9: switching screens closes context menu and Bootstrap focus does not stay sticky after focus moves elsewhere (with mutants)', async () => {
+  async function runContextMenuAndBootstrapFocusOracle(mutateSfc = null) {
+    const harness = createBrokerDouble();
+    /** @type {string[]} */
+    const termPasted = [];
+    let clipboardText = 'terminal-paste-payload';
+
+    class StubTerminal {
+      constructor() {
+        this.cols = 80;
+        this.rows = 24;
+        this.onDataCb = null;
+      }
+      loadAddon() {}
+      attachCustomKeyEventHandler() {}
+      onData(cb) {
+        this.onDataCb = cb;
+        return { dispose() {} };
+      }
+      open() {}
+      write() {}
+      focus() {}
+      blur() {}
+      getSelection() {
+        return 'sel';
+      }
+      paste(text) {
+        termPasted.push(text);
+        if (this.onDataCb) {
+          this.onDataCb(`\x1b[200~${text}\x1b[201~`);
+        }
+      }
+      dispose() {}
+    }
+    class StubFitAddon {
+      fit() {}
+    }
+
+    const prevWindow = globalThis.window;
+    const prevDocument = globalThis.document;
+    /** @type {Map<string, Set<Function>>} */
+    const winListeners = new Map();
+    /** @type {Map<string, Set<Function>>} */
+    const docListeners = new Map();
+
+    const TerminalDeckView = await compileSfc(
+      '../src/terminal/TerminalDeckView.vue',
+      {
+        '@xterm/xterm': { Terminal: StubTerminal },
+        '@xterm/addon-fit': { FitAddon: StubFitAddon },
+        '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) },
+        './terminalDeckModel.js': deckModel,
+      },
+      mutateSfc,
+    );
+
+    globalThis.window = /** @type {any} */ ({
+      addEventListener(type, fn) {
+        if (!winListeners.has(type)) winListeners.set(type, new Set());
+        winListeners.get(type).add(fn);
+      },
+      removeEventListener(type, fn) {
+        winListeners.get(type)?.delete(fn);
+      },
+    });
+    globalThis.document = /** @type {any} */ ({
+      body: { dataset: {}, setAttribute() {}, removeAttribute() {} },
+      activeElement: null,
+      addEventListener(type, fn) {
+        if (!docListeners.has(type)) docListeners.set(type, new Set());
+        docListeners.get(type).add(fn);
+      },
+      removeEventListener(type, fn) {
+        docListeners.get(type)?.delete(fn);
+      },
+    });
+
+    const mounted = mountTree(TerminalDeckView, {
+      open: true,
+      terminalBroker: harness.broker,
+      terminalBinding: harness.sessionFacade,
+      clipboard: {
+        async writeText(t) {
+          clipboardText = String(t);
+        },
+        async readText() {
+          return clipboardText;
+        },
+      },
+      storage: createMemoryStorage(),
+    });
+
+    try {
+      await tick();
+      await mounted.findById('terminal-deck-empty-shell').props.onClick();
+      await tick();
+      const tile1 = mounted.findById('terminal-deck-tile-slot-1');
+      assert.notEqual(tile1, null);
+
+      // 1. Open context menu on Screen 1, then add/switch to Screen 2 -> context menu must close.
+      tile1.props.onContextmenu({ clientX: 50, clientY: 60, preventDefault() {}, stopPropagation() {} });
+      await tick();
+      assert.notEqual(mounted.findById('terminal-deck-context-menu'), null);
+
+      mounted.findById('terminal-deck-screen-add').props.onClick();
+      await tick();
+      assert.equal(Boolean(mounted.findById('terminal-deck-context-menu')), false, 'Adding/switching screen must close context menu');
+
+      // Switch back to Screen 1, open context menu again, and switch via Ctrl+PageDown (controller.switchScreen) -> must also close.
+      mounted.findById('terminal-deck-screen-1').props.onClick();
+      await tick();
+      tile1.props.onContextmenu({ clientX: 50, clientY: 60, preventDefault() {}, stopPropagation() {} });
+      await tick();
+      assert.notEqual(mounted.findById('terminal-deck-context-menu'), null);
+
+      for (const fn of winListeners.get('keydown') ?? []) {
+        fn({ key: 'PageDown', ctrlKey: true, shiftKey: false, altKey: false, metaKey: false, preventDefault() {}, stopPropagation() {} });
+      }
+      await tick();
+      assert.equal(Boolean(mounted.findById('terminal-deck-context-menu')), false, 'Switching screens via shortcut must close context menu');
+
+      // Switch back to Screen 1 for Bootstrap focus test.
+      mounted.findById('terminal-deck-screen-1').props.onClick();
+      await tick();
+
+      // 2. Focus Bootstrap button, then blur / move focus elsewhere -> subsequent paste must go to terminal, not Bootstrap.
+      const bootstrapBtn = mounted.findById('terminal-deck-bootstrap');
+      bootstrapBtn.props.onFocus?.();
+      await tick();
+      // Blur Bootstrap (focus moves to another control such as New terminal button)
+      const newBtn = mounted.findById('terminal-deck-new');
+      globalThis.document.activeElement = newBtn;
+      bootstrapBtn.props.onBlur?.({ relatedTarget: newBtn });
+      await tick();
+
+      clipboardText = 'paste-into-terminal-after-blur';
+      const res = await mounted.vm.controller.pasteClipboard();
+      await tick();
+      assert.equal(res.pasted, true);
+      assert.deepEqual(termPasted, ['paste-into-terminal-after-blur']);
+      assert.notEqual(
+        mounted.findById('terminal-deck-bootstrap-panel').props['data-pasted-slot-id'],
+        'paste-into-terminal-after-blur',
+        'Bootstrap must not hijack paste after focus moved elsewhere',
+      );
+    } finally {
+      mounted.app.unmount();
+      globalThis.window = prevWindow;
+      globalThis.document = prevDocument;
+    }
+  }
+
+  await runContextMenuAndBootstrapFocusOracle();
+
+  // Mutant 9a: switching screens leaves contextMenu open.
+  await assert.rejects(
+    () =>
+      runContextMenuAndBootstrapFocusOracle((src) =>
+        src
+          .replace('function selectScreen(index) {\n  closeContextMenu();', 'function selectScreen(index) {')
+          .replace('function addScreen() {\n  closeContextMenu();', 'function addScreen() {')
+          .replace('if (prev && screenIdx !== prev[1]) {\n      closeContextMenu();\n      lastBootstrapFocused.value = false;\n    }', 'if (false) {}'),
+      ),
+    assert.AssertionError,
+  );
+
+  // Mutant 9b: Bootstrap focus stays sticky after blur / focus move elsewhere.
+  await assert.rejects(
+    () =>
+      runContextMenuAndBootstrapFocusOracle((src) =>
+        src
+          .replace('function onBootstrapFocusOut(event) {\n  if (!isInsideBootstrapWrap(event?.relatedTarget)) {\n    lastBootstrapFocused.value = false;\n  }\n}', 'function onBootstrapFocusOut() {}')
+          .replace('if (activeEl && !isBootstrapActive) {\n      lastBootstrapFocused.value = false;\n      return false;\n    }', 'if (false) {}'),
+      ),
+    assert.AssertionError,
+  );
 });
