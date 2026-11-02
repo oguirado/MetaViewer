@@ -295,11 +295,17 @@ func (s *RingSource) read(b capsule.Binding) (capsule.NativeFrame, []byte, error
 	}
 	return best, raw, nil
 }
+func usesNativePairCapture(kind string) bool {
+	return kind == "host-window" || kind == "host-xpra" || kind == "vm"
+}
+
 func (s *RingSource) Capture(ctx context.Context, id string) (capsule.Binding, capsule.NativeFrame, error) {
 	if err := ctx.Err(); err != nil {
 		return capsule.Binding{}, capsule.NativeFrame{}, err
 	}
-	if b, err := s.Manager.SubscriptionBinding(id); err == nil && (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") {
+	// Select native transports before acquisition, never as a fallback after a
+	// resident error. VM guest pairs retain Manager's identity and epoch checks.
+	if b, err := s.Manager.SubscriptionBinding(id); err == nil && usesNativePairCapture(b.NativeKind) {
 		return s.Manager.Capture(ctx, id)
 	}
 	var raw []byte
