@@ -215,9 +215,13 @@ v026-ci-assets.md	changes/unreleased/v026-ci-assets.md
 v026-host-polish.md	changes/unreleased/v026-host-polish.md
 v026-host-xpra.md	changes/unreleased/v026-host-xpra.md
 v026kit-286e58a540a9	changes/unreleased/v026-kit-sidecars-2.md
+v027-firstrun.md	changes/unreleased/v027-firstrun.md
 v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
+v027-repo.md	changes/unreleased/v027-repo.md
+v027-verify-text.md	changes/unreleased/v027-verify-text.md
+vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
 witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
@@ -1010,6 +1014,7 @@ digest_skip_test.go	daemon-adapter/internal/frames/digest_skip_test.go
 displaytap.go	daemon-adapter/internal/frames/displaytap.go
 displaytap_ring.go	daemon-adapter/internal/frames/displaytap_ring.go
 displaytap_test.go	daemon-adapter/internal/frames/displaytap_test.go
+displaytap_vm_test.go	daemon-adapter/internal/frames/displaytap_vm_test.go
 frames.go	daemon-adapter/internal/frames/frames.go
 lease_safety_test.go	daemon-adapter/internal/frames/lease_safety_test.go
 live_test.go	daemon-adapter/internal/frames/live_test.go
@@ -1036,6 +1041,7 @@ subscri-45e158044ffa	daemon-adapter/internal/frames/subscriptions_lock_timeout_t
 subscri-258b9e5e0942	daemon-adapter/internal/frames/subscriptions_reap_test.go
 subscri-84a98cfe9a77	daemon-adapter/internal/frames/subscriptions_robust_test.go
 subscri-c23a6160df7a	daemon-adapter/internal/frames/subscriptions_test.go
+vm_pair_test.go	daemon-adapter/internal/frames/vm_pair_test.go
 ipc-bounds_test.go	daemon-adapter/internal/ipc/bounds_test.go
 client.go	daemon-adapter/internal/ipc/client.go
 client_test.go	daemon-adapter/internal/ipc/client_test.go
@@ -1094,6 +1100,7 @@ MW_RUN_FIRST_RUN.md	docs/MW_RUN_FIRST_RUN.md
 P18B-HEADER-MENUS.md	docs/P18B-HEADER-MENUS.md
 P18MODE-a4b084fb483c	docs/P18_MODES_TILES_DESIGN.md
 PREEXISTING.md	docs/PREEXISTING.md
+docs-README.md	docs/README.md
 RESEARCH_LOG.md	docs/RESEARCH_LOG.md
 ROADMAP.md	docs/ROADMAP.md
 ROUTER_BOOTSTRAP.md	docs/ROUTER_BOOTSTRAP.md
@@ -2079,6 +2086,7 @@ v026hos-e5825ac19a7e	ui/test/v026-host-polish.test.js
 v026hos-0989adc7fb8b	ui/test/v026-host-xpra.test.js
 v026kit-ed2db276dbdb	ui/test/v026-kit-sidecars.test.js
 v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
+v027-firstrun.test.js	ui/test/v027-firstrun.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
