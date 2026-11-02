@@ -9,8 +9,12 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
 ```
 
 The example requests three actions [TARGET]. Supply the running app's `MV_CORE_CONFIG`,
-`XDG_RUNTIME_DIR`, `MV_SRF_BIN_DIR`, `MV_SRF_STATE_DIR` and `SRF_IDENTITY_STORE_ROOT`.
+`XDG_RUNTIME_DIR` and `MV_SRF_STATE_DIR`. Legacy container programs also need
+`MV_SRF_BIN_DIR` and `SRF_IDENTITY_STORE_ROOT` from that app.
 Supply the locked dependency roots with `MV_WENDER_ROOT` and `VQA_VE_ROOT`.
+For a host-xpra program, `MV_SRF_STATE_DIR` supplies the adapter's private binding;
+identity-store and native-admin configuration are unnecessary. The legacy
+container-backed program lane retains its native identity and Docker lease checks.
 Program evidence defaults to a private subtree beneath `/dev/shm/vqa-cu`.
 An explicit `XDG_STATE_HOME` must resolve inside `/dev/shm`, with owned mode-0700
 directories and no symlink traversal. Disk evidence refuses before connection or
@@ -38,6 +42,10 @@ The normal app creation hook is
 Read the admitted surface's `profile_id`; do not assume the host-selected name.
 The host provisions the identity and program mode before requesting the existing
 `desktop_capsule` wire surface. Raw surface creation alone does not perform that setup.
+For the existing host-xpra setup path, use
+`globalThis.metaviewerRoles.createProgram({binary: ABSOLUTE_BINARY, role: 'agent', hostXpra: true})`.
+This path deliberately omits identity-store provisioning. Use the returned program
+profile and current core surface; the command does not launch or attach a window.
 Native Agent role is separate from core control. The normal UI can arm human
 wall input immediately after creation, leaving the wire surface `control:'human'`.
 Use the supported Release control UI action, then verify the core surface list
@@ -62,6 +70,14 @@ Muse mode retains the user's goal separately and grounds the model-selected
 mark's exact observed name before using the same custody gate.
 ModelClient makes the semantic goal decision. Exact-target rules establish
 observable target custody; they do not prove that the user's goal was achieved.
+For each additional requested move, the lane observes the settled surface,
+requests a real fresh publication through the existing shared subscriber, and
+waits for a generation newer than both that observation and the previous verified
+receipt. It then invokes VE and Wender again. Unchanged pixels may accompany a
+new genuine capture; a repeated generation cannot authorize another planning tick.
+The next acquisition must match the frame passed to perception and belong to the
+same surface. Only the existing bounded explicit `STALE_FRAME` nonexecution path
+can trigger an input retry; an unknown dispatch or settlement cannot do so.
 The existing backend submits the action through core admission and waits for the
 verified native receipt. Changed pixels before submission require a new invocation;
 the lane never replays old coordinates against a changed image.
@@ -92,10 +108,35 @@ Human/shared control, missing program custody, an unsupported surface, an unknow
 visual observation, planner refusal, stale pixels, and failed settlement refuse.
 The program lane does not use browser URLs, browser AX, or browser egress witnesses.
 
+Host-xpra admission uses the existing private
+`human-bindings/SURFACE_ID.json` witness with schema
+`metaviewer.human_binding/v0.3`. Despite its historical name, the producer exports
+it for agent programs. The exact profile, public surface, agent role, ready state,
+host flag, private-display container and derived run identifier must agree. A
+foreign, browser, malformed or missing witness refuses; loss of an admitted host
+witness cannot select a legacy container. This path never consults Docker.
+Observed and retained raw frames must use that exact run's `frames/w1` allocation
+in canonical RAM paths. Binding dimensions describe initial allocation; current
+actions use the genuine frame geometry and require unchanged geometry while
+rebinding a decision. Core owns the actual native XID/witness checks. The agent
+requires the validated core tool-result projection for host input settlement;
+it does not synthesize a native window identifier stripped by that projection.
+
+Host-window admission: **ABSENT — do not invent**. At this base,
+`attachHostWindow` retains its XID/witness internally and `PublishHumanBinding`
+does not export a host-window witness. A profile name, display, active surface or
+unrelated container is insufficient proof. A reviewed producer route is needed
+before this lane can admit an arbitrary host window. Browser, VM and interface
+integration remain outside this change.
+
 The existing Wender bridge only admits custody-bound clicks. It cannot currently
 plan and deliver a text-editing step in gedit. Wender's model client can emit text
 actions, but connecting that interface requires a reviewed focus/custody bridge;
-this lane does not bypass the restriction.
+this lane does not bypass the restriction. Admitted text/key custody and semantic
+text verification for this program path: **ABSENT — do not invent**. Native
+window focus alone does not establish focused-editor custody, and the current
+program receipt path supplies RGB evidence rather than the semantic text witness
+required by `text_present`. Pixel changes cannot certify intended editor text.
 
 Focused checks:
 

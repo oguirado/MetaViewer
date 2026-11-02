@@ -2,13 +2,14 @@
 
 [TARGET, unit decision] A successful invocation proves verified moves only;
 it never claims that the requested goal or game has been completed. Program
-capsules use the frozen desktop_capsule wire kind and native srf-pg custody.
+capsules use the frozen desktop_capsule wire kind and native program custody.
 No browser URL, CDP or AX acquisition is required.
 """
 import argparse
 from contextlib import contextmanager
 import json
 import os
+import re
 import stat
 import selectors
 import signal
@@ -54,21 +55,120 @@ def private_evidence_base():
 class ProgramBackend(host.HostBackend):
     surface_kind = 'desktop_capsule'
 
+    def __init__(self, client, identity, evidence, env):
+        from metaviewer_agents.perception.deps_lock import resolve_locked_component
+        self.client, self.identity, self.evidence = client, identity, Path(evidence)
+        context = getattr(client, 'host_env', None)
+        env = context if isinstance(context, dict) else env
+        host.need(isinstance(identity, str) and host.live.PROFILE_ID_RE.fullmatch(identity), 'MW_IDENTITY')
+        host.need(bool(env.get('MV_SRF_STATE_DIR')), 'MW_RUN_CONFIG')
+        self.state = Path(env['MV_SRF_STATE_DIR'])
+        self.binary = (Path(env['MV_SRF_BIN_DIR']) / 'srf-identity-surface'
+                       if env.get('MV_SRF_BIN_DIR') else None)
+        self.admin = self.binary.with_name('srf-identity-admin') if self.binary is not None else None
+        self.store = Path(env['SRF_IDENTITY_STORE_ROOT']) if env.get('SRF_IDENTITY_STORE_ROOT') else None
+        host.need(all(p.is_absolute() for p in (self.state, self.binary, self.store) if p is not None),
+                  'MW_RUN_CONFIG')
+        self.wender = resolve_locked_component('wender-agent')
+        self.pending, self.network_evidence = {}, None
+        self.surface_id, self.capsule, self.program_binding = None, None, None
+        self.ownership()
+
+    def ownership(self):
+        surfaces = self.surfaces()
+        host.need(bool(surfaces), 'MW_RUN_NO_SURFACE')
+        host.need(len(surfaces) == 1, 'MW_RUN_AMBIGUOUS')
+        surface = surfaces[0]
+        host.need(surface.get('control') == 'agent', 'MW_PROGRAM_CONTROL')
+        surface_id = surface['surface_id']
+        host.need(isinstance(surface_id, str) and
+                  re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', surface_id),
+                  'MW_PROGRAM_BINDING')
+        path = self.state / 'human-bindings' / (surface_id + '.json')
+        prior = getattr(self, 'program_binding', None)
+        if os.path.lexists(path):
+            binding = host.private_json(path, self.state)
+            # The existing producer omits host_xpra for legacy program/browser
+            # bindings. Presence is never an excuse to downgrade a bad witness.
+            if 'host_xpra' in binding:
+                host.need(set(binding) == {'schema', 'surface_id', 'container', 'run_id',
+                          'control_ready', 'input_epoch', 'width', 'height', 'role',
+                          'profile_id', 'host_xpra'} and binding['host_xpra'] is True,
+                          'MW_PROGRAM_BINDING')
+                expected_run = 'run-hw-' + surface_id.removeprefix('surface-')[:16]
+                host.need(binding['schema'] == 'metaviewer.human_binding/v0.3' and
+                          binding['surface_id'] == surface_id and binding['profile_id'] == self.identity and
+                          binding['container'] == 'srf-pg-hx-' + self.identity and
+                          binding['run_id'] == expected_run and binding['role'] == 'agent' and
+                          binding['control_ready'] is True and type(binding['input_epoch']) is int and
+                          0 <= binding['input_epoch'] < 2**64 and
+                          all(type(binding[k]) is int and 1 <= binding[k] <= 16384
+                              for k in ('width', 'height')), 'MW_PROGRAM_BINDING')
+                immutable = ('schema', 'surface_id', 'profile_id', 'container', 'run_id', 'role', 'host_xpra')
+                host.need(prior is None or all(prior[k] == binding[k] for k in immutable),
+                          'MW_RUN_OWNERSHIP')
+                host.need(self.surface_id in (None, surface_id) and
+                          self.capsule in (None, binding['container']), 'MW_RUN_OWNERSHIP')
+                # Host programs deliberately bypass identity-store provisioning
+                # in roleHost and the manager. The authenticated surface and its
+                # matching private adapter witness bind this program identity.
+                self.surface_id, self.capsule = surface_id, binding['container']
+                self.program_binding = dict(binding)
+                return dict(profile='host-xpra', identity=self.identity, surface_id=surface_id,
+                            capsules=[], native_binding=dict(binding))
+            host.need(prior is None and binding.get('container') == 'srf-pg-' + self.identity and
+                      binding.get('profile_id') == self.identity and binding.get('surface_id') == surface_id and
+                      binding.get('role') == 'agent', 'MW_PROGRAM_BINDING')
+        # A host receipt disappearing cannot turn a host window into a Docker
+        # target. Unexported host-window custody remains unsupported at this pin.
+        host.need(prior is None, 'MW_PROGRAM_BINDING')
+        host.need(all(getattr(self, key, None) is not None for key in ('binary', 'admin', 'store')),
+                  'MW_RUN_CONFIG')
+        return super().ownership()
+
+    def check_program_frame(self, frame):
+        binding = getattr(self, 'program_binding', None)
+        if binding is None:
+            return
+        host.tools._check_frame(frame)
+        path = Path(frame['ramws_path'])
+        host.need(frame['surface_id'] == binding['surface_id'] and path.is_absolute() and
+                  path.is_relative_to('/dev/shm') and
+                  path.parts[-4:-1] == (binding['run_id'], 'frames', 'w1') and
+                  re.fullmatch(r'frame-[1-9][0-9]*\.rgb24', path.name) and
+                  path == path.resolve(strict=True) and
+                  not any(p.is_symlink() for p in (path, *path.parents)), 'MW_PROGRAM_FRAME_CUSTODY')
+
+    def retain(self, frame):
+        self.check_program_frame(frame)
+        return super().retain(frame)
+
+    def native_witness(self, verified):
+        if getattr(self, 'program_binding', None) is not None:
+            # Core validates the private-display XID and witness before exposing
+            # the frozen verified-result projection. It strips the native ID;
+            # do not manufacture an XID or accept an ordinary lookalike dict.
+            host.need(isinstance(verified, host.tools._VerifiedReceipt), 'MW_RECEIPT_MISMATCH')
+        return super().native_witness(verified)
+
     def before_propose(self, proposal, sensed):
         path = self.evidence / ('dispatch-' + proposal['proposal_id'] + '.json')
         artifact = atomic_journal(path, dict(status='pending_dispatch', proposal=proposal,
-            frame=sensed['frame'], intent_artifact=self.active_attempt['intent_artifact']))
+            frame=sensed['frame'], intent_artifact=self.active_attempt['intent_artifact'],
+            program_binding=getattr(self, 'program_binding', None)))
         self.active_attempt['dispatch_artifact'] = artifact
 
     def observe(self, timeout_ms):
         self.ownership()
         observed = host.tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
         host.need(observed['frame_ref']['surface_id'] == self.surface_id, 'MW_PROGRAM_SURFACE')
+        self.check_program_frame(observed['frame_ref'])
         return observed
 
     def perceive(self, observed):
         frame = observed['frame_ref']
         host.need(frame['surface_id'] == self.surface_id, 'MW_PROGRAM_SURFACE')
+        self.check_program_frame(frame)
         witness = self.retain(frame)
         record = dict(frame=dict(frame), frame_witness=witness, status='retained')
         if not hasattr(self, 'program_observations'):
@@ -347,9 +447,30 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
     # Preserve partial evidence on refusal; a delivered action is not undone.
     backend.program_moves = moves
     backend.program_attempts = []
+    settled_frame = None
     for _ in range(steps):
+        next_observation = None
+        if settled_frame is not None:
+            # A receipt settles the previous action; it is not the next planning
+            # acquisition. Ask the shared publisher for a real post-settlement
+            # capture, even if those pixels have not changed again.
+            baseline = backend.observe(remaining_budget(backend, timeout_ms))['frame_ref']
+            host.need(baseline['surface_id'] == settled_frame['surface_id'] == backend.surface_id,
+                      'MW_PROGRAM_SURFACE')
+            floor = max(baseline['generation'], settled_frame['generation'])
+            backend.client.subscribe_frames(backend.surface_id,
+                timeout_ms=remaining_budget(backend, timeout_ms))
+            next_observation = wait_for_publication(backend, floor, remaining_budget(backend, timeout_ms))
         for retry in range(3):
-            sensed = backend.perceive(backend.observe(remaining_budget(backend, timeout_ms)))
+            observed = (next_observation if next_observation is not None else
+                        backend.observe(remaining_budget(backend, timeout_ms)))
+            next_observation = None
+            sensed = backend.perceive(observed)
+            if settled_frame is not None:
+                host.need(sensed['frame'] == observed['frame_ref'] and
+                          sensed['frame']['surface_id'] == settled_frame['surface_id'] and
+                          sensed['frame']['generation'] > settled_frame['generation'],
+                          'MW_PROGRAM_FRESH_FRAME')
             action, expectation, state, target = planner.plan_step(
                 sensed['observation'], sensed['table'], goal)
             attempt = dict(status='planned', observation=sensed['observation'], table=sensed['table'],
@@ -389,6 +510,7 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                                   action=action, expectation=expectation, target=target,
                                   battery_state_sha256=planner.battery_state_sha256,
                                   verification=verified))
+                settled_frame = dict(verified['receipt']['after_frame'])
                 break
             except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError, host.ClientError,
                     host.tools.ToolRefusal, host.tools.VerificationFailed) as error:
@@ -498,6 +620,7 @@ def run_entry(args):
                       attempts=getattr(backend, 'program_attempts', []),
                       observations=getattr(backend, 'program_observations', []), message=message,
                       subscription=getattr(backend, 'subscription', None),
+                      program_binding=getattr(backend, 'program_binding', None),
                       frame_attempts=getattr(backend, 'frame_attempts', []))
         try:
             host.ReplayOwner.write(evidence / 'report.json', (json.dumps(report) + '\n').encode())

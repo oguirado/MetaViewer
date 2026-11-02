@@ -1,0 +1,2 @@
+- Admit host-xpra agent programs through their existing private adapter binding and authenticated core surface, without requiring a Docker lease or identity-store lookup. Refuse foreign bindings and host windows without exported custody.
+- Acquire a new verified frame and run visual perception and planning again after each settled move. Stop repeated generations, stale projections and uncertain delivery before another action; retain click-only custody and core verification.
