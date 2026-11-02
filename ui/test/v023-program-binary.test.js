@@ -1604,6 +1604,42 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     const failed = await runProbes({ launcherSource: mutatedLauncher });
     assert.ok(failed.includes('launcher-role-dialog-survives-sync-kit-close'), `Mutant 16 survived: ${failed}`);
   }
+
+  // Mutant 16a (V024-CAPSULE-LIMIT): createProgram skips 16-capsule ceiling check.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      "if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:formatCapsuleLimitReason(live)});",
+      'if (false && live >= MAX_CAPSULES) {}',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16a');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16a survived: ${failed}`);
+  }
+
+  // Mutant 16b (V024-CAPSULE-LIMIT): createProgram skips 6 GiB host free memory check.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      'if (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {',
+      'if (false && (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES)) {',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16b');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16b survived: ${failed}`);
+  }
+
+  // Mutant 16c (V024-CAPSULE-LIMIT): createProgram prefixes non-binary refusal reasons with host_program_unavailable.
+  {
+    const mutatedSrc = roleHostSrc.replace(
+      '              : createRefusalReason(code);\n        throw Object.assign(refuse(code), {reason});',
+      '              : createRefusalReason(code);\n        throw Object.assign(refuse(code), {reason:`host_program_unavailable: ${reason}`});',
+    );
+    assert.notEqual(mutatedSrc, roleHostSrc);
+    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16c');
+    const failed = await runProbes({ roleHost: mutatedMod });
+    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16c survived: ${failed}`);
+  }
 });
 
 test('V024-WALL-FIXES: mounted CatalogLauncher shows role and identity dialog with choices when kit dialog emits create then closes synchronously, and fails under old forwardVisible/onCreate order', async () => {
@@ -1776,43 +1812,6 @@ test('V024-WALL-FIXES: mounted CatalogLauncher shows role and identity dialog wi
     );
   assert.notEqual(revertedSource, realSource);
   await assert.rejects(() => verifyLauncherRoleDialog(revertedSource), { code: 'ERR_ASSERTION' });
-  });
-
-  // Mutant 16a (V024-CAPSULE-LIMIT): createProgram skips 16-capsule ceiling check.
-  {
-    const mutatedSrc = roleHostSrc.replace(
-      "if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:formatCapsuleLimitReason(live)});",
-      'if (false && live >= MAX_CAPSULES) {}',
-    );
-    assert.notEqual(mutatedSrc, roleHostSrc);
-    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16a');
-    const failed = await runProbes({ roleHost: mutatedMod });
-    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16a survived: ${failed}`);
-  }
-
-  // Mutant 16b (V024-CAPSULE-LIMIT): createProgram skips 6 GiB host free memory check.
-  {
-    const mutatedSrc = roleHostSrc.replace(
-      'if (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {',
-      'if (false && (freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES)) {',
-    );
-    assert.notEqual(mutatedSrc, roleHostSrc);
-    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16b');
-    const failed = await runProbes({ roleHost: mutatedMod });
-    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16b survived: ${failed}`);
-  }
-
-  // Mutant 16c (V024-CAPSULE-LIMIT): createProgram prefixes non-binary refusal reasons with host_program_unavailable.
-  {
-    const mutatedSrc = roleHostSrc.replace(
-      '              : createRefusalReason(code);\n        throw Object.assign(refuse(code), {reason});',
-      '              : createRefusalReason(code);\n        throw Object.assign(refuse(code), {reason:`host_program_unavailable: ${reason}`});',
-    );
-    assert.notEqual(mutatedSrc, roleHostSrc);
-    const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm16c');
-    const failed = await runProbes({ roleHost: mutatedMod });
-    assert.ok(failed.includes('capsule-limit-and-memory-check'), `Mutant 16c survived: ${failed}`);
-  }
 });
 
 test('a bare binary name is also found in the standard program directories the app PATH omits', async () => {

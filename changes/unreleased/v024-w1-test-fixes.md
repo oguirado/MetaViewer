@@ -1,0 +1,1 @@
+- Terminal resize: keep the type check clean when a direct port returns no promise.

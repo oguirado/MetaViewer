@@ -1889,7 +1889,7 @@ export function createTerminalDeckController(options = {}) {
     const direct = directPortFacades.get(sessionId);
     if (direct) {
       try {
-        const res = direct.resize({ session: sessionId, cols: clampedCols, rows: clampedRows });
+        const res = /** @type {unknown} */ (direct.resize({ session: sessionId, cols: clampedCols, rows: clampedRows }));
         if (res && typeof (/** @type {{ catch?: unknown }} */ (res)).catch === 'function') {
           /** @type {Promise<unknown>} */ (res).catch(() => {});
         }
