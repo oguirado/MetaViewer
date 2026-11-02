@@ -286,6 +286,22 @@ class ProgramTests(unittest.TestCase):
         with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_SURFACE'):
             self.b.perceive(dict(frame_ref=frame(surface='other')))
 
+    def rgb_frame(self, generation, value=120):
+        raw = bytes([value]) * (100 * 80 * 3)
+        path = self.root / ('pixels-' + str(value) + '.rgb')
+        path.write_bytes(raw); path.chmod(0o600)
+        return dict(frame(generation), ramws_path=str(path), sha256=host.hashlib.sha256(raw).hexdigest())
+
+    def retained_rgb(self, f):
+        return dict(artifact=f['ramws_path'], generation=f['generation'], surface_id=f['surface_id'])
+
+    def changed_frame(self, before, generation):
+        raw = bytearray(Path(before['ramws_path']).read_bytes())
+        raw[(60 * 100 + 60) * 3] ^= 1
+        path = self.root / ('effect-' + str(generation) + '.rgb')
+        path.write_bytes(raw); path.chmod(0o600)
+        return dict(before, generation=generation, ramws_path=str(path), sha256=host.hashlib.sha256(raw).hexdigest())
+
     def pixel_rebind_fixture(self, *, over_target=False, changed_row=None):
         old = frame()
         raw = b'x' * (100 * 80 * 3)
@@ -311,7 +327,7 @@ class ProgramTests(unittest.TestCase):
         old, fresh, planner = self.pixel_rebind_fixture()
         def settle(pid, *args, **kwargs):
             return dict(schema='action_receipt/v0.2', proposal_id=pid, executed_at_ns=2,
-                after_frame=dict(fresh, generation=3), verified=True,
+                after_frame=self.changed_frame(fresh, 3), verified=True,
                 verification=dict(method='pixel', detail='changed'), error='',
                 native_evidence=dict(surface_id='surface-alice', input_mono_ns=1, input_ts_ns=1))
         with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
@@ -537,26 +553,26 @@ class ProgramTests(unittest.TestCase):
         return planner
 
     def test_inherited_propose_changed_pixels_requires_new_perception_and_plan(self):
-        b=lambda n:dict(frame(n),sha256='b'*64)
+        b=lambda n:self.rgb_frame(n, 121)
         planner=self.freshness_fixture([frame(1),b(2),b(3),b(4),b(5)])
         def settle(pid,*args,**kwargs):
             return dict(schema='action_receipt/v0.2',proposal_id=pid,executed_at_ns=2,
-                after_frame=b(6),verified=True,verification=dict(method='pixel',detail='changed'),error='',
+                after_frame=self.rgb_frame(6, 122),verified=True,verification=dict(method='pixel',detail='changed'),error='',
                 native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1))
-        with patch.object(self.b,'ownership'),patch.object(self.b,'retain',return_value={}), \
+        with patch.object(self.b,'ownership'),patch.object(self.b,'retain',side_effect=self.retained_rgb), \
              patch.object(host.tools,'propose',return_value=dict(status='admitted')) as submit, \
              patch.object(host.tools,'wait_verify',side_effect=settle):
             moves=program.run_moves(self.b,planner,'Covered square',1,1000)
         self.assertEqual(len(moves),1);self.assertEqual(planner.plan_step.call_count,2)
         self.assertEqual(self.b.perceive.call_count,2);submit.assert_called_once()
         proposal=submit.call_args.args[0]
-        self.assertEqual(proposal['based_on_frame'],dict(sha256='b'*64,generation=5))
+        self.assertEqual(proposal['based_on_frame'],dict(sha256=b(5)['sha256'],generation=5))
         self.assertEqual(proposal['action']['x'],21) # Fresh second decision, not old x20.
         rejected=self.b.program_attempts[0]
         self.assertEqual(rejected['status'],'refused_before_dispatch')
         self.assertNotIn('proposal_id',rejected)
         self.assertEqual(rejected['rebind']['fresh_frame'],b(2))
-        self.assertEqual(rejected['rebind']['mismatches'],dict(sha256=dict(sensed='a'*64,fresh='b'*64)))
+        self.assertEqual(rejected['rebind']['mismatches'],dict(sha256=dict(sensed='a'*64,fresh=b(2)['sha256'])))
 
     def test_persistent_changed_pixels_is_bounded_without_proposals(self):
         f=lambda n,h:dict(frame(n),sha256=h*64)
@@ -633,8 +649,8 @@ class ProgramTests(unittest.TestCase):
                 self.b.wender=self.root;self.b.pending={};self.b.frame_attempts=[]
                 self.b.client=Mock()
                 def run(*unused):
-                    fresh=[frame(1),frame(2),frame(3),frame(4),dict(frame(5),sha256='b'*64),
-                           dict(frame(6),sha256='b'*64)]
+                    fresh=[self.rgb_frame(1),self.rgb_frame(2),self.rgb_frame(3,121),self.rgb_frame(4,121),
+                           self.rgb_frame(5,122),self.rgb_frame(6,122)]
                     planner=self.freshness_fixture(fresh)
                     observe=self.b.observe.side_effect;count=[0]
                     def acquire(timeout):
@@ -652,7 +668,7 @@ class ProgramTests(unittest.TestCase):
                     return real_write(path,value)
                 def settle(pid,*unused,**kwargs):
                     return dict(schema='action_receipt/v0.2',proposal_id=pid,executed_at_ns=2,
-                        after_frame=frame(3),verified=True,verification=dict(method='pixel',detail='changed'),error='',
+                        after_frame=self.rgb_frame(3,121),verified=True,verification=dict(method='pixel',detail='changed'),error='',
                         native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1))
                 with patch.dict(host.os.environ,{'XDG_STATE_HOME':str(self.root)}), \
                      patch.object(host,'connect',return_value=contextlib.nullcontext(self.b.client)), \
@@ -660,7 +676,7 @@ class ProgramTests(unittest.TestCase):
                      patch.object(program,'VCorePerceptionAdapter'),patch.object(program,'WenderSubprocessAdapter'), \
                      patch.object(program,'wait_for_publication',return_value=dict(frame_ref=frame(2))), \
                      patch.object(program,'run_moves',side_effect=run), \
-                     patch.object(self.b,'ownership'),patch.object(self.b,'retain',return_value={}), \
+                     patch.object(self.b,'ownership'),patch.object(self.b,'retain',side_effect=self.retained_rgb), \
                      patch.object(program,'atomic_journal',side_effect=journal), \
                      patch.object(host.tools,'propose',return_value=dict(status='admitted')) as submit, \
                      patch.object(host.tools,'wait_verify',side_effect=settle), \
@@ -691,14 +707,14 @@ class ProgramTests(unittest.TestCase):
         planner = program.WenderSubprocessAdapter(command=command, wender_root=self.root,
                                                   verify_lock=False)
         self.b.surface_id = 'surface-alice'
-        self.b.retain = Mock(side_effect=lambda f: dict(surface_id=f['surface_id'], generation=f['generation']))
-        sensed = dict(frame=frame(), frame_witness={}, observation=program.build_observation(
-            frame(), surface_id='surface-alice', generation=1), table=element_table())
+        self.b.retain = Mock(side_effect=self.retained_rgb)
+        sensed = dict(frame=self.rgb_frame(1), frame_witness={}, observation=program.build_observation(
+            self.rgb_frame(1), surface_id='surface-alice', generation=1), table=element_table())
 
         based={}
         def settlement(proposal_id, *args, **kwargs):
             return dict(schema='action_receipt/v0.2', proposal_id=proposal_id, executed_at_ns=2,
-                after_frame=frame(based[proposal_id]+1), verified=True, verification=dict(method='pixel', detail='changed'),
+                after_frame=self.rgb_frame(based[proposal_id]+1, 121 if based[proposal_id] < 4 else 122), verified=True, verification=dict(method='pixel', detail='changed'),
                 error='', native_evidence=dict(surface_id='surface-alice', input_mono_ns=1, input_ts_ns=1))
 
         def accept(proposal, **kwargs):
@@ -711,9 +727,10 @@ class ProgramTests(unittest.TestCase):
 
         def acquisition(observed):
             current=observed['frame_ref']
-            return dict(sensed,frame=current,frame_witness=self.b.retain(current),observation=program.build_observation(current,
+            table=element_table();table['frame_sha256']=current['sha256']
+            return dict(sensed,frame=current,table=table,frame_witness=self.b.retain(current),observation=program.build_observation(current,
                 surface_id='surface-alice',generation=current['generation']))
-        publications=iter([frame(2),frame(2),frame(3),frame(4),frame(5)])
+        publications=iter([self.rgb_frame(2),self.rgb_frame(2),self.rgb_frame(3,121),self.rgb_frame(4,121),self.rgb_frame(5,121)])
         with patch.object(self.b, 'ownership'), patch.object(self.b, 'observe',
                 side_effect=lambda _:dict(frame_ref=next(publications))), \
              patch.object(self.b, 'perceive', side_effect=acquisition), \
@@ -904,7 +921,7 @@ class ProgramTests(unittest.TestCase):
             return dict(status='admitted')
         def settle(pid, *args, **kwargs):
             return dict(schema='action_receipt/v0.2', proposal_id=pid, executed_at_ns=2,
-                after_frame=dict(later, generation=7), verified=True,
+                after_frame=self.changed_frame(later, 7), verified=True,
                 verification=dict(method='pixel', detail='changed'), error='',
                 native_evidence=dict(surface_id='surface-alice', input_mono_ns=1, input_ts_ns=1))
         with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
@@ -1024,8 +1041,8 @@ class ProgramTests(unittest.TestCase):
         self.b.client=client
         self.b.subscription={}
         self.b.surface_id='surface-alice'
-        self.b.observe=Mock(side_effect=lambda timeout_ms: dict(frame_ref=frame(9 if refreshed[0] else 8)))
-        sensed=dict(frame=frame(8),frame_witness={},observation={},table=element_table())
+        self.b.observe=Mock(side_effect=lambda timeout_ms: dict(frame_ref=self.rgb_frame(9 if refreshed[0] else 8)))
+        sensed=dict(frame=self.rgb_frame(8),frame_witness={},observation={},table=element_table())
         self.b.perceive=Mock(return_value=sensed)
         reply=planner_reply()
         planner=Mock(battery_state_sha256='d'*64)
@@ -1035,9 +1052,9 @@ class ProgramTests(unittest.TestCase):
             return dict(status='admitted')
         def settle(pid,*args,**kwargs):
             return dict(schema='action_receipt/v0.2',proposal_id=pid,executed_at_ns=2,
-                after_frame=frame(10),verified=True,verification=dict(method='pixel',detail='changed'),
+                after_frame=self.rgb_frame(10,121),verified=True,verification=dict(method='pixel',detail='changed'),
                 error='',native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1))
-        with patch.object(self.b,'ownership'),patch.object(self.b,'retain',return_value={}), \
+        with patch.object(self.b,'ownership'),patch.object(self.b,'retain',side_effect=self.retained_rgb), \
              patch.object(self.b,'check_program_frame'), \
              patch.object(host.tools,'propose',side_effect=accept),patch.object(host.tools,'wait_verify',side_effect=settle):
             moves=program.run_moves(self.b,planner,'Covered square',1,1000)
@@ -1426,6 +1443,395 @@ finally:s.close()
              patch.object(host, 'admit_home', side_effect=AssertionError('browser corpus used')):
             self.assertEqual(host.run_entry(args), 6)
         entry.assert_called_once_with(args)
+
+    def test_surface_effect_accepts_display_but_refuses_unchanged_mines_and_clock_only(self):
+        self.b.retain=Mock(side_effect=self.retained_rgb)
+        before = self.rgb_frame(1)
+        unchanged = dict(before, generation=2)
+        table = element_table()
+        with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_NO_VISIBLE_EFFECT'):
+            program.visible_effect(self.b, before, unchanged, table)
+        effect = self.changed_frame(before, 2)
+        program.visible_effect(self.b, before, effect, table)
+        table['elements'].append(dict(role='text', name='12:34', score_ppm=900000,
+                                      bbox=dict(x=55,y=55,w=20,h=20)))
+        with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_NO_VISIBLE_EFFECT'):
+            program.visible_effect(self.b, before, effect, table)
+        # Display changed outside the excluded clock still proves the click.
+        raw=bytearray(Path(effect['ramws_path']).read_bytes());raw[100*40*3] ^= 1
+        Path(effect['ramws_path']).write_bytes(raw)
+        effect['sha256']=host.hashlib.sha256(raw).hexdigest()
+        program.visible_effect(self.b, before, effect, table)
+        with self.assertRaisesRegex(host.OwnerRefused, 'MW_FRAME_BINDING'):
+            program.visible_effect(self.b, before, dict(effect,sha256='0'*64), table)
+
+    def test_dispatch_retention_survives_baseline_publication_release(self):
+        before=self.rgb_frame(1);after=self.changed_frame(before,2)
+        retained=self.root/'retained.rgb'
+        retained.write_bytes(Path(before['ramws_path']).read_bytes())
+        Path(before['ramws_path']).unlink()
+        self.b.retain=Mock(side_effect=self.retained_rgb)
+        program.visible_effect(self.b,before,after,element_table(),
+                               before_witness=dict(artifact=str(retained)))
+        self.b.retain.assert_called_once_with(after)
+
+    def test_false_positive_core_receipt_never_certifies_an_unchanged_click(self):
+        old,fresh,planner=self.pixel_rebind_fixture()
+        def settle(pid,*args,**kwargs):
+            return dict(schema='action_receipt/v0.2',proposal_id=pid,executed_at_ns=2,
+                after_frame=dict(fresh,generation=3),verified=True,
+                verification=dict(method='pixel',detail='changed'),error='',
+                native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1))
+        with patch.object(self.b,'ownership'),patch.object(self.b,'check_program_frame'), \
+             patch.object(host.tools,'propose',return_value=dict(status='admitted')) as submit, \
+             patch.object(host.tools,'wait_verify',side_effect=settle):
+            with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_NO_VISIBLE_EFFECT'):
+                program.run_moves(self.b,planner,'Covered square',1,1000)
+        submit.assert_called_once()
+        self.assertEqual(submit.call_args.args[0]['expectation'],
+                         dict(type='changed_region',bbox=dict(x=0,y=0,w=100,h=80)))
+        self.assertEqual(self.b.program_moves,[])
+        self.assertEqual(self.b.program_attempts[-1]['status'],'input_uncertain')
+        self.assertEqual(self.b.program_attempts[-1]['core_verification']['after_frame']['generation'],3)
+
+    def text_fixture(self, readback='hello', focus=True):
+        self.b.surface_id='surface-alice'
+        frames=[self.rgb_frame(1),self.rgb_frame(2,121),self.rgb_frame(3,122)]
+        current=[0];order=[];submitted={}
+        self.b.observe=Mock(side_effect=lambda _:dict(frame_ref=frames[current[0]]))
+        self.b.retain=Mock(side_effect=self.retained_rgb)
+        reply=planner_reply();reply['target_node'].update(role='field',name='Message')
+        table=element_table();table['elements'][0].update(role='field',name='Message')
+        def perceive(observed, **kwargs):
+            f=observed['frame_ref'];t=dict(table,frame_sha256=f['sha256'])
+            return dict(frame=f,frame_witness=self.retained_rgb(f),table=t,
+                        observation=program.build_observation(f,surface_id=self.b.surface_id,generation=f['generation']))
+        self.b.perceive=Mock(side_effect=perceive)
+        planner=Mock(battery_state_sha256='d'*64)
+        planner.plan_step.return_value=tuple(reply[k] for k in ('action','expectation','state','target_node'))
+        def submit(proposal,**kwargs):
+            order.append(proposal['action']['type']);submitted[proposal['proposal_id']]=copy.deepcopy(proposal)
+            current[0]+=1;order.append('publish')
+            return dict(status='admitted')
+        def settle(pid,*args,**kwargs):
+            return host.tools._VerifiedReceipt(dict(schema='action_receipt/v0.2',proposal_id=pid,executed_at_ns=2,
+                after_frame=frames[current[0]],verified=True,verification=dict(method='pixel',detail='changed'),
+                error='',
+                native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1)),
+                focus_verified=focus,input_mono_ns=1,frame_sha256=frames[current[0]]['sha256'])
+        marks=[] if readback is None else [dict(x=10,y=20,w=30,h=20,ocr_text=readback)]
+        self.b.vision=Mock(last_c2_payload=dict(marks=marks))
+        return planner,submit,settle,order,submitted
+
+    def test_text_core_order_and_ocr_exact_unreadable_mismatch(self):
+        for ocr, expected in (('hello','exact'),(None,'not_readable'),('wrong','mismatch')):
+            with self.subTest(ocr=ocr):
+                self.b.pending={}
+                planner,submit,settle,order,submitted=self.text_fixture(ocr)
+                with patch.object(self.b,'ownership'),patch.object(self.b,'check_program_frame'), \
+                     patch.object(host.tools,'propose',side_effect=submit), \
+                     patch.object(host.tools,'wait_verify',side_effect=settle):
+                    if expected=='mismatch':
+                        with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_TEXT_MISMATCH'):
+                            program.run_moves(self.b,planner,'Message',1,1000,text='hello')
+                    else:
+                        program.run_moves(self.b,planner,'Message',1,1000,text='hello')
+                        self.assertEqual(self.b.program_moves[-1]['status'],
+                                         'verified_text' if ocr else 'uncertified_text')
+                self.assertEqual(order,['click','publish','type','publish'])
+                self.assertEqual(self.b.text_readback,expected)
+                self.assertEqual([p['action']['type'] for p in submitted.values()],['click','type'])
+                self.b.vision.perceive.assert_called_once()
+                self.assertEqual(self.b.vision.perceive.call_args.args[0]['generation'],3)
+
+    def test_focused_text_one_admission_without_planner_and_ocr_verdicts(self):
+        for ocr, expected in (('hello', 'exact'), (None, 'not_readable'), ('wrong', 'mismatch')):
+            with self.subTest(ocr=ocr):
+                self.b.pending = {}
+                planner, submit, settle, order, submitted = self.text_fixture(ocr)
+                perceive = self.b.perceive.side_effect
+                def empty(observed, **kwargs):
+                    self.assertTrue(kwargs['allow_empty'])
+                    sensed = perceive(observed)
+                    sensed['table']['elements'] = []
+                    return sensed
+                self.b.perceive.side_effect = empty
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(host.tools, 'propose', side_effect=submit), \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle):
+                    if expected == 'mismatch':
+                        with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_TEXT_MISMATCH'):
+                            program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+                        self.assertEqual(self.b.program_moves, [])
+                    else:
+                        moves = program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+                        self.assertEqual(len(moves), 1)
+                        self.assertEqual(moves[0]['status'], 'verified_text' if ocr else 'uncertified_text')
+                planner.plan_step.assert_not_called()
+                self.assertEqual(order, ['type', 'publish'])
+                self.assertEqual(len(submitted), 1)
+                self.assertEqual(self.b.text_readback, expected)
+                self.assertEqual(self.b.vision.perceive.call_args.args[0]['generation'], 2)
+
+    def test_focused_ticks_drain_stale_retry_and_clean_exhaustion(self):
+        for refuse_all in (False, True):
+            with self.subTest(refuse_all=refuse_all):
+                self.b.pending = {}; self.b.frame_attempts = []
+                planner, _, _, _, _ = self.text_fixture('hello|')
+                client = Mock(spec=host.ToolClient); client._frames = {}
+                self.b.client = client
+                fresh = self.rgb_frame(4, 123)
+                later = self.rgb_frame(6, 124)
+                latest = self.rgb_frame(8, 125)
+                after = self.rgb_frame(9, 126)
+                queue = [fresh, None, later, None, latest, None]
+                def drain(**kwargs):
+                    value = queue.pop(0)
+                    if value is None:
+                        return False
+                    client._frames[self.b.surface_id] = value
+                    return True
+                client.drain_frames.side_effect = drain
+                submitted = []
+                def submit(proposal, **kwargs):
+                    submitted.append(proposal['based_on_frame'])
+                    self.assertEqual(proposal['action'], dict(type='type', text='hello'))
+                    self.assertEqual(proposal['based_on_frame'],
+                                     {k: client._frames[self.b.surface_id][k] for k in ('sha256', 'generation')})
+                    # Publications advance while the core processes this call.
+                    client._frames[self.b.surface_id] = later if len(submitted) == 1 else latest
+                    if refuse_all or len(submitted) == 1:
+                        raise host.tools.ToolRefusal('STALE_FRAME', None)
+                    return dict(status='admitted')
+                def settle(pid, *args, **kwargs):
+                    return dict(schema='action_receipt/v0.2', proposal_id=pid, executed_at_ns=2,
+                        after_frame=after, verified=True, verification=dict(method='pixel', detail='changed'),
+                        error='', native_evidence=dict(surface_id=self.b.surface_id, input_mono_ns=1, input_ts_ns=1))
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(program, 'wait_for_publication') as publication, \
+                     patch.object(host.tools, 'propose', side_effect=submit), \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle) as receipt:
+                    if refuse_all:
+                        with self.assertRaises(host.tools.ToolRefusal):
+                            program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+                        self.assertEqual(len(submitted), 3)
+                        self.assertEqual(self.b.program_attempts[-1]['status'], 'refused_before_execution')
+                        self.assertTrue(self.b.program_clean_refusal)
+                        self.assertEqual(self.b.program_moves, [])
+                        self.assertEqual(self.b.pending, {})
+                        receipt.assert_not_called()
+                        self.b.vision.perceive.assert_not_called()
+                    else:
+                        program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+                        self.assertEqual([p['generation'] for p in submitted], [4, 6])
+                        self.assertEqual(self.b.text_readback, 'exact')
+                        self.b.vision.perceive.assert_called_once_with(after)
+                    self.b.perceive.assert_called_once()
+                    planner.plan_step.assert_not_called()
+                    publication.assert_not_called()
+                    client.subscribe_frames.assert_not_called()
+
+    def test_focused_readback_changed_box_and_caret_without_unrelated_labels(self):
+        planner, submit, settle, _, _ = self.text_fixture()
+        before = self.b.observe(1000)['frame_ref']
+        raw = bytearray(Path(before['ramws_path']).read_bytes())
+        for y in range(20, 40):
+            for x in range(10, 40):
+                raw[(y * 100 + x) * 3] ^= 1
+        path = self.root / 'text-effect.rgb'; path.write_bytes(raw)
+        after = dict(before, generation=2, ramws_path=str(path), sha256=host.hashlib.sha256(raw).hexdigest())
+        def receipt(pid, *args, **kwargs):
+            result = settle(pid, *args, **kwargs)
+            result['after_frame'] = after
+            return result
+        self.b.vision.last_c2_payload = dict(marks=[
+            dict(x=10, y=20, w=25, h=20, ocr_text='hello'),
+            dict(x=36, y=20, w=1, h=20, ocr_text='|'),
+            dict(x=60, y=60, w=30, h=10, ocr_text='File')])
+        with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+             patch.object(host.tools, 'propose', side_effect=submit), \
+             patch.object(host.tools, 'wait_verify', side_effect=receipt):
+            program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+        self.assertEqual(self.b.program_attempts[-1]['readback_box'], [10, 20, 30, 20])
+        self.assertEqual(self.b.text_readback, 'exact')
+        for observed in ('Hello|', 'hell|', 'hello||', 'hello world|'):
+            with self.subTest(observed=observed):
+                self.assertEqual(program.classify_text_readback(dict(marks=[
+                    dict(x=10, y=20, w=25, h=20, ocr_text=observed)]),
+                    dict(box=[10, 20, 30, 20]), 'hello', caret=True), 'mismatch')
+
+    def test_focused_stale_exhaustion_entry_is_clean_refusal(self):
+        self.text_fixture()
+        args = SimpleNamespace(identity='alice', goal='focused', text='hello', steps=1,
+            timeout_ms=1000, planner='rules', model_timeout_ms=120000)
+        with patch.dict(host.os.environ, {'XDG_STATE_HOME': str(self.root)}), \
+             patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+             patch.object(program, 'ProgramBackend', return_value=self.b), \
+             patch.object(program, 'VCorePerceptionAdapter', return_value=self.b.vision), \
+             patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+             patch.object(host.tools, 'propose', side_effect=host.tools.ToolRefusal('STALE_FRAME', None)) as submit, \
+             patch.object(host.tools, 'wait_verify') as settle, \
+             contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(program.run_entry(args), 6)
+        result = json.loads(output.getvalue())
+        report = json.loads(Path(result['report']).read_text())
+        self.assertEqual(result['verdict_code'], 'STALE_FRAME')
+        self.assertEqual(report['status'], 'refused')
+        self.assertEqual(report['attempts'][0]['status'], 'refused_before_execution')
+        self.assertIsNone(report['text_readback'])
+        self.assertEqual(report['moves'], [])
+        self.assertEqual(submit.call_count, 3)
+        settle.assert_not_called()
+
+    def test_focused_rebind_keeps_geometry_surface_generation_and_deadline_gates(self):
+        for change in (dict(surface_id='other'), dict(width=101), dict(height=81),
+                       dict(generation=0), dict(sha256='b' * 64)):
+            with self.subTest(change=change):
+                self.text_fixture()
+                old = self.b.observe(1000)['frame_ref']
+                sensed = self.b.perceive(dict(frame_ref=old))
+                self.b.observe.return_value = dict(frame_ref=dict(old, **change))
+                self.b.observe.side_effect = None
+                with patch.object(host.tools, 'propose') as submit, self.assertRaises(host.OwnerRefused):
+                    self.b.rebind(sensed, dict(action=dict(type='type', text='hello'),
+                        target=None, focused_text=True), 1000)
+                submit.assert_not_called()
+        self.text_fixture()
+        client = Mock(spec=host.ToolClient); client._frames = {}
+        self.b.client = client
+        clock = [0]
+        def drain(**kwargs):
+            clock[0] += 400_000_000
+            return True
+        client.drain_frames.side_effect = drain
+        with patch.object(program.time, 'monotonic_ns', side_effect=lambda: clock[0]), \
+             patch.object(self.b, 'ownership'), patch.object(host.tools, 'propose') as submit:
+            with self.assertRaisesRegex(host.OwnerRefused, 'MW_STALE_FRAME_EXHAUSTED'):
+                program.run_moves(self.b, None, 'focused', 1, 1000, text='hello')
+        submit.assert_not_called()
+        self.assertEqual(client.drain_frames.call_count, 3)
+        self.assertEqual(self.b.program_attempts[-1]['status'], 'refused_before_dispatch')
+
+    def test_focused_unknown_dispatch_outcome_stays_uncertain_without_retry(self):
+        planner, _, _, _, _ = self.text_fixture()
+        with patch.object(self.b, 'ownership'), \
+             patch.object(host.tools, 'propose', side_effect=TimeoutError('core reply lost')) as submit, \
+             patch.object(host.tools, 'wait_verify') as settle:
+            with self.assertRaisesRegex(TimeoutError, 'core reply lost'):
+                program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+        self.assertEqual(self.b.program_attempts[-1]['status'], 'input_uncertain')
+        self.assertFalse(self.b.program_clean_refusal)
+        submit.assert_called_once()
+        settle.assert_not_called()
+
+    def test_focused_text_known_password_refuses_without_admission(self):
+        for change in (dict(name='Password'), dict(role='password'),
+                       dict(states=dict(secret=True)), dict(states=dict(type='password'))):
+            with self.subTest(change=change):
+                planner, submit, settle, order, _ = self.text_fixture()
+                perceive = self.b.perceive.side_effect
+                def password(observed, **kwargs):
+                    sensed = perceive(observed)
+                    sensed['table']['elements'][0].update(change)
+                    return sensed
+                self.b.perceive.side_effect = password
+                with patch.object(host.tools, 'propose') as core:
+                    with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_PASSWORD'):
+                        program.run_moves(self.b, planner, 'focused', 1, 1000, text='hello')
+                core.assert_not_called()
+                planner.plan_step.assert_not_called()
+
+    def test_focused_request_guards_and_empty_perception(self):
+        with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_FOCUSED_TEXT_REQUIRED'):
+            program.run_moves(self.b, Mock(), 'focused', 1, 1000)
+        with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_TEXT_STEPS'):
+            program.run_moves(self.b, Mock(), 'focused', 2, 1000, text='hello')
+        self.b.surface_id = 'surface-alice'
+        self.b.vision = Mock(last_c2_payload=dict(marks=[]), diagnostics={})
+        self.b.vision.last_vserve_error = self.b.vision.last_fallback_error = None
+        with patch.object(self.b, 'check_program_frame'), \
+             patch.object(self.b, 'retain', return_value={}), \
+             patch.object(program, 'project_element_table', return_value=dict(elements=[])), \
+             patch.object(program, 'build_observation', return_value={}):
+            observed = dict(frame_ref=frame())
+            self.assertEqual(self.b.perceive(observed, allow_empty=True)['table']['elements'], [])
+            with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_UNKNOWN_OBSERVATION'):
+                self.b.perceive(observed)
+
+    def test_text_requires_verified_focus_and_refuses_known_password_before_click(self):
+        planner,submit,settle,order,_=self.text_fixture(focus=False)
+        with patch.object(self.b,'ownership'),patch.object(self.b,'check_program_frame'), \
+             patch.object(host.tools,'propose',side_effect=submit), \
+             patch.object(host.tools,'wait_verify',side_effect=settle):
+            with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_FOCUS_UNVERIFIED'):
+                program.run_moves(self.b,planner,'Message',1,1000,text='hello')
+        self.assertEqual(order,['click','publish'])
+        for change in (dict(name='Password'),dict(role='password'),dict(states=dict(protected=True)),
+                       dict(states=dict(type='password'))):
+            with self.subTest(change=change):
+                planner,submit,settle,order,_=self.text_fixture()
+                action,expectation,state,target=planner.plan_step.return_value
+                target.update(change)
+                table=element_table();table['elements'][0].update(role=target['role'],name=target['name'])
+                old=self.b.perceive.side_effect
+                self.b.perceive.side_effect=lambda obs:dict(old(obs),table=table)
+                with patch.object(host.tools,'propose',side_effect=submit) as core:
+                    with self.assertRaisesRegex(host.OwnerRefused,'MW_PROGRAM_PASSWORD'):
+                        program.run_moves(self.b,planner,target['name'],1,1000,text='hello')
+                core.assert_not_called()
+
+    def test_ocr_readback_ignores_outside_labels_and_never_normalizes_mismatch(self):
+        target=dict(box=[10,20,30,20])
+        outside=dict(x=60,y=20,w=20,h=20,ocr_text='hello')
+        self.assertEqual(program.classify_text_readback(dict(marks=[outside]),target,'hello'),'not_readable')
+        inside=dict(x=10,y=20,w=20,h=20,ocr_text='Hello')
+        self.assertEqual(program.classify_text_readback(dict(marks=[inside]),target,'hello'),'mismatch')
+
+    def test_focused_entry_constructs_no_planner_even_when_muse_selected(self):
+        self.text_fixture()
+        self.b.wender = self.root
+        args = SimpleNamespace(identity='alice', goal='focused', text='hello', steps=1,
+                               timeout_ms=1000, planner='muse', model_timeout_ms=120000)
+        def run(backend, planner, goal, steps, timeout_ms, **kwargs):
+            self.assertIsNone(planner)
+            self.assertEqual(goal, 'focused')
+            self.assertEqual(kwargs, dict(text='hello'))
+            return []
+        with patch.dict(host.os.environ, {'XDG_STATE_HOME': str(self.root)}), \
+             patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+             patch.object(program, 'ProgramBackend', return_value=self.b), \
+             patch.object(program, 'VCorePerceptionAdapter'), \
+             patch.object(program, 'WenderSubprocessAdapter') as custody, \
+             patch.object(program, 'MuseProgramPlanner') as muse, \
+             patch.object(program, 'run_moves', side_effect=run), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(program.run_entry(args), 0)
+        custody.assert_not_called()
+        muse.assert_not_called()
+
+    def test_text_entry_uncertified_verdict_is_explicit_and_mismatch_nonzero(self):
+        for readback,rc,code in (('exact',0,'PROGRAM_BOUNDED_ACTIONS_VERIFIED'),
+                ('not_readable',0,'PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE'),('mismatch',5,'INPUT_UNCERTAIN')):
+            with self.subTest(readback=readback):
+                planner,_,_,_,_=self.text_fixture()
+                self.b.wender=self.root
+                def run(*args,**kwargs):
+                    self.b.text_readback=readback
+                    self.b.program_moves=[dict(status='verified_move')]
+                    self.b.program_attempts=[dict(status='input_uncertain' if rc else 'verified_text')]
+                    if rc:raise host.OwnerRefused('MW_PROGRAM_TEXT_MISMATCH')
+                    return self.b.program_moves
+                args=SimpleNamespace(identity='alice',goal='Message',text='hello',steps=1,timeout_ms=1000,planner='rules',model_timeout_ms=120000)
+                with patch.dict(host.os.environ,{'XDG_STATE_HOME':str(self.root)}), \
+                     patch.object(host,'connect',return_value=contextlib.nullcontext(self.b.client)), \
+                     patch.object(program,'ProgramBackend',return_value=self.b), \
+                     patch.object(program,'VCorePerceptionAdapter'),patch.object(program,'WenderSubprocessAdapter'), \
+                     patch.object(program,'run_moves',side_effect=run), \
+                     contextlib.redirect_stdout(io.StringIO()) as output,contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(program.run_entry(args),rc)
+                result=json.loads(output.getvalue());self.assertEqual(result['verdict_code'],code)
+                report=json.loads(Path(result['report']).read_text())
+                self.assertEqual(report['text_readback'],readback)
 
 
 if __name__ == '__main__':
