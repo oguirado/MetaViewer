@@ -403,9 +403,13 @@ loop:
 	return result
 }
 
+const capsuleXDisplay = ":100"
+
 func displayGetimageCommand(ctx context.Context, target DisplayTarget) *exec.Cmd {
-	loop := "while :; do /usr/local/libexec/srf-fbread getimage " + target.Display + " " + strconv.FormatUint(uint64(target.XID), 10) + " 2>/dev/null || exit 9; sleep 0.03; done"
-	return exec.CommandContext(ctx, "docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY="+target.Display, target.Container, "sh", "-c", loop)
+	// Every capsule runs its own Xvfb on :100 and srf-fbread admits only that value; target.Display
+	// is the adapter's logical pool slot, which differs from :100 for every capsule but the first.
+	loop := "while :; do /usr/local/libexec/srf-fbread getimage " + capsuleXDisplay + " " + strconv.FormatUint(uint64(target.XID), 10) + " 2>/dev/null || exit 9; sleep 0.03; done"
+	return exec.CommandContext(ctx, "docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY="+capsuleXDisplay, target.Container, "sh", "-c", loop)
 }
 
 func displayBinding(t DisplayTarget) ([]byte, [32]byte) {

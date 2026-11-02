@@ -625,10 +625,10 @@ func TestDisplayProductionGetimageCommand(t *testing.T) {
 		t.Fatalf("binding (:100) = %s (%v)", body100, err)
 	}
 
-	// Second capsule mv-live-2 (:101) uses its own display in both -e DISPLAY= and getimage arg, plus binding.
+	// Second capsule mv-live-2 has pool slot :101 but its own X server is :100 (srf-fbread admits only :100); the binding keeps the slot.
 	t101 := DisplayTarget{Container: "srf-id-mv-live-2", Run: "run-2", Window: "w1", Display: ":101", XID: 77, Width: 2, Height: 1}
 	cmd101 := displayGetimageCommand(context.Background(), t101)
-	want101 := []string{"docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY=:101", "srf-id-mv-live-2", "sh", "-c", "while :; do /usr/local/libexec/srf-fbread getimage :101 77 2>/dev/null || exit 9; sleep 0.03; done"}
+	want101 := []string{"docker", "exec", "-i", "-u", "10001:10001", "-e", "DISPLAY=:100", "srf-id-mv-live-2", "sh", "-c", "while :; do /usr/local/libexec/srf-fbread getimage :100 77 2>/dev/null || exit 9; sleep 0.03; done"}
 	if fmt.Sprint(cmd101.Args) != fmt.Sprint(want101) {
 		t.Fatalf("production sender (:101): %q", cmd101.Args)
 	}
@@ -757,7 +757,7 @@ func TestDisplayTwoCapsulesDistinctDisplaysAndRingsAndRestart(t *testing.T) {
 	if !strings.Contains(strings.Join(args1[0], " "), "DISPLAY=:100") || !strings.Contains(strings.Join(args1[0], " "), "getimage :100 42") {
 		t.Fatalf("capsule 1 wrong display argv: %q", args1[0])
 	}
-	if !strings.Contains(strings.Join(args2[0], " "), "DISPLAY=:101") || !strings.Contains(strings.Join(args2[0], " "), "getimage :101 84") {
+	if !strings.Contains(strings.Join(args2[0], " "), "DISPLAY=:100") || !strings.Contains(strings.Join(args2[0], " "), "getimage :100 84") {
 		t.Fatalf("capsule 2 wrong display argv: %q", args2[0])
 	}
 
@@ -783,7 +783,7 @@ func TestDisplayTwoCapsulesDistinctDisplaysAndRingsAndRestart(t *testing.T) {
 	mu.Lock()
 	latestArgs2 := spawnedArgs["srf-id-mv-live-2"][len(spawnedArgs["srf-id-mv-live-2"])-1]
 	mu.Unlock()
-	if !strings.Contains(strings.Join(latestArgs2, " "), "DISPLAY=:101") || !strings.Contains(strings.Join(latestArgs2, " "), "getimage :101 99") {
+	if !strings.Contains(strings.Join(latestArgs2, " "), "DISPLAY=:100") || !strings.Contains(strings.Join(latestArgs2, " "), "getimage :100 99") {
 		t.Fatalf("restarted capsule 2 wrong display argv: %q", latestArgs2)
 	}
 }
@@ -880,16 +880,16 @@ func TestDisplayMultiCapsuleMutants(t *testing.T) {
 		name, before, after, test, diagnostic string
 	}{
 		{
-			"MUT-MDISP-GETIMAGE-100",
+			"MUT-MDISP-GETIMAGE-POOL-SLOT",
+			`getimage " + capsuleXDisplay + " "`,
 			`getimage " + target.Display + " "`,
-			`getimage :100 "`,
 			"TestDisplayTwoCapsulesDistinctDisplaysAndRingsAndRestart$",
 			"capsule 2 wrong display argv",
 		},
 		{
-			"MUT-MDISP-ENV-100",
+			"MUT-MDISP-ENV-POOL-SLOT",
+			`"DISPLAY="+capsuleXDisplay`,
 			`"DISPLAY="+target.Display`,
-			`"DISPLAY=:100"`,
 			"TestDisplayTwoCapsulesDistinctDisplaysAndRingsAndRestart$",
 			"capsule 2 wrong display argv",
 		},
@@ -1032,5 +1032,19 @@ func TestDisplayStaleRingRejectsUnsafe(t *testing.T) {
 				t.Fatal("unsafe file removed")
 			}
 		})
+	}
+}
+
+func TestDisplayGetimageUsesTheCapsuleXServerNotThePoolSlot(t *testing.T) {
+	cmd := displayGetimageCommand(context.Background(), DisplayTarget{Container: "c", Run: "r", Window: "w1", Display: ":103", XID: 42, Width: 10, Height: 10})
+	joined := strings.Join(cmd.Args, " ")
+	if !strings.Contains(joined, "srf-fbread getimage :100 42") || !strings.Contains(joined, "DISPLAY=:100") || strings.Contains(joined, ":103") {
+		t.Fatalf("command must use the capsule X server: %s", joined)
+	}
+}
+
+func TestResolveDisplayTargetRefusesOtherNativeKinds(t *testing.T) {
+	if _, err := ResolveDisplayTarget(capsule.Binding{NativeKind: "holdings", Window: "w1"}, ""); !errors.Is(err, ErrDisplayUnsupported) {
+		t.Fatalf("holdings must stay unsupported: %v", err)
 	}
 }
