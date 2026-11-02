@@ -29,6 +29,14 @@ from metaviewer_agents.perception.vcore import VCorePerceptionAdapter, project_e
 from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
 
 
+class ProgramModelReplyRejected(RuntimeError):
+    """A model reply was rejected before any proposal could exist."""
+
+    def __init__(self, code, message):
+        self.code = code
+        super().__init__(code + ": " + message)
+
+
 class ProgramObservationChanged(RuntimeError):
     """A valid newer observation rejected rebind before any proposal exists."""
     code = 'MW_PROGRAM_OBSERVATION_CHANGED'
@@ -90,7 +98,9 @@ class ProgramBackend(host.HostBackend):
         host.need(bool(surfaces), 'MW_RUN_NO_SURFACE')
         host.need(len(surfaces) == 1, 'MW_RUN_AMBIGUOUS')
         surface = surfaces[0]
-        host.need(surface.get('control') == 'agent', 'MW_PROGRAM_CONTROL')
+        if surface.get('control') != 'agent':
+            raise host.refuse('MW_PROGRAM_CONTROL',
+                'the capsule is under human control; press Release on the tile, then run again')
         surface_id = surface['surface_id']
         host.need(isinstance(surface_id, str) and
                   re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', surface_id),
@@ -238,7 +248,25 @@ class ProgramBackend(host.HostBackend):
                     observation=build_observation(frame, surface_id=self.surface_id,
                         generation=frame['generation'], vision=vision))
 
+    def propose(self, sensed, plan, max_ms):
+        # [TARGET, unit decision] Explicit stale nonexecution retries only the
+        # RGB rebind, under the original attempt cap and absolute deadline.
+        deadline = time.monotonic_ns() + max_ms * 1_000_000
+        attempts = min(3, plan.get('frame_attempt_limit', 3))
+        for retry in range(attempts):
+            remaining = (deadline - time.monotonic_ns()) // 1_000_000
+            host.need(remaining > 0, 'MW_STALE_FRAME_EXHAUSTED')
+            start = len(getattr(self, 'frame_attempts', []))
+            try:
+                return super().propose(sensed, plan, remaining)
+            except host.tools.ToolRefusal as error:
+                rows = getattr(self, 'frame_attempts', [])[start:]
+                if (error.reason_code != 'STALE_FRAME' or not rows or
+                        rows[-1]['status'] != 'STALE_FRAME' or retry == attempts - 1):
+                    raise
+
     def rebind(self, sensed, plan, remaining):
+        started = time.monotonic_ns()
         # Wender binds its target to sensed pixels. A moving or replaced target
         # requires a new planning tick, never a coordinate replay or input retry.
         if isinstance(self.client, host.ToolClient):
@@ -250,15 +278,71 @@ class ProgramBackend(host.HostBackend):
             fresh = wait_for_publication(self, baseline['generation'], remaining)['frame_ref']
         else:
             fresh = self.observe(remaining)['frame_ref']
+        if isinstance(self.client, host.ToolClient):
+            # Drain through an empty readiness check; one event is not enough.
+            deadline = started + remaining * 1_000_000
+            while True:
+                budget = (deadline - time.monotonic_ns()) // 1_000_000
+                host.need(budget > 0, 'MW_STALE_FRAME_EXHAUSTED')
+                if not self.client.drain_frames(timeout_ms=budget):
+                    break
+            cached = self.client._frames.get(self.surface_id)
+            if cached is not None and cached['generation'] > fresh['generation']:
+                fresh = copy.deepcopy(cached)
+            self.check_program_frame(fresh)
         mismatches = {k: dict(sensed=sensed['frame'][k], fresh=fresh[k])
                       for k in ('surface_id', 'sha256', 'width', 'height')
                       if fresh[k] != sensed['frame'][k]}
         host.need(fresh['surface_id'] == sensed['frame']['surface_id'] == self.surface_id and
                   fresh['generation'] >= sensed['frame']['generation'], 'MW_REBIND_PIXELS')
+        cheap_started = time.monotonic_ns()
         if mismatches:
             host.need(fresh['generation'] > sensed['frame']['generation'], 'MW_REBIND_PIXELS')
+            if set(mismatches) == {'sha256'}:
+                rebound = self.unchanged_target(sensed, fresh, plan)
+                if rebound is not None:
+                    self.record_rebind_time(started, cheap_started, fresh)
+                    return rebound
             raise ProgramObservationChanged(sensed['frame'], fresh, mismatches)
-        return dict(sensed, frame=fresh, frame_witness=self.retain(fresh))
+        rebound = dict(sensed, frame=fresh, frame_witness=self.retain(fresh))
+        self.record_rebind_time(started, cheap_started, fresh)
+        return rebound
+
+    def record_rebind_time(self, started, cheap_started, fresh):
+        record = dict(generation=fresh['generation'],
+                      elapsed_us=(time.monotonic_ns() - started) // 1000,
+                      rgb_check_us=(time.monotonic_ns() - cheap_started) // 1000)
+        if hasattr(self, 'active_attempt'):
+            self.active_attempt.setdefault('frame_rebinds', []).append(record)
+
+    def unchanged_target(self, sensed, fresh, plan):
+        # [TARGET, unit decision] Exact RGB equality over the complete chosen
+        # box grounded in the original table admits only off-target drift.
+        target = plan.get('target')
+        artifact = sensed.get('frame_witness', {}).get('artifact')
+        if not isinstance(target, dict) or not artifact:
+            return None
+        box = target.get('box')
+        if (not isinstance(box, list) or len(box) != 4 or
+                any(type(v) is not int for v in box)):
+            return None
+        x, y, w, h = box
+        width, height = fresh['width'], fresh['height']
+        if not (0 <= x < x + w <= width and 0 <= y < y + h <= height):
+            return None
+        require_click_target(plan['action'], target)
+        require_grounded_goal(sensed['table'], target['name'], target)
+        witness = self.retain(fresh)
+        old = Path(artifact).read_bytes()
+        new = Path(witness['artifact']).read_bytes()
+        host.need(len(old) == len(new) == width * height * 3 and
+                  host.hashlib.sha256(old).hexdigest() == sensed['frame']['sha256'] and
+                  host.hashlib.sha256(new).hexdigest() == fresh['sha256'], 'MW_FRAME_BINDING')
+        for row in range(y, y + h):
+            start = (row * width + x) * 3
+            if old[start:start + w * 3] != new[start:start + w * 3]:
+                return None
+        return dict(sensed, frame=fresh, frame_witness=witness)
 
     def network_context(self):
         raise host.OwnerRefused('MW_PROGRAM_OPERATION')
@@ -359,13 +443,24 @@ class MuseProgramPlanner:
                 keepalive=keepalive)
         except host.subprocess.TimeoutExpired as error:
             raise host.refuse('MW_PROGRAM_MODEL_TIMEOUT', 'model planning budget expired before dispatch') from error
-        decision = json.loads(result.stdout)
+        try:
+            decision = json.loads(result.stdout)
+        except (ValueError, UnicodeError) as error:
+            raise ProgramModelReplyRejected('MW_PROGRAM_MODEL_FAILED', 'invalid model JSON') from error
+        self.last_decision = decision
+        if not isinstance(decision, dict):
+            raise ProgramModelReplyRejected('MW_PROGRAM_MODEL_TARGET', 'model reply must be an object')
         if result.returncode != 0:
             record['model_error'] = decision.get('error')
-            raise host.refuse('MW_PROGRAM_MODEL_FAILED', str(decision.get('error', 'model helper refused')))
-        host.need(set(decision) == {'c3','model_metadata'}, 'MW_PROGRAM_MODEL_TARGET')
-        name = self.selected_name(decision['c3'], c2, table)
-        self.last_decision = decision
+            error = decision.get('error')
+            if isinstance(error, dict) and error.get('type') == 'ActionValidationError':
+                raise ProgramModelReplyRejected('MW_PROGRAM_MODEL_FAILED', str(error))
+            raise host.refuse('MW_PROGRAM_MODEL_FAILED', str(error or 'model helper refused'))
+        try:
+            host.need(set(decision) == {'c3','model_metadata'}, 'MW_PROGRAM_MODEL_TARGET')
+            name = self.selected_name(decision['c3'], c2, table)
+        except (host.OwnerRefused, KeyError, TypeError, AttributeError) as error:
+            raise ProgramModelReplyRejected('MW_PROGRAM_MODEL_TARGET', str(error)) from error
         planned = self.custody.plan_step(observation, table, name)
         require_grounded_goal(table, name, planned[3])
         self.grounded_goal, self.battery_state_sha256 = name, self.custody.battery_state_sha256
@@ -584,8 +679,18 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                           sensed['frame']['surface_id'] == settled_frame['surface_id'] and
                           sensed['frame']['generation'] > settled_frame['generation'],
                           'MW_PROGRAM_FRESH_FRAME')
-            action, expectation, state, target = planner.plan_step(
-                sensed['observation'], sensed['table'], goal)
+            try:
+                action, expectation, state, target = planner.plan_step(
+                    sensed['observation'], sensed['table'], goal)
+            except ProgramModelReplyRejected as error:
+                backend.program_attempts.append(dict(status='refused_before_dispatch',
+                    reason_code=error.code, message=str(error), submitted=False,
+                    observation=sensed['observation'], table=sensed['table'],
+                    model_decision=copy.deepcopy(planner.last_decision)))
+                if retry < 2:
+                    continue
+                backend.program_clean_refusal = True
+                raise
             attempt = dict(status='planned', observation=sensed['observation'], table=sensed['table'],
                            perception_transport=sensed.get('perception_transport'),
                            action=action, expectation=expectation, target=target,
@@ -609,7 +714,8 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
             start = len(getattr(backend, 'frame_attempts', []))
             backend.active_attempt = attempt
             try:
-                admitted = backend.propose(sensed, dict(action=action, expectation=expectation), budget)
+                admitted = backend.propose(sensed, dict(action=action, expectation=expectation, target=target,
+                    frame_attempt_limit=3 - retry), budget)
                 attempt['status'] = 'settlement_pending'
                 verified = backend.wait_verify(admitted, remaining_budget(backend, timeout_ms))
                 attempt['status'] = 'verified_move'
@@ -629,9 +735,11 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                     host.tools.ToolRefusal, host.tools.VerificationFailed) as error:
                 rows = getattr(backend, 'frame_attempts', [])[start:]
                 if isinstance(error, ProgramObservationChanged):
-                    # Rebind emits this before the inherited propose seam creates
-                    # a proposal. Any contrary dispatch evidence forbids recovery.
-                    if rows or attempt.get('proposal_id') or attempt.get('dispatch_artifact'):
+                    # The current rebind has not submitted a proposal. Earlier
+                    # explicit stale refusals prove nonexecution; other dispatch
+                    # evidence forbids recovery.
+                    stale_only = bool(rows) and all(r.get('status') == 'STALE_FRAME' for r in rows)
+                    if not stale_only and (rows or attempt.get('proposal_id') or attempt.get('dispatch_artifact')):
                         attempt['status'] = 'input_uncertain'
                         raise
                     attempt.update(status='refused_before_dispatch', reason_code=error.code,
@@ -639,7 +747,7 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                     atomic_journal(backend.evidence / ('rebind-refused-' + journal_id + '.json'),
                         dict(status='refused_before_dispatch', intent_artifact=attempt['intent_artifact'],
                              reason_code=error.code, rebind=error.detail, submitted=False))
-                    if retry < 2:
+                    if retry < 2 and not stale_only:
                         baseline = backend.observe(remaining_budget(backend, timeout_ms))['frame_ref']
                         host.need(baseline['surface_id'] == backend.surface_id, 'MW_PROGRAM_SURFACE')
                         backend.client.subscribe_frames(backend.surface_id,
@@ -658,13 +766,6 @@ def run_moves(backend, planner, goal, steps, timeout_ms):
                 elif nonexecution:
                     attempt['status'] = 'refused_before_execution'
                     attempt['reason_code'] = error.reason_code
-                    if error.reason_code == 'STALE_FRAME' and retry < 2:
-                        baseline = backend.observe(remaining_budget(backend, timeout_ms))['frame_ref']
-                        backend.client.subscribe_frames(backend.surface_id,
-                            timeout_ms=remaining_budget(backend, timeout_ms))
-                        wait_for_publication(backend, baseline['generation'],
-                                             remaining_budget(backend, timeout_ms))
-                        continue
                 elif ((rows and rows[-1].get('status') != 'intent_pending') or
                       attempt['status'] in ('settlement_pending', 'verified_move')):
                     attempt['status'] = 'input_uncertain'
@@ -745,7 +846,17 @@ def run_entry(args):
             host.subprocess.SubprocessError) as error:
         result.update(rc=6, receipt=None,
                       verdict_code=getattr(error, 'code', getattr(error, 'reason_code', 'MW_PROGRAM_CONFIG')))
-        clean_refusal = isinstance(error, ProgramObservationChanged) and getattr(backend, 'program_clean_refusal', False)
+        attempts = getattr(backend, 'program_attempts', [])
+        last = attempts[-1] if attempts else {}
+        # A retry can exhaust its deadline during acquisition or planning too.
+        # The last recorded model rejection still proves no new dispatch began.
+        clean_model_stop = (last.get('status') == 'refused_before_dispatch' and
+                            last.get('submitted') is False and
+                            last.get('reason_code') in
+                            ('MW_PROGRAM_MODEL_FAILED', 'MW_PROGRAM_MODEL_TARGET'))
+        clean_refusal = (clean_model_stop or
+                         isinstance(error, ProgramObservationChanged) and
+                         getattr(backend, 'program_clean_refusal', False))
         if ((getattr(backend, 'program_moves', []) and not clean_refusal) or any(a.get('status') in
                 ('input_uncertain','dispatch_or_settlement_pending','settlement_pending')
                 for a in getattr(backend, 'program_attempts', []))):

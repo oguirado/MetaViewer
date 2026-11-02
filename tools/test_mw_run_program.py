@@ -286,6 +286,232 @@ class ProgramTests(unittest.TestCase):
         with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_SURFACE'):
             self.b.perceive(dict(frame_ref=frame(surface='other')))
 
+    def pixel_rebind_fixture(self, *, over_target=False, changed_row=None):
+        old = frame()
+        raw = b'x' * (100 * 80 * 3)
+        old_path = self.root / 'old.rgb'; old_path.write_bytes(raw)
+        old.update(ramws_path=str(old_path), sha256=host.hashlib.sha256(raw).hexdigest())
+        pixels = bytearray(raw)
+        pixels[((25 * 100 + 20) if over_target else 0) * 3] = ord('y')
+        new_path = self.root / 'new.rgb'; new_path.write_bytes(pixels)
+        fresh = dict(old, generation=2, ramws_path=str(new_path),
+                     sha256=host.hashlib.sha256(pixels).hexdigest())
+        planner = self.freshness_fixture([old, fresh])
+        def perceive(observed):
+            f = observed['frame_ref']; table = element_table()
+            table['frame_sha256'] = f['sha256']
+            if f['generation'] == 2 and changed_row:
+                table['elements'][0].update(changed_row)
+            return dict(frame=f, frame_witness=self.b.retain(f),
+                        observation=dict(frame_ref=f), table=table)
+        self.b.perceive.side_effect = perceive
+        return old, fresh, planner
+
+    def test_clock_changes_between_model_and_dispatch_bind_newest_frame(self):
+        old, fresh, planner = self.pixel_rebind_fixture()
+        def settle(pid, *args, **kwargs):
+            return dict(schema='action_receipt/v0.2', proposal_id=pid, executed_at_ns=2,
+                after_frame=dict(fresh, generation=3), verified=True,
+                verification=dict(method='pixel', detail='changed'), error='',
+                native_evidence=dict(surface_id='surface-alice', input_mono_ns=1, input_ts_ns=1))
+        with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+             patch.object(host.tools, 'propose', return_value=dict(status='admitted')) as submit, \
+             patch.object(host.tools, 'wait_verify', side_effect=settle):
+            moves = program.run_moves(self.b, planner, 'Covered square', 1, 1000)
+        self.assertEqual(len(moves), 1)
+        planner.plan_step.assert_called_once()
+        self.assertEqual(self.b.perceive.call_count, 1)
+        proposal = submit.call_args.args[0]
+        self.assertEqual(proposal['based_on_frame'],
+                         dict(sha256=fresh['sha256'], generation=2))
+        dispatch = json.loads(Path(self.b.program_attempts[0]['dispatch_artifact']).read_text())
+        self.assertEqual(dispatch['frame'], fresh)
+        self.assertNotEqual(old['sha256'], fresh['sha256'])
+
+    def test_target_pixels_or_ungrounded_identity_refuses_without_proposal(self):
+        for over, change in ((True, None), (False, dict(role='text')),
+                             (False, dict(name='different')),
+                             (False, dict(bbox=dict(x=11, y=20, w=30, h=20)))):
+            with self.subTest(over=over, change=change):
+                old, fresh, planner = self.pixel_rebind_fixture(over_target=over, changed_row=change)
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(host.tools, 'propose') as submit:
+                    sensed = self.b.perceive(self.b.observe(1000))
+                    reply = planner_reply(); reply['target'] = reply['target_node']
+                    if change:
+                        sensed['table']['elements'][0].update(change)
+                    with self.assertRaises((program.ProgramObservationChanged, host.OwnerRefused)):
+                        self.b.propose(sensed, reply, 1000)
+                submit.assert_not_called()
+
+    def test_stale_retry_target_change_refuses_and_stale_cap_does_not_replan(self):
+        for changed in (True, False):
+            with self.subTest(changed=changed):
+                old, fresh, planner = self.pixel_rebind_fixture()
+                raw = bytearray(Path(fresh['ramws_path']).read_bytes())
+                if changed:
+                    raw[(25 * 100 + 20) * 3] = ord('z')
+                path = self.root / 'retry.rgb'; path.write_bytes(raw)
+                latest = dict(fresh, generation=3, ramws_path=str(path),
+                              sha256=host.hashlib.sha256(raw).hexdigest())
+                self.b.observe = Mock(side_effect=[dict(frame_ref=f) for f in
+                                                  (old, fresh, latest, latest)])
+                self.b.frame_attempts = []
+                self.b.client = Mock()
+                expected = program.ProgramObservationChanged if changed else host.tools.ToolRefusal
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(host.tools, 'propose',
+                                  side_effect=host.tools.ToolRefusal('STALE_FRAME', None)) as submit, \
+                     patch.object(host.tools, 'wait_verify') as settle:
+                    with self.assertRaises(expected):
+                        program.run_moves(self.b, planner, 'Covered square', 1, 1000)
+                self.assertEqual(submit.call_count, 1 if changed else 3)
+                settle.assert_not_called()
+                self.b.perceive.assert_called_once()
+                planner.plan_step.assert_called_once()
+                if changed:
+                    self.assertTrue(self.b.program_clean_refusal)
+                    self.assertEqual(self.b.program_attempts[-1]['status'], 'refused_before_dispatch')
+
+    def test_model_rejections_share_the_existing_stale_attempt_cap(self):
+        for rejected in (1, 2):
+            with self.subTest(rejected=rejected):
+                old, fresh, planner = self.pixel_rebind_fixture()
+                self.b.frame_attempts = []
+                self.b.observe = Mock(side_effect=[dict(frame_ref=f) for f in
+                    [old] * (rejected + 1) + [fresh] * 3])
+                valid = planner.plan_step.side_effect
+                planner.last_decision = {}
+                def plan(*args):
+                    if planner.plan_step.call_count <= rejected:
+                        raise program.ProgramModelReplyRejected('MW_PROGRAM_MODEL_FAILED', 'bad reply')
+                    return valid(*args)
+                planner.plan_step.side_effect = plan
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(host.tools, 'propose',
+                                  side_effect=host.tools.ToolRefusal('STALE_FRAME', None)) as submit:
+                    with self.assertRaises(host.tools.ToolRefusal):
+                        program.run_moves(self.b, planner, 'Covered square', 1, 1000)
+                self.assertEqual(submit.call_count, 3 - rejected)
+                self.assertEqual(planner.plan_step.call_count, rejected + 1)
+                self.assertEqual(self.b.perceive.call_count, rejected + 1)
+
+    def muse_retry_fixture(self):
+        from metaviewer_agents.perception.base import Frame
+        from metaviewer_agents.perception.vcore import _png_bytes
+        temporary = tempfile.TemporaryDirectory(dir='/dev/shm/vqa-cu')
+        self.addCleanup(temporary.cleanup)
+        directory = Path(temporary.name)
+        raw = b'x' * (100 * 80 * 3)
+        path = directory / 'raw.rgb'; path.write_bytes(raw); path.chmod(0o600)
+        current = dict(frame(), ramws_path=str(path), sha256=host.hashlib.sha256(raw).hexdigest())
+        marks = directory / 'marks.png'
+        marks.write_bytes(_png_bytes(Frame(100, 80, raw))); marks.chmod(0o600)
+        table = element_table(); table['frame_sha256'] = current['sha256']
+        c2 = dict(frame_sha256=current['sha256'], marks_png=str(marks),
+            marks=[dict(id=1, x=10, y=20, w=30, h=20, kind='button', ocr_text='Covered square')])
+        self.b.surface_id = current['surface_id']; self.b.wender = self.root
+        self.b.observe = Mock(return_value=dict(frame_ref=current))
+        sensed = dict(frame=current, frame_witness=dict(artifact=str(path)),
+                      table=table, observation=dict(frame_ref=current))
+        def perceive(observed):
+            self.b.program_observations = [dict(sensed, c2=c2)]
+            return sensed
+        self.b.perceive = Mock(side_effect=perceive)
+        custody = Mock(battery_state_sha256='d'*64); reply = planner_reply()
+        custody.plan_step.return_value = tuple(reply[k] for k in ('action', 'expectation', 'state', 'target_node'))
+        planner = program.MuseProgramPlanner(self.b, custody, 1000)
+        good = dict(c3=dict(schema='cu.action/v1', action=dict(kind='click', mark_id=1, x=25, y=30)),
+                    model_metadata={})
+        return planner, good, current
+
+    def test_invalid_model_replies_retry_before_input_then_accept_or_refuse(self):
+        invalids = [dict(error=dict(type='ActionValidationError', message='changed_region requires region')),
+                    dict(c3=dict(schema='cu.action/v1', action=dict(kind='click', mark_id=99)),
+                         model_metadata={})]
+        for invalid in invalids:
+            for succeeds in (True, False):
+                with self.subTest(invalid=invalid, succeeds=succeeds):
+                    planner, good, current = self.muse_retry_fixture()
+                    replies = [invalid, invalid, good if succeeds else invalid]
+                    results = [SimpleNamespace(returncode=6 if 'error' in r else 0,
+                                               stdout=json.dumps(r).encode()) for r in replies]
+                    self.b.run_deadline_ns = time.monotonic_ns() + 5_000_000_000
+                    deadline = self.b.run_deadline_ns
+                    verification = dict(receipt=dict(after_frame=dict(current, generation=2)))
+                    with patch.object(program, 'run_model_with_frames', side_effect=results) as model, \
+                         patch.object(self.b, 'propose', return_value={}) as submit, \
+                         patch.object(self.b, 'wait_verify', return_value=verification), \
+                         patch.object(self.b, 'retain', return_value={}):
+                        if succeeds:
+                            moves = program.run_moves(self.b, planner, 'play', 1, 1000)
+                            self.assertEqual(len(moves), 1); submit.assert_called_once()
+                        else:
+                            with self.assertRaises(program.ProgramModelReplyRejected):
+                                program.run_moves(self.b, planner, 'play', 1, 1000)
+                            submit.assert_not_called()
+                            self.assertTrue(self.b.program_clean_refusal)
+                    self.assertEqual(model.call_count, 3)
+                    self.assertEqual(self.b.run_deadline_ns, deadline)
+                    self.assertEqual(len(self.b.program_attempts), 3)
+                    for attempt in self.b.program_attempts[:2 if succeeds else 3]:
+                        self.assertEqual(attempt['status'], 'refused_before_dispatch')
+                        self.assertFalse(attempt['submitted'])
+                        self.assertNotIn('proposal_id', attempt)
+                        self.assertEqual(attempt['model_decision'], invalid)
+
+    def test_model_rejection_does_not_extend_absolute_deadline(self):
+        planner, good, current = self.muse_retry_fixture()
+        clock = [1_000_000_000]; self.b.run_deadline_ns = 2_000_000_000
+        def reject(*args, **kwargs):
+            clock[0] = self.b.run_deadline_ns
+            return SimpleNamespace(returncode=6, stdout=json.dumps(dict(
+                error=dict(type='ActionValidationError', message='changed_region requires region'))).encode())
+        with patch.object(program.time, 'monotonic_ns', side_effect=lambda: clock[0]), \
+             patch.object(program, 'run_model_with_frames', side_effect=reject) as model, \
+             patch.object(self.b, 'propose') as submit:
+            with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_DEADLINE'):
+                program.run_moves(self.b, planner, 'play', 1, 1000)
+        model.assert_called_once(); submit.assert_not_called()
+        self.assertEqual(self.b.run_deadline_ns, 2_000_000_000)
+        self.assertEqual(len(self.b.program_attempts), 1)
+
+    def test_model_refusal_after_verified_move_keeps_code_and_partial_evidence(self):
+        self.b.observe = Mock(return_value=dict(frame_ref=frame())); self.b.wender = self.root
+        args = SimpleNamespace(identity='alice', goal='play', steps=2, timeout_ms=1000,
+                               planner='rules', model_timeout_ms=120000)
+        for code in ('MW_PROGRAM_MODEL_FAILED', 'MW_PROGRAM_MODEL_TARGET', 'MW_PROGRAM_DEADLINE'):
+            reason = 'MW_PROGRAM_MODEL_TARGET' if code == 'MW_PROGRAM_DEADLINE' else code
+            def refused(*unused):
+                self.b.program_moves = [dict(status='verified_move')]
+                self.b.program_attempts = [dict(status='verified_move'),
+                    dict(status='refused_before_dispatch', reason_code=reason, submitted=False)]
+                self.b.program_clean_refusal = code != 'MW_PROGRAM_DEADLINE'
+                if code == 'MW_PROGRAM_DEADLINE':
+                    raise host.OwnerRefused(code)
+                raise program.ProgramModelReplyRejected(code, 'invalid model reply')
+            with patch.dict(host.os.environ, {'XDG_STATE_HOME': str(self.root)}), \
+                 patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+                 patch.object(program, 'ProgramBackend', return_value=self.b), \
+                 patch.object(program, 'VCorePerceptionAdapter'), \
+                 patch.object(program, 'WenderSubprocessAdapter'), \
+                 patch.object(program, 'run_moves', side_effect=refused), \
+                 contextlib.redirect_stdout(io.StringIO()) as output, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(program.run_entry(args), 6)
+            result = json.loads(output.getvalue())
+            self.assertEqual(result['verdict_code'], code)
+            report = json.loads(Path(result['report']).read_text())
+            self.assertEqual(report['status'], 'refused')
+            self.assertEqual(len(report['moves']), 1)
+            self.assertEqual(report['attempts'][-1]['reason_code'], reason)
+
+    def test_unreleased_message_explains_release_action(self):
+        with self.assertRaises(host.OwnerRefused) as caught:
+            self.own(dict(self.surface, control='human'))
+        self.assertEqual(caught.exception.code, 'MW_PROGRAM_CONTROL')
+        self.assertIn('press Release on the tile, then run again', str(caught.exception))
+
     def test_moving_pixels_do_not_submit_old_coordinates(self):
         self.b.surface_id = 'surface-alice'
         with patch.object(self.b, 'ownership'), patch.object(self.b, 'observe', return_value=dict(
@@ -643,29 +869,57 @@ class ProgramTests(unittest.TestCase):
         self.assertEqual(attempt['verification_failure_journal_error']['type'],'OSError')
         self.assertNotIn('verification_failure_artifact',attempt)
 
-    def test_only_explicit_stale_nonexecution_replans_after_new_publication(self):
-        sensed = dict(frame=frame(), frame_witness={}, observation={}, table=element_table())
-        self.b.observe = Mock(side_effect=[{},dict(frame_ref=frame()),dict(frame_ref=frame(2)),{}])
-        self.b.perceive = Mock(side_effect=[sensed, dict(sensed,frame=frame(2))])
-        self.b.surface_id = 'surface-alice'
-        planner = Mock(battery_state_sha256='d' * 64)
-        reply=planner_reply()
-        planner.plan_step.return_value = tuple(reply[k] for k in ('action','expectation','state','target_node'))
-        self.b.frame_attempts = []
-        def submit(*args):
-            status = 'STALE_FRAME' if not self.b.frame_attempts else 'admitted'
-            self.b.frame_attempts.append(dict(status=status))
-            if status == 'STALE_FRAME':
-                raise host.tools.ToolRefusal(status, None)
-            return {}
-        with patch.object(self.b, 'propose', side_effect=submit), patch.object(
-                self.b, 'wait_verify', return_value=dict(receipt=dict(after_frame=frame(3)))), \
-             patch.object(self.b, 'retain', return_value={}):
-            moves = program.run_moves(self.b, planner, 'Covered square', 1, 1000)
+    def test_ticking_frames_drain_and_stale_retry_without_model_or_perception(self):
+        old, fresh, planner = self.pixel_rebind_fixture()
+        newest = dict(fresh, generation=5)
+        later = dict(fresh, generation=6)
+        client = Mock(spec=host.ToolClient)
+        client._frames = {}
+        self.b.client = client
+        self.b.subscription = {}
+        clock = [0]
+        def perceive(observed):
+            # A one-second publisher ticks twice during slow perception.
+            clock[0] += 2_100_000_000
+            client._frames[self.b.surface_id] = dict(fresh, generation=3)
+            table = element_table(); table['frame_sha256'] = old['sha256']
+            return dict(frame=old, frame_witness=self.b.retain(old),
+                        table=table, observation=dict(frame_ref=old))
+        self.b.perceive.side_effect = perceive
+        self.b.observe = Mock(return_value=dict(frame_ref=old))
+        queue = [dict(fresh, generation=4), newest, None, later, None]
+        def drain(**kwargs):
+            value = queue.pop(0)
+            if value is None:
+                return False
+            client._frames[self.b.surface_id] = value
+            return True
+        client.drain_frames.side_effect = drain
+        submitted = []
+        def submit(proposal, **kwargs):
+            submitted.append(proposal['based_on_frame']['generation'])
+            if len(submitted) == 1:
+                raise host.tools.ToolRefusal('STALE_FRAME', None)
+            self.assertEqual(submitted[-1], client._frames[self.b.surface_id]['generation'])
+            return dict(status='admitted')
+        def settle(pid, *args, **kwargs):
+            return dict(schema='action_receipt/v0.2', proposal_id=pid, executed_at_ns=2,
+                after_frame=dict(later, generation=7), verified=True,
+                verification=dict(method='pixel', detail='changed'), error='',
+                native_evidence=dict(surface_id='surface-alice', input_mono_ns=1, input_ts_ns=1))
+        with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+             patch.object(program, 'wait_for_publication', return_value=dict(frame_ref=fresh)), \
+             patch.object(program.time, 'monotonic_ns', side_effect=lambda: clock[0]), \
+             patch.object(host.tools, 'propose', side_effect=submit), \
+             patch.object(host.tools, 'wait_verify', side_effect=settle):
+            moves = program.run_moves(self.b, planner, 'Covered square', 1, 10000)
         self.assertEqual(len(moves), 1)
-        self.assertEqual(planner.plan_step.call_count, 2)
-        self.assertEqual(self.b.observe.call_count, 4)
-        self.assertEqual(self.b.program_attempts[0]['status'], 'refused_before_execution')
+        self.assertEqual(submitted, [5, 6])
+        self.assertEqual(client.drain_frames.call_count, 5)
+        self.b.perceive.assert_called_once()
+        planner.plan_step.assert_called_once()
+        self.assertEqual([r['status'] for r in self.b.frame_attempts], ['STALE_FRAME', 'admitted'])
+        self.assertEqual(len(self.b.program_attempts[0]['frame_rebinds']), 2)
 
     def test_each_verified_move_reacquires_and_plans_the_current_target(self):
         self.b.surface_id='surface-alice'
@@ -762,6 +1016,8 @@ class ProgramTests(unittest.TestCase):
     def test_existing_static_subscription_refreshes_after_planning_without_replanning(self):
         client=object.__new__(host.ToolClient)
         client._frame_subscriptions={'surface-alice'}
+        client._frames={}
+        client.drain_frames=Mock(return_value=False)
         refreshed=[False]
         def refresh(*args,**kwargs): refreshed[0]=True
         client.subscribe_frames=Mock(side_effect=refresh)
@@ -782,6 +1038,7 @@ class ProgramTests(unittest.TestCase):
                 after_frame=frame(10),verified=True,verification=dict(method='pixel',detail='changed'),
                 error='',native_evidence=dict(surface_id='surface-alice',input_mono_ns=1,input_ts_ns=1))
         with patch.object(self.b,'ownership'),patch.object(self.b,'retain',return_value={}), \
+             patch.object(self.b,'check_program_frame'), \
              patch.object(host.tools,'propose',side_effect=accept),patch.object(host.tools,'wait_verify',side_effect=settle):
             moves=program.run_moves(self.b,planner,'Covered square',1,1000)
         self.assertEqual(len(moves),1)

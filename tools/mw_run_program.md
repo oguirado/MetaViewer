@@ -81,8 +81,8 @@ The next acquisition must match the frame passed to perception and belong to the
 same surface. Only the existing bounded explicit `STALE_FRAME` nonexecution path
 can trigger an input retry; an unknown dispatch or settlement cannot do so.
 The existing backend submits the action through core admission and waits for the
-verified native receipt. Changed pixels before submission require a new invocation;
-the lane never replays old coordinates against a changed image.
+verified native receipt. Before submission, off-target pixel changes can be admitted
+only with the target proof described below; a changed target requires replanning.
 
 Success means `PROGRAM_BOUNDED_ACTIONS_VERIFIED`, not task or game completion.
 The existing `metaviewer.mw_run/v1` output identifies `moves.json` and `report.json`.
@@ -93,12 +93,14 @@ The frozen frame-subscription request has no success acknowledgement. The core's
 real observation and proposal admission remain authoritative. Before dispatch,
 repeat subscribe asks the existing shared poller to publish a new real capture,
 including unchanged pixels; the lane waits for that actual newer generation and
-proves identical pixels, geometry and surface before using the existing plan.
+proves unchanged geometry and surface plus identical whole-frame pixels or a
+unique unchanged target before using the existing plan.
 One actor drains authenticated frame events during provider pipe I/O; there is
 no competing background reader. The lane never automatically unsubscribes the
 global surface poller or cancels other readers; explicit surface lifecycle stop
-owns that cleanup. Only explicit core `STALE_FRAME` nonexecution permits bounded
-fresh perception/replanning. Unknown delivery or settlement returns
+owns that cleanup. Bounded fresh perception/replanning is permitted after a
+pre-proposal observation change. Explicit core `STALE_FRAME` nonexecution retries
+only frame acquisition and RGB validation. Unknown delivery or settlement returns
 `INPUT_UNCERTAIN` and is never automatically retried.
 
 Private atomic `intent-*.json` and `dispatch-*.json` records are synced before
@@ -172,17 +174,42 @@ window focus alone does not establish focused-editor custody, and the current
 program receipt path supplies RGB evidence rather than the semantic text witness
 required by `text_present`. Pixel changes cannot certify intended editor text.
 
-If a genuinely newer same-surface publication changes after planning, rebind
-refuses the old decision before constructing a proposal. The program loop may
-acquire a new frame, perceive it and plan again for the original goal, consuming
-the same existing attempt limit and absolute run deadline. It records the actual
-old/fresh metadata and mismatch fields. Persistent motion can exhaust this bound;
-there is no guarantee of progress on continuously changing pixels. A known
-unsubmitted refusal retains previous verified moves as partial evidence without
-calling the rejected decision delivered or uncertain. Any proposal/transport
-evidence or uncertain settlement prevents this recovery and retains the
-`INPUT_UNCERTAIN` outcome. The existing explicit core `STALE_FRAME` nonexecution
-path remains separate. No rejected coordinates are replayed.
+If a newer same-surface publication changes after planning, the final rebind
+retains and authenticates both RGB frames and compares every RGB byte inside
+the complete selected target box. The original perception table must uniquely
+ground its role, name and box. No second perception or model call occurs: exact
+target pixels and unchanged surface/geometry bind the existing decision to the
+new frame. Off-target clock or cursor updates are allowed; any target pixel
+change refuses before constructing a proposal. Identity is grounded in the
+original table, not claimed to have been independently perceived again.
+
+After requesting a real publication, the single client owner drains authenticated
+frame events until readiness is empty, then selects the highest generation from
+the observation and client cache. This covers buffered lines as well as ready
+socket data. A publication racing submission can still cause core `STALE_FRAME`;
+only that explicit nonexecution retries the cheap rebind, at most twice [TARGET],
+under the original absolute deadline, without perception or model calls. No
+unknown dispatch or settlement can retry. Changed target pixels after a stale
+refusal stop the decision. The report records `frame_rebinds`: `elapsed_us`
+includes frame acquisition/draining and `rgb_check_us` measures authentication,
+retention and comparison. Both are host monotonic measurements [MEASURED].
+Unsubmitted observation refusals preserve previous verified moves as partial
+evidence. A delivered click with an unmet changed-region expectation retains
+the honest `INPUT_UNCERTAIN` / rc 5 outcome.
+
+Muse replies rejected by ModelClient action validation or unique mark mapping
+send no input. The runner requests another decision within the existing shared
+attempt bound (at most two additional attempts [TARGET]) and absolute deadline.
+Each rejection appears in report `attempts` with its original
+`MW_PROGRAM_MODEL_FAILED` or `MW_PROGRAM_MODEL_TARGET` code, model evidence,
+`submitted:false` and `refused_before_dispatch`. Exhaustion returns refusal
+(rc 6 [TARGET]), preserving earlier verified moves; those moves alone do not
+make this model refusal `INPUT_UNCERTAIN`. Unknown dispatch, failed settlement,
+and delivery evidence still retain `INPUT_UNCERTAIN` (rc 5 [TARGET]) and never
+permit model recovery. Provider/transport failures are not validation retries.
+
+`MW_PROGRAM_CONTROL` means the capsule is under human control: press Release
+on the tile, then run again. The runner never releases control itself.
 
 While the external model runs, the same actor maintains the authenticated session
 with an existing read-only observe call. The internal interval is shorter than
@@ -209,3 +236,16 @@ The pinned integration checks require the dependency roots above; missing roots
 fail rather than silently skip. Run host checks inside the operator's required
 resource scope. Live acceptance additionally requires recorded program actions
 through the real vision, planner and core chain.
+
+Fresh-binding measurements [MEASURED]: the supplied `mines_2030_3.json`, `_2`
+and `_1` reports contain nine stale refusals among eleven proposal submissions.
+Their second-perception diagnostics show approximately 56–65 ms latency, rather
+than a perception longer than the clock tick. Observed-to-submitted generation
+gaps span 12–41; the reports do not establish the exact latest core generation at
+each refusal. The implementation therefore removes the extra perception and
+drains the pending client publications instead of assuming perception duration
+alone explains the race. An offline synthetic 1280×900 RGB fixture with a 100×99
+target measured retention, authentication and comparison over twenty calls:
+10.102 ms minimum, 11.227 ms median, 14.068 ms maximum [MEASURED]. This excludes
+publication acquisition, custody discovery and dispatch; runtime `frame_rebinds`
+provide acquisition and comparison timings for subsequent operator runs.
