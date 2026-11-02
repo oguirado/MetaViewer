@@ -15,6 +15,7 @@ Pre-release. Program and desktop window capsules need OpenSuperficies binaries t
 - Add desktop window capsules: attach an open X11 window to a tile, with no container and an explicit Add. The tile says it is the real desktop, not isolated, and Stop detaches without closing the window.
 - Add early program automation: `mw_run --surface-kind program` drives a program capsule through vision-engine, wender-agent and core-verified input. Clicks only.
 - Treat cuentas and perplexity identities like any other capsule, and remove Open in multislot and Automate from a demo from the More menu.
+- Add `route/`, a queryable map of the repository for people and AIs. Its findings come from a model with no human review: coordinates, not proof.
 - Add the AI operator guide and update the judge kit for machines without pinned cores. x64 is not yet tested end to end.
 
 ## 0.2.3 (2026-11-02) [CITED: `VERSION`]
