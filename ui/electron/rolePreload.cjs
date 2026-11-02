@@ -7,6 +7,7 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
     choices: () => invoke('choices'),
     surfaces: () => invoke('surfaces'),
     create: choice => invoke('create', {choice}),
+    createProgram: choice => invoke('create-program', {choice}),
     open: choice => invoke('open', {choice}),
     switchMode: surfaceId => invoke('switch', {surfaceId}),
     stop: surfaceId => invoke('stop', {surfaceId}),

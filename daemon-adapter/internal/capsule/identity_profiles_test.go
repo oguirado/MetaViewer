@@ -228,3 +228,193 @@ func TestIdentityProcessWitnessUsesOnlyConfiguredAdminShow(t *testing.T) {
 		}
 	}
 }
+
+type hostExecRunner struct {
+	binaries     map[string]string
+	searchPath   string
+	starts       int
+	lastStart    []string
+	stopVerified bool
+}
+
+func (r *hostExecRunner) SearchPath() string { return r.searchPath }
+
+func (r *hostExecRunner) ConsumeOpeningProgram(id string) (string, error) {
+	bin := r.binaries[id]
+	delete(r.binaries, id)
+	return bin, nil
+}
+
+func (r *hostExecRunner) Run(_ context.Context, argv []string, _ []byte) ([]byte, error) {
+	switch argv[1] {
+	case "start":
+		r.starts++
+		r.lastStart = append([]string(nil), argv...)
+		id := argv[5]
+		return []byte(fmt.Sprintf(`{"kind":"program","container":"srf-pg-%s","run_id":"run-pg-%d","windows":[{"id":"w1","x":0,"y":0,"w":1280,"h":900,"title":%q,"url":""}]}`, id, r.starts, id)), nil
+	case "stop":
+		return []byte(fmt.Sprintf(`{"stopped":%q,"removed_verified":%t}`, argv[3], r.stopVerified)), nil
+	}
+	return nil, fmt.Errorf("unexpected command %q", argv)
+}
+
+func TestHostExecProgramAdmissionAndBinaryResolution(t *testing.T) {
+	if !admittedProgram("host-exec", 0) || admittedProgram("host-exec", 1) {
+		t.Fatal("unexpected host-exec nested_depth admission")
+	}
+	binDir := t.TempDir()
+	geditPath := filepath.Join(binDir, "gedit")
+	if err := os.WriteFile(geditPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	xtermPath := filepath.Join(binDir, "xterm")
+	if err := os.WriteFile(xtermPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	nonExecPath := filepath.Join(binDir, "not-exec")
+	if err := os.WriteFile(nonExecPath, []byte("plain"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Static host-exec profile is refused by NewManager.
+	r := &hostExecRunner{binaries: map[string]string{}, searchPath: binDir, stopVerified: true}
+	if _, err := NewManager(Config{
+		BinDir: t.TempDir(),
+		Profiles: map[string]Profile{
+			"static-prog": {Kind: "desktop_capsule", NativeKind: "program", Program: "host-exec", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":111"},
+		},
+		MaxSurfaces: 4, MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100,
+	}, r, func() uint64 { return 200 }); err == nil {
+		t.Fatal("static host-exec profile admitted by NewManager")
+	}
+
+	profiles := map[string]Profile{
+		"mv-live-1": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":111", TextInput: "paste"},
+		"mv-live-2": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":112", TextInput: "paste"},
+		"mv-live-3": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":113", TextInput: "paste"},
+	}
+	m, err := NewManager(Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 3, MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100}, r, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutant check: static host-exec injected after NewManager without per-create binary is refused at manager.go:616.
+	m.cfg.Profiles["injected-static"] = Profile{Kind: "desktop_capsule", NativeKind: "program", Program: "host-exec", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":119"}
+	if _, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"injected-static","geometry":{"w":1280,"h":900}}`)); err == nil {
+		t.Fatal("injected static host-exec admitted without per-create binary")
+	}
+	delete(m.cfg.Profiles, "injected-static")
+
+	// Static browser profile cannot be hijacked by staging a per-create binary.
+	r.binaries["mv-live-1"] = "gedit"
+	if _, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"mv-live-1","geometry":{"w":1280,"h":900}}`)); err == nil {
+		t.Fatal("static browser profile admitted as host-exec program")
+	}
+
+	// Protected identities stay refused even with a valid binary.
+	for _, id := range []string{"cuentas-1", "perplexity-2", "srf-pg-gedit", "notepad-1", "metaviewer-1"} {
+		r.binaries[id] = "gedit"
+		if _, err := m.Handle(context.Background(), req("create", fmt.Sprintf(`{"kind":"desktop_capsule","profile_id":%q,"geometry":{"w":1280,"h":900}}`, id))); err == nil {
+			t.Fatalf("protected identity admitted for program: %s", id)
+		}
+	}
+
+	// Invalid, relative, non-executable, or missing binaries return HOST_PROGRAM_UNAVAILABLE naming the binary.
+	for _, bad := range []string{"missing-bin", "./gedit", "../gedit", "gedit;id", "gedit|sh", nonExecPath, binDir} {
+		r.binaries["prog-bad"] = bad
+		_, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"prog-bad","geometry":{"w":1280,"h":900}}`))
+		if err == nil || WireCode(err) != "HOST_PROGRAM_UNAVAILABLE" {
+			t.Fatalf("expected HOST_PROGRAM_UNAVAILABLE for %q, got %v (wire=%s)", bad, err, WireCode(err))
+		}
+	}
+	if r.starts != 0 {
+		t.Fatalf("refusals performed %d native starts", r.starts)
+	}
+
+	// Bare binary name resolved via PATH + explicit absolute path + multiple concurrent program capsules.
+	r.binaries["gedit"] = "gedit"
+	events1, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"gedit","geometry":{"w":1280,"h":900}}`))
+	if err != nil {
+		t.Fatalf("create gedit failed: %v", err)
+	}
+	wantArgv := []string{
+		filepath.Join(m.cfg.BinDir, "srf-identity-surface"),
+		"start", "--kind", "program", "--identity", "gedit", "--windows", "1", "--program", "host-exec", "--host-binary", geditPath,
+	}
+	if fmt.Sprintf("%q", r.lastStart) != fmt.Sprintf("%q", wantArgv) {
+		t.Fatalf("unexpected start argv:\ngot:  %q\nwant: %q", r.lastStart, wantArgv)
+	}
+
+	r.binaries["xterm"] = xtermPath
+	events2, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"xterm","geometry":{"w":1280,"h":900}}`))
+	if err != nil {
+		t.Fatalf("create xterm failed: %v", err)
+	}
+
+	var s1, s2 struct {
+		Data struct {
+			Surface Surface `json:"surface"`
+		} `json:"data"`
+	}
+	_ = json.Unmarshal(events1[0], &s1)
+	_ = json.Unmarshal(events2[0], &s2)
+	if s1.Data.Surface.Display == s2.Data.Surface.Display {
+		t.Fatalf("concurrent program capsules shared display %s", s1.Data.Surface.Display)
+	}
+	if err := identityStop(t, m, s1.Data.Surface.SurfaceID); err != nil {
+		t.Fatal(err)
+	}
+	if err := identityStop(t, m, s2.Data.Surface.SurfaceID); err != nil {
+		t.Fatal(err)
+	}
+	if len(m.dynamicProfiles) != 0 {
+		t.Fatalf("dynamic program profiles leaked: %v", m.dynamicProfiles)
+	}
+}
+
+func TestProcessRunnerHostProgramUnavailableExit2ClearsQuarantine(t *testing.T) {
+	binDir := t.TempDir()
+	stateDir := t.TempDir()
+	if err := os.Chmod(stateDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	surfaceBin := filepath.Join(binDir, "srf-identity-surface")
+	script := "#!/bin/sh\n" +
+		"echo 'host_program_unavailable: gedit rejected by surface' >&2\n" +
+		"exit 2\n"
+	if err := os.WriteFile(surfaceBin, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	geditPath := filepath.Join(binDir, "gedit")
+	if err := os.WriteFile(geditPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(binDir, []string{"PATH=" + binDir, "MV_SRF_STATE_DIR=" + stateDir}, 4096, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modesDir := filepath.Join(stateDir, "opening-modes")
+	if err := os.Mkdir(modesDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(modesDir, "gedit.json"), []byte(`{"schema":"metaviewer.opening_mode/v0.3","profile_id":"gedit","mode":"agent","host_binary":"gedit"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := NewManager(Config{
+		BinDir: binDir,
+		Profiles: map[string]Profile{
+			"mv-live-1": {Kind: "browser", NativeKind: "browser", Width: 1280, Height: 900, RAMRoot: "/dev/shm", Display: ":111"},
+		},
+		MaxSurfaces: 2, MaxOutputBytes: 4096, Timeout: time.Second, OriginNS: 100,
+	}, r, func() uint64 { return 200 })
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"gedit","geometry":{"w":1280,"h":900}}`))
+	if err == nil || WireCode(err) != "HOST_PROGRAM_UNAVAILABLE" {
+		t.Fatalf("expected HOST_PROGRAM_UNAVAILABLE, got %v (wire=%s)", err, WireCode(err))
+	}
+	if m.quarantined["gedit"] || m.dynamicProfiles["gedit"] {
+		t.Fatalf("exit-2 pre-spawn refusal left profile quarantined or allocated: quarantined=%v dynamic=%v", m.quarantined, m.dynamicProfiles)
+	}
+}

@@ -269,6 +269,8 @@ func WireCode(err error) string {
 		return "SURFACE_CAPACITY_OR_QUARANTINE"
 	case f.Code == "identity_unavailable":
 		return "IDENTITY_UNAVAILABLE"
+	case f.Code == "host_program_unavailable":
+		return "HOST_PROGRAM_UNAVAILABLE"
 	}
 	var b strings.Builder
 	b.WriteString("ADAPTER_")
@@ -289,15 +291,16 @@ func WireCode(err error) string {
 }
 
 // [TARGET, unit decision] desktop_capsule program profiles admit only the
-// catalog-sanctioned programs ("notepad" at nested_depth 0, or
-// "metaviewer-nested" at nested_depth 0 or 1); nested_depth > 1 is refused.
+// catalog-sanctioned programs ("notepad" or per-create "host-exec" at
+// nested_depth 0, or "metaviewer-nested" at nested_depth 0 or 1);
+// nested_depth > 1 is refused.
 func admittedProgram(program string, nestedDepth int) bool {
 	if !profileID.MatchString(program) {
 		return false
 	}
 	switch nestedDepth {
 	case 0:
-		return program == "notepad" || program == "metaviewer-nested"
+		return program == "notepad" || program == "metaviewer-nested" || program == "host-exec"
 	case 1:
 		return program == "metaviewer-nested"
 	default:
@@ -362,7 +365,7 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 				return nil, fault("configuration", "browser mapping invalid")
 			}
 		case "desktop_capsule":
-			if p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) {
+			if p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || p.Program == "host-exec" {
 				return nil, fault("configuration", "program mapping required")
 			}
 		case "vm":
@@ -602,7 +605,39 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if protectedIdentity(q.ProfileID) {
 		return nil, fault("protected_container", "protected identity refused")
 	}
-	p, ok := m.profileFor(q.ProfileID)
+	_, static := m.cfg.Profiles[q.ProfileID]
+	static = static && !m.dynamicProfiles[q.ProfileID]
+	var hostBinary string
+	if progSelector, ok := m.runner.(interface {
+		ConsumeOpeningProgram(string) (string, error)
+	}); ok {
+		if !static && q.Kind == "desktop_capsule" {
+			rawBinary, progErr := progSelector.ConsumeOpeningProgram(q.ProfileID)
+			if progErr != nil {
+				return nil, progErr
+			}
+			if rawBinary != "" {
+				resolved, resErr := ResolveHostBinary(rawBinary, m.runnerSearchPath())
+				if resErr != nil {
+					return nil, resErr
+				}
+				hostBinary = resolved
+			}
+		} else if _, isProc := m.runner.(*ProcessRunner); !isProc {
+			if rawBinary, progErr := progSelector.ConsumeOpeningProgram(q.ProfileID); progErr != nil {
+				return nil, progErr
+			} else if rawBinary != "" {
+				return nil, fault("profile", "host-exec requires dynamic program profile")
+			}
+		}
+	}
+	var p Profile
+	var ok bool
+	if !static && q.Kind == "desktop_capsule" && hostBinary != "" {
+		p, ok = m.programProfileFor(q.ProfileID)
+	} else {
+		p, ok = m.profileFor(q.ProfileID)
+	}
 	if !ok || !profileID.MatchString(q.ProfileID) || p.Kind != q.Kind || q.Geometry.W != p.Width || q.Geometry.H != p.Height {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
@@ -613,7 +648,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if p.NestedDepth < 0 || p.NestedDepth > 1 || effectiveDepth != p.NestedDepth || (p.Kind != "desktop_capsule" && p.NestedDepth != 0) {
 		return nil, fault("nested_depth", "profile nested_depth mismatch")
 	}
-	if p.Kind == "desktop_capsule" && (p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720))) {
+	if p.Kind == "desktop_capsule" && (p.NativeKind != "program" || !admittedProgram(p.Program, p.NestedDepth) || (p.Program == "host-exec" && (static || hostBinary == "")) || (p.NestedDepth == 1 && (p.Width != 1280 || p.Height != 720))) {
 		return nil, fault("profile", "unadmitted profile, kind or geometry")
 	}
 	// Refuse protected profile collisions before any create state or native call.
@@ -644,17 +679,23 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if active >= m.cfg.MaxSurfaces || m.quarantined[q.ProfileID] {
 		return nil, fault("uncertain", detailCapacityOrQuarantine)
 	}
-	if err := m.admitIdentityProfile(ctx, q.ProfileID, &p); err != nil {
+	if p.Program == "host-exec" {
+		if err := m.admitProgramProfile(q.ProfileID, &p); err != nil {
+			return nil, err
+		}
+	} else if err := m.admitIdentityProfile(ctx, q.ProfileID, &p); err != nil {
 		return nil, err
 	}
 	defer func() { m.releaseIdleIdentityProfile(q.ProfileID) }()
 	// Mode belongs to this opening. Legacy profile Role is only a default.
-	if selector, ok := m.runner.(interface {
-		ConsumeOpeningMode(string, string) (string, error)
-	}); ok {
-		p.Role, err = selector.ConsumeOpeningMode(q.ProfileID, p.Role)
-		if err != nil {
-			return nil, err
+	if p.Program != "host-exec" {
+		if selector, ok := m.runner.(interface {
+			ConsumeOpeningMode(string, string) (string, error)
+		}); ok {
+			p.Role, err = selector.ConsumeOpeningMode(q.ProfileID, p.Role)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	if p.Role == "human" && (p.Kind != "browser" || p.Width != 1280 || p.Height != 900) {
@@ -668,6 +709,9 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	args := []string{"start", "--kind", p.NativeKind, "--identity", q.ProfileID, "--windows", "1"}
 	if p.NativeKind == "program" || p.NativeKind == "vm" {
 		args = append(args, "--program", p.Program)
+	}
+	if p.Program == "host-exec" {
+		args = append(args, "--host-binary", hostBinary)
 	}
 	if p.NativeKind == "holdings" {
 		args = []string{"start", "--slots", "1", "--app", p.AppDir}

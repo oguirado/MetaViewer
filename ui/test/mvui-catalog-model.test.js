@@ -132,16 +132,17 @@ test('intent builder emits a frozen kind-plus-placement payload', () => {
 });
 
 test('intent builder falls back to tab placement and refuses bad input', () => {
-  assert.equal(buildCreateIntent({ kind: 'program', placement: 'sideways' }).intent.placement, 'tab');
-  assert.equal(buildCreateIntent({ kind: 'program' }).intent.placement, 'tab');
-  assert.equal(buildCreateIntent({ kind: 'program', placement: 'split' }).intent.placement, 'split');
+  assert.equal(buildCreateIntent({ kind: 'program', placement: 'sideways', binary: 'gedit' }).intent.placement, 'tab');
+  assert.equal(buildCreateIntent({ kind: 'program', binary: 'gedit' }).intent.placement, 'tab');
+  assert.equal(buildCreateIntent({ kind: 'program', placement: 'split', binary: 'gedit' }).intent.placement, 'split');
+  assert.equal(buildCreateIntent({ kind: 'program', binary: '  gedit  ' }).intent.binary, 'gedit');
   assert.equal(resolveCatalogPlacement('floating'), 'floating');
   assert.equal(resolveCatalogPlacement(null), 'tab');
-  // Negative controls: unknown kind and malformed inputs refuse typed.
+  // Negative controls: unknown kind and malformed inputs (including program without binary) refuse typed.
   const unknown = buildCreateIntent({ kind: 'teleport', placement: 'tab' });
   assert.equal(unknown.ok, false);
   assert.equal(unknown.error.code, CATALOG_UNKNOWN_KIND);
-  for (const value of [null, 42, 'program', {}, { kind: null }, { kind: 7 }]) {
+  for (const value of [null, 42, 'program', {}, { kind: null }, { kind: 7 }, { kind: 'program' }, { kind: 'program', binary: '' }, { kind: 'program', binary: '   ' }]) {
     const refused = buildCreateIntent(value);
     assert.equal(refused.ok, false);
     assert.equal(refused.error.code, CATALOG_INVALID_INTENT);

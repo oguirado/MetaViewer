@@ -5,8 +5,8 @@ import { identityMarkers } from './identityMarkers.js';
 import { xpraClientQuery } from './xpraClient.js';
 // Additive v0.3 role API. All capsule/socket selection stays in Electron main.
 import { open, realpath, readFile } from 'node:fs/promises';
-import { constants } from 'node:fs';
-import { join, isAbsolute } from 'node:path';
+import { constants, statSync } from 'node:fs';
+import { join, isAbsolute, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
@@ -54,6 +54,35 @@ export function surfaceCreateRefusal(reply) {
 /** @param {any} v @param {string} keys */
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) &&
   Reflect.ownKeys(v).sort().join(',') === keys && Object.values(Object.getOwnPropertyDescriptors(v)).every(d => 'value' in d);
+
+/** Resolve a bare binary name via PATH or validate an absolute path on the host without any shell. */
+/** @param {unknown} binary @param {NodeJS.ProcessEnv} [env] @returns {{path:string, name:string}} */
+export function resolveHostBinary(binary, env = process.env) {
+  const trimmed = typeof binary === 'string' ? binary.trim() : '';
+  const fail = (/** @type {string} */ detail) => {
+    const reason = `host_program_unavailable: ${detail}`;
+    return Object.assign(new Error(reason), {code:'HOST_PROGRAM_UNAVAILABLE', reason});
+  };
+  if (!trimmed || trimmed.length > 256) throw fail('binary name is required');
+  if (/[;\s|&$`<>(){}[\]!#*?~"'\\\x00-\x1f\x7f]/.test(trimmed)) throw fail(`${trimmed}: invalid binary name`);
+  const isExec = (/** @type {string} */ candidate) => {
+    try { const st = statSync(candidate); return st.isFile() && (st.mode & 0o111) !== 0; }
+    catch { return false; }
+  };
+  if (trimmed.startsWith('/')) {
+    if (posix.normalize(trimmed) !== trimmed || trimmed.endsWith('/')) throw fail(`${trimmed}: path must be clean`);
+    if (!isExec(trimmed)) throw fail(`${trimmed}: not found or not executable`);
+    return {path:trimmed, name:posix.basename(trimmed)};
+  }
+  if (trimmed.includes('/') || trimmed === '.' || trimmed === '..') throw fail(`${trimmed}: relative path refused`);
+  for (const dir of String(env?.PATH || '').split(':')) {
+    const cleanDir = dir.replace(/\/+$/, '');
+    if (!cleanDir.startsWith('/') || posix.normalize(cleanDir) !== cleanDir) continue;
+    const candidate = join(cleanDir, trimmed);
+    if (isExec(candidate)) return {path:candidate, name:trimmed};
+  }
+  throw fail(`${trimmed}: not found in PATH`);
+}
 /** @param {any} bounds */
 export function validateRoleBounds(bounds) {
   if (!exact(bounds, 'height,width,x,y') || !Object.values(bounds).every(Number.isSafeInteger) ||
@@ -121,7 +150,9 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       && !isForeignIdentity(p.id);
   });
   const dynamicProfiles = new Map();
-  const allProfiles = () => [...profiles, ...dynamicProfiles.values()];
+  const programProfiles = new Map();
+  const browserProfiles = () => [...profiles, ...dynamicProfiles.values()];
+  const allProfiles = () => [...profiles, ...dynamicProfiles.values(), ...programProfiles.values()];
   const identityAllowed = (/** @type {string} */ value) => /^[a-z0-9][a-z0-9-]{1,39}$/.test(value) && !isForeignIdentity(value);
   /** @param {string} profile */
   const roleOf = profile => raw[profile]?.default_mode ?? raw[profile]?.role ?? 'agent';
@@ -261,12 +292,74 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       }
       for (const name of dynamicProfiles.keys()) if (!names.has(name) && !bound.has(name)) dynamicProfiles.delete(name);
     }
-    return await Promise.all(allProfiles().filter(p=>!isForeignIdentity(p.id)).map(async p => {
+    return await Promise.all(browserProfiles().filter(p=>!isForeignIdentity(p.id)).map(async p => {
       const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
       return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
         currentMode:entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
         lastLogin:await markers.read(p.id),busy:bound.has(p.id) && !entry?.surface_id};
     }));
+  }
+
+  /** @param {any} choice */
+  async function createProgram(choice) {
+    if (choice && typeof choice === 'object' && ('profileId' in choice || 'profile_id' in choice || 'profile' in choice)) {
+      throw Object.assign(refuse('PROGRAM_PROFILE_FORBIDDEN'), {reason:'Renderer cannot select a profile for a program capsule.'});
+    }
+    if (!exact(choice, 'binary')) {
+      throw Object.assign(refuse('PROGRAM_BINARY_REQUIRED'), {reason:'Binary name is required.'});
+    }
+    const resolved = resolveHostBinary(choice.binary, {...process.env, ...env});
+    if (creating) throw Object.assign(refuse('SURFACE_CREATE_BUSY'), {reason:'Another capsule is currently starting.'});
+    creating = true;
+    let key, clearMode;
+    try {
+      const {live,bound} = summarizeSurfaces(capsuleStates);
+      if (live >= MAX_CAPSULES) throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:'Capsule limit reached; stop a capsule first.'});
+      let knownIdentities = new Set();
+      try {
+        const idReply = await listIdentities?.();
+        if (Array.isArray(idReply?.rows)) knownIdentities = new Set(idReply.rows.map((/** @type {any} */ r) => r.id));
+      } catch { /* non-fatal for program profile allocation */ }
+      if (disposed) throw refuse('XPRA_HOST_CLOSED');
+      let base = resolved.name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30);
+      if (base.length < 2) base = ('pg-' + (base || 'app')).slice(0, 30);
+      const forbidden = new Set(['notepad-1','metaviewer-1','srf-egress-proxy','n8n','distil-box']);
+      const canUse = (/** @type {string} */ candidate) => identityAllowed(candidate) && !forbidden.has(candidate)
+        && !raw[candidate] && !profiles.some(p => p.id === candidate)
+        && !dynamicProfiles.has(candidate) && !knownIdentities.has(candidate)
+        && !programProfiles.has(candidate) && !bound.has(candidate);
+      let profileId = canUse(base) ? base : '';
+      for (let n = 2; !profileId && n <= 99; n++) {
+        const candidate = `${base.slice(0, 36)}-${n}`;
+        if (canUse(candidate)) profileId = candidate;
+      }
+      if (!profileId) throw Object.assign(refuse('CAPSULE_SLOT_UNAVAILABLE'), {reason:'No free program profile slot available.'});
+      key = `pending:${profileId}`;
+      capsuleStates.set(key, {profile_id:profileId, state:'creating'});
+      clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, 'agent', resolved.path);
+      if (disposed) throw refuse('XPRA_HOST_CLOSED');
+      const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:1280, h:900}}});
+      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {
+        const code = surfaceCreateRefusal(reply);
+        const rawDetail = typeof reply?.data?.detail === 'string' ? reply.data.detail : '';
+        const reason = rawDetail.includes('host_program_unavailable:') ? rawDetail : (rawDetail || code);
+        throw Object.assign(refuse(code), {reason});
+      }
+      const surface = reply.data.surface;
+      if (disposed || !id(surface?.surface_id) || surface.profile_id !== profileId || surface.state !== 'active') {
+        if (id(surface?.surface_id)) {
+          capsuleStates.set(surface.surface_id, surface);
+          const stopped = await core.stopSurface?.(surface.surface_id);
+          if (stopped?.event !== 'state_changed' || stopped.data?.surface?.surface_id !== surface.surface_id || stopped.data.surface.state !== 'destroyed') throw refuse('CAPSULE_STOP_UNPROVEN');
+          capsuleStates.set(surface.surface_id, stopped.data.surface);
+        }
+        throw refuse(disposed ? 'XPRA_HOST_CLOSED' : 'CAPSULE_MODE_UNPROVEN');
+      }
+      openingRoles.set(surface.surface_id, 'agent');
+      programProfiles.set(profileId, {id:profileId, binary:resolved.name, path:resolved.path});
+      capsuleStates.set(surface.surface_id, surface);
+      return {ok:true, surfaceId:surface.surface_id, profileId, role:'agent', binary:resolved.name, path:resolved.path};
+    } finally { if (key) capsuleStates.delete(key); await clearMode?.(); creating = false; }
   }
 
   /** @param {any} choice */
@@ -318,6 +411,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         reply.data?.surface?.surface_id !== surfaceId || reply.data.surface.state !== 'destroyed') throw refuse('CAPSULE_STOP_UNPROVEN');
     capsuleStates.set(surfaceId,reply.data.surface);
     openingRoles.delete(surfaceId);
+    programProfiles.delete(surface.profile_id);
     return {ok:true,profileId:surface.profile_id};
   }
   /** @param {string} surfaceId */
@@ -352,7 +446,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const handler = async (event, message) => {
     if (disposed || !admit(event) || !message || message.schema !== 'metaviewer.roles/v0.3') throw refuse('XPRA_SENDER_REFUSED');
     const {op} = message;
-    const keys = ['choices','surfaces'].includes(op) ? 'op,schema' : ['create','open'].includes(op) ? 'choice,op,schema'
+    const keys = ['choices','surfaces'].includes(op) ? 'op,schema' : ['create','open','create-program'].includes(op) ? 'choice,op,schema'
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
       : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
@@ -361,6 +455,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (op === 'surfaces') return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active' && roleFor(s) === 'human')
         .map(s => ({schema:'metaviewer.role_surface/v0.3',role:'human',surface:rendererSurface(authoritative(s.surface_id))}));
       if (op === 'create') return await create(message.choice);
+      if (op === 'create-program') return await createProgram(message.choice);
       if (op === 'open') return await openIdentity(message.choice);
       if (op === 'switch') return await switchMode(message.surfaceId);
       if (op === 'stop') {
@@ -384,7 +479,11 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       }
       if (op === 'close') { if (!id(message.surfaceId)) throw refuse('SURFACE_UNKNOWN'); await close(message.surfaceId); return {ok:true}; }
       throw refuse('XPRA_PAYLOAD_REFUSED');
-    } catch (error) { return {ok:false,code:typeof /** @type {any} */ (error)?.code === 'string' ? /** @type {any} */ (error).code : 'XPRA_REFUSED'}; }
+    } catch (error) {
+      const code = typeof /** @type {any} */ (error)?.code === 'string' ? /** @type {any} */ (error).code : 'XPRA_REFUSED';
+      const reason = typeof /** @type {any} */ (error)?.reason === 'string' ? /** @type {any} */ (error).reason : undefined;
+      return reason ? {ok:false,code,reason} : {ok:false,code};
+    }
   };
   ipcMain.handle(CHANNEL,handler);
   const parentSession = window.webContents.session;

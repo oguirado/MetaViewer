@@ -732,11 +732,55 @@ function reopenLiveSurfaces() {
 }
 /** @param {any} choice */
 function openIdentityChoice(choice) { onCreateCapsule({kind:'identity-browser',choice}); }
-/** @param {unknown} intent */
-function onCreateCapsule(intent) {
+/** @param {any} body */
+async function createProgramCapsule(body) {
+  const roles = /** @type {any} */ (globalThis).metaviewerRoles;
+  if (!roles?.createProgram) {
+    return {
+      ok: false,
+      code: 'HOST_PROGRAM_UNAVAILABLE',
+      reason: 'host_program_unavailable: program launching is not available on this host',
+    };
+  }
+  selectGlobalView('agent');
+  await nextTick();
+  const reply = await roles.createProgram({ binary: body.binary.trim() });
+  if (!reply?.ok) {
+    const code = typeof reply?.code === 'string' && reply.code.length > 0 ? reply.code : 'HOST_PROGRAM_UNAVAILABLE';
+    const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
+    return { ok: false, code, reason };
+  }
+  if (reply.surfaceId) {
+    await revealOpenedIdentity(reply.surfaceId, 'agent');
+    if (props.runtime?.intentBuilders) {
+      wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
+      applyWallControl(reply.surfaceId, 'take_control');
+    }
+  }
+  return reply;
+}
+/** @param {unknown} intent @param {((outcome: any) => void)|undefined} [settle] */
+function onCreateCapsule(intent, settle) {
   if (nestedMode.displayOnly) return;
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
+  if (body?.kind === 'program' && typeof body?.binary === 'string' && body.binary.trim().length > 0) {
+    if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id) {
+      const reason = 'Renderer cannot select a profile for a program capsule.';
+      settle?.({ ok: false, code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
+      hostOutcome.value = { code: 'PROGRAM_PROFILE_FORBIDDEN', message: reason, tone: 'refusal' };
+      recordActivity({ code: 'PROGRAM_PROFILE_FORBIDDEN' });
+      return;
+    }
+    const promise = createProgramCapsule(body);
+    settle?.(promise);
+    void submitHost(async () => {
+      const reply = await promise;
+      if (!reply?.ok) throw Object.assign(new Error(reply?.reason || reply?.code || 'HOST_PROGRAM_UNAVAILABLE'), { code: reply?.code || 'HOST_PROGRAM_UNAVAILABLE' });
+      return null;
+    });
+    return;
+  }
   if (props.authorityHost && body?.schema !== 'action_proposal/v0.2') {
     if (!props.authorityHost.createSurface && propose && body?.kind === 'browser' && props.fixture?.key === 'multislot') {
       void submitHost(() => propose({

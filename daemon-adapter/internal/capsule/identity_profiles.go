@@ -3,6 +3,7 @@ package capsule
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -63,6 +64,53 @@ func (m *Manager) profileFor(id string) (Profile, bool) {
 		return Profile{}, false
 	}
 	return *m.identityTemplate, true
+}
+
+func (m *Manager) programProfileFor(id string) (Profile, bool) {
+	if existing, ok := m.cfg.Profiles[id]; ok {
+		if !m.dynamicProfiles[id] || existing.Kind != "desktop_capsule" || existing.Program != "host-exec" {
+			return Profile{}, false
+		}
+		return existing, true
+	}
+	if m.identityTemplate == nil || !storedIdentityID.MatchString(id) || protectedIdentity(id) {
+		return Profile{}, false
+	}
+	p := *m.identityTemplate
+	p.Kind = "desktop_capsule"
+	p.NativeKind = "program"
+	p.Program = "host-exec"
+	p.Role = "agent"
+	p.NestedDepth = 0
+	p.Display = ""
+	return p, true
+}
+
+func (m *Manager) admitProgramProfile(id string, p *Profile) error {
+	if _, static := m.cfg.Profiles[id]; static && !m.dynamicProfiles[id] {
+		return fault("profile", "host-exec requires dynamic program profile")
+	}
+	if !storedIdentityID.MatchString(id) || protectedIdentity(id) {
+		return fault("profile", "program profile refused")
+	}
+	for _, display := range m.identityDisplays {
+		if !m.displayOccupied(p.RAMRoot, display, id) {
+			p.Display = display
+			m.cfg.Profiles[id] = *p
+			m.dynamicProfiles[id] = true
+			return nil
+		}
+	}
+	return fault("profile", "identity display pool exhausted; stop a capsule first")
+}
+
+func (m *Manager) runnerSearchPath() string {
+	if sp, ok := m.runner.(interface{ SearchPath() string }); ok {
+		if path := sp.SearchPath(); path != "" {
+			return path
+		}
+	}
+	return os.Getenv("PATH")
 }
 
 func (m *Manager) displayOccupied(root, display, except string) bool {

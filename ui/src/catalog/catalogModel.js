@@ -48,11 +48,12 @@
 
 /**
  * @typedef {object} CatalogCreateIntent Create intent payload emitted by the
- * launcher. Carries the kind id and presentation placement only; the core
- * selects the allowlisted profile, never renderer executables or paths.
+ * launcher. Carries the kind id, presentation placement and, for program
+ * capsules, the requested binary name.
  * @property {string} type Always `'create-capsule'`.
  * @property {string} kind Known kind id.
  * @property {CatalogPlacement} placement Requested placement.
+ * @property {string} [binary] Required binary name when `kind === 'program'`.
  */
 
 /**
@@ -292,12 +293,28 @@ export function buildCreateIntent(input) {
   if (!BY_KIND.has(record.kind)) {
     return Object.freeze({ ok: false, error: unknownKindRow(record.kind) });
   }
+  const placement = resolveCatalogPlacement(record.placement);
+  if (record.kind === 'program') {
+    const binary = typeof record.binary === 'string' ? record.binary.trim() : '';
+    if (binary.length === 0) {
+      return Object.freeze({ ok: false, error: invalidIntentRow() });
+    }
+    return Object.freeze({
+      ok: true,
+      intent: Object.freeze({
+        type: 'create-capsule',
+        kind: 'program',
+        placement,
+        binary,
+      }),
+    });
+  }
   return Object.freeze({
     ok: true,
     intent: Object.freeze({
       type: 'create-capsule',
       kind: record.kind,
-      placement: resolveCatalogPlacement(record.placement),
+      placement,
     }),
   });
 }

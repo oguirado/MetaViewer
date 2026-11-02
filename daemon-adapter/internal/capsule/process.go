@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -91,6 +90,36 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	}
 	return b.buffer.Write(p)
 }
+func extractHostProgramRefusal(outputs ...string) string {
+	for _, s := range outputs {
+		idx := strings.Index(s, "host_program_unavailable:")
+		if idx < 0 {
+			continue
+		}
+		line := s[idx:]
+		if nl := strings.IndexAny(line, "\r\n"); nl >= 0 {
+			line = line[:nl]
+		}
+		line = strings.TrimSpace(line)
+		if len(line) > 256 {
+			line = line[:256]
+		}
+		if len(line) > len("host_program_unavailable:") {
+			return line
+		}
+	}
+	return ""
+}
+
+func (r *ProcessRunner) SearchPath() string {
+	for _, entry := range r.env {
+		if k, v, ok := strings.Cut(entry, "="); ok && k == "PATH" {
+			return v
+		}
+	}
+	return ""
+}
+
 func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([]byte, error) {
 	adminShow := len(argv) == 4 && filepath.Base(argv[0]) == "srf-identity-admin" && argv[1] == "show" && argv[2] == "--id" && storedIdentityID.MatchString(argv[3]) && !protectedIdentity(argv[3]) && len(stdin) == 0
 	if len(argv) < 2 || filepath.Dir(argv[0]) != r.root || (!adminShow && filepath.Base(argv[0]) != "srf-identity-surface" && filepath.Base(argv[0]) != "srf-holdings-capsule") {
@@ -125,8 +154,9 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 	cmd.Env = append([]string(nil), r.env...)
 	cmd.Stdin = bytes.NewReader(stdin)
 	out := &cappedBuffer{limit: r.limit}
+	errBuf := &cappedBuffer{limit: min(r.limit, 4096)}
 	cmd.Stdout = out
-	cmd.Stderr = io.Discard
+	cmd.Stderr = errBuf
 	cmd.WaitDelay = time.Second
 	if e := cmd.Start(); e != nil {
 		if ctx.Err() != nil {
@@ -143,6 +173,11 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 		}
 		var exit *exec.ExitError
 		if errors.As(e, &exit) {
+			if exit.ExitCode() == 2 && filepath.Base(argv[0]) == "srf-identity-surface" {
+				if reason := extractHostProgramRefusal(errBuf.buffer.String(), out.buffer.String()); reason != "" {
+					return nil, &preSpawnRefusal{fault("host_program_unavailable", reason)}
+				}
+			}
 			return nil, cli.ExitFault(filepath.Base(argv[0]), exit.ExitCode(), "")
 		}
 		return nil, fault("uncertain", "native command failed without a verified result")

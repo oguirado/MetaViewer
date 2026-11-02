@@ -28,8 +28,9 @@ const emit = defineEmits(['update:visible', 'create', 'close']);
 
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
+const choosingProgram = ref(false), programBinary = ref(''), programError = ref(''), programBusy = ref(false);
 let choiceGeneration = 0;
-watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;}});
+watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programError.value='';}});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
@@ -40,6 +41,50 @@ function confirmRole() {
   if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND' : 'NO_IDENTITY'; return; }
   emit('create', {...pendingIntent.value,choice:{role:roleChoice.value,profileId:profile.profileId}});
   choosingRole.value = false;
+  emit('update:visible', false);
+}
+async function confirmProgram() {
+  const result = buildCreateIntent({
+    kind: 'program',
+    placement: pendingIntent.value?.placement,
+    binary: programBinary.value,
+  });
+  if (!result.ok) {
+    programError.value = result.error.message;
+    return;
+  }
+  programError.value = '';
+  programBusy.value = true;
+  let settledByListener = false;
+  /** @type {any} */
+  let outcome = null;
+  const settle = (/** @type {any} */ reply) => {
+    settledByListener = true;
+    outcome = reply;
+  };
+  try {
+    emit('create', result.intent, settle);
+    if (outcome && typeof outcome.then === 'function') {
+      outcome = await outcome;
+    } else if (!settledByListener && api?.createProgram) {
+      outcome = await api.createProgram({ binary: result.intent.binary });
+    }
+    if (outcome && outcome.ok === false) {
+      programError.value = outcome.reason || outcome.message || outcome.code || 'Program could not be started.';
+      return;
+    }
+    choosingProgram.value = false;
+    emit('update:visible', false);
+  } catch (err) {
+    const e = /** @type {any} */ (err);
+    programError.value = e?.reason || e?.message || e?.code || 'Program could not be started.';
+  } finally {
+    programBusy.value = false;
+  }
+}
+function cancelProgram() {
+  choosingProgram.value = false;
+  programError.value = '';
   emit('update:visible', false);
 }
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
@@ -58,12 +103,22 @@ watch(() => props.visible, (open, previous) => {
 
 /** @param {boolean} value */
 function forwardVisible(value) {
-  if(!value){choiceGeneration++;choosingRole.value=false;}
+  if (!value && typeof choosingProgram !== 'undefined' && choosingProgram.value) return;
+  if(!value){choiceGeneration++;choosingRole.value=false;if(typeof choosingProgram!=='undefined')choosingProgram.value=false;}
   emit('update:visible', value);
 }
 
-/** @param {{ type?: { id?: unknown }, placement?: unknown } | null} payload */
+/** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown } | null} payload */
 async function onCreate(payload) {
+  if (payload?.type?.id === 'program') {
+    pendingIntent.value = { kind: 'program', placement: payload?.placement };
+    if (typeof choosingProgram !== 'undefined') {
+      programBinary.value = typeof payload?.binary === 'string' ? payload.binary : '';
+      programError.value = '';
+      choosingProgram.value = true;
+    }
+    return;
+  }
   const result = buildCreateIntent({ kind: payload?.type?.id, placement: payload?.placement });
   if (!result.ok) return;
   if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create', result.intent); return; }
@@ -81,6 +136,7 @@ async function onCreate(payload) {
 }
 
 function onClose() {
+  if (typeof choosingProgram !== 'undefined' && choosingProgram.value) return;
   choiceGeneration++;choosingRole.value=false;
   emit('close');
 }
@@ -93,6 +149,46 @@ function onClose() {
     <p v-if="roleError" role="alert">{{ roleError }}</p>
     <button type="button" @click="confirmRole">Open capsule</button>
     <button type="button" @click="choosingRole = false; emit('update:visible', false)">Cancel</button>
+  </div>
+  <div
+    v-else-if="choosingProgram"
+    id="shell/new-capsule/program-dialog"
+    data-semantic-anchor="dialog/new-capsule/program-dialog"
+    class="mv-role-dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Program capsule"
+  >
+    <h2>Program</h2>
+    <label for="shell/new-capsule/program-binary">Binary name</label>
+    <input
+      id="shell/new-capsule/program-binary"
+      data-semantic-anchor="dialog/new-capsule/program-binary"
+      v-model="programBinary"
+      type="text"
+      placeholder="gedit"
+      required
+      autofocus
+    />
+    <p
+      v-if="programError"
+      id="shell/new-capsule/program-error"
+      data-semantic-anchor="dialog/new-capsule/program-error"
+      role="alert"
+    >{{ programError }}</p>
+    <button
+      id="shell/new-capsule/program-start"
+      data-semantic-anchor="dialog/new-capsule/program-start"
+      type="button"
+      :disabled="programBusy || !programBinary.trim()"
+      @click="confirmProgram"
+    >Start</button>
+    <button
+      id="shell/new-capsule/program-cancel"
+      data-semantic-anchor="dialog/new-capsule/program-cancel"
+      type="button"
+      @click="cancelProgram"
+    >Cancel</button>
   </div>
   <NewCapsuleDialog v-else
     :visible="visible"
