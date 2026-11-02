@@ -43,7 +43,7 @@ lock = root/'locks'/(identity+'.json')
 if verb == 'create':
     for d in ('metadata', 'profiles', 'locks'): (root/d).mkdir(mode=0o700, parents=True, exist_ok=True)
     root.chmod(0o700)
-    if meta.exists(): sys.exit(4)
+    if meta.exists() or profile.exists() or profile.is_symlink(): sys.exit(4)
     profile.mkdir(mode=0o700)
     browser = arg('--browser') if '--browser' in a else 'browser'
     domains = [d for d in arg('--domains').split(',') if d] if '--domains' in a else []
@@ -660,6 +660,70 @@ class IdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
                 self.tool.create("calc-app", "calc-app", "", browser="program")
         self.assertFalse((self.root / "metadata" / "calc-app.json").exists())
+
+        # Retrying the same program identity name after failed provisioning succeeds cleanly.
+        retried_prog = self.tool.create("calc-app", "calc-app", "", browser="program")
+        self.assertEqual(retried_prog["profile_id"], "calc-app")
+        self.assertEqual(retried_prog["browser"], "program")
+
+    def test_failed_provisioning_allows_clean_retry_while_preserving_populated_and_protected(self):
+        def fail_once(identity):
+            raise mv.Refused("PROFILE_NOT_PROVISIONED")
+
+        # 1. Browser identity: failed provisioning leaves empty host-owned profile dir, retry succeeds.
+        with patch.object(self.tool, "provision", side_effect=fail_once):
+            with self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
+                self.tool.create("retry-browser", "Retry Browser", "example.com")
+        self.assertFalse((self.root / "metadata" / "retry-browser.json").exists())
+        self.assertTrue((self.root / "profiles" / "retry-browser").is_dir())
+        retried = self.tool.create("retry-browser", "Retry Browser", "example.com")
+        self.assertEqual(retried["profile_id"], "retry-browser")
+        self.assertTrue((self.root / "metadata" / "retry-browser.json").is_file())
+
+        # 2. Never delete a profile directory that holds data; never read identity contents.
+        with patch.object(self.tool, "provision", side_effect=fail_once):
+            with self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
+                self.tool.create("populated-id", "Populated", "example.com")
+        sentinel = self.root / "profiles" / "populated-id" / "opaque-cookie"
+        sentinel.write_bytes(b"SECRET-COOKIE-BYTES")
+        with patch.object(mv.os, "listdir", side_effect=AssertionError("directory listed")), \
+             patch.object(mv.os, "scandir", side_effect=AssertionError("directory scanned")):
+            with self.assertRaisesRegex(mv.Refused, "^NATIVE_REFUSED$"):
+                self.tool.create("populated-id", "Populated", "example.com")
+        self.assertEqual(sentinel.read_bytes(), b"SECRET-COOKIE-BYTES")
+
+        # 3. Never delete a directory already owned by NATIVE_PROFILE_UID (10001).
+        with patch.object(self.tool, "provision", side_effect=fail_once):
+            with self.assertRaisesRegex(mv.Refused, "^PROFILE_NOT_PROVISIONED$"):
+                self.tool.create("uid-owned", "Uid Owned", "example.com")
+        with patch.object(mv, "NATIVE_PROFILE_UID", os.getuid()):
+            with self.assertRaisesRegex(mv.Refused, "^NATIVE_REFUSED$"):
+                self.tool.create("uid-owned", "Uid Owned", "example.com")
+        self.assertTrue((self.root / "profiles" / "uid-owned").is_dir())
+
+        # 4. Never touch protected identities (cuentas-, perplexity-, mv-).
+        for protected in ("cuentas-main", "perplexity-pro", "mv-live-1"):
+            expected = "^RESERVED_ID$" if protected.startswith("mv-") else "^IDENTITY_PROTECTED$"
+            with self.assertRaisesRegex(mv.Refused, expected):
+                self.tool.reclaim_unprovisioned_profile(protected)
+
+    def test_mutant_skipping_unprovisioned_reclaim_blocks_retry_after_failed_create(self):
+        source = (REPO / "tools/mv_identity.py").read_text()
+        target = "self.reclaim_unprovisioned_profile(identity)"
+        self.assertEqual(source.count(target), 1)
+        mutated_source = source.replace(target, "pass", 1)
+        mutant_spec = importlib.util.spec_from_loader("mv_identity_mutant", loader=None)
+        mutant_mod = importlib.util.module_from_spec(mutant_spec)
+        mutant_mod.__file__ = str(REPO / "tools/mv_identity.py")
+        exec(compile(mutated_source, str(REPO / "tools/mv_identity.py"), "exec"), mutant_mod.__dict__)
+
+        mutant_tool = mutant_mod.Identities(str(self.root), str(self.home), str(self.bin), str(self.state), profile_uid=os.getuid())
+        mutant_tool.provision = Mock(side_effect=[mutant_mod.Refused("PROFILE_NOT_PROVISIONED"), None])
+        with self.assertRaisesRegex(mutant_mod.Refused, "^PROFILE_NOT_PROVISIONED$"):
+            mutant_tool.create("mutant-retry", "Mutant", "example.com")
+        # In the mutant, retrying the same name fails with NATIVE_REFUSED because the empty directory was not reclaimed.
+        with self.assertRaisesRegex(mutant_mod.Refused, "^NATIVE_REFUSED$"):
+            mutant_tool.create("mutant-retry", "Mutant", "example.com")
 
 
 if __name__ == "__main__":

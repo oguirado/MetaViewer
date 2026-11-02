@@ -10,6 +10,11 @@ The host menu invokes this tool; it is never an agent tool or a wire request.
 [TARGET, unit decision] IDT-FIX robustness additions, all control-metadata only:
 - login checks native profile provisioning (private 0700, uid 10001, surface.go:405)
   before `start` and names the missing step (PROFILE_MISSING, PROFILE_NOT_PROVISIONED);
+- failed provisioning rolls back its newly created metadata entry while retaining
+  the empty host-owned profile directory for legacy unprovisioned inspection, and
+  a retry of `create` with the same name reclaims that unprovisioned empty
+  host-owned directory under the per-id guard before invoking native create
+  (never deleting a non-empty or uid-10001 directory, never opening payloads);
 - the login reservation file records its owner (pid + /proc start time); SIGTERM/SIGHUP
   tear the view down and remove it, and a reservation whose owner is dead (SIGKILL,
   crash) is reclaimed after a native view-stop, so a killed login never bricks the id;
@@ -189,6 +194,7 @@ class Identities:
                 raise Refused("PROFILE_ALREADY_BOUND")
             created_new = False
         if created_new:
+            self.reclaim_unprovisioned_profile(identity)
             native_args = ["create", "--store-root", str(self.root), "--id", identity, "--label", label]
             native_args.extend(["--browser", "program"] if browser == "program" else ["--domains", domains])
             self.native("srf-identity-admin", native_args)
@@ -212,6 +218,42 @@ class Identities:
                             private(metadata, directory=False)
                             metadata.unlink()
             raise
+
+    def reclaim_unprovisioned_profile(self, identity):
+        """Reclaim an empty host-owned profile left by a rolled-back create; never open payloads."""
+        identity = fresh_id(identity, self.live_profile)
+        if not self.root.exists():
+            return
+        private(self.root)
+        locks = self.root / "locks"
+        profiles = self.root / "profiles"
+        if not locks.exists() or not profiles.exists():
+            return
+        private(locks)
+        target = self.profile_path(identity)
+        fd = os.open(locks / (identity + ".guard"), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "r+") as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX)
+            metadata = self.root / "metadata" / (identity + ".json")
+            if metadata.exists() or metadata.is_symlink():
+                return
+            lease = self.lease(identity)
+            if lease is not None and lease["active"]:
+                raise Refused("IDENTITY_BOUND")
+            try:
+                st = target.lstat()
+            except FileNotFoundError:
+                return
+            if not stat.S_ISDIR(st.st_mode):
+                raise Refused("UNSAFE_IDENTITY_PATH")
+            # Only an unprovisioned directory still owned by the host caller uid
+            # (mode 0700, empty via os.rmdir) is eligible; never remove data.
+            if (st.st_uid == os.getuid() and st.st_uid != NATIVE_PROFILE_UID and
+                    stat.S_IMODE(st.st_mode) == 0o700):
+                try:
+                    target.rmdir()
+                except OSError:
+                    pass
 
     def list(self):
         metadata = self.root / "metadata"
