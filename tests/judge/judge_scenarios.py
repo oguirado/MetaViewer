@@ -71,7 +71,9 @@ pf("JUDGE_DISPLAY", T1, lambda sb: {"DISPLAY": None}, _noop)
 pf("JUDGE_XDG_RUNTIME", T1, lambda sb: shutil.rmtree(sb.runuser), _noop)
 pf("JUDGE_SHM", T1, lambda sb: sb.set_df(shm=("tmpfs", 100 * 1024 * 1024), home=500_000_000_000, docker=500_000_000_000), _noop)
 pf("JUDGE_RAM", T2, lambda sb: (_t2_ready(sb), sb.set_meminfo(32 * 1024 * 1024, 6 * 1024 * 1024)), _t2_ready)
-pf("JUDGE_CPUSET", T2, lambda sb: (_t2_ready(sb), sb.set_cpuset("0-7")), _t2_ready)
+pf("JUDGE_CPUSET", T2,
+   lambda sb: (_t2_ready(sb), sb.set_cpuset("0-7"), {"MV_JUDGE_REQUIRE_CPUSET": "10-14"})[2],
+   lambda sb: (_t2_ready(sb), {"MV_JUDGE_REQUIRE_CPUSET": "10-14"})[1])
 pf("JUDGE_DOCKER", T2, lambda sb: (_t2_ready(sb), sb.put("docker_info_rc", "1\n")), _t2_ready)
 pf("JUDGE_DOCKER_HOST", T2, lambda sb: (_t2_ready(sb), {"DOCKER_HOST": "tcp://127.0.0.1:2375"})[1], _t2_ready)
 pf("JUDGE_DOCKER_DESKTOP", T2,

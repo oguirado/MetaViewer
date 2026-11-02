@@ -64,7 +64,7 @@ CPUSET_FILE=${MV_JUDGE_CPUSET_FILE:-/sys/fs/cgroup/cpuset.cpus.effective}
 RUN_USER_ROOT=${MV_JUDGE_RUN_USER_ROOT:-/run/user}
 APPARMOR_DIR=${MV_JUDGE_APPARMOR_DIR:-/etc/apparmor.d}
 WITNESS=${MV_JUDGE_FW_WITNESS:-/run/srf-open-egress/rules.sha256}
-REQUIRE_CPUSET=${MV_JUDGE_REQUIRE_CPUSET:-10-14}
+REQUIRE_CPUSET=${MV_JUDGE_REQUIRE_CPUSET:-none}
 JUDGE_HOME=${MV_JUDGE_HOME:-${XDG_DATA_HOME:-$HOME_DIR/.local/share}/metaviewer-judge}
 if [ -n "${MV_JUDGE_KIT:-}" ]; then
     KIT=$MV_JUDGE_KIT
@@ -254,19 +254,24 @@ chk_xdg() {
 }
 
 chk_shm() {
-    local fst avail need=536870912
-    [ "$TIER" = T2 ] && need=$((536870912 + 2147483648))
+    local fst avail need=536870912 rec=536870912
+    if [ "$TIER" = T2 ]; then
+        need=1073741824
+        rec=$((536870912 + 2147483648))
+    fi
     fst=$(df --output=fstype "$SHM" 2>/dev/null | tail -n 1 | tr -d ' ')
     avail=$(df --output=avail -B1 "$SHM" 2>/dev/null | tail -n 1 | tr -d ' ')
     if [ "$fst" != tmpfs ]; then # MUT:JUDGE_SHM
         refuse JUDGE_SHM "$SHM is '${fst:-unreadable}', a tmpfs is required" "mount a tmpfs on $SHM (WSL2: check .wslconfig)"
     elif ! is_num "$avail" || [ "$avail" -lt "$need" ]; then # MUT:JUDGE_SHM
-        refuse JUDGE_SHM "$SHM has $(($(is_num "$avail" && echo "$avail" || echo 0) / 1048576)) MiB [MEASURED] free, $(($need / 1048576)) MiB [CITED] needed" "free shared memory or remount: sudo mount -o remount,size=4g $SHM"
+        refuse JUDGE_SHM "$SHM has $(($(is_num "$avail" && echo "$avail" || echo 0) / 1048576)) MiB [MEASURED] free, $(($need / 1048576)) MiB [TARGET] needed" "free shared memory or remount: sudo mount -o remount,size=4g $SHM"
+    elif [ "$avail" -lt "$rec" ]; then
+        note "warning (JUDGE_SHM): $SHM has $(($avail / 1048576)) MiB [MEASURED] free, below recommended $(($rec / 1048576)) MiB [TARGET] for multi-capsule runs; remount with: sudo mount -o remount,size=4g $SHM"
     fi
 }
 
 chk_ram() {
-    local total avail floor need
+    local total avail floor need rec
     total=$(meminfo MemTotal)
     avail=$(meminfo MemAvailable)
     if ! is_num "$total" || ! is_num "$avail"; then
@@ -275,9 +280,12 @@ chk_ram() {
     fi
     floor=$((total / 4))
     [ "$floor" -gt 20971520 ] && floor=20971520
-    need=$((floor + 4194304))
+    need=$((floor + 524288))
+    rec=$((floor + 4194304))
     if [ "$avail" -lt "$need" ]; then # MUT:JUDGE_RAM
-        refuse JUDGE_RAM "MemAvailable is $(kib_mib "$avail") MiB [MEASURED], one capsule needs $(kib_mib "$need") MiB [TARGET]" "close applications, add RAM, or (WSL2) raise memory= in .wslconfig"
+        refuse JUDGE_RAM "MemAvailable is $(kib_mib "$avail") MiB [MEASURED], minimum $(kib_mib "$need") MiB [TARGET] needed (floor $(kib_mib "$floor") MiB + 512 MiB capsule reserve)" "close applications, add RAM, or (WSL2) raise memory= in .wslconfig"
+    elif [ "$avail" -lt "$rec" ]; then
+        note "warning (JUDGE_RAM): MemAvailable is $(kib_mib "$avail") MiB [MEASURED], below recommended $(kib_mib "$rec") MiB [TARGET] for multi-capsule runs; single capsule can run"
     fi
 }
 
@@ -358,9 +366,9 @@ chk_image() {
     local img
     [ "$DOCKER_OK" = 1 ] || return 0
     [ -n "$ARCHN" ] || return 0
-    local idver=0.1.0
+    local idver=0.1.1
     open_ready && idver=0.2.0
-    for img in "opensuperficies-identity-browser-$ARCHN:$idver" "opensuperficies-desktop-$ARCHN:1.1.0"; do
+    for img in "opensuperficies-identity-browser-$ARCHN:$idver" "opensuperficies-program-host-$ARCHN:0.1.0" "opensuperficies-desktop-$ARCHN:1.1.0"; do
         if docker image inspect "$img" >/dev/null 2>&1; then : # MUT:JUDGE_IMAGE
         else
             refuse JUDGE_IMAGE "image $img is not present" "bash scripts/judge/metaviewer-judge.sh install --capsules (loads the images from the kit)"
@@ -402,7 +410,7 @@ chk_profile() {
     local p="$STORE/profiles/$PROFILE_ID" st
     st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
     if [ "$st" != "700 10001" ]; then # MUT:JUDGE_PROFILE
-        refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "sudo install -d -m 0700 -o 10001 -g 10001 $p"
+        refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo)"
     fi
 }
 
@@ -427,12 +435,14 @@ chk_ram_stale() {
 }
 
 chk_disk() {
-    local need=30000000000 home_avail root_avail
+    local need=15000000000 rec=30000000000 home_avail root_avail
     home_avail=$(df_avail "$HOME_DIR" || printf 0)
     root_avail=$home_avail
     [ -n "$DOCKER_ROOT" ] && root_avail=$(df_avail "$DOCKER_ROOT" || printf 0)
     if [ "$home_avail" -lt "$need" ] || [ "$root_avail" -lt "$need" ]; then # MUT:JUDGE_DISK
-        refuse JUDGE_DISK "free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], 30 GB [TARGET] needed on both" "free disk space (docker system prune removes unused images)"
+        refuse JUDGE_DISK "free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], 15 GB [TARGET] minimum needed on both" "free disk space (docker system prune removes unused images)"
+    elif [ "$home_avail" -lt "$rec" ] || [ "$root_avail" -lt "$rec" ]; then
+        note "warning (JUDGE_DISK): free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], below recommended 30 GB [TARGET]"
     fi
 }
 

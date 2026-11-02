@@ -358,9 +358,9 @@ extract_dep() { # asset, component directory name
 }
 
 step_images() {
-    local asset=images-linux-$ARCHN.tar img missing=0 idver=0.1.0
+    local asset=images-linux-$ARCHN.tar img missing=0 idver=0.1.1
     [ "$(net_mode_now)" = open ] && idver=0.2.0
-    for img in "opensuperficies-identity-browser-$ARCHN:$idver" "opensuperficies-desktop-$ARCHN:1.1.0"; do
+    for img in "opensuperficies-identity-browser-$ARCHN:$idver" "opensuperficies-program-host-$ARCHN:0.1.0" "opensuperficies-desktop-$ARCHN:1.1.0"; do
         docker image inspect "$img" >/dev/null 2>&1 || missing=1
     done
     [ "$missing" = 1 ] || return 0
@@ -369,12 +369,28 @@ step_images() {
 }
 
 step_profile() {
-    local p="$STORE/profiles/$PROFILE_ID" st
-    mkdir -p "$STORE/profiles" && chmod 0700 "$STORE" "$STORE/profiles" || fail JUDGE_PROFILE "cannot create $STORE/profiles" "choose a writable SRF_IDENTITY_STORE_ROOT"
+    local pid p st idver=0.1.1 admin=$JUDGE_HOME/deps/opensuperficies/bin/srf-identity-admin
+    [ "$(net_mode_now)" = open ] && idver=0.2.0
+    mkdir -p "$STORE/identities" "$STORE/profiles" && chmod 0700 "$STORE" "$STORE/identities" "$STORE/profiles" || fail JUDGE_PROFILE "cannot create $STORE/profiles" "choose a writable SRF_IDENTITY_STORE_ROOT"
+    for pid in "$PROFILE_ID" mv-live-1 mv-live-2 mv-live-3 mv-live-4; do
+        if [ -x "$admin" ] && [ ! -f "$STORE/metadata/$pid.json" ]; then
+            "$admin" create --store-root "$STORE" --id "$pid" --label "$pid" --domains example.com >/dev/null 2>&1 || true
+        fi
+        if [ ! -f "$STORE/identities/$pid.json" ]; then
+            printf '{"profile_id":"%s","display_name":"%s","domains":["example.com"]}\n' "$(json_str "$pid")" "$(json_str "$pid")" >"$STORE/identities/$pid.json" 2>/dev/null || true
+        fi
+        p="$STORE/profiles/$pid"
+        st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
+        [ "$st" = "700 10001" ] && continue
+        docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh \
+            --mount "type=bind,src=$STORE/profiles,dst=/profiles" \
+            "opensuperficies-identity-browser-$ARCHN:$idver" \
+            -c 'mkdir -p "$1" && chown 10001:10001 "$1" && chmod 0700 "$1"' -- "/profiles/$pid" >/dev/null 2>&1 ||
+            fail JUDGE_PROFILE "cannot provision $p via Docker" "docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=$STORE/profiles,dst=/profiles opensuperficies-identity-browser-$ARCHN:$idver -c 'mkdir -p /profiles/$pid && chown 10001:10001 /profiles/$pid && chmod 0700 /profiles/$pid'"
+    done
+    p="$STORE/profiles/$PROFILE_ID"
     st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
-    [ "$st" = "700 10001" ] && return 0
-    need_sudo_step "create the capsule profile directory owned by uid 10001 (the capsule runs as that uid)" \
-        install -d -m 0700 -o 10001 -g 10001 "$p"
+    [ "$st" = "700 10001" ] || fail JUDGE_PROFILE "profile directory $p is not mode 0700 owned by uid 10001 (found '${st:-absent}')" "docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=$STORE/profiles,dst=/profiles opensuperficies-identity-browser-$ARCHN:$idver -c 'mkdir -p /profiles/$PROFILE_ID && chown 10001:10001 /profiles/$PROFILE_ID && chmod 0700 /profiles/$PROFILE_ID'"
 }
 
 fw_script() { # prints the exact root script; every input file is re-hashed at run time
@@ -488,9 +504,9 @@ cmd_install() {
         extract_dep vision-engine.tar.gz vision-engine
         extract_dep wender-agent.tar.gz wender-agent
         assets_used="$assets_used opensuperficies-linux-$ARCHN.tar.gz vision-engine.tar.gz wender-agent.tar.gz images-linux-$ARCHN.tar"
-        step_profile
         step_firewall || true
         step_images
+        step_profile
         [ "$(net_mode_now)" = open ] || ensure_capsule_net
     fi
     pf_or_exit --tier "$TIER" --phase all
@@ -504,7 +520,7 @@ cmd_install() {
 receipt_tier() { sed -n 's/^  "tier": "\(T[0-2]\)",\{0,1\}$/\1/p' "$RECEIPT" 2>/dev/null | head -n 1; }
 
 cmd_run() {
-    local pid tier v rc child dest statedir ramroot
+    local pid tier v rc child dest statedir ramroot profiles_json p2 p3 p4 rjson
     local -a envv
     if [ ! -x "$APP_BIN" ] || [ ! -f "$RECEIPT" ]; then # MUT:JUDGE_NOT_INSTALLED
         fail JUDGE_NOT_INSTALLED "MetaViewer is not installed under $JUDGE_HOME" "bash $0 install [--capsules]"
@@ -520,7 +536,7 @@ cmd_run() {
         ensure_capsule_net
     fi
     pf_or_exit --tier "$TIER" --phase all
-    envv=("HOME=$HOME_DIR" "PATH=/usr/local/bin:/usr/bin:/bin" "USER=${USER:-$(id -un)}" "LANG=${LANG:-C.UTF-8}")
+    envv=("HOME=$HOME_DIR" "PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games" "USER=${USER:-$(id -un)}" "LANG=${LANG:-C.UTF-8}" "SHELL=${SHELL:-/bin/bash}")
     envv+=("XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-$RUN_USER_ROOT/$UID_NOW}")
     for v in DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS WAYLAND_DISPLAY; do
         [ -n "${!v:-}" ] && envv+=("$v=${!v}")
@@ -534,12 +550,27 @@ cmd_run() {
     if [ "$TIER" = T2 ]; then
         statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
         ramroot=$SHM/vqa-ramws/opensuperficies/os-cu-0
-        mkdir -p "$statedir" "$ramroot" && chmod 0700 "$statedir" "$ramroot"
+        mkdir -p "$statedir" "$ramroot" "$STORE" && chmod 0700 "$statedir" "$ramroot"
+        [ -f "$STORE/proxies.json" ] || printf '{"proxies":{}}\n' >"$STORE/proxies.json" 2>/dev/null || true
+        if [ -n "${MV_SRF_PROFILES:-}" ]; then
+            profiles_json=$MV_SRF_PROFILES
+        else
+            p2=mv-live-2; [ "$PROFILE_ID" = "$p2" ] && p2=mv-live-1
+            p3=mv-live-3; [ "$PROFILE_ID" = "$p3" ] && p3=mv-live-1
+            p4=mv-live-4; [ "$PROFILE_ID" = "$p4" ] && p4=mv-live-1
+            rjson=$(json_str "$ramroot")
+            profiles_json=$(printf '{"%s":{"Kind":"browser","NativeKind":"browser","RAMRoot":"%s","Display":":100","Width":1280,"Height":900,"text_input":"paste"},"%s":{"Kind":"browser","NativeKind":"browser","RAMRoot":"%s","Display":":101","Width":1280,"Height":900,"text_input":"paste"},"%s":{"Kind":"browser","NativeKind":"browser","RAMRoot":"%s","Display":":102","Width":1280,"Height":900,"text_input":"paste"},"%s":{"Kind":"browser","NativeKind":"browser","RAMRoot":"%s","Display":":103","Width":1280,"Height":900,"text_input":"paste"}}' \
+                "$(json_str "$PROFILE_ID")" "$rjson" "$p2" "$rjson" "$p3" "$rjson" "$p4" "$rjson")
+        fi
         envv+=("MV_SRF_BIN_DIR=$SRF_BIN" "MV_SRF_STATE_DIR=$statedir" "MV_SRF_LIVE_PROFILE=$PROFILE_ID"
-            "MV_SRF_LIVE_RAM_ROOT=$ramroot" "MV_SRF_LIVE_TEXT_INPUT=paste" "SRF_IDENTITY_STORE_ROOT=$STORE")
-        [ -n "${SRF_PROXY_REGISTRY:-}" ] && envv+=("SRF_PROXY_REGISTRY=$SRF_PROXY_REGISTRY")
-        [ -d "$JUDGE_HOME/deps/vision-engine" ] && envv+=("VQA_VE_ROOT=$JUDGE_HOME/deps/vision-engine")
-        [ -d "$JUDGE_HOME/deps/wender-agent" ] && envv+=("MV_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent")
+            "MV_SRF_LIVE_RAM_ROOT=$ramroot" "MV_SRF_LIVE_TEXT_INPUT=paste" "MV_SRF_PROFILES=$profiles_json"
+            "SRF_IDENTITY_STORE_ROOT=$STORE" "SRF_PROXY_REGISTRY=${SRF_PROXY_REGISTRY:-$STORE/proxies.json}")
+        if [ -d "$JUDGE_HOME/deps/vision-engine" ]; then
+            envv+=("VQA_VE_ROOT=$JUDGE_HOME/deps/vision-engine" "MV_VISION_ENGINE_PATH=$JUDGE_HOME/deps/vision-engine")
+        fi
+        if [ -d "$JUDGE_HOME/deps/wender-agent" ]; then
+            envv+=("MV_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent" "MV_MW_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent")
+        fi
     fi
     mkdir -p "$JUDGE_HOME/run"
     env -i "${envv[@]}" "$APP_BIN" --ozone-platform=x11 &

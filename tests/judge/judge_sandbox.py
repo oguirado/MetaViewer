@@ -160,7 +160,16 @@ FAKES = {
         '    if [ "${2:-}" = create ]; then printf "true 172.30.80.0/24 \\n" > "$D/network"; exit 0; fi\n'
         '    [ -f "$D/network" ] && cat "$D/network" || exit 1;;\n'
         '  inspect) [ -f "$D/proxy" ] && cat "$D/proxy" || exit 1;;\n'
-        '  start|run) echo true > "$D/proxy"; exit 0;;\n'
+        '  start|run)\n'
+        '    if [[ "$*" == *"dst=/profiles"* ]]; then\n'
+        '      [ -f "$D/docker_profile_fail" ] && exit 1\n'
+        '      src=; for a in "$@"; do case $a in type=bind,src=*,dst=/profiles) src=${a#type=bind,src=}; src=${src%,dst=/profiles};; esac; done\n'
+        '      target="$src/${!##/profiles/}"\n'
+        '      mkdir -p "$target" && chmod 0700 "$target"\n'
+        '      echo "$target|10001" >> "$D/owner.tbl"\n'
+        '      exit 0\n'
+        '    fi\n'
+        '    echo true > "$D/proxy"; exit 0;;\n'
         '  ps)\n'
         '    if [[ "$*" == *"name=^srf-id-"* ]]; then grep "^srf-id-" "$D/containers" 2>/dev/null || true; exit 0; fi\n'
         '    cat "$D/containers" 2>/dev/null; exit 0;;\n'
@@ -169,7 +178,7 @@ FAKES = {
         'esac\n'
     ),
 }
-SIMPLE_TOOLS = ("Xvfb", "xauth", "zip", "strace", "git", "pip3")
+SIMPLE_TOOLS = ("Xvfb", "xauth", "zip", "unzip", "strace", "git", "pip3")
 
 SRF_FAKE = (
     "#!/bin/bash\n"
@@ -259,7 +268,7 @@ class Sandbox:
         self.put("ip_route", "default via 192.168.1.1 dev eth0\n192.168.1.0/24 dev eth0 proto kernel\n")
         self.put("caps", "net_modes=legacy\n")
         self.put("containers", "")
-        for gone in ("network", "proxy", "docker_info_rc", "docker_ctx", "sudo_rc", "pkg_smoke_rc", "pkg_verify_rc",
+        for gone in ("network", "proxy", "docker_info_rc", "docker_ctx", "docker_profile_fail", "sudo_rc", "pkg_smoke_rc", "pkg_verify_rc",
                      "fw_fail", "app_hold", "app_deaf", "ram_reclaim_out", "xdpyinfo_rc", "owner.tbl", "sudo.log",
                      "curl.log", "apt.log", "srf.log", "docker.log", "node.log"):
             (self.fake / gone).unlink(missing_ok=True)
@@ -287,7 +296,11 @@ class Sandbox:
 
     def make_t2_ready(self):
         """Everything a T2 doctor needs: images, legacy network, profile dir."""
-        self.put("images", f"opensuperficies-identity-browser-{self.archn}:0.1.0\nopensuperficies-desktop-{self.archn}:1.1.0\n")
+        self.put("images", (
+            f"opensuperficies-identity-browser-{self.archn}:0.1.1\n"
+            f"opensuperficies-program-host-{self.archn}:0.1.0\n"
+            f"opensuperficies-desktop-{self.archn}:1.1.0\n"
+        ))
         self.put("network", "true 172.30.80.0/24 \n")
         self.put("proxy", "true\n")
         store = self.home / "store" / "profiles" / "judge"
@@ -336,8 +349,8 @@ class Sandbox:
         for comp in ("vision-engine", "wender-agent"):
             make_tar(self.assets / f"{comp}.tar.gz", [(comp + "/", None, 0o755), (comp + "/README", b"x\n", 0o644)])
         (self.assets / f"images-linux-{self.archn}.tar").write_text(
-            f"opensuperficies-identity-browser-{self.archn}:0.1.0\nopensuperficies-identity-browser-{self.archn}:0.2.0\n"
-            f"opensuperficies-desktop-{self.archn}:1.1.0\n")
+            f"opensuperficies-identity-browser-{self.archn}:0.1.1\nopensuperficies-identity-browser-{self.archn}:0.2.0\n"
+            f"opensuperficies-program-host-{self.archn}:0.1.0\nopensuperficies-desktop-{self.archn}:1.1.0\n")
 
     def write_sums(self, skip=()):
         lines = []
