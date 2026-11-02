@@ -3,6 +3,8 @@
 // Runs under plain Node (`node --test`): no DOM, no Electron, no kit Vue.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   CATALOG_INVALID_ENTRY,
   CATALOG_INVALID_INTENT,
@@ -17,14 +19,17 @@ import {
   resolveCatalogPlacement,
   slugifyCatalogKey,
 } from '../src/catalog/catalogModel.js';
-import { normalizeCapsuleCatalog } from '../.kit/capsule-ui-kit/src/shell/NewCapsuleModel.js';
+import {
+  capsuleCategories,
+  normalizeCapsuleCatalog,
+} from '../.kit/capsule-ui-kit/src/shell/NewCapsuleModel.js';
 
 test('closed kind set carries the four roadmap kinds in display order', () => {
   assert.deepEqual([...CATALOG_KIND_IDS],
-    ['identity-browser', 'program', 'holdings-app', 'desktop']);
+    ['identity-browser', 'program']);
   assert.deepEqual(CATALOG_KINDS.map((entry) => entry.label),
-    ['Identity browser', 'Program', 'Holdings app', 'Desktop']);
-  // Negative control: a fifth or reordered id breaks the contract.
+    ['Identity browser', 'Program']);
+  // Negative control: a third or reordered id breaks the contract.
   assert.throws(() => assert.deepEqual([...CATALOG_KIND_IDS, 'extra'], [...CATALOG_KIND_IDS]),
     assert.AssertionError);
 });
@@ -85,8 +90,8 @@ test('resolve maps an unknown kind to a typed error row, never a throw', () => {
 
 test('normalize splits mixed entries into types plus typed error rows', () => {
   const normalized = normalizeCatalogEntries(
-    ['program', 'teleport', { kind: 'desktop' }, null, 42, 'program', { kind: 'teleport' }]);
-  assert.deepEqual(normalized.types.map((type) => type.id), ['program', 'desktop']);
+    ['program', 'teleport', { kind: 'identity-browser' }, null, 42, 'program', { kind: 'teleport' }]);
+  assert.deepEqual(normalized.types.map((type) => type.id), ['program', 'identity-browser']);
   assert.deepEqual(normalized.errors.map((row) => row.key),
     ['unknown-kind-teleport', 'invalid-entry-unknown']);
   assert.deepEqual(normalized.errors.map((row) => row.code),
@@ -116,10 +121,10 @@ test('normalized types survive kit normalization unchanged', () => {
 });
 
 test('intent builder emits a frozen kind-plus-placement payload', () => {
-  const result = buildCreateIntent({ kind: 'desktop', placement: 'floating' });
+  const result = buildCreateIntent({ kind: 'identity-browser', placement: 'floating' });
   assert.equal(result.ok, true);
   assert.deepEqual({ ...result.intent },
-    { type: 'create-capsule', kind: 'desktop', placement: 'floating' });
+    { type: 'create-capsule', kind: 'identity-browser', placement: 'floating' });
   assert.ok(Object.isFrozen(result));
   assert.ok(Object.isFrozen(result.intent));
   // Negative control: mutating the intent throws.
@@ -179,4 +184,61 @@ test('invoker focus never touches disconnected or unfocusable nodes', () => {
   assert.equal(calls, 0);
   // Negative control: restore without capture reports false.
   assert.equal(createInvokerFocus().restore(), false);
+});
+
+test('catalog lists exactly the two kinds and kills mutants that re-add removed kinds', async () => {
+  function assertExactTwoKindCatalog(mod) {
+    assert.deepEqual([...mod.CATALOG_KIND_IDS], ['identity-browser', 'program']);
+    assert.deepEqual(mod.CATALOG_KINDS.map((entry) => entry.kind), ['identity-browser', 'program']);
+    const normalized = mod.normalizeCatalogEntries(mod.CATALOG_KIND_IDS);
+    assert.deepEqual(
+      capsuleCategories([...normalized.types]),
+      [
+        { id: 'browse', label: 'Browse', count: 1 },
+        { id: 'programs', label: 'Programs', count: 1 },
+      ],
+    );
+    for (const removed of ['holdings-app', 'desktop']) {
+      assert.equal(mod.isKnownCatalogKind(removed), false);
+      const resolved = mod.resolveCatalogKind(removed);
+      assert.equal(resolved.ok, false);
+      assert.equal(resolved.error.code, CATALOG_UNKNOWN_KIND);
+      const intent = mod.buildCreateIntent({ kind: removed, placement: 'tab' });
+      assert.equal(intent.ok, false);
+      assert.equal(intent.error.code, CATALOG_UNKNOWN_KIND);
+    }
+  }
+
+  assertExactTwoKindCatalog({
+    CATALOG_KIND_IDS,
+    CATALOG_KINDS,
+    normalizeCatalogEntries,
+    isKnownCatalogKind,
+    resolveCatalogKind,
+    buildCreateIntent,
+  });
+
+  const source = readFileSync(
+    fileURLToPath(new URL('../src/catalog/catalogModel.js', import.meta.url)),
+    'utf8',
+  );
+  const readdedHoldings = source.replace(
+    "kind: 'program',",
+    "kind: 'holdings-app', label: 'Holdings app', category: 'Programs', description: 'x', opensAs: 'tab', footprint: '', keywords: Object.freeze(['holdings']), }), Object.freeze({ kind: 'program',",
+  );
+  assert.notEqual(readdedHoldings, source);
+  const mutantHoldings = await import(
+    `data:text/javascript;base64,${Buffer.from(readdedHoldings).toString('base64')}#mutant-holdings`
+  );
+  assert.throws(() => assertExactTwoKindCatalog(mutantHoldings), assert.AssertionError);
+
+  const readdedDesktop = source.replace(
+    "kind: 'program',",
+    "kind: 'desktop', label: 'Desktop', category: 'Desktops', description: 'x', opensAs: 'tab', footprint: '', keywords: Object.freeze(['desktop']), }), Object.freeze({ kind: 'program',",
+  );
+  assert.notEqual(readdedDesktop, source);
+  const mutantDesktop = await import(
+    `data:text/javascript;base64,${Buffer.from(readdedDesktop).toString('base64')}#mutant-desktop`
+  );
+  assert.throws(() => assertExactTwoKindCatalog(mutantDesktop), assert.AssertionError);
 });

@@ -113,24 +113,6 @@ export const CATALOG_KINDS = Object.freeze([
     footprint: '',
     keywords: Object.freeze(['program', 'run', 'app']),
   }),
-  Object.freeze({
-    kind: 'holdings-app',
-    label: 'Holdings app',
-    category: 'Programs',
-    description: 'Open a Holdings app in its own capsule.',
-    opensAs: 'tab',
-    footprint: '',
-    keywords: Object.freeze(['holdings', 'app']),
-  }),
-  Object.freeze({
-    kind: 'desktop',
-    label: 'Desktop',
-    category: 'Desktops',
-    description: 'Open a full desktop in its own capsule.',
-    opensAs: 'tab',
-    footprint: '',
-    keywords: Object.freeze(['desktop', 'screen']),
-  }),
 ]);
 
 /**

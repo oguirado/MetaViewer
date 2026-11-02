@@ -29,7 +29,7 @@ test('New Capsule launcher creates and destroys each offered kind; terminal ids 
     assert.equal(result.status, 0, JSON.stringify(result));
     const journey = JSON.parse(readFileSync(report, 'utf8'));
     assert.equal(journey.schema, 'metaviewer.launcher-journey/v1');
-    const kinds = ['identity-browser', 'program', 'holdings-app', 'desktop'];
+    const kinds = ['identity-browser', 'program'];
     assert.deepEqual(journey.intents, kinds.map(kind => ({ type: 'create-capsule', kind, placement: 'tab' })));
     assert.deepEqual(journey.unknown, { errors: ['ERR_CATALOG_UNKNOWN_KIND'], cards: 0, emitted: 0 });
     mkdirSync(join(scratch, 'state_dir'));
@@ -37,10 +37,10 @@ test('New Capsule launcher creates and destroys each offered kind; terminal ids 
     const transitions = JSON.parse(runRust(scratch,
       readFileSync(join(__dirname, 'launcher-authority.rs'), 'utf8')));
     assert.deepEqual(transitions.map(row => row.kind), kinds);
-    assert.equal(new Set(transitions.flatMap(row => [row.original, row.fresh])).size, 8);
+    assert.equal(new Set(transitions.flatMap(row => [row.original, row.fresh])).size, 4);
     assert.ok(transitions.every(row => row.old_id_refused === true));
     assert.deepEqual(transitions.map(row => row.binary), [
-      'srf-identity-surface', 'srf-identity-surface', 'srf-holdings-capsule', 'srf-capsula-desktop',
+      'srf-identity-surface', 'srf-identity-surface',
     ]);
   } finally { harness.removeScratch(scratch); }
 });

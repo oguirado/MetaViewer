@@ -6,7 +6,7 @@ import { installKitTheme } from 'capsule-ui-kit/theme';
 import 'capsule-ui-kit/theme.css';
 import CatalogLauncher from '../../ui/src/catalog/CatalogLauncher.vue';
 
-const kinds = ['identity-browser', 'program', 'holdings-app', 'desktop'];
+const kinds = ['identity-browser', 'program'];
 const visible = ref(false), choices = ref(kinds), intents = [];
 const app = createApp({ setup: () => () => h('main', [
   h('button', { id: 'open-launcher', onClick: () => { visible.value = true; } }, 'New Capsule'),
