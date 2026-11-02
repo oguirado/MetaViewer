@@ -1311,6 +1311,8 @@ else if (process.argv.includes('--nested-depth=1')) {
     const configPath = join(runtime, 'config.json');
     await fs.writeFile(configPath, JSON.stringify(config), {mode:0o600});
     const daemonPeer = config.peers.find(p => p.endpoint.component === 'daemon');
+    // mw_run writes handoff records under the operator's state home, not this private session one.
+    process.env.MV_OPERATOR_STATE_HOME = process.env.XDG_STATE_HOME || (process.env.HOME ? join(process.env.HOME, '.local/state') : '');
     process.env.XDG_RUNTIME_DIR = runtime;
     process.env.MV_CORE_CONFIG = configPath;
     process.env.XDG_STATE_HOME = stateHome;

@@ -170,7 +170,7 @@ export const HANDOFF_DISCOVERY=Object.freeze({maxScan:4096,maxRuns:32,maxAgeMs:6
  * private-directory and private-file reads at latch time stay the trust gate.
  * @param {Record<string,string|undefined>} env @param {number} nowMs @returns {string[]} */
 export function discoverHandoffPaths(env,nowMs) {
-  const state=typeof env.XDG_STATE_HOME==='string' && env.XDG_STATE_HOME!==''?env.XDG_STATE_HOME:typeof env.HOME==='string' && env.HOME!==''?join(env.HOME,'.local/state'):'';
+  const state=typeof env.MV_OPERATOR_STATE_HOME==='string' && env.MV_OPERATOR_STATE_HOME!==''?env.MV_OPERATOR_STATE_HOME:typeof env.XDG_STATE_HOME==='string' && env.XDG_STATE_HOME!==''?env.XDG_STATE_HOME:typeof env.HOME==='string' && env.HOME!==''?join(env.HOME,'.local/state'):'';
   if(!isAbsolute(state) || resolve(state)!==state)return [];
   const runs=join(state,'metaviewer/runs');
   /** @type {{name:string,mtime:number}[]} */const found=[];

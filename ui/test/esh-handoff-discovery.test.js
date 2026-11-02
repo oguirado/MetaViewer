@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,utimesSync,chmodSync,existsSync} from 'node:fs';
+import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,utimesSync,chmodSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createOperatorService,discoverHandoffPaths,HANDOFF_DISCOVERY} from '../electron/operatorBridge.js';
@@ -98,4 +98,14 @@ test('ESH-HAND-7: at the latch cap no unacknowledged row is evicted; after one a
   assert.ok(after.some(r=>r.step_index===extra));        // the new run took the acked row's slot
   assert.ok(!after.some(r=>r.step_index===spent));
   assert.ok(after.some(r=>r.step_index===1));
+});
+test('ESH-HAND-5: the operator state home wins over the private session state home of the packaged app',async t=>{
+  const {env,runs}=home(t);run(runs,1);
+  const session=mkdtempSync(join(tmpdir(),'mv-session-state-'));t.after(()=>rmSync(session,{recursive:true,force:true}));
+  const packaged={...env,MV_OPERATOR_STATE_HOME:env.XDG_STATE_HOME??join(env.HOME,'.local/state'),XDG_STATE_HOME:session};
+  assert.equal(createOperatorService({env:packaged}).refresh().rows.length,1);
+  // The control: without the operator state home the private session directory hides the run.
+  assert.equal(createOperatorService({env:{...env,XDG_STATE_HOME:session}}).refresh().rows.length,0);
+  const pkg=readFileSync(new URL('../tools/package.js',import.meta.url),'utf8');
+  assert.ok(pkg.indexOf('process.env.MV_OPERATOR_STATE_HOME =')<pkg.indexOf('process.env.XDG_STATE_HOME = stateHome'),'captured before the override');
 });
