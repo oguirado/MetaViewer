@@ -54,7 +54,8 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 ATTACH_KEYS = ('MV_CORE_CONFIG', 'XDG_RUNTIME_DIR', 'MV_SRF_BIN_DIR', 'MV_SRF_STATE_DIR',
-               'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY')
+               'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY', 'MV_WENDER_EXECUTABLE',
+               'MV_VISION_EXECUTABLE', 'MV_WENDER_ROOT', 'VQA_VE_ROOT', 'MV_OPERATOR_REPO')
 SCHEMA_KINDS = ('site', 'workflow', 'step', 'run')
 MAX_NOTICE_S = 300
 CAPTCHA_CUES = {
@@ -291,6 +292,8 @@ def private_json(path, root, mode=0o600):
 
 def admit_home(repo, override):
     home = canonical_home(resolve_home(repo, override))
+    if home_check.packaged_runtime(Path(repo), home):
+        return check_home(home, lambda path: path.is_relative_to(repo))
 
     def tracked(path):
         selectors = {'memoryweb'}
@@ -360,6 +363,11 @@ class HostBackend:
         self.admin = self.binary.with_name('srf-identity-admin')
         need(all(p.is_absolute() for p in (self.state, self.binary, self.store)), 'MW_RUN_CONFIG')
         self.wender = resolve_locked_component('wender-agent')
+        from metaviewer_agents.perception.compiled import compiled_executable
+        if compiled_executable('wender-agent', root=self.wender) is not None:
+            raise refuse('MW_COMPILED_BROWSER_UNAVAILABLE',
+                'compiled Wender exports plan/model only; browser workflow/state APIs require '
+                'a verified checkout. Program automation supports the compiled runtime.')
         self.pending = {}
         self.network_evidence = None
         self.surface_id = None
