@@ -55,9 +55,11 @@ export function surfaceCreateRefusal(reply) {
 const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) &&
   Reflect.ownKeys(v).sort().join(',') === keys && Object.values(Object.getOwnPropertyDescriptors(v)).every(d => 'value' in d);
 
+/** The app starts with PATH=/usr/bin:/bin; programs also install here (games in /usr/games). */
+export const HOST_BINARY_STANDARD_DIRS = Object.freeze(['/usr/local/bin', '/usr/games', '/usr/local/games', '/usr/sbin', '/sbin']);
 /** Resolve a bare binary name via PATH or validate an absolute path on the host without any shell. */
 /** @param {unknown} binary @param {NodeJS.ProcessEnv} [env] @returns {{path:string, name:string}} */
-export function resolveHostBinary(binary, env = process.env) {
+export function resolveHostBinary(binary, env = process.env, standardDirs = HOST_BINARY_STANDARD_DIRS) {
   const trimmed = typeof binary === 'string' ? binary.trim() : '';
   const fail = (/** @type {string} */ detail) => {
     const reason = `host_program_unavailable: ${detail}`;
@@ -75,7 +77,7 @@ export function resolveHostBinary(binary, env = process.env) {
     return {path:trimmed, name:posix.basename(trimmed)};
   }
   if (trimmed.includes('/') || trimmed === '.' || trimmed === '..') throw fail(`${trimmed}: relative path refused`);
-  for (const dir of String(env?.PATH || '').split(':')) {
+  for (const dir of [...String(env?.PATH || '').split(':'), ...standardDirs]) {
     const cleanDir = dir.replace(/\/+$/, '');
     if (!cleanDir.startsWith('/') || posix.normalize(cleanDir) !== cleanDir) continue;
     const candidate = join(cleanDir, trimmed);

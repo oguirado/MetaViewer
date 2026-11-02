@@ -1,0 +1,1 @@
+- Find bare program names in the standard directories the app PATH omits, such as /usr/games.

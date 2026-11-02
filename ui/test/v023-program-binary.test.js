@@ -1446,3 +1446,17 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     assert.ok(failed.includes('refusal-propagates-to-dialog'), `Mutant 15c survived: ${failed}`);
   }
 });
+
+test('a bare binary name is also found in the standard program directories the app PATH omits', async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const roleHost = await import('../electron/roleHost.js');
+  assert.ok(roleHost.HOST_BINARY_STANDARD_DIRS.includes('/usr/games'));
+  const games = mkdtempSync(join(tmpdir(), 'mv-games-'));
+  try {
+    writeFileSync(join(games, 'mines-fixture'), '#!/bin/sh\n', { mode: 0o755 });
+    assert.equal(roleHost.resolveHostBinary('mines-fixture', { PATH: '/nonexistent' }, [games]).path, join(games, 'mines-fixture'));
+    assert.throws(() => roleHost.resolveHostBinary('mines-fixture', { PATH: '/nonexistent' }, []), /not found in PATH/);
+  } finally { rmSync(games, { recursive: true, force: true }); }
+});
