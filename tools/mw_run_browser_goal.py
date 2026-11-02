@@ -56,6 +56,13 @@ class BrowserGoalBackend(host.HostBackend):
                                       ax=observed['ax_snapshot']['elements']))
         return observed
 
+    def keepalive_observe(self, timeout_ms):
+        # Session maintenance during the model wait: no AX read and no authority.
+        # The full observe and rebind still gate every proposal.
+        observed = host.tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
+        host.need(observed['frame_ref']['surface_id'] == self.surface_id, 'MW_BROWSER_GOAL_SURFACE')
+        return observed
+
     def observe_for_rebind(self, timeout_ms):
         return self.observe(timeout_ms)
 

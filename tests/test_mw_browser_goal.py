@@ -149,6 +149,16 @@ class BrowserGoalTests(unittest.TestCase):
             goal.run_moves(self.b, self.planner, self.args)
         self.assertEqual([a['type'] for a in self.inputs], ['click'])
 
+    def test_model_wait_keepalive_observes_without_ax(self):
+        self.b.ax = Mock(side_effect=AssertionError('no AX read in maintenance'))
+        with patch.object(goal.host.tools, 'observe', return_value=dict(frame_ref=self.frame)) as observe:
+            self.assertEqual(self.b.keepalive_observe(500)['frame_ref'], self.frame)
+        observe.assert_called_once_with('surface-fixture', client=self.b.client, timeout_ms=500)
+        other = dict(self.frame, surface_id='surface-other')
+        with patch.object(goal.host.tools, 'observe', return_value=dict(frame_ref=other)):
+            with self.assertRaises(Exception):
+                self.b.keepalive_observe(500)
+
     def test_muse_uses_bound_ax_marks_and_rejects_invented_target(self):
         sensed = goal.planning_view(self.b, self.b.perceive(self.observe(1000)))
         with goal.marks_workspace() as path:
