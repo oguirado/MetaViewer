@@ -684,8 +684,11 @@ class HostBackend:
                    off[(i-1)*3:(i-1)*3+3] == off[(i+1)*3:(i+1)*3+3] == background
                    for i in changed)
 
+    def observe_for_rebind(self, timeout_ms):
+        return tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
+
     def rebind(self, sensed, plan, remaining):
-        observed = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)
+        observed = self.observe_for_rebind(remaining)
         fresh = self.perceive(observed)
         need(not wall_kind(dict(elements=fresh['ax'])), 'MW_HANDOFF_REQUIRED')
         self.revalidate_action(sensed, fresh, plan['action'])
@@ -887,6 +890,9 @@ def run_entry(args):
     if getattr(args, 'surface_kind', 'browser') == 'program':
         program = module('mv_mw_run_program', ROOT / 'tools/mw_run_program.py')
         return program.run_entry(args)
+    if getattr(args, 'goal', None) is not None:
+        browser = module('mv_mw_run_browser_goal', ROOT / 'tools/mw_run_browser_goal.py')
+        return browser.run_entry(args)
     receipt, report = None, None
     rc, code = 6, 'MW_RUN_CONFIG'
     backend, message, trace = None, None, {}
