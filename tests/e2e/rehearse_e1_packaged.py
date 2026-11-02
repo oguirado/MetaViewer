@@ -398,7 +398,8 @@ def command(*args, **kwargs):
     result = original_command(*args, **kwargs)
     if result.returncode:
         emit(dict(method='native_command', argv=args[0], rc=result.returncode,
-                  stderr=result.stderr.decode('utf-8', 'replace')))
+                  stderr=result.stderr.decode('utf-8', 'replace'),
+                  refusal=result.stdout.decode('utf-8', 'replace')[:500] if result.returncode else ''))
     return result
 host.command = command
 from metaviewer_agents.mw_owner import wender_api
