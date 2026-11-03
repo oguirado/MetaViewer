@@ -1,0 +1,1 @@
+- Document the current VM limits, proposed VM and MicroVM launch flow, image compatibility requirements, and staged acceptance gates.
