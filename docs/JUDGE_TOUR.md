@@ -1,5 +1,7 @@
 # Judge tour: MetaViewer after installation
 
+For refusal codes and source-backed next steps, see [Judge troubleshooting](JUDGE_TROUBLESHOOTING.md).
+
 Use this tour with your AI after completing [Judge Quickstart](JUDGE_QUICKSTART.md).
 Commands run from the MetaViewer checkout or the installed public operator tree
 supplied by **Use MetaViewer**; judge launcher commands run from the kit root.

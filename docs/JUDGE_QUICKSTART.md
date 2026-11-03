@@ -1,5 +1,7 @@
 # MetaViewer — Judge Quickstart
 
+For refusal codes and source-backed next steps, see [Judge troubleshooting](JUDGE_TROUBLESHOOTING.md).
+
 After installation, follow the [Judge tour](JUDGE_TOUR.md) with your AI.
 
 This page takes a hackathon judge from a clean Linux machine (such as an 8-core,

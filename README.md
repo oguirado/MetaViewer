@@ -1,5 +1,7 @@
 # MetaViewer
 
+For refusal codes and source-backed next steps, see [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
+
 After installation, follow the [Judge tour](docs/JUDGE_TOUR.md) with your AI.
 
 Start with the [documentation index](docs/README.md), the
