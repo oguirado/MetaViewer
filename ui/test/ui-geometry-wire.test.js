@@ -302,12 +302,14 @@ async function mountRenderedTile(Component, {
       [ch.port2],
     );
     sender.postDisplayFrame({
-      width: 2,
-      height: 2,
+      // Paint the geometry asserted below; presentation now owns the aspect.
+      // Mismatched projection/paint is covered by v028-fit.test.js.
+      width: canvasEl.width,
+      height: canvasEl.height,
       seq: 2,
       captureMonoNs: '1000',
       generation: 1,
-      bytes: new Uint8Array(12).fill(0x7f),
+      bytes: new Uint8Array(canvasEl.width * canvasEl.height * 3).fill(0x7f),
     });
     await new Promise((r) => setTimeout(r, 20));
     await Vue.nextTick();

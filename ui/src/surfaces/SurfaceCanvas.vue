@@ -208,7 +208,9 @@ const strip = computed(() => formatFrameStrip({
 
 const domId = computed(() => surfaceCanvasDomId(props.surfaceId));
 const anchor = computed(() => surfaceCanvasAnchor(props.surfaceId));
-const surfaceGeometry = computed(() => resolveSurfaceDimensions({
+// [TARGET, unit decision] Presentation owns geometry; projection is only a pre-paint fallback.
+const paintedGeometry = ref(/** @type {{frameWidth:number,frameHeight:number}|null} */ (null));
+const surfaceGeometry = computed(() => resolveSurfaceDimensions(paintedGeometry.value ?? {
   frameWidth: props.frameWidth,
   frameHeight: props.frameHeight,
 }));
@@ -407,6 +409,12 @@ function scheduleFpsDisplayUpdate(forceImmediate = false) {
  * @param {unknown} [captureHint]
  */
 function onFramePainted(captureHint) {
+  const canvas = canvasRef.value;
+  if (canvas && canvas.width > 0 && canvas.height > 0) {
+    if (paintedGeometry.value?.frameWidth !== canvas.width || paintedGeometry.value?.frameHeight !== canvas.height) {
+      paintedGeometry.value = { frameWidth: canvas.width, frameHeight: canvas.height };
+    }
+  }
   const cap = parseCaptureUsValue(captureHint);
   if (cap !== null) latestCaptureUs = cap;
   const now = readFpsClock();
@@ -1128,6 +1136,7 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
     unbindFramePort(previous[0]);
     unbindDisplayPort(previous[0]);
     displayMode.value = 'absent';
+    paintedGeometry.value = null;
     // L3-1: the pinned delivery identity belongs to the old surface; the
     // rebind below receives a fresh notice for the new one.
     registeredIdentity = null;
@@ -1198,6 +1207,8 @@ onBeforeUnmount(() => {
     :data-anchor="anchor"
     :data-state="resolvedState"
     :data-aspect-ratio="surfaceGeometry.aspectRatio"
+    :data-frame-width="surfaceGeometry.width"
+    :data-frame-height="surfaceGeometry.height"
     :data-display-state="displayActive ? displayMode : undefined"
     :aria-label="accessibleName"
   >
@@ -1226,6 +1237,7 @@ onBeforeUnmount(() => {
 </template>
 <style scoped>
 .mv-surface {
+  --mv-frame-aspect: calc(attr(data-frame-width type(<number>), 1280) / attr(data-frame-height type(<number>), 900));
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1234,12 +1246,17 @@ onBeforeUnmount(() => {
   overflow: hidden;
   width: 100%;
   height: 100%;
+  width: min(100cqw, calc(100cqh * var(--mv-frame-aspect)));
+  height: min(100cqh, calc(100cqw / var(--mv-frame-aspect)));
+  flex: 0 0 auto;
   background: var(--cuk-semantic-surface-canvas);
   color: var(--cuk-semantic-text-primary);
 }
 .mv-surface:has(> .mv-surface__strip) {
   width: min(100cqw, calc((100cqh - 23px) * 1280 / 900));
   height: min(100cqh, calc(100cqw * 900 / 1280 + 23px));
+  width: min(100cqw, calc(max(0px, 100cqh - 23px) * var(--mv-frame-aspect)));
+  height: min(100cqh, calc(100cqw / var(--mv-frame-aspect) + 23px));
 }
 .mv-surface__canvas {
   display: block;
@@ -1247,6 +1264,7 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   aspect-ratio: 1280 / 900;
+  aspect-ratio: var(--mv-frame-aspect);
   object-fit: contain;
   background-color: var(--mv-primitive-color-neutral-1100, #000000);
 }
