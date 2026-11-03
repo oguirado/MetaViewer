@@ -269,6 +269,7 @@ v027-x64-evidence.md	changes/unreleased/v027-x64-evidence.md
 v028-core-fix.md	changes/unreleased/v028-core-fix.md
 v028-docs-x64.md	changes/unreleased/v028-docs-x64.md
 v028-fit.md	changes/unreleased/v028-fit.md
+v028-grid6.md	changes/unreleased/v028-grid6.md
 v028-slots-core.md	changes/unreleased/v028-slots-core.md
 v028-slots-store.md	changes/unreleased/v028-slots-store.md
 v028-slots-ui.md	changes/unreleased/v028-slots-ui.md
@@ -2276,6 +2277,7 @@ v027win-4508650304ef	ui/test/v027-window-resize.test.js
 v028-fit-render.cjs	ui/test/v028-fit-render.cjs
 v028fit-1d677c28111c	ui/test/v028-fit-render.test.js
 v028-fit.test.js	ui/test/v028-fit.test.js
+v028-grid6.test.js	ui/test/v028-grid6.test.js
 v028-tiles-visual.js	ui/test/v028-tiles-visual.js
 v028-tiles.html	ui/test/v028-tiles.html
 v028-tiles.test.js	ui/test/v028-tiles.test.js
