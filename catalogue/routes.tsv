@@ -2143,6 +2143,7 @@ v027fir-79fcc62bbe59	ui/test/v027-first-view-visual.js
 v027-first-view.html	ui/test/v027-first-view.html
 v027-firstrun.test.js	ui/test/v027-firstrun.test.js
 v027-fix-b1.test.js	ui/test/v027-fix-b1.test.js
+v027-fix-f.test.js	ui/test/v027-fix-f.test.js
 v027-fix-j3.test.js	ui/test/v027-fix-j3.test.js
 v027hos-06c56f4d7d15	ui/test/v027-host-wall-triage.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
