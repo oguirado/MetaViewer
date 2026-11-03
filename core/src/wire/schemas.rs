@@ -10,6 +10,12 @@ pub(super) fn schema(name: &str) -> Option<serde_json::Value> {
         "action_verdict.schema.json" => {
             include_str!("../../../contracts/v0.2/action_verdict.schema.json")
         }
+        "capsule_state_request.schema.json" => {
+            include_str!("../../../contracts/v0.2/capsule_state_request.schema.json")
+        }
+        "capsule_state_event.schema.json" => {
+            include_str!("../../../contracts/v0.2/capsule_state_event.schema.json")
+        }
         "capsule_meta.schema.json" => {
             include_str!("../../../contracts/v0.2/capsule_meta.schema.json")
         }

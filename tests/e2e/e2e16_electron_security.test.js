@@ -23,7 +23,9 @@ function audit(report) {
   assert.equal(report.windows, 1);
   assert.equal(report.frozen, true);
   assert.deepEqual(report.facade, ['authority', 'capture', 'clipboard', 'frames', 'input', 'load', 'loadSettings', 'nestedDepth', 'operator',
-    'recordingDestination', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal']);
+    'recordingDestination', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal', 'slots']);
+  assert.deepEqual(report.slots, ['request']);
+  assert.equal(report.slotsFrozen, true);
   assert.deepEqual(report.operator, {
     demo: ['check', 'prompt', 'start', 'stop'],
     entry: ['copy'],
@@ -54,6 +56,8 @@ test('Chromium enforces product flags, CSP, popup denial and preload allowlist; 
     audit(clean);
     assert.throws(() => audit({ ...clean, facade: [...clean.facade, 'unexpected'].sort() }),
       { code: 'ERR_ASSERTION' });
+    assert.throws(() => audit({ ...clean, slots: ['request', 'unexpected'] }),
+      { code: 'ERR_ASSERTION' });
     assert.throws(() => audit({ ...clean, operator: { ...clean.operator, unexpected: [] } }),
       { code: 'ERR_ASSERTION' });
     assert.throws(() => audit({ ...clean, operator: {
@@ -62,4 +66,26 @@ test('Chromium enforces product flags, CSP, popup denial and preload allowlist; 
     assert.throws(() => audit({ ...clean, operatorCallable: false }), /operator members/);
     assert.throws(() => audit(run('unsafe')), /E2E_SECURITY/);
   } finally { harness.removeScratch(scratch); }
+});
+
+// The additive facade method uses precisely the host's fixed slot channel.
+test('slots request channel agrees with main and rejects unknown request fields', async () => {
+  const { installPreload } = await import('../../ui/electron/preload.js');
+  const { WIRE_CHANNELS } = await import('../../ui/electron/authorityWire.js');
+  const calls = [];
+  const api = installPreload({ contextBridge: { exposeInMainWorld() {} }, ipcRenderer: {
+    on() {}, removeListener() {},
+    async invoke(channel, request) {
+      calls.push([channel, request]);
+      const { credential_copy_confirmed, ...fields } = request;
+      return { ...fields, schema: 'capsule_state_event/v0.2', event: 'completed', slots: [] };
+    },
+  } });
+  const request = { schema: 'capsule_state_request/v0.2', operation_id: 'security-slot',
+    op: 'list', profile_id: 'profile-demo', slot_id: 'slot-demo', credential_copy_confirmed: true };
+  assert.equal(WIRE_CHANNELS.slotRequest, 'metaviewer:capsule-state.request');
+  await api.slots.request(request);
+  assert.deepEqual(calls, [[WIRE_CHANNELS.slotRequest, request]]);
+  await assert.rejects(api.slots.request({ ...request, channel: 'unexpected' }));
+  assert.equal(calls.length, 1);
 });

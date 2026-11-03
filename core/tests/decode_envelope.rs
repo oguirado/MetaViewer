@@ -114,7 +114,7 @@ fn all_frozen_body_examples_and_negative_controls() {
                 .to_string()
         })
         .collect();
-    assert_eq!(envelope_bodies.len(), 19);
+    assert_eq!(envelope_bodies.len(), 21);
     let directory =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/examples/v0.2");
     let mut valid_body_prefixes = std::collections::BTreeSet::new();

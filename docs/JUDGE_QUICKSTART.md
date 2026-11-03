@@ -61,12 +61,11 @@ python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --caps
 python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
 ```
 
-Set these variables to the actual directory or published release URL and manifest digest
-supplied by the maintainer. A publicly accessible complete release has not been established
-by the supplied evaluation evidence; the command refuses incomplete or corrupt sets. Do not assume
-that a GitHub Actions artifact is a published release. CI currently exports app and Node
-assets with `SHA256SUMS` for T1 only; T2 also needs the private component and image assets
-built by the maintainer. Checksums protect integrity, not publisher authenticity.
+Set these variables from the release: published releases carry their assets, the source URL is
+`https://github.com/oguirado/MetaViewer/releases/download/v<VERSION>` and each release's
+notes from the maintainer give the manifest digest. Do not assume that a GitHub Actions artifact
+is a published release. The command refuses incomplete or corrupt sets. Checksums protect integrity, not
+publisher authenticity.
 The explicit fetch command authorizes the transfer; install still asks before downloading
 missing assets. No install begins until the fetch command has verified the selected set.
 
@@ -177,6 +176,11 @@ no destinations. A running browser capsule is not evidence of working public bro
 Arbitrary public browsing requires a compatible Open image and firewall; this kit does
 not invent wildcard approvals or silently change proxy policy.
 
+The release-package x64 WSL2 evaluation at c26/c27 [CITED: maintainer evaluation]
+verified Open network **with its firewall step**: a public site returned
+HTTP 200 [MEASURED]; local network and Docker bridge access were blocked. This
+result does not certify a legacy kit or an install that declined the firewall.
+
 ### Headless installation
 
 The install smoke needs an X server. On a headless host, install the display tools and
@@ -278,6 +282,17 @@ browser goals with rules or Muse. Stored browser workflows still need private
 APIs from a verified checkout and refuse `MW_COMPILED_WORKFLOW_UNAVAILABLE`
 in compiled mode. Live results are limited to the architecture table in
 [Judge tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
+The release-package x64 WSL2 checks at c26/c27 [CITED: maintainer evaluation]
+measured browser rules goals 10 of 10 [MEASURED], Agent `gnome-calculator` in
+both Host program and isolated Program, Desktop window `gedit` attach, type,
+resize and closed message, login wall `HUMAN_HANDOFF`, and clean stop.
+Calculator text `2+3` was sent with rc 0 [MEASURED] and verdict
+`PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`: exact readback and arithmetic are
+uncertified. Human Program `gedit` closed its window with `XPRA_MODE_REFUSED`.
+A closed Desktop window tile can retain a reused X11 id; if **Add** refuses,
+press **Stop** on that tile. Muse on x64 and real mouse drag under a window
+manager remain unverified. See the [tour](JUDGE_TOUR.md) for the arm64 column.
+
 Arm64 compiled private assets are absent.
 The version labels in `deps.lock` are retained even where release tags disagree.
 
@@ -316,7 +331,7 @@ entries and HTTPS `connect_ports` entries for each capsule and host. Leave
 `private_targets` absent to retain LAN/host blocking. Arbitrary public browsing
 is not available through this policy schema; no wildcard policy is implied.
 
-The x64 kit supplies browser image `0.1.1`. If a binary advertises Open and the
+A legacy x64 kit with browser image `0.1.1` does not inherit the measured Open result. If a binary advertises Open and the
 firewall witness is present, preflight requires `0.2.0` and refuses that image set.
 The installer detects this before offering a new firewall. Retagging `0.1.1` would not establish Open support; the upstream source disables
 Open for its default image. Use a legacy-only kit without an active Open witness, or obtain a compatible Open kit.
