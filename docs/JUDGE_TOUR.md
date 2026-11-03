@@ -212,6 +212,20 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
 Repeat after a fresh observation for **7 → + → 8 → =**; expected display **15**. Button names depend on the calculator;
 do not pass the whole arithmetic expression as an invented control name.
 
+Small operator buttons can miss a mark: asked for **+**, Muse has pressed **%** with rc 0, and it can also refuse.
+Always read the display. A steadier route is to type the expression, then press equals:
+
+```bash
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
+  --surface-kind program --identity '<calculator-profile>' --planner muse \
+  --goal focused --text '2+3' --steps 1
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
+  --surface-kind program --identity '<calculator-profile>' --planner muse \
+  --goal 'Press the equals button' --steps 1
+```
+
+Do not put `=` in the typed text: the display changes to the result and the read back reports `INPUT_UNCERTAIN`.
+
 **Success:** each run reports `PROGRAM_BOUNDED_ACTIONS_VERIFIED` with receipts;
 you separately inspect the final display. **If refused:** check Agent ownership,
 unique observed target, attachment and dependency pins. Without Muse Code use
