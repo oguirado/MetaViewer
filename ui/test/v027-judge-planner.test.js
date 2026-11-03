@@ -54,7 +54,8 @@ for block in blocks:
         else:
             raise AssertionError('mixed goal/workflow command accepted')
     assert len(calls) == before
-for extra in (['--text', 'value'], ['--key', 'Enter']):
+# Program text is approved and tested in agents/tests/test_mw_run.py; a key stays browser only.
+for extra in (['--key', 'Enter'], ['--text', 'value', '--key', 'Enter']):
     with contextlib.redirect_stderr(io.StringIO()):
         try:
             main(['--surface-kind', 'program', '--identity', 'fixture', '--goal', 'Square'] + extra,
@@ -62,7 +63,7 @@ for extra in (['--text', 'value'], ['--key', 'Enter']):
         except SystemExit as error:
             assert error.code == 2
         else:
-            raise AssertionError('program text/key accepted')
+            raise AssertionError('program key accepted')
 `;
   const result = spawnSync('python3', ['-c', python], {
     cwd: root, env: { ...process.env, PYTHONPATH: 'agents', PYTHONDONTWRITEBYTECODE: '1' },

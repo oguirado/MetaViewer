@@ -31,7 +31,7 @@ For a field that already has focus (for example, a just opened editor), use:
 
 ```sh
 PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --identity PROGRAM_PROFILE \
-  --surface-kind program --goal focused --text 'hello' --steps 1
+  --surface-kind program --planner rules --goal focused --text 'hello' --steps 1
 ```
 
 [TARGET, unit decision] `focused` reserves an explicit operator assertion of
@@ -61,7 +61,7 @@ For a named field requiring a grounded focus click, use:
 
 ```sh
 PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --identity PROGRAM_PROFILE \
-  --surface-kind program --goal 'Message' --text 'hello' --steps 1
+  --surface-kind program --planner rules --goal 'Message' --text 'hello' --steps 1
 ```
 
 The named-field text mode permits a single focus-and-type sequence [TARGET]. It first
