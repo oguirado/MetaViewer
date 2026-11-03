@@ -1669,7 +1669,7 @@ onMounted(() => {
       mv-light and mv-dark; the kit accent default measures 4.35:1 rendered. -->
     <StatusBar v-if="!nestedMode.displayOnly" :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]">
       <template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template>
-      <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.length} capsules` : 'Ready when you are' }}</span></template>
+      <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.filter(row => row.backendLifecycle !== 'lost').length} capsules${rows.some(row => row.backendLifecycle === 'lost') ? ` · ${rows.filter(row => row.backendLifecycle === 'lost').length} lost` : ''}` : 'Ready when you are' }}</span></template>
     </StatusBar>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
       <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :deck="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />

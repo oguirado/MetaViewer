@@ -1355,12 +1355,12 @@ impl Server {
                 let sid = value["params"]["surface_id"].as_str();
                 if matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe")
                     && !sid.is_some_and(|id| {
-                        self.authority
-                            .state()
-                            .surfaces
-                            .get(id)
-                            .is_some_and(|s| s.live)
-                            && !self.authority.state().is_destroyed(id)
+                        self.authority.state().surfaces.get(id).is_some_and(|s| {
+                            s.live
+                                || (op == "destroy"
+                                    && env.from.component == Component::Ui
+                                    && !s.agent_controlled)
+                        }) && !self.authority.state().is_destroyed(id)
                     })
                 {
                     return self.unsupported_at(now_ns, &env, boundary);
