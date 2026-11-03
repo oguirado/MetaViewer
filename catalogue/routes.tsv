@@ -241,6 +241,7 @@ v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
 v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
+v027-rebind-caret.md	changes/unreleased/v027-rebind-caret.md
 v027rel-acff733643dd	changes/unreleased/v027-release-notices.md
 v027-repo.md	changes/unreleased/v027-repo.md
 v027-review-fix-2.md	changes/unreleased/v027-review-fix-2.md
@@ -1084,6 +1085,7 @@ subscri-258b9e5e0942	daemon-adapter/internal/frames/subscriptions_reap_test.go
 subscri-84a98cfe9a77	daemon-adapter/internal/frames/subscriptions_robust_test.go
 subscri-c23a6160df7a	daemon-adapter/internal/frames/subscriptions_test.go
 v027fix-a3bd265b0251	daemon-adapter/internal/frames/v027_fix_k1_test.go
+v027_fix_k5_test.go	daemon-adapter/internal/frames/v027_fix_k5_test.go
 v027tri-ab1ca1942408	daemon-adapter/internal/frames/v027_triage_test.go
 vm_pair_test.go	daemon-adapter/internal/frames/vm_pair_test.go
 windowc-2fe281116e97	daemon-adapter/internal/frames/window_close_test.go
@@ -1528,6 +1530,7 @@ test_mw_focus_skip.py	tests/test_mw_focus_skip.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
 testmwr-696ca082e4f0	tests/test_mw_readback_deadline.py
 testmwr-1a182b00c310	tests/test_mw_readback_textof.py
+testmwr-44cac4f65ccb	tests/test_mw_rebind_caret.py
 test_mw_refusals.py	tests/test_mw_refusals.py
 testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
 testmws-a6db1334a46b	tests/test_mw_slot_length.py
@@ -2162,6 +2165,7 @@ v027-fix-k1.test.js	ui/test/v027-fix-k1.test.js
 v027fix-46b26230c523	ui/test/v027-fix-k2-cache.test.js
 v027fix-df3425b4e373	ui/test/v027-fix-k2-presentation.test.js
 v027fix-89dde92796eb	ui/test/v027-fix-k2-terminal.test.js
+v027-fix-k5.test.js	ui/test/v027-fix-k5.test.js
 v027hos-06c56f4d7d15	ui/test/v027-host-wall-triage.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 v027sea-46470f0a4e51	ui/test/v027-seams-role-transport.test.js
