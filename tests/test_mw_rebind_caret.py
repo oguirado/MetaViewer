@@ -149,11 +149,34 @@ class CaretRebindTests(unittest.TestCase):
         self.assertEqual(result['frame_witness']['sha256'], result['frame']['sha256'])
         self.assertEqual(result['frame_witness']['generation'], result['frame']['generation'])
 
-    def test_click_and_type_do_not_gain_final_caret_tolerance(self):
-        for action in (dict(type='click', x=30, y=30), dict(type='type', text='hello')):
-            with self.subTest(action=action), \
-                 self.assertRaisesRegex(goal.host.OwnerRefused, 'MW_REBIND_PIXELS'):
-                self.rebind_frames(action, [self.off, self.on])
+    def test_click_does_not_gain_final_caret_tolerance(self):
+        with self.assertRaisesRegex(goal.host.OwnerRefused, 'MW_REBIND_PIXELS'):
+            self.rebind_frames(dict(type='click', x=30, y=30), [self.off, self.on])
+
+    def test_caret_beside_a_glyph_is_classified_by_its_measured_pixels(self):
+        # Measured on x64: the off phase beside a glyph is its antialiased edge, not one flat colour.
+        check = goal.host.HostBackend.caret_only_change
+        frame = dict(self.fixture_frame())
+        rows = [dict(role='textbox', focused=True, box=[20, 20, 60, 20])]
+        off = bytearray(b'\xff' * (frame['width'] * frame['height'] * 3))
+        for y, level in ((23, 0xe1), (24, 0xef), (25, 0xc0)):
+            offset = (y * frame['width'] + 30) * 3
+            off[offset:offset+3] = bytes([level]) * 3
+        caret = bytearray(off)
+        for y in range(22, 37):
+            offset = (y * frame['width'] + 30) * 3
+            caret[offset:offset+3] = b'\0\0\0'
+        self.assertTrue(check(frame, frame, rows, bytes(off), bytes(caret)))
+        self.assertTrue(check(frame, frame, rows, bytes(caret), bytes(off)))
+        dark = bytearray(off)
+        dark[(24 * frame['width'] + 30) * 3:(24 * frame['width'] + 30) * 3 + 3] = bytes([0x40]) * 3
+        self.assertFalse(check(frame, frame, rows, bytes(dark), bytes(caret)))
+        grey = bytearray(caret)
+        grey[(24 * frame['width'] + 30) * 3:(24 * frame['width'] + 30) * 3 + 3] = bytes([0x30]) * 3
+        self.assertFalse(check(frame, frame, rows, bytes(off), bytes(grey)))
+
+    def fixture_frame(self):
+        return dict(surface_id='owned', width=100, height=80)
 
     def test_native_identity_value_geometry_or_focus_change_refuses(self):
         for change in (dict(id='replacement'), dict(value='changed'),

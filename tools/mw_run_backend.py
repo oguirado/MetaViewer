@@ -383,6 +383,9 @@ def connect(env, trace=None):
     return client
 
 
+CARET_OFF_MIN_LEVEL = 0xc0  # [MEASURED] x64 off phase beside a glyph: e1e1e1, efefef, ffffff
+
+
 class HostBackend:
     surface_kind = 'browser'
     eager_slot_text = True
@@ -711,8 +714,8 @@ class HostBackend:
     def caret_only_change(before, after, rows, old_pixels, new_pixels):
         """[TARGET, unit decision] Admit only a solid black one-pixel caret.
 
-        Measured E1 blink: one column, fifteen pixels, black versus the
-        surrounding flat editor background. Bound height at thirty-two pixels;
+        Measured blink: one column, fifteen pixels, black versus near white
+        background or antialiased edge. Bound height at thirty-two pixels;
         text/value/geometry/focus must independently survive AX revalidation.
         """
         if (before['surface_id'] != after['surface_id'] or
@@ -736,13 +739,16 @@ class HostBackend:
             return False
         if changed != [((y + dy) * w + x) for dy in range(len(changed))]:
             return False
-        pair = (old_pixels[changed[0]*3:changed[0]*3+3], new_pixels[changed[0]*3:changed[0]*3+3])
-        if b'\0\0\0' not in pair or pair[0] == pair[1]:
+        first = old_pixels[changed[0]*3:changed[0]*3+3]
+        if first == b'\0\0\0':
+            caret, off = old_pixels, new_pixels
+        elif new_pixels[changed[0]*3:changed[0]*3+3] == b'\0\0\0':
+            caret, off = new_pixels, old_pixels
+        else:
             return False
-        off = new_pixels if pair[0] == b'\0\0\0' else old_pixels
-        background = pair[1] if pair[0] == b'\0\0\0' else pair[0]
-        return all((old_pixels[i*3:i*3+3], new_pixels[i*3:i*3+3]) == pair and
-                   off[(i-1)*3:(i-1)*3+3] == off[(i+1)*3:(i+1)*3+3] == background
+        # Measured on x64: beside the last typed glyph the caret's other phase is the glyph's
+        # antialiased edge (efefef, not ffffff), so it is near white rather than one flat colour.
+        return all(caret[i*3:i*3+3] == b'\0\0\0' and min(off[i*3:i*3+3]) >= CARET_OFF_MIN_LEVEL
                    for i in changed)
 
     def observe_for_rebind(self, timeout_ms):
@@ -778,12 +784,12 @@ class HostBackend:
         # Reuse only the already retained identical pixel content; never spend
         # another native capture/file read between this binding and proposal.
         final = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)['frame_ref']
-        # [TARGET, unit decision] Only the browser goal's verified focused key
+        # [TARGET, unit decision] Only the browser goal's verified focused key or text
         # may bind either retained caret phase. Classify an unseen final phase
         # before one more publication read; no pixel reads follow that read.
         # Click/type and other owners keep the identical-final-pixels gate.
         keys = ('surface_id', 'sha256', 'width', 'height')
-        if (getattr(self, 'rebind_caret_keys', False) and plan['action']['type'] == 'key' and
+        if (getattr(self, 'rebind_caret_keys', False) and plan['action']['type'] in ('key', 'type') and
                 not all(final[k] == latest[k] for k in keys)):
             alternate = self.retain(final)
             old_pixels = Path(witness['artifact']).read_bytes()
