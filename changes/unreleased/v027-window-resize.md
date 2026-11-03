@@ -1,0 +1,1 @@
+- fix(ui): keep attached desktop windows active during resize, admit bounded opening geometry independently of retained sizes, and verify Stop before explicitly reopening a live window with the same witness.

@@ -1,4 +1,25 @@
 <script>
+// [TARGET, unit decision] Explicit recovery uses existing window-list, detach,
+// and create operations. A matching live witness is required before releasing the tile.
+/** @param {any} api @param {any} previous */
+export async function findLiveHostWindow(api, previous) {
+  if (!previous || typeof api?.listWindows !== 'function') return null;
+  const rows = await api.listWindows();
+  if (!Array.isArray(rows)) return null;
+  return rows.find((/** @type {any} */ row) => row.xid === previous.xid && row.witness === previous.witness) || null;
+}
+
+/** @param {any} api @param {string} surfaceId @param {any} previous */
+export async function reopenHostWindow(api, surfaceId, previous) {
+  const current = await findLiveHostWindow(api, previous);
+  if (!current) throw Error('HOST_WINDOW_UNAVAILABLE');
+  const detached = await api.detachWindow(surfaceId);
+  if (!detached?.ok) throw Error(detached?.reason || detached?.code || 'HOST_WINDOW_DETACH_FAILED');
+  const opened = await api.createWindow(current);
+  if (!opened?.ok) throw Error(opened?.reason || opened?.code || 'HOST_WINDOW_UNAVAILABLE');
+  return opened;
+}
+
 /** @param {any} rect */
 function normalizeRect(rect) {
   if (!rect || typeof rect !== 'object') return null;
@@ -180,6 +201,7 @@ const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const root = ref(/** @type {HTMLElement|null} */ (null));
 const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
 const hostXpra = ref(false);
+const reopenableHostWindow = ref(false);
 const hostWindow = ref(/** @type {any} */ (null));
 let ended = false, notifiedEnd = false, resync = false;
 let transferring = false;
@@ -208,6 +230,7 @@ async function sync() {
         hostWindow.value = status.hostWindow || null;
         if (status.hostWindow?.state === 'lost') {
           error.value = status.hostWindow.lostReason || 'Window closed — capsule tile ended.';
+          try { reopenableHostWindow.value = Boolean(await findLiveHostWindow(api, status.hostWindow)); } catch { reopenableHostWindow.value = false; }
           return;
         }
       }
@@ -338,6 +361,19 @@ async function lifecycle(operation) {
   } catch (reason) { error.value = /** @type {Error} */(reason).message; }
   finally { progress.value = ''; }
 }
+async function reopenLostHostWindow() {
+  if (progress.value || !hostWindow.value) return;
+  progress.value = 'Reopening window…';
+  try {
+    const completion = reopenHostWindow(api, props.surfaceId, hostWindow.value);
+    emit('lifecycle', {surfaceId:props.surfaceId, completion});
+    const result = await completion;
+    ended = true;
+    if (result.surfaceId) emit('reveal', result.surfaceId);
+    emit('stopped', props.surfaceId);
+  } catch (reason) { error.value = /** @type {Error} */ (reason).message; }
+  finally { progress.value = ''; }
+}
 async function confirmLogin() {
   try { const result = await api.confirmLogin(props.surfaceId); if (!result.ok) throw Error(result.code); confirmed.value = true; }
   catch (reason) { error.value = /** @type {Error} */(reason).message; }
@@ -358,6 +394,7 @@ onMounted(async () => {
       hostWindow.value = status.hostWindow;
       if (status.hostWindow.state === 'lost') {
         error.value = status.hostWindow.lostReason || 'Window closed — capsule tile ended.';
+        try { reopenableHostWindow.value = Boolean(await findLiveHostWindow(api, status.hostWindow)); } catch { reopenableHostWindow.value = false; }
       }
     }
     const transfer = tileLayout?.transfers.get(props.surfaceId);
@@ -420,6 +457,7 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
     <div ref="root" class="mv-role-viewport">
       <div v-if="role === 'agent'" :style="{visibility: (watching || hostWindow?.minimized || hostWindow?.state === 'lost') ? 'hidden' : undefined}" :inert="watching || Boolean(hostWindow?.minimized) || hostWindow?.state === 'lost'" class="mv-role-agent-canvas"><slot /></div>
       <button v-if="resourceReleased" :id="`tile-reconnect-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/reconnect`" type="button" @click="reconnectReleased">Disconnected to save resources, click to reconnect</button>
+      <button v-if="error && hostWindow?.state === 'lost' && reopenableHostWindow" type="button" :disabled="!!progress" @click="reopenLostHostWindow">Reopen</button>
       <button v-if="error && !hostWindow" type="button" @click="error = ''; sync()">Reopen</button>
       <p v-if="hostWindow?.minimized && !error && hostWindow?.state !== 'lost'" :id="`tile-host-minimized-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-minimized`" class="mv-role-status" role="status">Window minimized — waiting for window to be restored</p>
       <p v-else-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' && hasConnected ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>

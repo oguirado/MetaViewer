@@ -679,18 +679,12 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const winEntry = [...windowProfiles.values()].find(w => w.surfaceId === surfaceId);
     if (!winEntry) throw refuse('SURFACE_UNKNOWN');
     await close(surfaceId);
-    const liveSurface = core.getHumanSurface?.(surfaceId);
-    if (liveSurface && liveSurface.state === 'active') {
-      if (typeof core.stopSurface !== 'function') throw refuse('CAPSULE_STOP_UNAVAILABLE');
-      const reply = await core.stopSurface(surfaceId);
-      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'state_changed' ||
-          reply.data?.surface?.surface_id !== surfaceId || reply.data.surface.state !== 'destroyed') throw refuse('CAPSULE_STOP_UNPROVEN');
-      capsuleStates.set(surfaceId, reply.data.surface);
-    } else {
-      try { await core.stopSurface?.(surfaceId); } catch { /* already lost/departed in core */ }
-      const existing = capsuleStates.get(surfaceId) || {schema:'surface/v0.2', surface_id:surfaceId, profile_id:winEntry.id};
-      capsuleStates.set(surfaceId, {...existing, state:'destroyed'});
-    }
+    // A lost binding still owns adapter capacity until destroy is verified.
+    if (typeof core.stopSurface !== 'function') throw refuse('CAPSULE_STOP_UNAVAILABLE');
+    const reply = await core.stopSurface(surfaceId);
+    if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'state_changed' ||
+        reply.data?.surface?.surface_id !== surfaceId || reply.data.surface.state !== 'destroyed') throw refuse('CAPSULE_STOP_UNPROVEN');
+    capsuleStates.set(surfaceId, reply.data.surface);
     openingRoles.delete(surfaceId);
     windowProfiles.delete(winEntry.id);
     return {ok:true, profileId:winEntry.id, detached:true};

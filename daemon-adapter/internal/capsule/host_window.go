@@ -20,6 +20,26 @@ import (
 	"metaviewer/daemon-adapter/internal/cli"
 )
 
+// [TARGET, unit decision] Resize is capture progress, not absence. Yield one
+// attempt to the paced subscription; never retry in an unbounded capture loop.
+var hostWindowResizePattern = regexp.MustCompile(`^(?:host_window_unavailable:\s*)*resized: [0-9]+x[0-9]+ -> ([0-9]+)x([0-9]+)$`)
+
+func hostWindowResizeGeometry(reason string) (int, int, bool) {
+	match := hostWindowResizePattern.FindStringSubmatch(strings.TrimSpace(reason))
+	if match == nil {
+		return 0, 0, false
+	}
+	w, ew := strconv.Atoi(match[1])
+	h, eh := strconv.Atoi(match[2])
+	return w, h, ew == nil && eh == nil && w >= 1 && h >= 1 && w <= 4096 && h <= 4096
+}
+
+// IsHostWindowResize identifies a validated geometry change from capture.
+func IsHostWindowResize(err error) bool {
+	var f *cli.Fault
+	return errors.As(err, &f) && f.Code == "host_window_resized"
+}
+
 func isHostWindowMinimizedReason(s string) bool {
 	lower := strings.ToLower(s)
 	return strings.Contains(lower, "minimized") || strings.Contains(lower, "iconic") || strings.Contains(lower, "unmapped")
@@ -205,6 +225,10 @@ func (m *Manager) captureHostWindow(ctx context.Context, id string) (Binding, Na
 	}
 	if execErr != nil {
 		errText := execErr.Error()
+		if w, h, resized := hostWindowResizeGeometry(errText); resized {
+			m.updateHostWindowGeometryLocked(id, w, h)
+			return m.bindings[id], NativeFrame{}, fault("host_window_resized", "capture geometry changed")
+		}
 		if isHostWindowMinimizedReason(errText) {
 			current.HostMinimized = true
 			m.bindings[id] = current
@@ -486,6 +510,10 @@ func (m *Manager) UpdateHostWindowGeometry(id string, w, h int) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.updateHostWindowGeometryLocked(id, w, h)
+}
+
+func (m *Manager) updateHostWindowGeometryLocked(id string, w, h int) bool {
 	b, ok := m.bindings[id]
 	if !ok || b.Surface.State != "active" || m.destroying[id] || (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 		return false
