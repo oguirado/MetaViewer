@@ -700,8 +700,43 @@ cmd_run() {
 }
 
 # ---------------------------------------------------------------------- stop
+# [TARGET, unit decision] Program cleanup requires a private native receipt in
+# this launcher's state directory; a name prefix alone never admits a program.
+owned_programs() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 -c '
+import json, os, re, stat, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+try:
+    meta = root.lstat()
+    if not stat.S_ISDIR(meta.st_mode) or meta.st_uid != os.getuid() or stat.S_IMODE(meta.st_mode) != 0o700:
+        sys.exit(1)
+    names = set()
+    for path in root.glob("*.json"):
+        meta = path.lstat()
+        if not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.getuid() or stat.S_IMODE(meta.st_mode) != 0o600 or meta.st_size > 1048576:
+            continue
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(value, dict):
+            continue
+        lease, capsule = value.get("Lease"), value.get("Capsule")
+        if not isinstance(lease, dict) or not isinstance(capsule, dict):
+            continue
+        profile, name = lease.get("ProfileID"), capsule.get("container")
+        if isinstance(profile, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", profile) and isinstance(name, str) and re.fullmatch(r"srf-pg-[a-z0-9][a-z0-9-]{0,39}", name):
+            names.add(name)
+    print("\n".join(sorted(names)))
+except OSError:
+    sys.exit(1)
+' "$1"
+}
+
 cmd_stop() {
-    local pid waited=0 leaks=0 name f ram adm
+    local pid waited=0 leaks=0 name f ram adm inventory programs
     pid=$(running_pid)
     if [ -n "$pid" ]; then
         kill -TERM "$pid" 2>/dev/null
@@ -718,19 +753,31 @@ cmd_stop() {
     fi
     remove_owned_pid "$pid"
     local statedir="${MV_SRF_STATE_DIR:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf}"
-    if [ -x "$SRF_BIN/srf-identity-surface" ] && command -v docker >/dev/null 2>&1; then
+    programs=$(owned_programs "$statedir" 2>/dev/null) || programs=
+    if [ -x "$SRF_BIN/srf-identity-surface" ] && command -v docker >/dev/null 2>&1 &&
+        docker info >/dev/null 2>&1 &&
+        inventory=$(docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
         while IFS= read -r name; do
             [ -n "$name" ] || continue
+            case $name in
+                srf-id-*) ;;
+                srf-pg-*) printf '%s\n' "$programs" | grep -qxF -- "$name" || continue ;;
+                *) continue ;;
+            esac
             "$SRF_BIN/srf-identity-surface" stop --container "$name" --state-dir "$statedir" >/dev/null 2>&1 ||
                 note "capsule stop for $name reported a problem; the leak check below is authoritative"
-        done < <(docker ps -a --filter 'name=^srf-id-' --format '{{.Names}}' 2>/dev/null)
+        done <<< "$inventory"
     fi
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 &&
+        inventory=$(docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
         while IFS= read -r name; do
             [ -n "$name" ] && [ "$name" != srf-egress-proxy ] || continue
             leaks=$((leaks + 1))
             printf 'JUDGE_STOP_LEAK: container %s is still present -- fix: docker rm -f %s\n' "$name" "$name" >&2
-        done < <(docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null)
+        done <<< "$inventory"
+    else
+        leaks=$((leaks + 1))
+        printf 'JUDGE_STOP_LEAK: Docker inventory unavailable -- fix: restore Docker access, run docker info and retry stop; native absence is unverified\n' >&2
     fi
     for f in "${MV_SRF_STATE_DIR:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf}" "${XDG_RUNTIME_DIR:-$RUN_USER_ROOT/$UID_NOW}/metaviewer"; do
         [ -d "$f" ] || continue
@@ -766,16 +813,20 @@ cmd_stop() {
         # is gone is safe to remove; anything else stays and is reported below.
         if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
             local live
-            live=$(docker ps -a --filter 'name=^srf-id-' --format '{{.Names}}' 2>/dev/null)
-            for f in "$ram"/srf-id-*; do
-                [ -d "$f" ] && [ ! -L "$f" ] || continue
-                printf '%s\n' "$live" | grep -qxF -- "${f##*/}" || rm -rf -- "$f"
-            done
+            if live=$(docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
+                for f in "$ram"/srf-id-* "$ram"/srf-pg-*; do
+                    [ -d "$f" ] && [ ! -L "$f" ] && [ -O "$f" ] || continue
+                    case ${f##*/} in
+                        srf-pg-*) printf '%s\n' "$programs" | grep -qxF -- "${f##*/}" || continue ;;
+                    esac
+                    printf '%s\n' "$live" | grep -qxF -- "${f##*/}" || rm -rf -- "$f"
+                done
+            fi
         fi
         while IFS= read -r name; do
             [ -n "$name" ] || continue
             leaks=$((leaks + 1))
-            printf 'JUDGE_STOP_LEAK: RAM entry %s is still present -- fix: rm -rf -- %q\n' "$name" "$name" >&2
+            printf 'JUDGE_STOP_LEAK: RAM entry %s is still present -- fix: restore Docker access if needed, verify native absence and ownership, then retry stop; retain unverifiable entries\n' "$name" >&2
         done < <(find "$ram" -mindepth 1 -maxdepth 1 2>/dev/null)
     fi
     adm=${MV_RAM_ADMISSION_DIR:-${XDG_RUNTIME_DIR:-$RUN_USER_ROOT/$UID_NOW}/metaviewer/ram-admission}

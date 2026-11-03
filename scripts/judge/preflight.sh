@@ -192,7 +192,9 @@ chk_bundle_arch() {
         refuse JUDGE_BUNDLE_ARCH "the kit holds metaviewer-linux-$other.tar.gz but this host is $ARCHN" "download metaviewer-linux-$ARCHN.tar.gz from the release and place it in $ASSET_DIR"
         return
     fi
-    for f in "$APP_DIR/metaviewer" "$APP_DIR"/resources/bin/* "$SRF_BIN"/*; do
+    for f in "$APP_DIR/metaviewer" "$APP_DIR"/resources/bin/* "$SRF_BIN"/* \
+        "$JUDGE_HOME/deps/vision-engine/vision-runtime" \
+        "$JUDGE_HOME/deps/wender-agent/wender-runtime"; do
         [ -f "$f" ] || continue
         m=$(elf_machine "$f")
         [ -n "$m" ] || continue
@@ -235,7 +237,7 @@ chk_userns() {
 chk_display() {
     if [ -z "${DISPLAY:-}" ]; then # MUT:JUDGE_DISPLAY
         if [ -n "${WAYLAND_DISPLAY:-}" ]; then
-            refuse JUDGE_DISPLAY "Wayland-only session: DISPLAY is empty so there is no XWayland" "enable XWayland (WSLg provides it) or run under xvfb-run"
+            refuse JUDGE_DISPLAY "Wayland-only session: DISPLAY is empty so there is no reachable XWayland" "enable XWayland (WSLg provides it) and use a reachable desktop DISPLAY for the visible app; xvfb-run is only for headless install/smoke and supplies no visible desktop"
         else
             refuse JUDGE_DISPLAY "DISPLAY is not set" "xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY)"
         fi
@@ -336,7 +338,7 @@ chk_docker() {
     command -v docker >/dev/null 2>&1 || return 0 # JUDGE_SYSDEP reports it
     if DOCKER_INFO=$(docker info --format '{{.SecurityOptions}}|{{.OperatingSystem}}|{{.DockerRootDir}}' 2>/dev/null); then : # MUT:JUDGE_DOCKER
     else
-        refuse JUDGE_DOCKER "'docker info' fails for this user" "sudo usermod -aG docker \$USER, then log out and in again (rootful Docker only)"
+        refuse JUDGE_DOCKER "'docker info' fails for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info"
         return
     fi
     DOCKER_ROOT=${DOCKER_INFO##*|}
@@ -504,8 +506,12 @@ if [ "$MODE" = facts ]; then
 fi
 
 # Optional host capability: absence never gates browser or container programs.
-if ! command -v xpra >/dev/null 2>&1; then
-    note 'optional capability (JUDGE_HOST_PROGRAM): Host program disabled: xpra is absent; install with: apt install xpra'
+host_missing=
+for host_tool in xpra Xvfb xauth xdotool; do
+    command -v "$host_tool" >/dev/null 2>&1 || host_missing="$host_missing $host_tool"
+done
+if [ -n "$host_missing" ]; then
+    note "optional capability (JUDGE_HOST_PROGRAM): Host program disabled: missing${host_missing}; install with: sudo apt-get install -y xpra xvfb xauth xdotool"
 fi
 
 run_checks() {
