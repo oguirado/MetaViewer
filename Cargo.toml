@@ -3,7 +3,8 @@ resolver = "2"
 members = ["core"]
 
 [workspace.package]
-version = "0.2.4"
+license = "AGPL-3.0-only"
+version = "0.2.5"
 edition = "2021"
 publish = false
 rust-version = "1.97"

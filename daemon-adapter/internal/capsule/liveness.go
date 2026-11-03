@@ -6,8 +6,8 @@ package capsule
 // malformed output and setup/usage errors are unknown, break the consecutive-miss
 // sequence and never prove loss.
 // Defaults [TARGET]: interval 5s, consecutive misses 2; one serial probe per
-// active capsule per tick, no overlapping sweeps or catch-up loop. Terminal
-// bindings are not probed. The session owns cancellation and event delivery.
+// active or unconfirmed-lost capsule per tick, no overlapping sweeps or catch-up
+// loop. Confirmed-absent and destroyed bindings are not probed. The session owns cancellation and event delivery.
 import (
 	"context"
 	"encoding/json"
@@ -52,7 +52,7 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 		m.mu.Lock()
 		active := make([]Binding, 0, len(m.bindings))
 		for id, b := range m.bindings {
-			if b.Surface.State == "active" && !m.destroying[id] && b.NativeKind != "host-window" {
+			if (b.Surface.State == "active" || b.Surface.State == "lost" && !b.ConfirmedAbsent) && !m.destroying[id] && (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 				active = append(active, b)
 			} else {
 				delete(misses, id)
@@ -68,7 +68,7 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 			// outside mu so manager operations are not blocked across LivenessTimeout.
 			m.mu.Lock()
 			current, ok := m.bindings[id]
-			if !ok || current.Surface.State != "active" || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
+			if !ok || (current.Surface.State != "active" && current.Surface.State != "lost") || current.ConfirmedAbsent || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
 				delete(misses, id)
 				m.mu.Unlock()
 				continue
@@ -89,7 +89,7 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 
 			m.mu.Lock()
 			after, ok := m.bindings[id]
-			if !ok || after.Surface.State != "active" || m.destroying[id] || after.Container != current.Container || after.RunID != current.RunID || after.recoveryProbe != current.recoveryProbe {
+			if !ok || after.Surface.State != current.Surface.State || m.destroying[id] || after.Container != current.Container || after.RunID != current.RunID || after.recoveryProbe != current.recoveryProbe {
 				delete(misses, id)
 				m.mu.Unlock()
 				continue
@@ -110,7 +110,15 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 			}
 			var ev json.RawMessage
 			if misses[id] >= m.cfg.LivenessMisses {
-				ev, _ = m.markLostLocked(id, true, true)
+				if after.Surface.State == "lost" {
+					// [TARGET, unit decision] Stop already closed this lifetime.
+					// Only these native probes may upgrade its private removal proof;
+					// no duplicate lifecycle delivery or active-state rollback is needed.
+					after.ConfirmedAbsent = true
+					m.bindings[id] = after
+				} else {
+					ev, _ = m.markLostLocked(id, true, true)
+				}
 				delete(misses, id)
 			}
 			m.mu.Unlock()

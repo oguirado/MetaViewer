@@ -175,10 +175,16 @@ func (m *Manager) defaultRAMRoot() string {
 }
 
 func (m *Manager) hostWindowProfileFor(id string, spec *HostWindowSpec, reqW, reqH int) (Profile, bool) {
+	// [TARGET, unit decision] Opening geometry is bounded independently of the
+	// picker's snapshot and any retained profile; the next capture reconciles it.
+	if spec == nil || reqW < 1 || reqH < 1 || reqW > 4096 || reqH > 4096 {
+		return Profile{}, false
+	}
 	if existing, ok := m.cfg.Profiles[id]; ok {
 		if !m.dynamicProfiles[id] || existing.Kind != "desktop_capsule" || existing.NativeKind != "host-window" {
 			return Profile{}, false
 		}
+		existing.Width, existing.Height = reqW, reqH
 		return existing, true
 	}
 	if !storedIdentityID.MatchString(id) || protectedIdentity(id) || spec == nil {
@@ -188,13 +194,7 @@ func (m *Manager) hostWindowProfileFor(id string, spec *HostWindowSpec, reqW, re
 	if ramRoot == "" {
 		return Profile{}, false
 	}
-	w, h := spec.Width, spec.Height
-	if w < 1 || h < 1 {
-		w, h = reqW, reqH
-	}
-	if w < 1 || h < 1 {
-		w, h = 1280, 900
-	}
+	w, h := reqW, reqH
 	return Profile{
 		Kind:        "desktop_capsule",
 		NativeKind:  "host-window",
@@ -220,7 +220,7 @@ func (m *Manager) admitHostWindowProfile(id string, spec *HostWindowSpec, p *Pro
 	}
 	for _, b := range m.bindings {
 		if b.Surface.State != "destroyed" && b.NativeKind == "host-window" && b.HostXID == spec.XID {
-			return fault("host_window_unavailable", "host_window_unavailable: window already attached")
+			return fault("host_window_unavailable", "host_window_unavailable: window already attached; if its tile shows Window Closed, press Stop on that tile and add the window again")
 		}
 	}
 	p.Display = fmt.Sprintf(":0.%d", spec.XID)

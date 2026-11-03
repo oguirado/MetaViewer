@@ -119,8 +119,13 @@
 
 .mv-terminal-deck__actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--cuk-semantic-spacing-sm);
+}
+
+.mv-terminal-deck__bootstrap-wrap {
+  flex-wrap: wrap;
 }
 
 .mv-terminal-deck__bootstrap-wrap,
@@ -405,7 +410,11 @@
 .mv-terminal-deck__context-menu {
   position: fixed;
   z-index: var(--cuk-semantic-z-index-popover);
-  min-width: 9rem;
+  min-width: min(9rem, 100vw);
+  max-width: 100vw;
+  max-height: 100vh;
+  overflow: auto;
+  box-sizing: border-box;
   background: var(--cuk-semantic-surface-elevated);
   border: 1px solid var(--cuk-semantic-border-default);
   border-radius: var(--cuk-semantic-radius-sm);

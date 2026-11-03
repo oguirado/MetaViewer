@@ -18,6 +18,8 @@ import re
 import shutil
 import signal
 import stat
+import sys
+import shlex
 import subprocess
 import tarfile
 import time
@@ -92,7 +94,8 @@ FAKES = {
     "sysctl": '[ "$1" = -n ] && [ -f "$MV_FAKE_DIR/sysctl_$2" ] && { cat "$MV_FAKE_DIR/sysctl_$2"; exit 0; }\nexit 255\n',
     "ip": '[ "$1" = route ] && cat "$MV_FAKE_DIR/ip_route" 2>/dev/null\nexit 0\n',
     "xdpyinfo": 'exit "$(cat "$MV_FAKE_DIR/xdpyinfo_rc" 2>/dev/null || echo 0)"\n',
-    "python3": '[ "${1:-}" = -I ] && shift\nexec bash "$@"\n',
+    "python3": ('case "${1:-}" in -c|*/unpack_node.py) exec ' + shlex.quote(sys.executable) + ' "$@";; esac\n'
+                '[ "${1:-}" = -I ] && shift\nexec bash "$@"\n'),
     "apparmor_parser": 'echo "apparmor_parser $*" >> "$MV_FAKE_DIR/apparmor.log"\n',
     "iptables": "exit 0\n",
     "ip6tables": "exit 0\n",
@@ -185,6 +188,12 @@ SRF_FAKE = (
     'D=${MV_FAKE_DIR:?}\necho "srf $*" >> "$D/srf.log"\n'
     'case "$1 ${2:-}" in\n'
     '  "capabilities ") printf "capabilities v1\\n"; cat "$D/caps";;\n'
+    '  "net up")\n'
+    '    [ -f "$D/net_up_fail" ] && exit 4\n'
+    '    registry=; while [ $# -gt 0 ]; do case $1 in --registry) registry=$2; shift 2;; *) shift;; esac; done\n'
+    '    printf "{}\\n" > "$registry"; chmod 0600 "$registry"\n'
+    '    docker network create --internal --subnet 172.30.80.0/24 srf-idnet >/dev/null\n'
+    '    echo true > "$D/proxy"; exit 0;;\n'
     '  "stop --container") sed -i "/^${3:-}$/d" "$D/containers" 2>/dev/null; exit 0;;\n'
     "esac\n"
 )
@@ -224,6 +233,7 @@ class Sandbox:
                   self.kit / "judge" / "apparmor", self.kit / "ui" / "tools", self.kit / "tools",
                   self.runuser / str(os.getuid()), self.fake / "release", self.root / "libexec", self.root / "units"):
             d.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(JUDGE_SRC / "unpack_node.py", self.kit / "judge" / "unpack_node.py")
         (self.runuser / str(os.getuid())).chmod(0o700)
         for tool in BASE_TOOLS:
             (self.bin / tool).symlink_to(which(tool))
@@ -303,10 +313,13 @@ class Sandbox:
         ))
         self.put("network", "true 172.30.80.0/24 \n")
         self.put("proxy", "true\n")
-        store = self.home / "store" / "profiles" / "judge"
-        store.mkdir(parents=True, exist_ok=True)
-        store.chmod(0o700)
-        (self.fake / "owner.tbl").write_text(f"{store}|10001\n")
+        owners = []
+        for profile in ("judge", "mv-live-2", "mv-live-3", "mv-live-4"):
+            store = self.home / "store" / "profiles" / profile
+            store.mkdir(parents=True, exist_ok=True)
+            store.chmod(0o700)
+            owners.append(f"{store}|10001\n")
+        (self.fake / "owner.tbl").write_text("".join(owners))
 
     def install_profile(self):
         shutil.copyfile(JUDGE_SRC / "apparmor" / "metaviewer", self.apparmor / "metaviewer-judge")
@@ -343,6 +356,7 @@ class Sandbox:
               "srf-open-egress6.rules": b"*filter\nCOMMIT\n", "srf-open-egress.service": b"[Unit]\n"}
         members = [("opensuperficies/", None, 0o755), ("opensuperficies/bin/", None, 0o755),
                    ("opensuperficies/bin/srf-identity-surface", SRF_FAKE.encode(), 0o755),
+                   ("opensuperficies/bin/srf-egress-proxy", b"#!/bin/sh\nexit 0\n", 0o755),
                    ("opensuperficies/firewall/", None, 0o755)]
         members += [("opensuperficies/firewall/" + n, d, 0o644) for n, d in fw.items()]
         make_tar(self.assets / f"opensuperficies-linux-{self.archn}.tar.gz", members)

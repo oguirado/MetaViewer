@@ -659,7 +659,9 @@ class BuildReleaseAssetsToolTests(unittest.TestCase):
             exe.write_bytes(b"#!/bin/sh\nexit 0\n")
             exe.chmod(0o755)
 
-            node_bin = base / "node"
+            node_bin = base / "runtime/bin/node"
+            node_bin.parent.mkdir(parents=True)
+            (node_bin.parent.parent / "LICENSE").write_text("Node fixture license\n")
             node_bin.write_bytes(b"#!/bin/sh\necho v24.14.0\n")
             node_bin.chmod(0o755)
 
@@ -685,7 +687,10 @@ class BuildReleaseAssetsToolTests(unittest.TestCase):
 
             img_tar = base / "images.tar"
             with tarfile.open(img_tar, "w") as tf:
-                bra._add_bytes(tf, "manifest.json", b"[]\n", 0o644)
+                manifest = [{"Config": "config.json", "Layers": [],
+                             "RepoTags": bra.default_image_tags("x64")}]
+                bra._add_bytes(tf, "manifest.json", json.dumps(manifest).encode(), 0o644)
+                bra._add_bytes(tf, "config.json", b"{}\n", 0o644)
 
             out_dir = base / "out"
             summary = bra.build_all_assets(

@@ -12,14 +12,14 @@ macOS and Windows are **not supported**. In `ui/tools/package.js`, `packageArchi
 
 | Component | Required Version / Pin | Source of Truth | Notes |
 | --- | --- | --- | --- |
-| Release version | `0.2.4` [CITED] | `VERSION`, `Cargo.toml`, `agents/pyproject.toml`, `ui/package.json` | Enforced for parity by the `manifests` and `laws` gate legs (`tools/gate.sh`). |
+| Release version | `0.2.5` [CITED] | `VERSION`, `Cargo.toml`, `agents/pyproject.toml`, `ui/package.json` | Enforced for parity by the `manifests` and `laws` gate legs (`tools/gate.sh`). |
 | Node.js | `>=24` [CITED] | `ui/package.json` (`engines.node`) | Checked by `ui/tools/package.js` and `tools/gate.sh`; hosted CI runs Node `24` (`.github/workflows/ci.yml`). |
 | Electron | `44.9.2` [CITED] | `ui/package.json`, `ui/electron/main.js` (`ELECTRON_PIN`) | Supplied from local disk via `ELECTRON_OVERRIDE_DIST_PATH` or `MV_ELECTRON_ZIP_DIR`; network downloads are disabled (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`). |
 | Rust compiler & Clippy | `1.97` (`1.97.0` in CI) [CITED] | `Cargo.toml` (`rust-version`) | Used to compile `metaviewer-core` and `mv-replay` (`core/Cargo.toml`) and run `cargo clippy --offline`. |
 | Rust formatter | `1.92.0` [CITED] | `tools/gate.sh`, `.github/workflows/ci.yml` | Invoked as `rustup run 1.92.0 cargo fmt --all --check`. |
 | Go | `1.26.0` [CITED] | `daemon-adapter/go.mod` | Builds `mv-daemon-adapter` offline with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`. |
 | Python | `>=3.11` (`3.12` in CI) [CITED] | `agents/pyproject.toml` (`requires-python`) | Standard library only (`dependencies = []`); `tools/gate.sh` requires Python's `tomllib`. |
-| Capsule UI Kit | `0.2.1` (`bf31bc201987206d16dbd88d93102f9d5ce026f9`) [CITED] | `ui/kit.lock.json` | Content hash `1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2`, staged from a local checkout via `CAPSULE_UI_KIT_REPO` or `MV_KIT_CHECKOUT`. |
+| Capsule UI Kit | `0.2.1` (`aaada9dedc177b096e8b4764959e258e76c1ef02`) [CITED] | `ui/kit.lock.json` | Content hash `1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2`, staged from a local checkout via `CAPSULE_UI_KIT_REPO` or `MV_KIT_CHECKOUT`. |
 
 ### Headless Display and Host Utilities
 
@@ -286,7 +286,7 @@ External runtime components are pinned in `deps.lock` by component name, kind, r
 | --- | --- | --- | --- | --- | --- |
 | `vision-engine` | `python_package` | `oguirado/vision-engine` | `v0.2.0` [CITED] | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED] | `VQA_VE_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
 | `wender-agent` | `python_package` | `oguirado/wender-agent` | `v0.3.0` [CITED] | `96120967b435b72fc6d29635f3844dae140388a9` [CITED] | `MV_WENDER_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
-| `opensuperficies` | `go_binary` | `oguirado/OpenSuperficies` | `os-cu-w9-mv1` [CITED] | `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED] | `MV_SRF_BIN_DIR` [CITED: `daemon-adapter/internal/daemon/environment.go`] |
+| `opensuperficies` | `go_binary` | `oguirado/OpenSuperficies` | `os-cu-w9-mv1` [CITED] | `3cb86d752f38457b6730eefd235d4da4c4039721` [CITED] | `MV_SRF_BIN_DIR` [CITED: `daemon-adapter/internal/daemon/environment.go`] |
 
 I keep MetaViewer, OpenSuperficies, vision-engine, and wender-agent in their own repositories. I use the exact commit column as checkout authority; version fields are release labels [CITED: `deps.lock`]. I use persistent `vadapt.vserve` when its raw-frame handshake succeeds (including a typed `ring` capability), with one-shot `vadapt.cu_describe` fallback. I use `wender.plan.cli` over the pipe-only planner boundary; MetaViewer retains action admission and execution [CITED: `agents/metaviewer_agents/perception/vcore.py`, `agents/metaviewer_agents/wender_bridge.py`]. Assembly CI runs that boundary with `--require-planner` [CITED: `.github/workflows/assembly.yml`].
 
@@ -376,7 +376,7 @@ If you built from source, also remove your external `MV_PKG_OUT` and `CARGO_TARG
 
 | Error Code / Diagnostic | Source | Cause and Resolution |
 | --- | --- | --- |
-| `kit absent` / `Kit repository/commit mismatch` / `Kit metadata/pin/hash mismatch` | `tools/sync_kit.mjs`, `tools/gate.sh` (`js` leg) | Set `CAPSULE_UI_KIT_REPO` (or `MV_KIT_CHECKOUT`) to a clean Git checkout of `capsule-ui-kit` at commit `bf31bc201987206d16dbd88d93102f9d5ce026f9` (`v0.2.1`) and run `node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO"` [CITED: `tools/sync_kit.mjs`, `ui/kit.lock.json`]. |
+| `kit absent` / `Kit repository/commit mismatch` / `Kit metadata/pin/hash mismatch` | `tools/sync_kit.mjs`, `tools/gate.sh` (`js` leg) | Set `CAPSULE_UI_KIT_REPO` (or `MV_KIT_CHECKOUT`) to a clean Git checkout of `capsule-ui-kit` at commit `aaada9dedc177b096e8b4764959e258e76c1ef02` (`v0.2.1`) and run `node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO"` [CITED: `tools/sync_kit.mjs`, `ui/kit.lock.json`]. |
 | `ui: Node >=24 required` | `tools/gate.sh` (`ui` leg), `ui/tools/package.js` | Ensure `node --version` on `PATH` (or `NODE`) is major version `24` or newer [CITED: `tools/gate.sh`, `ui/tools/package.js`]. |
 | `rust: pinned formatter unavailable` / `rust: clippy toolchain unavailable` | `tools/gate.sh` (`rust` leg) | Install the pinned Rust formatter (`rustup toolchain install 1.92.0 --profile minimal --component rustfmt`) and Rust `1.97.0` with `clippy` (`rustup toolchain install 1.97.0 --profile minimal --component clippy`) [CITED: `tools/gate.sh`, `.github/workflows/ci.yml`]. |
 | `ui-smoke: no executable local Electron; set ELECTRON_OVERRIDE_DIST_PATH or install its local binary` | `tools/gate.sh` (`ui-smoke` leg) | Export `ELECTRON_OVERRIDE_DIST_PATH` pointing to a directory containing an executable `electron` `44.9.2` binary [CITED: `tools/gate.sh`]. |

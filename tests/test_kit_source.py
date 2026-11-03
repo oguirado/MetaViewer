@@ -246,7 +246,7 @@ catch(error) { console.error('ERROR: ' + error.message); process.exitCode = 1; }
     def test_pinned_lock(self):
         pin = json.loads((ROOT / 'ui/kit.lock.json').read_text())
         self.assertEqual(set(pin), {'repo', 'commit', 'version', 'contentHash'})
-        self.assertEqual(pin['commit'], 'bf31bc201987206d16dbd88d93102f9d5ce026f9')
+        self.assertEqual(pin['commit'], 'aaada9dedc177b096e8b4764959e258e76c1ef02')
         self.assertEqual(pin['version'], '0.2.1')
         self.assertEqual(pin['contentHash'],
                          '1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2')

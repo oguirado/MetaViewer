@@ -117,7 +117,7 @@ function createAppProgramHarness(appSource, rolesDouble) {
     emit: () => {},
   };
   vm.createContext(ctx);
-  vm.runInContext([fnMap.recordActivity, fnMap.submitHost, fnMap.createProgramCapsule, fnMap.onCreateCapsule].join('\n'), ctx);
+  vm.runInContext([fnMap.recordActivity, fnMap.submitHost, fnMap.reportRevealPending, fnMap.createProgramCapsule, fnMap.onCreateCapsule].join('\n'), ctx);
   const origRecord = ctx.recordActivity;
   ctx.recordActivity = (entry) => {
     origRecord(entry);
@@ -621,7 +621,8 @@ async function runProbes({
     return okReply?.ok === true
       && okReply?.surfaceId === 'surface-pg-ok'
       && okH.views.includes('agent')
-      && okH.ctx.hostOutcome.value === null;
+      && okH.ctx.hostOutcome.value?.code === 'CAPSULE_REVEAL_PENDING'
+      && /running.*Identities.*retry/.test(okH.ctx.hostOutcome.value?.message);
   });
 
   // 12. Review Fix 6: intent with kind 'program' and empty binary or naming a profile is refused, never passed to identity branch.
@@ -954,7 +955,7 @@ test('V023-HOST-MV: real modules pass all program binary probes', async () => {
   assert.deepEqual(await runProbes(), []);
 });
 
-test('V023-HOST-MV: multiple program capsules, immediate writable tile arming, tile label, and Stop', async (t) => {
+test('V023-HOST-MV: multiple agent-controlled program capsules, tile reveal, tile label, and Stop', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'v023-lifecycle-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const binDir = join(root, 'bin');
@@ -1060,17 +1061,13 @@ test('V023-HOST-MV: multiple program capsules, immediate writable tile arming, t
     host_binary: geditPath,
   });
 
-  // Both tiles were revealed in agent view and immediately armed via take_control with no extra menu click.
+  // Both tiles remain revealed in agent view without taking control from the agent.
   assert.deepEqual(appH.revealed, [
     { id: 'surface-pg-1', mode: 'agent' },
     { id: 'surface-pg-2', mode: 'agent' },
   ]);
-  assert.deepEqual(appH.controlCalls, [
-    { id: 'surface-pg-1', verb: 'take_control' },
-    { id: 'surface-pg-2', verb: 'take_control' },
-  ]);
-  assert.equal(appH.ctx.wallInputPending.value['surface-pg-1'], true);
-  assert.equal(appH.ctx.wallInputPending.value['surface-pg-2'], true);
+  assert.deepEqual(appH.controlCalls, []);
+  assert.deepEqual(Object.keys(appH.ctx.wallInputPending.value), []);
 
   // Tile label uses profile_id ('gedit') and status + Stop work on the program capsule.
   const status1 = await rolesBridge.status('surface-pg-1');
@@ -1313,7 +1310,8 @@ sys.exit(mv.main())
   assert.equal(launcherH.ctx.choosingProgram.value, false, 'dialog closes on successful gedit launch');
   assert.equal(states.get('surface-cli-1')?.profile_id, 'gedit');
   assert.equal(states.get('surface-cli-1')?.display, ':111');
-  assert.equal(appH.ctx.wallInputPending.value['surface-cli-1'], true);
+  assert.deepEqual(Object.keys(appH.ctx.wallInputPending.value), [], 'program creation never arms pending human input');
+  assert.deepEqual(appH.controlCalls, [], 'program creation preserves agent control');
 
   // 4. Stop frees display (:111) and name ('gedit'); re-opening 'gedit' reuses the 'gedit' program identity and display :111.
   const stopped1 = await rolesBridge.stop('surface-cli-1');
@@ -1513,10 +1511,10 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     assert.ok(failed.includes('app-view-on-success-only-and-post-launch-throw-safe'), `Mutant 12a survived: ${failed}`);
   }
 
-  // Mutant 12b (Fix 5 post-launch throw): post-launch reveal/wall-control throw is not caught.
+  // Mutant 12b (Fix 5 post-launch throw): post-launch reveal throw is not caught.
   {
     const mutatedApp = appSrc.replace(
-      '  } catch {\n    // Post-launch view, reveal, or wall-control errors must not report the launch as failed.\n  }',
+      '  } catch {\n    if (reply.surfaceId) reportRevealPending(reply.surfaceId);\n  }',
       '  } catch (err) { throw err; }',
     );
     assert.notEqual(mutatedApp, appSrc);
@@ -1527,7 +1525,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
   // Mutant 13 (Fix 6): onCreateCapsule only enters program branch when binary is non-empty string.
   {
     const mutatedApp = appSrc.replace(
-      "if (body?.kind === 'program') {",
+      "if (body?.kind === 'program' || body?.kind === 'host-program') {",
       "if (body?.kind === 'program' && typeof body?.binary === 'string' && body.binary.trim().length > 0) {",
     );
     assert.notEqual(mutatedApp, appSrc);
@@ -1538,7 +1536,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
   // Mutant 14 (V023-HOST-MV2): provisioning skipped in roleHost createProgram.
   {
     const mutatedSrc = roleHostSrc.replace(
-      'const provReply = await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});',
+      'const provReply = choice.hostXpra ? {ok:true} : await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});',
       'const provReply = {ok:true};',
     );
     assert.notEqual(mutatedSrc, roleHostSrc);
@@ -1593,7 +1591,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
         '',
       )
       .replace(
-        "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
+        "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible) { choosingRole.value = false; return; }\n    if (generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    if (profileChoice.value && roleError.value.startsWith('NO_IDENTITY:')) roleError.value = '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible){choosingRole.value=false;return;}if(generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
         "  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n    choosingRole.value = true;\n  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; profileChoice.value = ''; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; choosingRole.value = true; }",
       )
       .replace(
@@ -1803,7 +1801,7 @@ test('V024-WALL-FIXES: mounted CatalogLauncher shows role and identity dialog wi
       '',
     )
     .replace(
-      "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
+      "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible) { choosingRole.value = false; return; }\n    if (generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    if (profileChoice.value && roleError.value.startsWith('NO_IDENTITY:')) roleError.value = '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible){choosingRole.value=false;return;}if(generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
       "  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n    choosingRole.value = true;\n  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; profileChoice.value = ''; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; choosingRole.value = true; }",
     )
     .replace(

@@ -185,7 +185,7 @@ else: sys.exit(2)
 			t.Fatal(err)
 		}
 		out, err := r.Handler(ctx, ipc.Envelope{MsgID: "msg-" + step.op, Body: raw})
-		if err != nil || len(out) != 1 {
+		if err != nil || len(out) != 2 {
 			t.Fatalf("wired op=%s id=%s: out=%s err=%v", step.op, step.id, out, err)
 		}
 		var ev struct {
@@ -198,10 +198,14 @@ else: sys.exit(2)
 		if err := json.Unmarshal(out[0], &ev); err != nil || ev.Schema != "surface_event/v0.2" || ev.Event != "state_changed" || ev.Data.Surface.SurfaceID != surfaceID {
 			t.Fatalf("wired op=%s id=%s unexpected event: %s %v", step.op, step.id, out[0], err)
 		}
+		var ready struct{ Event string }
+		if json.Unmarshal(out[1], &ready) != nil || ready.Event != "frame_ready" {
+			t.Fatalf("wired op=%s missing refresh: %s", step.op, out)
+		}
 	}
 	afterWiredCalls := countLines()
-	if afterWiredCalls != beforeCalls+4 {
-		t.Fatalf("expected 4 wired view CLI calls, got %d (total %d)", afterWiredCalls-beforeCalls, afterWiredCalls)
+	if afterWiredCalls != beforeCalls+8 {
+		t.Fatalf("expected 4 wired view CLI calls plus 4 refresh captures, got %d (total %d)", afterWiredCalls-beforeCalls, afterWiredCalls)
 	}
 
 	// Negative wired controls: invalid identity "../foreign", unadmitted container, and unknown_op "screenshot"
@@ -236,8 +240,16 @@ else: sys.exit(2)
 	}
 
 	listed, err := r.Handler(ctx, ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"list","params":{}}`)})
-	if err != nil || len(listed) != 1 {
+	if err != nil || len(listed) != 2 {
 		t.Fatalf("active surface disturbed after view operations: %s %v", listed, err)
+	}
+	var refresh struct{ Event string }
+	if json.Unmarshal(listed[1], &refresh) != nil || refresh.Event != "frame_ready" {
+		t.Fatalf("list missing fresh frame: %s", listed)
+	}
+	afterListCalls := countLines()
+	if afterListCalls != afterWiredCalls+1 {
+		t.Fatalf("list must capture exactly one refresh: before=%d after=%d", afterWiredCalls, afterListCalls)
 	}
 
 	vm, err := view.NewFromEnvironment()
@@ -254,8 +266,8 @@ else: sys.exit(2)
 			t.Fatalf("invalid identity %q stop: %v", badID, err)
 		}
 	}
-	if got := countLines(); got != afterWiredCalls {
-		t.Fatalf("invalid identity executed native CLI: before=%d after=%d", afterWiredCalls, got)
+	if got := countLines(); got != afterListCalls {
+		t.Fatalf("invalid identity executed native CLI: before=%d after=%d", afterListCalls, got)
 	}
 
 	var fault *cli.Fault

@@ -364,7 +364,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # checkout v4.2.2
         with:
           repository: oguirado/capsule-ui-kit
-          ref: bf31bc201987206d16dbd88d93102f9d5ce026f9
+          ref: aaada9dedc177b096e8b4764959e258e76c1ef02
           token: ${{ secrets.KIT_REPO_TOKEN }}
           path: kit-checkout
           fetch-depth: 1

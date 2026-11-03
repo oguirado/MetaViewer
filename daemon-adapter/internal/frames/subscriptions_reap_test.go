@@ -74,14 +74,16 @@ func TestSubscriptionReapsTerminalTasks(t *testing.T) {
 					t.Error("terminal failure was lost after reaping")
 				}
 				if mode == "delivery_failure" {
-					select {
-					case msg := <-events:
-						var event struct{ Event string }
-						if err := json.Unmarshal(msg, &event); err != nil || event.Event != "frame_ready" {
-							t.Fatalf("delivery failure did not follow frame publication: %s (%v)", msg, err)
+					for attempt := 0; attempt < 2; attempt++ {
+						select {
+						case msg := <-events:
+							var event struct{ Event string }
+							if err := json.Unmarshal(msg, &event); err != nil || event.Event != "frame_ready" {
+								t.Fatalf("delivery failure did not follow frame publication: %s (%v)", msg, err)
+							}
+						default:
+							t.Error("frame delivery was never attempted")
 						}
-					default:
-						t.Error("frame delivery was never attempted")
 					}
 				}
 				{
