@@ -1341,4 +1341,20 @@ onBeforeUnmount(() => {
   line-height: 14px;
   pointer-events: none;
 }
+/* The strip is part of the frame's flex height: wrapping consumes body space
+ * without overlapping pixels or clipping the safety labels mid word. */
+@container tile-chrome (max-width: 499px) {
+  .mv-surface:has(> .mv-surface__strip) { width:100%; height:100%; }
+  .mv-surface__strip {
+    flex-wrap:wrap;
+    gap:2px 8px;
+    padding:2px 8px;
+    white-space:normal;
+    overflow:visible;
+  }
+  .mv-surface__key { white-space:nowrap; }
+  .mv-surface__guard { margin-left:0; flex:0 1 auto; overflow-wrap:normal; }
+  .mv-surface__display-chip { flex:0 1 auto; overflow-wrap:normal; }
+  .mv-surface__state { display:none; }
+}
 </style>
