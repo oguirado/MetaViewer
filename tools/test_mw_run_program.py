@@ -1004,6 +1004,10 @@ class ProgramTests(unittest.TestCase):
         table['elements'][0]['name'] = 'mark-11'
         c3 = dict(schema='cu.action/v1',action=dict(kind='click',mark_id=11,x=25,y=30))
         self.assertEqual(program.MuseProgramPlanner.selected_name(c3,c2,table), 'mark-11')
+        for doubt in (dict(need_reasoning=True), dict(confidence=0.35)):
+            with self.subTest(doubt=doubt), self.assertRaises(host.OwnerRefused):
+                program.MuseProgramPlanner.selected_name(dict(c3, **doubt), c2, table)
+        self.assertEqual(program.MuseProgramPlanner.selected_name(dict(c3, confidence=0.45), c2, table), 'mark-11')
         for action in (dict(kind='click',x=25,y=30), dict(kind='type',text='unsafe'),
                        dict(kind='click',mark_id=12,x=25,y=30), dict(kind='click',mark_id=11,x=0,y=0)):
             with self.subTest(action=action), self.assertRaises(host.OwnerRefused):

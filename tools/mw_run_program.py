@@ -34,6 +34,9 @@ from metaviewer_agents.perception.vcore import VCorePerceptionAdapter, project_e
 from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
 
 
+MODEL_CLICK_MIN_CONFIDENCE = 0.4  # [MEASURED, 40 live replies] wrong 0.35, lowest correct 0.45
+
+
 class ProgramModelReplyRejected(RuntimeError):
     """A model reply was rejected before any proposal could exist."""
 
@@ -684,6 +687,12 @@ class MuseProgramPlanner:
     @staticmethod
     def selected_name(c3, c2, table):
         action = c3.get('action', {})
+        # A live "Press the C button" clicked the 7 at confidence 0.35 with this flag set; correct
+        # clicks measured 0.45 and above. A model that says it is guessing does not get to click.
+        confidence = c3.get('confidence')
+        host.need(c3.get('need_reasoning') is not True and
+                  (type(confidence) not in (int, float) or confidence >= MODEL_CLICK_MIN_CONFIDENCE),
+                  'MW_PROGRAM_MODEL_TARGET')
         host.need(c3.get('schema') == 'cu.action/v1' and action.get('kind') == 'click' and
                   type(action.get('mark_id')) is int, 'MW_PROGRAM_MODEL_TARGET')
         marks = [m for m in c2['marks'] if m.get('id') == action['mark_id']]
