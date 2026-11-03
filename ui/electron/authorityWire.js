@@ -721,7 +721,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     for (const [id, old] of capsuleStates) {
       if (old.profile_id === state.profile_id && id.startsWith('pending:')) capsuleStates.delete(id);
     }
-    if (state.state === 'destroyed' || state.state === 'lost') capsuleStates.delete(state.surface_id);
+    if (state.state === 'destroyed') capsuleStates.delete(state.surface_id);
     else capsuleStates.set(state.surface_id, state);
   };
   /** @type {number} */

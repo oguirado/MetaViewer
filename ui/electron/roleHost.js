@@ -324,10 +324,14 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   // profile definition. Geometry comes from one configured browser template.
   const template = [...profiles].sort((a,b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0).find(p => {
     const configured = raw[p.id];
-    return configured?.Kind === 'browser' && configured.NativeKind === 'browser'
-      && configured.Width === 1280 && configured.Height === 900
-      && typeof configured.RAMRoot === 'string' && configured.RAMRoot.startsWith('/dev/shm')
-      && typeof configured.Display === 'string'
+    const kind = configured?.Kind ?? configured?.kind;
+    const nativeKind = configured?.NativeKind ?? configured?.native_kind;
+    const width = configured?.Width ?? configured?.width, height = configured?.Height ?? configured?.height;
+    const ramRoot = configured?.RAMRoot ?? configured?.ram_root, display = configured?.Display ?? configured?.display;
+    return kind === 'browser' && nativeKind === 'browser'
+      && width === 1280 && height === 900
+      && typeof ramRoot === 'string' && ramRoot.startsWith('/dev/shm')
+      && typeof display === 'string'
       && !isForeignIdentity(p.id);
   });
   const dynamicProfiles = new Map();
@@ -449,6 +453,8 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     let trace = null, mountedRole = 'agent';
     try {
       const current = authoritative(surfaceId);
+      // Desktop-window capture has no Xpra client or human-binding file.
+      if (windowProfiles.has(current.profile_id)) throw refuse('XPRA_BINDING_REFUSED');
       if (current.control !== (roleFor(current) === 'human' ? 'human' : 'agent')) throw refuse('XPRA_ROLE_OWNERSHIP');
       if (sessions.get(surfaceId)?.active) {
         sessions.get(surfaceId).resize(bounds);

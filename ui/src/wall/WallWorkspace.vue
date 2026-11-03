@@ -194,6 +194,8 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {(options:{group:unknown,position:string,index:number}) => void} [moveTo]
  * @property {() => void} close
  * @property {() => void} setActive
+ * @property {string} [title]
+ * @property {(title:string) => void} [setTitle]
  */
 
 /**
@@ -579,6 +581,11 @@ export function createWallWorkspaceController(options = {}) {
           const deadId = WALL_PANEL_ID_PREFIX + row.id;
           const deadPanel = api.getPanel(deadId);
           if (deadPanel) { captureSlot(deadId); deadPanel.api.close(); collapseEmptyGroups(); }
+        } else if (row?.id === row?.surfaceId) {
+          // Native window metadata can arrive after the provisional core row.
+          const panel = api.getPanel(WALL_PANEL_ID_PREFIX + row.id);
+          const title = panelTitle(row);
+          if (panel?.api.setTitle && panel.api.title !== title) panel.api.setTitle(title);
         }
       }
       pruneOrphanPanels(now);
