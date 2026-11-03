@@ -163,6 +163,7 @@ judgeki-2abc0a3eae20	changes/unreleased/judge-kit-capsule-net.md
 judgeki-16dad1d0cde7	changes/unreleased/judge-kit-package-tool-deps.md
 judgest-1257a8a92a8d	changes/unreleased/judge-stop-capsule-ram.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
+judge-tour.md	changes/unreleased/judge-tour.md
 launcher-role-step.md	changes/unreleased/launcher-role-step.md
 launcher-two-kinds.md	changes/unreleased/launcher-two-kinds.md
 main-rss-headroom.md	changes/unreleased/main-rss-headroom.md
@@ -1105,6 +1106,7 @@ HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
 INSTALL.md	docs/INSTALL.md
 JUDGES.md	docs/JUDGES.md
 JUDGE_QUICKSTART.md	docs/JUDGE_QUICKSTART.md
+JUDGE_TOUR.md	docs/JUDGE_TOUR.md
 MULTI_CAPSULE.md	docs/MULTI_CAPSULE.md
 MW_RUN_FIRST_RUN.md	docs/MW_RUN_FIRST_RUN.md
 P18B-HEADER-MENUS.md	docs/P18B-HEADER-MENUS.md
@@ -1469,6 +1471,7 @@ testgat-00ce04a7a024	tests/test_gate_ui_smoke_leg.py
 testgit-a33a0afaaea0	tests/test_gitleaks_config.py
 test_hygiene.py	tests/test_hygiene.py
 test_install_docs.py	tests/test_install_docs.py
+testjud-2323ef3b1389	tests/test_judge_tour_docs.py
 test_kill_guard.py	tests/test_kill_guard.py
 test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
