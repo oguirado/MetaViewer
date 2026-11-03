@@ -487,7 +487,7 @@ func (s *Store) Save(ctx context.Context, r Request) (Manifest, error) {
 		return m, e
 	}
 	required := estimate.Bytes + 65536
-	if required < 0 || required > s.cfg.MaxBytes-used {
+	if required < 0 || used > s.cfg.MaxBytes-65536 {
 		return m, errors.New("SLOT_QUOTA")
 	}
 	fs, e := filesystem(s.slot(r.SlotID))
@@ -513,7 +513,7 @@ func (s *Store) Save(ctx context.Context, r Request) (Manifest, error) {
 	if e = s.step("staging"); e != nil {
 		return m, e
 	}
-	payload, e := s.helper(ctx, "pack", profile, stage, s.cfg.MaxBytes)
+	payload, e := s.helper(ctx, "pack", profile, stage, s.cfg.MaxBytes-used-65536)
 	if e != nil {
 		return m, e
 	}
@@ -522,6 +522,9 @@ func (s *Store) Save(ctx context.Context, r Request) (Manifest, error) {
 	}
 	m = Manifest{SavedAt: time.Now().UTC().Format(time.RFC3339Nano), Version: Version, Generation: old.Generation + 1, ProfileID: r.ProfileID, Kind: r.Kind, Architecture: r.Architecture, Image: r.Image, PayloadSHA256: payload.Hash, PayloadBytes: payload.Bytes, ExpandedBytes: payload.Expanded, Entries: payload.Entries}
 	b, _ := json.Marshal(m)
+	if payload.Bytes < 0 || payload.Bytes > s.cfg.MaxBytes-used-int64(len(b))-65536 {
+		return m, errors.New("SLOT_QUOTA")
+	}
 	m.Digest = hash(b)
 	if e = writeSync(filepath.Join(stage, "manifest.json"), b); e != nil {
 		return m, e
@@ -634,6 +637,9 @@ func (s *Store) Load(ctx context.Context, r Request) (Manifest, error) {
 	if e != nil {
 		return m, e
 	}
+	if m.Entries < 0 || uint64(m.Entries)+3 > fs.Ffree {
+		return m, errors.New("SLOT_DISK_INODES")
+	}
 	if m.ExpandedBytes < 0 || m.ExpandedBytes > math.MaxInt64-65536 || fs.Bsize <= 0 || fs.Bavail > math.MaxUint64/uint64(fs.Bsize) || uint64(m.ExpandedBytes+65536) > fs.Bavail*uint64(fs.Bsize) {
 		return m, errors.New("SLOT_DISK_SPACE")
 	}
@@ -660,7 +666,17 @@ func (s *Store) Load(ctx context.Context, r Request) (Manifest, error) {
 		return m, e
 	}
 	if _, e = s.helper(ctx, "unpack", stage, s.generation(r.SlotID, m.Digest), s.cfg.MaxBytes); e != nil {
-		return m, e
+		// An uncertain helper may still be writing; leave its intent for recovery.
+		if strings.Contains(e.Error(), "SLOT_HELPER_CLEANUP_UNCERTAIN") {
+			return m, e
+		}
+		if _, ce := s.helper(ctx, "discard", stage, "", s.cfg.MaxBytes); ce != nil {
+			return m, errors.Join(e, ce)
+		}
+		if ce := syncDir(filepath.Dir(stage)); ce != nil {
+			return m, errors.Join(e, ce)
+		}
+		return m, errors.Join(e, s.clear(r.SlotID))
 	}
 	if e = s.step("load-extract"); e != nil {
 		return m, e
@@ -705,7 +721,7 @@ func (s *Store) Reconcile(ctx context.Context, id string) error {
 		return e
 	}
 	var in intent
-	if decode(b, &in) != nil || !idPattern.MatchString(in.Profile) || protected(in.Profile) {
+	if decode(b, &in) != nil || !idPattern.MatchString(in.Profile) || protected(in.Profile) || in.Profile == s.cfg.LiveProfile {
 		return errors.New("SLOT_QUARANTINED")
 	}
 	v, e := lock(filepath.Join(s.cfg.Root, "locks", in.Profile+".guard"))
@@ -718,9 +734,45 @@ func (s *Store) Reconcile(ctx context.Context, id string) error {
 	}
 	switch in.Operation {
 	case "save":
-		_, e = s.selectLocked(ctx, id)
-		if e != nil && !os.IsNotExist(e) {
-			return e
+		best, err := s.selectLocked(ctx, id)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		// Discard only unpublished successors; older retained generations stay.
+		dir := filepath.Join(s.slot(id), "generations")
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			p := filepath.Join(dir, entry.Name())
+			if !digestPattern.MatchString(entry.Name()) || privateDir(p) != nil {
+				return errors.New("SLOT_QUARANTINED")
+			}
+			raw, err := read(filepath.Join(p, "manifest.json"))
+			var m Manifest
+			if err != nil || hash(raw) != entry.Name() || decode(raw, &m) != nil {
+				return errors.New("SLOT_QUARANTINED")
+			}
+			if m.Generation > best.Generation {
+				if err = os.RemoveAll(p); err != nil {
+					return err
+				}
+			}
+		}
+		if err = syncDir(dir); err != nil {
+			return err
+		}
+		entries, err = os.ReadDir(s.slot(id))
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if strings.HasPrefix(entry.Name(), "staging-") || strings.HasPrefix(entry.Name(), "ref-") {
+				if err = os.RemoveAll(filepath.Join(s.slot(id), entry.Name())); err != nil {
+					return err
+				}
+			}
 		}
 	case "load":
 		if !strings.HasPrefix(in.Stage, ".slot-load-") || filepath.Base(in.Stage) != in.Stage {
@@ -731,11 +783,24 @@ func (s *Store) Reconcile(ctx context.Context, id string) error {
 			return e
 		}
 		b, e := inode(filepath.Join(s.cfg.Root, "profiles", in.Stage))
+		if os.IsNotExist(e) && a == in.Before && in.Before != 0 && in.Prepared != 0 && in.Before != in.Prepared {
+			// Cleanup may have completed before the intent was durably cleared.
+			if e = syncDir(filepath.Join(s.cfg.Root, "profiles")); e != nil {
+				return e
+			}
+			return s.clear(id)
+		}
 		if e != nil {
 			return e
 		}
 		if !((a == in.Before && b == in.Prepared) || (a == in.Prepared && b == in.Before)) {
 			return errors.New("SLOT_QUARANTINED")
+		}
+		if a == in.Before {
+			// No exchange occurred: discard even a partially extracted tree.
+			if _, e = s.helper(ctx, "discard", filepath.Join(s.cfg.Root, "profiles", in.Stage), "", s.cfg.MaxBytes); e != nil {
+				return e
+			}
 		}
 		if e = syncDir(filepath.Join(s.cfg.Root, "profiles")); e != nil {
 			return e
@@ -756,7 +821,7 @@ func (s *Store) docker(ctx context.Context, op, profile, stage string, cap int64
 	if profile != "" {
 		parent := filepath.Dir(profile)
 		mode := ",readonly"
-		if op == "provision" || op == "unpack" || op == "exchange" || op == "exchange-probe" {
+		if op == "provision" || op == "unpack" || op == "exchange" || op == "exchange-probe" || op == "discard" {
 			mode = ""
 		}
 		args = append(args, "--mount", "type=bind,src="+parent+",dst=/profiles"+mode)
@@ -808,7 +873,7 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 // with pipefail; a second streaming pass verifies the on-disk bytes. Validation
 // precedes extraction and rejects all links, special nodes and unsafe paths.
 const helperScript = `
-import os,sys,stat,json,hashlib,tarfile,subprocess,ctypes,tempfile,resource
+import os,sys,stat,json,hashlib,tarfile,subprocess,ctypes,tempfile,resource,shutil
 OWNER = 10001
 op,p,s,cap=sys.argv[1:]; cap=int(cap)
 excluded={'SingletonLock','SingletonCookie','SingletonSocket'}
@@ -858,6 +923,9 @@ if op=='provision':
  assert not os.path.islink(p)
  os.makedirs(p,mode=0o700,exist_ok=True);assert os.path.isdir(p)
  os.chown(p,OWNER,OWNER);os.chmod(p,0o700);syncdir(os.path.dirname(p));r={}
+elif op=='discard':
+ assert os.path.basename(p).startswith('.slot-load-') and stat.S_ISDIR(os.lstat(p).st_mode)
+ shutil.rmtree(p);syncdir(os.path.dirname(p));r={}
 elif op=='probe':
  total,count=inventory(p);r=dict(bytes=total+count*12288+65536,expanded=total,entries=count)
 elif op=='pack':
@@ -873,6 +941,7 @@ elif op=='pack':
 elif op=='verify':r=verify(s)
 elif op=='unpack':
  r=verify(s)
+ assert os.statvfs(p).f_favail>=r['entries'], 'SLOT_DISK_INODES'
  assert not os.listdir(p) and stat.S_ISDIR(os.lstat(p).st_mode)
  # All members were validated above. Refuse conflicting hierarchy on extraction.
  subprocess.check_call(['tar','--numeric-owner','--same-owner','--same-permissions','-xf',os.path.join(s,'payload.tar'),'-C',p],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)

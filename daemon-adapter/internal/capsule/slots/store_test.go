@@ -485,3 +485,150 @@ func TestCopySelectedSlotToNewProfileAndRejectForeignSourceBeforeTouch(t *testin
 		t.Fatal("copy touched source", e)
 	}
 }
+
+func TestReconcileRemovesUnpublishedGeneration(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	s.cfg.Failpoint = func(p string) error {
+		if p == "generation" {
+			return errors.New("crash")
+		}
+		return nil
+	}
+	m, e := s.Save(ctx, r)
+	if e == nil {
+		t.Fatal("missing crash")
+	}
+	s.cfg.Failpoint = nil
+	if e = s.Reconcile(ctx, r.SlotID); e != nil {
+		t.Fatal(e)
+	}
+	if _, e = os.Stat(s.generation(r.SlotID, m.Digest)); !os.IsNotExist(e) {
+		t.Fatal("unpublished generation retained", e)
+	}
+	if _, e = s.Save(ctx, r); e != nil {
+		t.Fatal("retry failed", e)
+	}
+}
+
+func TestReconcileRefusesNowLiveProfile(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	if _, e := s.Save(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	s.cfg.Failpoint = func(p string) error {
+		if p == "load-prepared" {
+			return errors.New("crash")
+		}
+		return nil
+	}
+	if _, e := s.Load(ctx, r); e == nil {
+		t.Fatal("missing crash")
+	}
+	s.cfg.LiveProfile = r.ProfileID
+	if e := s.Reconcile(ctx, r.SlotID); e == nil {
+		t.Fatal("live recovery accepted")
+	}
+	if e := s.noIntent(r.SlotID); e == nil {
+		t.Fatal("live intent cleared")
+	}
+	s.cfg.LiveProfile = ""
+	if e := s.Reconcile(ctx, r.SlotID); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestPartialExtractionCleanedWithoutPublication(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	if _, e := s.Save(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	s.helper = func(c context.Context, op, p, stage string, cap int64) (receipt, error) {
+		if op == "unpack" {
+			if e := os.WriteFile(filepath.Join(p, "partial"), []byte("partial"), 0600); e != nil {
+				t.Fatal(e)
+			}
+			return receipt{}, errors.New("ENOSPC")
+		}
+		return localHelper(c, op, p, stage, cap)
+	}
+	if _, e := s.Load(ctx, r); e == nil {
+		t.Fatal("partial extraction accepted")
+	}
+	b, e := os.ReadFile(filepath.Join(s.cfg.Root, "profiles/demo/data"))
+	if e != nil || string(b) != "original\x00bytes" {
+		t.Fatal("destination changed", e)
+	}
+	stages, e := filepath.Glob(filepath.Join(s.cfg.Root, "profiles/.slot-load-*"))
+	if e != nil || len(stages) != 0 {
+		t.Fatal("partial staging retained", stages, e)
+	}
+	if e = s.noIntent(r.SlotID); e != nil {
+		t.Fatal(e)
+	}
+}
+
+func TestSaveQuotaUsesPackedSize(t *testing.T) {
+	s, r := fixture(t)
+	for i := range 24 {
+		if e := os.WriteFile(filepath.Join(s.cfg.Root, "profiles/demo", fmt.Sprint(i)), []byte("x"), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	s.cfg.MaxBytes = 200000
+	if _, e := s.Save(context.Background(), r); e != nil {
+		t.Fatal("small packed profile refused", e)
+	}
+	s.cfg.MaxBytes = 1
+	if _, e := s.Save(context.Background(), r); e == nil {
+		t.Fatal("quota exceeded")
+	}
+}
+
+func TestUnpackRefusesInsufficientInodes(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	m, e := s.Save(ctx, r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	stage := t.TempDir()
+	script := strings.Replace(helperScript, "OWNER = 10001", "OWNER = "+fmtInt(int64(os.Getuid()))+"\nclass FullInodes:\n f_favail=0\nos.statvfs=lambda p: FullInodes()", 1)
+	out, e := exec.Command("python3", "-c", script, "unpack", stage, s.generation(r.SlotID, m.Digest), fmtInt(s.cfg.MaxBytes)).CombinedOutput()
+	if e == nil || !strings.Contains(string(out), "SLOT_DISK_INODES") {
+		t.Fatal("inode shortage accepted", e, string(out))
+	}
+	entries, e := os.ReadDir(stage)
+	if e != nil || len(entries) != 0 {
+		t.Fatal("extracted despite inode shortage", e)
+	}
+}
+
+func TestReconcileAfterStagingCleanupCrash(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	if _, e := s.Save(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	s.cfg.Failpoint = func(p string) error {
+		if p == "load-intent" {
+			return errors.New("crash")
+		}
+		return nil
+	}
+	if _, e := s.Load(ctx, r); e == nil {
+		t.Fatal("missing crash")
+	}
+	stages, e := filepath.Glob(filepath.Join(s.cfg.Root, "profiles/.slot-load-*"))
+	if e != nil || len(stages) != 1 {
+		t.Fatal(stages, e)
+	}
+	if e = os.RemoveAll(stages[0]); e != nil {
+		t.Fatal(e)
+	}
+	if e = s.Reconcile(ctx, r.SlotID); e != nil {
+		t.Fatal("cleanup recovery failed", e)
+	}
+}
