@@ -1407,14 +1407,17 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 			fresh.SetHostWindowMinimized(id, minimized)
 		},
 		OnTerminal: func(id string, reason string) {
-			ev, err := fresh.MarkHostWindowLost(id, reason)
+			ev, err := fresh.BeginHostWindowLost(id, reason)
 			if err == nil && len(ev) > 0 && session.emit != nil {
 				lock := session.surfaceLock(id)
 				if lock != nil {
 					lock.Lock()
 					defer lock.Unlock()
 				}
-				_ = session.emit(session.ctx, ev)
+				err = session.emit(session.ctx, ev)
+				fresh.CompleteLost(id, err == nil && session.ctx.Err() == nil)
+			} else if err == nil && len(ev) > 0 {
+				fresh.CompleteLost(id, false)
 			}
 		},
 		Admit: func() error {

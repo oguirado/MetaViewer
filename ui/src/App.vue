@@ -798,7 +798,10 @@ async function createWindowCapsule(body) {
       reason: 'host_window_unavailable: desktop window attaching is not available on this host',
     };
   }
-  const reply = await roles.createWindow(body.window);
+  let reply = await roles.createWindow(body.window);
+  if (reply?.ok === false && reply.code === 'PROFILE_ALREADY_BOUND' && reply.surfaceId) {
+    reply = {ok:true, reused:true, surfaceId:reply.surfaceId};
+  }
   if (!reply?.ok) {
     const code = typeof reply?.code === 'string' && reply.code.length > 0 ? reply.code : 'HOST_WINDOW_UNAVAILABLE';
     const reason = typeof reply?.reason === 'string' && reply.reason.length > 0 ? reply.reason : code;
@@ -809,7 +812,7 @@ async function createWindowCapsule(body) {
     await nextTick();
     if (reply.surfaceId) {
       await revealOpenedIdentity(reply.surfaceId, 'agent');
-      if (props.runtime?.intentBuilders) {
+      if (!reply.reused && props.runtime?.intentBuilders) {
         wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
         applyWallControl(reply.surfaceId, 'take_control');
       }

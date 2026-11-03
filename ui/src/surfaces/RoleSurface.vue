@@ -9,14 +9,24 @@ export async function findLiveHostWindow(api, previous) {
   return rows.find((/** @type {any} */ row) => row.xid === previous.xid && row.witness === previous.witness) || null;
 }
 
+// A successful detach receipt survives a failed create for this renderer API only.
+// Unknown surfaces without that receipt must still fail closed.
+const detachedHostWindows = new WeakMap();
 /** @param {any} api @param {string} surfaceId @param {any} previous */
 export async function reopenHostWindow(api, surfaceId, previous) {
   const current = await findLiveHostWindow(api, previous);
   if (!current) throw Error('HOST_WINDOW_UNAVAILABLE');
-  const detached = await api.detachWindow(surfaceId);
-  if (!detached?.ok) throw Error(detached?.reason || detached?.code || 'HOST_WINDOW_DETACH_FAILED');
+  let detached = detachedHostWindows.get(api);
+  if (!detached) { detached = new Map(); detachedHostWindows.set(api, detached); }
+  const witnessKey = `${current.xid}:${current.witness}`;
+  if (detached.get(surfaceId) !== witnessKey) {
+    const receipt = await api.detachWindow(surfaceId);
+    if (!receipt?.ok) throw Error(receipt?.reason || receipt?.code || 'HOST_WINDOW_DETACH_FAILED');
+    detached.set(surfaceId, witnessKey);
+  }
   const opened = await api.createWindow(current);
   if (!opened?.ok) throw Error(opened?.reason || opened?.code || 'HOST_WINDOW_UNAVAILABLE');
+  detached.delete(surfaceId);
   return opened;
 }
 
@@ -435,7 +445,7 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
             <template v-if="tileLayout"><button v-for="control in sizeControls" :key="control.action" type="button" role="menuitem" :id="`tile-menu-size-${control.action}-${surfaceId}`" :aria-label="control.title" @click="runMenu(() => resizeTile(control.action))">{{ control.title }}</button></template>
             <hr v-if="tileLayout" role="separator">
           </div>
-          <button :id="`tile-switch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/mode/switch`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('switchMode'))">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>
+          <button v-if="!hostWindow" :id="`tile-switch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/mode/switch`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('switchMode'))">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>
           <button v-if="role === 'human'" role="menuitem" :id="`tile-login-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/login/confirm`" title="Remembers that this identity has a signed-in session; shown as Last login in Identities." type="button" :disabled="confirmed || !!progress" @click="runMenu(confirmLogin)">{{ confirmed ? 'Marked as logged in' : 'Mark as logged in' }}</button>
           <button v-if="role === 'agent' && control === 'agent'" role="menuitem" :id="`tile-watch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/watch`" type="button" @click="runMenu(() => watching = !watching)">{{ watching ? 'Close watch' : 'Watch read-only' }}</button>
           <template v-if="tileLayout">
