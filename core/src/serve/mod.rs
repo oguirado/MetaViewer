@@ -13,6 +13,9 @@
 //! well-formed messages receive journalled POLICY verdicts keyed by request/msg id.
 //! Saturated peers receive a terminal surface_event.error QUEUE_OVERFLOW through
 //! a reserved notification slot before disconnection; normal queue memory is bounded.
+//! [TARGET, unit decision] Replay capacity exhaustion uses the same reserved
+//! terminal path with REPLAY_EXHAUSTED; reconnect refuses with that diagnostic
+//! without discarding session nonce evidence or admitting the failed envelope.
 //! Frame witnesses are retained only from regular, non-symlink /dev/shm files,
 //! bounded to 64 MiB and verified against the advertised digest before commit.
 //! [TARGET, unit decision] UI and agent may create/destroy/list and subscribe to
@@ -562,6 +565,16 @@ impl Server {
         body: Command,
         tag: &str,
     ) -> Result<()> {
+        let env = self.outbound_at(ts_ns, to, body, tag)?;
+        self.enqueue(to, env)
+    }
+    fn outbound_at(
+        &mut self,
+        ts_ns: u64,
+        to: &Endpoint,
+        body: Command,
+        tag: &str,
+    ) -> Result<Envelope> {
         self.serial = self
             .serial
             .checked_add(1)
@@ -578,6 +591,48 @@ impl Server {
             body,
         };
         decode_envelope(&serde_json::to_string(&env)?)?;
+        Ok(env)
+    }
+    fn replay_exhausted_at(&mut self, ts_ns: u64, to: &Endpoint) -> Result<Envelope> {
+        self.outbound_at(
+            ts_ns,
+            to,
+            Command::SurfaceEvent(Box::new(serde_json::from_value(
+                serde_json::json!({"schema":"surface_event/v0.2","event":"error",
+                "data":{"surface_id":to.instance,"code":"REPLAY_EXHAUSTED",
+                "detail":"Session replay capacity exhausted; start a fresh session"}}),
+            )?)),
+            "core",
+        )
+    }
+    fn record_envelope_at(&mut self, ts_ns: u64, env: &Envelope) -> Result<bool> {
+        match self
+            .replay
+            .record(&env.session_id, &env.from, &env.nonce, env.seq)
+        {
+            Ok(()) => Ok(true),
+            Err(
+                crate::replay::ReplayError::CapacityExceeded
+                | crate::replay::ReplayError::Exhausted,
+            ) => {
+                let diagnostic = self.replay_exhausted_at(ts_ns, &env.from)?;
+                let connection = self
+                    .connections
+                    .get(&env.from)
+                    .ok_or_else(|| invalid("connection retired"))?;
+                let mut terminal = connection
+                    .terminal
+                    .lock()
+                    .map_err(|_| invalid("poisoned terminal slot"))?;
+                if terminal.is_none() {
+                    *terminal = Some(diagnostic);
+                }
+                Ok(false)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+    fn enqueue(&self, to: &Endpoint, env: Envelope) -> Result<()> {
         let c = self
             .connections
             .get(to)
@@ -1005,9 +1060,8 @@ impl Server {
             return Ok(false);
         }
         peer.check_sender(env)?;
-        let _now_ns = self.now()?;
-        self.replay
-            .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
+        let now_ns = self.now()?;
+        self.record_envelope_at(now_ns, env)?;
         Ok(true)
     }
     fn route_peer_envelope(
@@ -1224,8 +1278,9 @@ impl Server {
         pre_pixels: Option<Result<VerifiedPixels>>,
     ) -> Result<()> {
         let boundary_started = Instant::now();
-        self.replay
-            .record(&env.session_id, &env.from, &env.nonce, env.seq)?;
+        if !self.record_envelope_at(now_ns, &env)? {
+            return Ok(());
+        }
         // [TARGET, unit decision] An authenticated, replay-reserved probe ack
         // changes no surface state and retains no journal witness.
         if env.from.component == Component::Daemon {
@@ -2312,7 +2367,7 @@ async fn connection_with_liveness(
         }
         tokio::time::sleep(Duration::from_millis(2)).await;
     }
-    let (id, epoch) = {
+    let admitted = (|| -> Result<(u64, u64)> {
         let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
         if s.connections.contains_key(ready.endpoint()) {
             return Err(invalid("endpoint already connected"));
@@ -2344,7 +2399,31 @@ async fn connection_with_liveness(
         );
         let hello = s.config.core.hello.clone();
         s.send_at(now_ns, ready.endpoint(), Command::Hello(Box::new(hello)))?;
-        (id, epoch)
+        Ok((id, epoch))
+    })();
+    let (id, epoch) = match admitted {
+        Ok(connection) => connection,
+        Err(error) => {
+            if matches!(
+                error.downcast_ref::<crate::replay::ReplayError>(),
+                Some(
+                    crate::replay::ReplayError::CapacityExceeded
+                        | crate::replay::ReplayError::Exhausted
+                )
+            ) {
+                let diagnostic = {
+                    let mut s = server.lock().map_err(|_| invalid("poisoned authority"))?;
+                    let now_ns = s.now()?;
+                    s.replay_exhausted_at(now_ns, ready.endpoint())?
+                };
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(1),
+                    write_frame(&mut stream, &diagnostic),
+                )
+                .await;
+            }
+            return Err(error);
+        }
     };
     let (mut reader, mut writer) = stream.into_split();
     let writer_closed = closed.clone();
@@ -2428,13 +2507,19 @@ async fn connection_with_liveness(
                 if is_daemon && Instant::now() >= next_probe {
                     let mut guard = server.lock().map_err(|_| invalid("poisoned authority"))?;
                     let now = guard.now()?;
-                    guard.send_tagged_at(
+                    if let Err(error) = guard.send_tagged_at(
                         now, ready.endpoint(),
                         Command::SurfaceRequest(Box::new(serde_json::from_value(
                             serde_json::json!({"schema":"surface_request/v0.2","op":"list","params":{}}),
                         )?)),
                         "core-keepalive",
-                    )?;
+                    ) {
+                        // The writer owns the reserved overflow terminal. Do not
+                        // abort it while it drains a backpressured socket.
+                        if !matches!(error.downcast_ref::<SendFailure>(), Some(SendFailure::QueueOverflow(_))) {
+                            return Err(error);
+                        }
+                    }
                     next_probe = Instant::now() + probe_interval;
                 }
                 server
@@ -2491,7 +2576,12 @@ async fn connection_with_liveness(
     }
     // Removing the sender closes the bounded queue. A half-close still receives
     // its queued verdicts; a stalled reader cannot retain the writer forever.
-    if result.is_err()
+    let capture_terminal = result.as_ref().err().is_some_and(|error| {
+        error
+            .downcast_ref::<capture::CaptureTerminalFailure>()
+            .is_some()
+    });
+    if (result.is_err() && !capture_terminal)
         || tokio::time::timeout(Duration::from_secs(1), &mut writer_task)
             .await
             .is_err()
@@ -2521,6 +2611,98 @@ mod tests;
 
 #[cfg(test)]
 mod nv_regressions {
+
+    #[test]
+    fn v027_capture_storage_terminal_flushes_before_socket_closes() {
+        run(async {
+            let f = Fixture::new();
+            let uid = effective_uid().unwrap();
+            let socket = f.root.join("capture-flush.sock");
+            let listener = bind(&socket, uid).await.unwrap();
+            let mut state =
+                Server::open(f.server.config.clone(), &f.root.join("flush-state"), uid).unwrap();
+            state.capture.exports_recovered = true;
+            let server = Arc::new(Mutex::new(state));
+            let task = tokio::spawn(serve(listener, server.clone(), uid));
+            let mut stream = UnixStream::connect(&socket).await.unwrap();
+            write_frame(
+                &mut stream,
+                &f.envelope(
+                    Component::Ui,
+                    1,
+                    serde_json::to_value(&f.server.config.peers[2].hello).unwrap(),
+                ),
+            )
+            .await
+            .unwrap();
+            read_frame(&mut stream).await.unwrap().unwrap();
+            crate::journal::fail_next_append_with_torn_event_sidecar(&server.lock().unwrap().root);
+            let request = f.envelope(Component::Ui, 2, json!({"schema":"record_request/v0.2", "request_id":"storage-wire", "op":"ram_start", "params":{"surface_id":"surface-demo", "recording_id":"recording-storage", "ring_bytes":8388608, "max_fps":3}}));
+            write_frame(&mut stream, &request).await.unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(2), read_frame(&mut stream))
+                .await
+                .unwrap()
+                .unwrap()
+                .expect("terminal reply before EOF");
+            let value = serde_json::to_value(response.body).unwrap();
+            assert_eq!(value["data"]["code"], "CAPTURE_REPLY");
+            let detail: Value =
+                serde_json::from_str(value["data"]["detail"].as_str().unwrap()).unwrap();
+            assert_eq!(detail["request_id"], "storage-wire");
+            assert_eq!(detail["reply"]["code"], "CAPTURE_UNAVAILABLE");
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), read_frame(&mut stream))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_none()
+            );
+            task.abort();
+            let _ = task.await;
+        });
+    }
+
+    #[test]
+    fn v027_capture_storage_failure_has_correlated_terminal_without_commit() {
+        let mut f = Fixture::new();
+        f.seed();
+        let _ui = f.attach(Component::Ui, 16);
+        let env = f.envelope(Component::Ui, 2, json!({"schema":"record_request/v0.2", "request_id":"storage-stop", "op":"ram_start", "params":{"surface_id":"surface-demo", "recording_id":"recording-storage", "ring_bytes":8388608, "max_fps":3}}));
+        let boundary = f
+            .server
+            .authority
+            .retain_witness(b"capture-boundary")
+            .unwrap();
+        f.server.capture.exports_recovered = true;
+        let mut frame: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        frame["width"] = 1.into();
+        frame["height"] = 1.into();
+        frame["sha256"] = sha256_hex(&[1, 2, 3]).into();
+        f.server
+            .capture
+            .frame(&serde_json::from_value(frame).unwrap(), vec![1, 2, 3], 0)
+            .unwrap();
+        let before = f.server.capture.clone();
+        crate::journal::fail_next_append_with_torn_event_sidecar(&f.server.root);
+        let Command::RecordRequest(request) = &env.body else {
+            panic!("record request");
+        };
+        assert!(f.server.capture_wire(0, &env, request, boundary).is_err());
+        assert_eq!(f.server.capture, before);
+        let terminal = f.server.connections[&env.from].terminal.lock().unwrap();
+        let value =
+            serde_json::to_value(&terminal.as_ref().expect("missing terminal diagnostic").body)
+                .unwrap();
+        assert_eq!(value["data"]["code"], "CAPTURE_REPLY");
+        let reply: Value = serde_json::from_str(value["data"]["detail"].as_str().unwrap()).unwrap();
+        assert_eq!(reply["request_id"], "storage-stop");
+        assert_eq!(reply["method"], "recordStart");
+        assert_eq!(reply["reply"]["code"], "CAPTURE_UNAVAILABLE");
+    }
+
     use super::*;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -5388,3 +5570,6 @@ mod reconnect_tests;
 
 #[cfg(test)]
 mod b1_stale_frame_tests;
+
+#[cfg(test)]
+mod v027_tests;

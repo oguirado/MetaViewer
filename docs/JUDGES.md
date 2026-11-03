@@ -1,3 +1,10 @@
+# First run of the packaged judge kit
+
+Start with [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md): fetch verified assets, run
+`doctor --before-install`, install, then run full doctor and the app. T0 below is
+a separate checkout fixture. Legacy capsule networking reaches no public site today;
+public browsing requires the compatible Open image and firewall.
+
 # Judge the offline conversation
 
 From the repository root, with Node on PATH and the locked Wender checkout
@@ -7,7 +14,9 @@ configured through `MV_MW_WENDER_ROOT`, run:
 node tests/e2e/packs/builtin-fixtures/META/hosted.mjs
 ```
 
-This command needs no account, browser, display, downloads or network. It runs
+With those prerequisites already installed, this command needs no account,
+browser, display, downloads or network. The locked Wender checkout is an external
+prerequisite, not supplied by a fresh MetaViewer clone. It runs
 the real MemoryWeb runner through the existing hosted RPC path against the
 hosted capsule and core fakes. The reviewed neutral page is
 `tests/e2e/packs/builtin-fixtures/META/pages/meta-chat.html`; its digest is

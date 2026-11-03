@@ -1,0 +1,3 @@
+- Publish a forced current agent frame after successful release control so unchanged pages clear the core freshness fence.
+- Refresh active agent lifecycle snapshots after their state event using the same ordered frame path.
+- Preserve successful state changes when capture or publication fails and log the diagnostic for later subscription recovery.

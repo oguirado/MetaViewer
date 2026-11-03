@@ -35,6 +35,28 @@ from .observe import (
 )
 from .tools import ToolValidationError, _check_action, _check_expectation
 
+# [TARGET, unit decision] Share the pipe timeout type without another spawn site.
+BoundedProcessTimeout = subprocess.TimeoutExpired
+
+
+def detect_stopstate(state, *, url, frame_urls, headers):
+    """Keep compiled IPC and receipt validation at the existing process boundary."""
+    from .perception.compiled import compiled_browser_entry
+    receipt = compiled_browser_entry('stopstate', dict(
+        state=state, url=url, frame_urls=frame_urls, headers=headers))
+    if receipt is None:
+        from wender.perceive.stopstate import detect
+        return detect(state, url=url, frame_urls=frame_urls, headers=headers)
+    fields = {'is_stop', 'reason', 'confidence', 'evidence'}
+    if (type(receipt) is not dict or set(receipt) != fields or type(receipt['is_stop']) is not bool or
+            (receipt['reason'] is not None and type(receipt['reason']) is not str) or
+            type(receipt['confidence']) is not int or type(receipt['evidence']) is not list or
+            any(type(item) is not dict or type(item.get('kind')) is not str or
+                ('value' in item and type(item['value']) is not str)
+                for item in receipt['evidence'])):
+        raise ObservationError('bad_shape', 'compiled detector receipt invalid')
+    return receipt
+
 __all__ = [
     "ALLOWED_MODEL_BACKENDS",
     "DEFAULT_WENDER_PLANNER_CMD",
@@ -71,6 +93,9 @@ def _is_valid_argv_token(value: object) -> bool:
 def has_configured_wender_root(wender_root: str | Path | None = None) -> bool:
     """Return True when an explicit wender_root or MV_WENDER_ROOT is configured."""
     raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
+    if raw is None:
+        from .perception.compiled import compiled_executable
+        return compiled_executable("wender-agent") is not None
     return isinstance(raw, (str, Path)) and bool(str(raw).strip())
 
 
@@ -426,7 +451,10 @@ class WenderSubprocessAdapter:
         lock_path=None,
         model_backend=None,
     ):
-        raw = wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")
+        from .perception.compiled import compiled_executable
+        self.compiled = compiled_executable('wender-agent', root=wender_root, lock_path=lock_path)
+        raw = (self.compiled.parent if self.compiled is not None else
+               (wender_root if wender_root is not None else os.environ.get("MV_WENDER_ROOT")))
         if not isinstance(raw, (str, Path)) or not str(raw):
             raise ObservationError("unavailable", "MV_WENDER_ROOT or wender_root required")
         try:
@@ -463,6 +491,8 @@ class WenderSubprocessAdapter:
             if locked_root != self.wender_root:
                 raise ObservationError("commit_mismatch", "verified checkout differs from wender_root")
         self.command = resolve_planner_command(command)
+        if self.compiled is not None and self.command == DEFAULT_WENDER_PLANNER_CMD:
+            self.command = (str(self.compiled), 'plan')
         self.timeout = _validate_timeout(timeout)
         self.battery_state_sha256 = None
 

@@ -94,6 +94,10 @@ async function loadApp(source, captured, canvasComponent = DefaultSurfaceCanvas)
       return () => null;
     },
   });
+  const launcherStub = vue.defineComponent({
+    emits: ['create'],
+    setup: (_, ctx) => { captured.createCapsule = (body, settle) => ctx.emit('create', body, settle); return () => null; },
+  });
   const wallStub = vue.defineComponent({
     props: ['projectionView', 'intentBuilders'],
     emits: ['submit-intent', 'ready', 'wall-settled', 'activate-surface', 'panel-closed'],
@@ -110,6 +114,8 @@ async function loadApp(source, captured, canvasComponent = DefaultSurfaceCanvas)
         },
       };
       ctx.expose({
+        selectView: (mode) => { captured.selectedView = mode; },
+        followSurface: (id, mode) => { captured.followed = [id, mode]; },
         revealSurface: (id, mode) => { captured.revealed.push([id, mode]); return { ok: true }; },
         applyLayoutEcho: () => ({ ok: true }),
       });
@@ -128,7 +134,7 @@ async function loadApp(source, captured, canvasComponent = DefaultSurfaceCanvas)
     'capsule-ui-kit/DockWorkspace': stub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
     './wall/EmptyWallView.vue': stub,
-    './catalog/CatalogLauncher.vue': stub,
+    './catalog/CatalogLauncher.vue': launcherStub,
     './terminal/SideTerminalOverlay.vue': stub,
     './multislot/MultislotHost.vue': stub,
     './recording/MvRecordingPanel.vue': stub,
@@ -404,6 +410,40 @@ async function mountApp(t, stack, { source = APP_SOURCE, canvasComponent = Defau
 }
 
 const settle = async () => { await tick(); await new Promise((resolve) => setTimeout(resolve, 45)); await tick(); };
+
+test('V027: opening an Agent program reveals it without taking control; menu Take control still arms input', async (t) => {
+  const stack = await createStack(t);
+  stack.surfaces.set('s1', { ...makeSurface('s1', 'agent'), kind: 'desktop_capsule' });
+  const view = await mountApp(t, stack);
+  view.captured.wall.emit('wall-settled');
+  const roles = globalThis.metaviewerRoles;
+  globalThis.metaviewerRoles = {
+    ...roles,
+    createProgram: async (choice) => {
+      assert.deepEqual(choice, { binary: 'gedit', role: 'agent' });
+      return { ok: true, surfaceId: 's1', role: 'agent' };
+    },
+  };
+  const reply = await new Promise(resolve => view.captured.createCapsule({ kind: 'program', binary: 'gedit', role: 'agent' }, resolve));
+  assert.equal(reply.ok, true);
+  await settle();
+  assert.ok(view.captured.revealed.some(([id, mode]) => id === 's1' && mode === 'split'), 'opened program remains revealed');
+  assert.equal(view.captured.selectedView, 'agent');
+  assert.deepEqual(view.captured.followed, ['s1', 'agent'], 'opened program stays selected');
+  assert.equal(stack.surfaces.get('s1').control, 'agent', 'opening preserves authoritative agent control');
+  assert.deepEqual(stack.controlIntents(), [], 'opening sends no take_control');
+  assert.equal(view.chipState(), 'view');
+  assert.equal(view.focusable(), false);
+  // The real RoleSurface menu remains the explicit entry to interactive input.
+  const take = anchored(view.root, 'capsule/s1/control/emergency');
+  assert.ok(take, 'Take control remains available in the real tile menu');
+  assert.equal(take.props.disabled, false);
+  take.props.onClick();
+  await until(() => view.chipState() === 'interactive', 'manual menu Take control arms the program');
+  assert.equal(stack.surfaces.get('s1').control, 'human');
+  view.key('a');
+  await until(() => stack.coreInputs().length === 1, 'manual Take control enables keyboard input');
+});
 
 test('UI-CONTROL-ARM 1: header Control path and attaching to an already-human surface arm input (with mutant: bypass arming)', async (t) => {
   // Verify SurfacePanel.vue routes header Control presses via controlVerbForRow and emits submit-intent.
