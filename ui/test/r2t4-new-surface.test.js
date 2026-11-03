@@ -99,9 +99,10 @@ describe('Electron main and preload surface security checks', () => {
     assert.throws(() => verdictReply(invalidVerdict), { message: 'OUTCOME' });
   });
 
-  it('3. Domain-wire channel closure (12 valid channels)', async () => {
+  it('3. Domain-wire channel closure (13 valid channels)', async () => {
     const validChannels = Object.values(WIRE_CHANNELS);
-    assert.equal(validChannels.length, 12);
+    assert.equal(validChannels.length, 13);
+    assert.ok(validChannels.includes('metaviewer:authority.vmAvailable'));
     assert.ok(validChannels.includes('metaviewer:authority.createSurface'));
 
     const bridge = installPreload({
@@ -109,7 +110,7 @@ describe('Electron main and preload surface security checks', () => {
       ipcRenderer: {
         invoke: async (channel) => {
           if (!validChannels.includes(channel)) throw new ContractError('CHANNEL', channel);
-          return null;
+          return channel === 'metaviewer:authority.vmAvailable' ? true : null;
         },
         on: () => {},
         removeListener: () => {},
@@ -118,6 +119,7 @@ describe('Electron main and preload surface security checks', () => {
 
     const res = await bridge.loadSettings();
     assert.equal(res, null);
+    assert.equal(await bridge.authority.vmAvailable(), true);
   });
 
   it('4. Domain-wire arity and 256 KiB payload capping', async () => {

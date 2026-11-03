@@ -204,8 +204,8 @@ export function formatTileElapsedMs(value) {
 
 /**
  * Badge copy for one record phase. Only the active recording carries an
- * elapsed readout; the error phase renders `Idle` (no error text ever
- * renders; the refusal detail stays in the entry `lastCode`, never shown).
+ * elapsed readout; the error phase renders `Idle`. The separate refusal
+ * notice projects safe recovery text from the entry's `lastCode`.
  * @param {{ phase?: unknown, elapsedMs?: unknown } | null | undefined} input
  * @returns {string} Visible badge text.
  */
@@ -326,3 +326,13 @@ export {
   copyCapsuleReadyLine,
   createCapsuleCopyFeedback,
 } from './capsuleId.js';
+
+/** Visible recovery for a host refusal; never project raw diagnostic detail.
+ * @param {{lastCode?:unknown}|null|undefined} entry */
+export function tileCaptureRefusal(entry) {
+  const code=entry?.lastCode;
+  if(typeof code!=='string' || code==='')return '';
+  if(code==='SURFACE_UNKNOWN')return 'Capture refused: this surface is not available. Reopen a live capsule.';
+  if(code==='CAPTURE_UNAVAILABLE')return 'Capture unavailable. Check that the capsule is live, then try again.';
+  return 'Capture refused. Check the capsule and recording settings before trying again.';
+}

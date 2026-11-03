@@ -18,6 +18,7 @@ import {
   tileBadgeText,
   tileBadgeVariant,
   tileCapturePhaseBusy,
+  tileCaptureRefusal,
   tileChromeGroupName,
   tileCapsuleIdDomId,
   tileCopyIdDomId,
@@ -62,6 +63,7 @@ const props = defineProps({
 });
 
 const entry = computed(() => readSurfaceEntry(props.captureState, props.capsuleId));
+const refusal = computed(() => tileCaptureRefusal(entry.value));
 const phase = computed(() => surfaceEntryPhase(entry.value));
 const busy = computed(() => tileCapturePhaseBusy(phase.value));
 const unavailable = computed(() => isCaptureUnavailable(props.captureState));
@@ -189,6 +191,7 @@ function onShotClick() {
       :id="shotId"
       type="button"
       class="mv-tile-chrome__shot"
+      :data-captured="shotLabel === 'Captured' ? 'true' : undefined"
       :data-semantic-anchor="shotAnchor"
       :aria-label="shotName"
       :title="shotReason || shotName"
@@ -216,6 +219,7 @@ function onShotClick() {
       >{{ CAPSULE_COPY_LABEL }}</button>
       <span v-if="copyStatusText !== ''" role="status" class="mv-tile-capid__status" :data-copy-outcome="copyState" :title="copyReason || undefined">{{ copyStatusText }}</span>
     </span>
+    <span v-if="refusal" role="alert" class="mv-tile-chrome__refusal">{{ refusal }}</span>
     <span
       :id="badgeId"
       class="mv-tile-chrome__badge"

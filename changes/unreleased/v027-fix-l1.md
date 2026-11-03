@@ -1,0 +1,1 @@
+- Bound Docker and stalled downloads in the judge install, refuse partial dependencies, unprepared directories and malformed assets, and keep a successor session attach pointer.
