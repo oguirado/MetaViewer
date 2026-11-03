@@ -269,8 +269,26 @@ def run_moves(backend, planner, args, marks_path=None):
         attempt['status'] = 'binding_pending'
         start = len(getattr(backend, 'frame_attempts', []))
         try:
-            admitted = backend.propose(sensed, dict(action=action, expectation=expectation),
-                                        remaining_budget(backend, args.timeout_ms))
+            # [TARGET, unit decision] Retry only wholly core-refused stale
+            # rounds. Keep one step intent; an admitted or ambiguous dispatch
+            # must never authorize repeating input.
+            for round_index in range(3):
+                round_start = len(getattr(backend, 'frame_attempts', []))
+                try:
+                    admitted = backend.propose(sensed, dict(action=action, expectation=expectation),
+                                                remaining_budget(backend, args.timeout_ms))
+                    break
+                except host.OwnerRefused as error:
+                    rows = getattr(backend, 'frame_attempts', [])[round_start:]
+                    if (error.code != 'MW_STALE_FRAME_EXHAUSTED' or round_index == 2 or
+                            not rows or any(row.get('status') != 'STALE_FRAME' for row in rows)):
+                        raise
+                    sensed = backend.perceive(backend.observe(
+                        remaining_budget(backend, args.timeout_ms)))
+                    if text is not None and index > 0:
+                        focused_target(sensed, target)
+                        if index == 2:
+                            exact_readback(backend, sensed, target, text)
         except host.tools.VerificationFailed as error:
             terminal_failure(backend, attempt, action, error, journal_id)
         except host.tools.ToolRefusal as error:

@@ -1,0 +1,1 @@
+- Retry a browser goal step when core refused every proposal of a round as stale; nothing was dispatched, so text is never repeated.
