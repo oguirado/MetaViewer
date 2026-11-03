@@ -220,7 +220,7 @@ func (m *Manager) admitHostWindowProfile(id string, spec *HostWindowSpec, p *Pro
 	}
 	for _, b := range m.bindings {
 		if b.Surface.State != "destroyed" && b.NativeKind == "host-window" && b.HostXID == spec.XID {
-			return fault("host_window_unavailable", "host_window_unavailable: window already attached")
+			return fault("host_window_unavailable", "host_window_unavailable: window already attached; if its tile shows Window Closed, press Stop on that tile and add the window again")
 		}
 	}
 	p.Display = fmt.Sprintf(":0.%d", spec.XID)
