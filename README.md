@@ -11,7 +11,15 @@ only; external proprietary components require their own authorization.
 
 For a fresh Linux judge machine, follow [Judge Quickstart](docs/JUDGE_QUICKSTART.md).
 Fetch verified assets with `python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules`,
-then run `doctor --before-install`, install, and full doctor through the judge launcher.
+then preserve the capsule tier through the launcher:
+
+```bash
+bash scripts/judge/metaviewer-judge.sh doctor --before-install --capsules
+bash scripts/judge/metaviewer-judge.sh install --capsules
+bash scripts/judge/metaviewer-judge.sh doctor --capsules
+```
+
+For the app-only tier, deliberately omit `--capsules` from fetch, doctor and install.
 A complete public release URL is not established here; obtain the asset directory or
 release URL and checksum digest from the maintainer. Legacy networking reaches no
 public site today; public browsing requires a compatible Open image and firewall.
@@ -83,8 +91,7 @@ Setup and restrictions are in [INSTALL.md](docs/INSTALL.md).
 - **Contracts first.** `21` versioned JSON schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] in `contracts/v0.2/` and `10` closed schemas [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] in `contracts/v0.1/`; a new message type requires its schema and valid/invalid examples before any producer or consumer code [CITED: `LAWS.md` L3].
 - **Not available yet.** Features not wired end to end report explicit refusal states rather than faking behavior:
   - The Storyboard / creative screen (`ui/src/creative/CreativeCapsule.vue`) has no wire schema yet and reports `Creative service unavailable.` (`CREATIVE_SERVICE_UNAVAILABLE`) [CITED: `ui/src/App.vue`].
-  - Catalog management in the UI beyond the closed `4`-kind launcher set (`identity-browser`, `program`, `holdings-app`, `desktop`) is not available yet [CITED: `ui/src/catalog/CatalogLauncher.vue`].
-  - Legacy `mvctl observe` without `--v02` is not available and exits with `unsupported_operation` (rc `2`; use `mvctl --v02 observe`) [CITED: `agents/metaviewer_agents/mvctl.py`].
+  - Catalog management in the UI beyond the launcher set (`identity-browser`, `program`, `host-program`, `desktop-window`) is not available yet.
   - Direct agent `observation` envelope intake on the core (outside `mv_tool_call`) is not available yet and returns a journaled `POLICY` verdict [CITED: `docs/ARCHITECTURE.md`].
   - The `100,000`-case nightly property entrypoint in `.github/workflows/volume.yml` and the `G-NOVAC` meta-oracle interface in `.github/workflows/ci.yml` are not available yet (`ABSENT — do not invent`) and emit `BLOCKED` / `NOT_APPLICABLE` receipts [CITED: `.github/workflows/volume.yml`, `.github/workflows/ci.yml`].
   - OS-level desktop installers (`.deb`, `.rpm`, Flatpak, AppImage) and macOS/Windows builds are not available [CITED: `docs/INSTALL.md`, `.github/workflows/ci.yml`].
@@ -164,12 +171,21 @@ MV_CORE_CONFIG=/path/to/core.json XDG_RUNTIME_DIR=/run/user/$UID "$CARGO_TARGET_
 go -C daemon-adapter run ./cmd/mv-daemon-adapter
 # UI smoke (needs ELECTRON_OVERRIDE_DIST_PATH + xvfb-run)
 (cd ui && npm run smoke)
-# CLI probe (legacy v0.1 envelope in FILE, or pass --v02 for the v0.2 tool protocol)
-python3 agents/metaviewer_agents/mvctl.py propose --json-arg FILE --timeout-ms 5000 \
+# CLI probe: FILE is an action_proposal/v0.2 JSON object.
+# Source the live attachment first. Select registered agent/core instances from
+# MV_CORE_CONFIG and set MV_AGENT_INSTANCE, MV_CORE_INSTANCE, MV_CORE_SOCKET.
+# MV_CORE_SOCKET is current.json's core_socket.
+PYTHONPATH=agents python3 -m metaviewer_agents.mvctl propose --json-arg FILE --timeout-ms 5000 \
+  --socket "$MV_CORE_SOCKET" --session-id "$MV_SESSION_ID" \
+  --agent-instance "$MV_AGENT_INSTANCE" --core-instance "$MV_CORE_INSTANCE" \
   --max-line-bytes 65536 --max-reply-bytes 65536
 # Hosted slice (no devices needed); --live needs the admitted capsule profile + env in tests/e2e/e2e1_slice/README.md
 node tests/e2e/e2e1_slice/index.js
 ```
+
+`mvctl observe` uses the current tool protocol by default; the optional leading
+`--v02` spelling selects the same protocol and is not a legacy repair. Observe
+also requires the registered bindings and `--surface-id`.
 
 I leave `MV_CAPTURE_RING` unset until the OpenSuperficies ring pin and host mount are ready; `MV_CAPTURE_RING=1` opts into the validated resident reader [CITED: `daemon-adapter/internal/frames/ringsource.go`].
 I use `MV_LIVE_WEB=1` only for the opt-in live web runner; I leave it unset in hosted CI [CITED: `tests/e2e/e2e1_slice/asm_web_live.py`].

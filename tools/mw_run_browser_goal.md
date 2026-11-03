@@ -57,12 +57,12 @@ Without that account keep `--planner rules`. Both modes keep grounding and custo
 gates. AX supplies geometry; retained pixels and core settlement remain mandatory.
 Vision-engine cross-checking is not implemented; model readings are commentary.
 
-Until a compiled browser build lands, this branch refuses a selected compiled
-Wender runtime with `MW_COMPILED_BROWSER_UNAVAILABLE`. Neither planner bypasses
-this. Ask the operator for a verified checkout matching `deps.lock`, set
-`MV_WENDER_ROOT` to it and unset `MV_WENDER_EXECUTABLE` in the run subshell, or wait
-for the compiled build. Never remove the guard or substitute an unverified root.
-Compiled program support does not imply compiled browser support.
+The pinned Linux x64 compiled runtime supports browser goals with rules or Muse.
+Dependency hashes, architecture, grounding and custody gates still apply. Stored
+browser workflows remain restricted in compiled mode and refuse
+`MW_COMPILED_WORKFLOW_UNAVAILABLE`; those require a verified checkout matching
+`deps.lock`. Live verification is limited to the architecture table in
+[Judge tour](../docs/JUDGE_TOUR.md#architecture-support-at-this-snapshot).
 
 | Result / rc [CITED: `tools/mw_run_browser_goal.py` (`run_entry`), `agents/metaviewer_agents/mw_run.py` (`main`)] | Meaning | Next action |
 | --- | --- | --- |
@@ -72,12 +72,12 @@ Compiled program support does not imply compiled browser support.
 | `INPUT_UNCERTAIN` / `5` | Delivery or settlement unknown. | Stop. Inspect report, dispatch and receipt journals with the operator; never automatically retry. |
 | refusal / `6` | Inspect `verdict_code` and report; earlier verified moves may exist. | Repair the named precondition and inspect current state before a new run. |
 
-For `MW_PROGRAM_CONTROL`, press **Release control** on the tile and verify
+For `MW_PROGRAM_CONTROL`, use **Switch to agent mode** for a Human-role capsule
+or **Release control** after takeover of an Agent capsule, and verify
 `control:'agent'` before a new run. For `MW_RUN_ATTACH`/`MW_RUN_CONFIG`, recopy the
 running app's attachment. For `MW_PROGRAM_RAM_REQUIRED`/`MW_PRIVATE_OUTPUT`, use
 the private RAM setup above. Missing/dirty/mismatched dependencies require the
-operator's pinned root. `MW_COMPILED_BROWSER_UNAVAILABLE` requires the checkout
-route described above. Some unexpected missing private modules can escape as a
+operator's pinned root. Some unexpected missing private modules can escape as a
 traceback without a JSON report; stop and provide the diagnostic to the operator.
 Stored `--site` / `--workflow` behavior is unchanged.
 

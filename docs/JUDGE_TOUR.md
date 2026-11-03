@@ -109,7 +109,7 @@ isolated.** Their access and signed-in sessions are real host access.
 
 For **Host program**, choose **＋ Add capsule → Host program**, confirm the
 selection, choose a role, enter an installed GUI **Binary name**, and **Start**.
-This requires `xpra`. Browser launches use a fresh temporary profile in RAM,
+This requires `xpra`, `Xvfb`, `xauth`, and `xdotool`. Browser launches use a fresh temporary profile in RAM,
 not your personal browser profile.
 
 For **Desktop window**, first open a harmless X11 window yourself. Choose
@@ -119,8 +119,9 @@ and move the real pointer; avoid competing desktop input while the AI acts.
 
 **Success:** the tile shows the host isolation warning and live window contents.
 Desktop window **⋮ → Stop capsule** detaches it without closing the original
-window. **If refused:** Host program needs `xpra`; have it installed before
-retrying. For Desktop window, select an existing X11 window; native Wayland
+window. **If refused:** install missing Host program tools with
+`sudo apt-get install -y xpra xvfb xauth xdotool` before retrying.
+For Desktop window, select an existing X11 window; native Wayland
 windows are unsupported. Do not assume an empty list means permission to capture
 another display.
 
@@ -186,9 +187,9 @@ Choose `--planner muse` in the same command to use Muse Code.
 **Success:** `BROWSER_BOUNDED_ACTIONS_VERIFIED` plus a fresh observed effect and
 receipts. A verified action does not certify the whole goal.
 **If refused:** release human control, inspect the named precondition, and observe
-again. `MW_COMPILED_BROWSER_UNAVAILABLE` means this compiled runtime lacks browser
-automation; use a verified checkout matching the lock or wait for a compatible
-build. Rules does not remove that limitation. Never automatically retry
+again. The pinned Linux x64 compiled runtime supports browser goals with either
+planner; dependency validation still applies. Stored workflows retain their
+separate compiled-runtime restriction. Never automatically retry
 `INPUT_UNCERTAIN`; delivery may already have happened.
 
 **Architecture:** x64 — verified on a local page with the rules planner; arm64 — browser goal with
