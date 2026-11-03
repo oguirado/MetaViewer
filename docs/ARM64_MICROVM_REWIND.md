@@ -2,7 +2,7 @@
 
 Unreleased feature branch. Backend counter restoration has been observed; packaged application acceptance and integration with the shared capsule header are still separate gates.
 
-The goal is to add a MicroVM from **Add capsule**, work inside its command console, mark a known state and return to it with **Back**. The capsule header belongs to the shared frontend: it supplies the classic double-left rewind icon and a short list of timed checkpoints through its capability prop. A selected checkpoint requests one return operation; a running guest is explicitly paused first, and restoration proceeds only after that pause is confirmed. Commands remain fenced while the operation is uncertain.
+The goal is to add a MicroVM from **Add capsule**, work inside its command console, mark a known state and return to it with **Back**. The MicroVM command header provides the classic double-left rewind icon and a short list of timed checkpoints. Its optional header slot exposes `{capabilities, onRestore(point_id)}` so the shared frontend can place the same controls without acquiring native authority. A selected checkpoint requests one return operation; a running guest is explicitly paused first, and restoration proceeds only after that pause is confirmed. Commands remain fenced while the operation is uncertain.
 
 The ARM64 rewind profile uses an immutable boot image and a mutable RAM workspace. Checkpoints contain full guest memory and machine state. They are local, disposable and disappear when the owning session closes. They are not durable save slots. Writable block disks, graphical Firecracker desktops and x64 rewind are not enabled by this profile.
 
@@ -24,6 +24,8 @@ The feature requires a protected, hash-checked host profile, an admitted local A
 
 The current profile preparer is a developer tool, not a turnkey image installer. Download/import catalogues and a normal end-user setup flow are not claimed by the source tests. Private Wender, Vision and OpenSuperficies implementations remain external; their source and private images are not included in this public repository. No VM image or kernel binary is added by this feature branch.
 
-The frontend owner holds the capsule header and its `stateControls` / `state-action` seam. ARM supplies the point-list and restore capability after agreeing the exact prop/event shape; it does not overwrite the header implementation. The command-console timeline is the isolated validation surface until that integration is accepted.
+The shared native-surface header remains owned by the frontend. MicroVM workloads use the agreed command-header slot, with `capabilities.back` projected from validated current snapshots and one restore action built from the current target on each click. The presentation router uses the kit’s existing CapsulePanel and stable session identity; floating, hiding and showing a tile do not change its workload identity. The timeline retains Pause, Resume and Mark. Both header and timeline still require live packaged acceptance.
+
+A developer profile must name the exact application guardian cgroup that exists before adapter startup. The native runner verifies its separate service cgroup and replaces the template path before constructing the controller. Runtime roots must fit the backend’s existing Unix-socket path limit; shortening a fresh private RAM root is required rather than relaxing that limit.
 
 Tests of contracts, state reducers and fault injection are source evidence. A feature is usable in the packaged application only after a separate live Create, command, checkpoint, restore and Stop cycle confirms its visible behavior and closed resources.

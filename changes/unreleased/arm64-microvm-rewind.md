@@ -2,3 +2,5 @@
 - Preserve cleanup after journal failures, reject stale recovery witnesses, keep mapped checkpoint memory until native closure and retain verified checkpoints when restoration fails. External effects and writable block disks are outside this RAM-workspace profile.
 - Keep published schemas unchanged, add closed rewind contracts and SDK observation/control on the existing authenticated connection, and extend the fixture corpus with separate content pins while retaining the legacy fixture oracles.
 - Treat a protected rewind-only launch as a dedicated guest mode: require its live adapter, reject invalid configuration and prevent automatic graphical capsule creation.
+- Route MicroVM consoles through the pinned kit’s admitted panel type, retaining workload identity across float/hide/show and layout persistence. Add the agreed capability-driven Back header, timed point menu and cleanup controls without changing the shared native header or kit pin.
+- Require authenticated hello before Rewind dispatch even when the optional core-commit pin is absent.
