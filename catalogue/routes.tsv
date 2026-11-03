@@ -994,6 +994,7 @@ list.json	daemon-adapter/internal/capsule/testdata/host-xpra/list.json
 srf-identity-surface	daemon-adapter/internal/capsule/testdata/srf-identity-surface
 text_input_test.go	daemon-adapter/internal/capsule/text_input_test.go
 textcap_test.go	daemon-adapter/internal/capsule/textcap_test.go
+v027_fix_k1_test.go	daemon-adapter/internal/capsule/v027_fix_k1_test.go
 v027_triage_test.go	daemon-adapter/internal/capsule/v027_triage_test.go
 window_resize_test.go	daemon-adapter/internal/capsule/window_resize_test.go
 runner.go	daemon-adapter/internal/cli/runner.go
@@ -1079,6 +1080,7 @@ subscri-45e158044ffa	daemon-adapter/internal/frames/subscriptions_lock_timeout_t
 subscri-258b9e5e0942	daemon-adapter/internal/frames/subscriptions_reap_test.go
 subscri-84a98cfe9a77	daemon-adapter/internal/frames/subscriptions_robust_test.go
 subscri-c23a6160df7a	daemon-adapter/internal/frames/subscriptions_test.go
+v027fix-a3bd265b0251	daemon-adapter/internal/frames/v027_fix_k1_test.go
 v027tri-ab1ca1942408	daemon-adapter/internal/frames/v027_triage_test.go
 vm_pair_test.go	daemon-adapter/internal/frames/vm_pair_test.go
 windowr-55ca1914206b	daemon-adapter/internal/frames/window_resize_test.go
@@ -1548,6 +1550,7 @@ test_theme.py	tests/test_theme.py
 testv02-bfa3520ba0b7	tests/test_v026_sidecar_assets.py
 test_v027_fix_j2.py	tests/test_v027_fix_j2.py
 test_v027_fix_j4.py	tests/test_v027_fix_j4.py
+test_v027_fix_k3.py	tests/test_v027_fix_k3.py
 testv02-4fc2cd804a0a	tests/test_v027_judge_triage.py
 testv02-d4158620998e	tests/test_v027_mw_triage.py
 testv02-828a9d0ea891	tests/test_v027_seams_mw_wire.py
@@ -2151,6 +2154,10 @@ v027-firstrun.test.js	ui/test/v027-firstrun.test.js
 v027-fix-b1.test.js	ui/test/v027-fix-b1.test.js
 v027-fix-f.test.js	ui/test/v027-fix-f.test.js
 v027-fix-j3.test.js	ui/test/v027-fix-j3.test.js
+v027-fix-k1.test.js	ui/test/v027-fix-k1.test.js
+v027fix-46b26230c523	ui/test/v027-fix-k2-cache.test.js
+v027fix-df3425b4e373	ui/test/v027-fix-k2-presentation.test.js
+v027fix-89dde92796eb	ui/test/v027-fix-k2-terminal.test.js
 v027hos-06c56f4d7d15	ui/test/v027-host-wall-triage.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 v027sea-46470f0a4e51	ui/test/v027-seams-role-transport.test.js
