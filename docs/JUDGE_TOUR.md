@@ -234,7 +234,7 @@ action evidence before a new attempt; do not blindly type again. Use a named
 observed field instead of `focused` if focus is not established. Known password
 fields refuse; do not use this flow for secrets. Program `--key` is unsupported.
 
-**Architecture:** x64 and arm64 — implemented, live text verification AUSENTE —
+**Architecture:** arm64 — typed into gedit and read back once with OCR, not always exact; x64 — not verified live;
 no inventar.
 
 ## Wall stop: login or CAPTCHA
@@ -271,8 +271,7 @@ recording panel has more detailed refusal messages when it is available.
 Nested display capture is unavailable. Recording is evidence capture;
 it does not itself create a stored automation.
 
-**Architecture:** x64 and arm64 — available, separate live verification AUSENTE —
-no inventar.
+**Architecture:** x64 and arm64 — available, not verified live separately.
 
 ## Stop and clean up
 
@@ -313,5 +312,5 @@ available, separate cleanup verification not documented here.
 | Public internet without Open mode | Not available | Legacy policy grants no public destinations |
 | VM capsules | Not verified live | Not verified live |
 
-Sources: operator evaluation statements; linked code and parser references above.
+Sources: the live checks above and the linked code.
 This tour's claims are limited to the supplied evaluation statements and this checkout.
