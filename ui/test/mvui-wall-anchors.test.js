@@ -46,7 +46,7 @@ describe('lane control anchors', () => {
     const template = source.slice(source.indexOf('<template>'));
     assert.deepEqual(interactiveTags(template), [], 'no lane-owned button/input/select/link');
     assert.doesNotMatch(template, /tabindex/, 'no lane focus order overrides');
-    assert.match(template, /<div class="mv-tile" :hidden="presentationHidden" :data-mv-window-hidden="String\(presentationHidden\)" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code">/,
+    assert.match(template, /<div class="mv-tile" :hidden="presentationHidden" :data-chrome-expanded="String\(chromeExpanded\)" :data-mv-window-hidden="String\(presentationHidden\)" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">/,
       'tile state rides a CSP-safe data attribute, never an id');
   });
 

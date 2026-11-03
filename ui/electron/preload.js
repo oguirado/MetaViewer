@@ -786,7 +786,7 @@ function assertSurfaceInputReply(reply, maxAccepted) {
   }
   throw new ContractError('OUTCOME', 'surface input reply');
 }
-const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
+const WIRE_NAMES = Object.freeze({slotRequest:'capsule-state.request',loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
   vmAvailable:'authority.vmAvailable',propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
@@ -803,7 +803,7 @@ function wireCall(channel,args) {
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
-  const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
+  const arity=['slotRequest','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
   const vmCreate = name==='createSurface' && Array.isArray(args) && args.length===1 && args[0] && typeof args[0]==='object'
     && !Array.isArray(args[0]) && Reflect.ownKeys(args[0]).join(',')==='kind' && /** @type {any} */(args[0]).kind==='vm';
   if (!Array.isArray(args) || (args.length !== arity && !vmCreate)) throw new ContractError('ARGS','wrong arity');
@@ -822,6 +822,7 @@ function wireCall(channel,args) {
     const parsed=JSON.parse(value);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new ContractError('PAYLOAD','expected object');
   }
+  if (name==='slotRequest') stateRequest(args[0]);
   if (name==='terminalEnabled' && typeof args[0] !== 'boolean') throw new ContractError('PAYLOAD','expected boolean');
   if (name==='terminalOpen') {
     const v=/** @type {any} */(args[0]);
@@ -999,7 +1000,7 @@ function wireFacade(transport) {
   /** @param {keyof typeof WIRE_NAMES} name @param {unknown[]} args */
   const call=async(name,args) => {
     if (name==='intent' && args.length===1 && typeof args[0]!=='string') throw new ContractError('PAYLOAD','expected JSON text');
-    if (transport.nested && (name.startsWith('terminal') || name.startsWith('clipboard'))) {
+    if (transport.nested && (name==='slotRequest' || name.startsWith('terminal') || name.startsWith('clipboard'))) {
       throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
     }
     if (name==='terminalAttach') ensureTerminalPortSubscription();
@@ -1012,6 +1013,7 @@ function wireFacade(transport) {
       }
     }
     const reply=await transport.invoke(admitted.channel,admitted.args);
+    if(name==='slotRequest') return stateEvent(reply);
     if (['saveSettings','intent','subscribeFrames','unsubscribeFrames','terminalEnabled','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name)) {
       const out=assertSaveReply(reply);
       if (name==='terminalClose') {
@@ -1089,6 +1091,7 @@ function wireFacade(transport) {
   /** @type {Set<(value:any)=>void>} */ const captureCallbacks=new Set();
   /** @type {Set<string>} */ const seededCaptureSurfaces=new Set();
   api.capture=captureFacade(transport,captureCallbacks,seededCaptureSurfaces);
+  api.slots=Object.freeze({request:(/** @type {any} */request)=>call('slotRequest',[request])});
   for (const name of ['loadSettings','saveSettings','recordingDestination','nestedDepth','selfCapsuleId']) {
     /** @param {...unknown} args */
     api[name]=(...args)=>call(/** @type {keyof typeof WIRE_NAMES} */(name),args);
@@ -1557,6 +1560,7 @@ function wireFacade(transport) {
       const admitted=wireCall(FRAME_REPORT_DIAG_CHANNEL,args);
       const report=/** @type {{rehashSkipped:number,rehashDone:number}} */(admitted.args[0]);
       const reply=await transport.invoke(admitted.channel,admitted.args);
+
       assertSaveReply(reply);
       diagRehashSkipped=Math.max(diagRehashSkipped,report.rehashSkipped);
       diagRehashDone=Math.max(diagRehashDone,report.rehashDone);
@@ -1727,4 +1731,48 @@ if (typeof module !== 'undefined' && module !== null && typeof require === 'func
       void ipcRenderer.invoke('metaviewer:renderer-ready').catch(() => {});
     }, { once: true });
   }
+}
+
+// [TARGET, unit decision] Closed, path-free capsule state IPC. The core stamps
+// UI sender authority; a renderer can supply neither an endpoint nor a path.
+/** @param {any} value @param {string[]} required @param {string[]} [optional] */
+function stateKeys(value, required, optional=[]) {
+  if (!value || typeof value!=='object' || Array.isArray(value)) return false;
+  const proto=Object.getPrototypeOf(value);
+  return (proto===Object.prototype || proto===null) && Reflect.ownKeys(value).every(key=>typeof key==='string'
+    && [...required,...optional].includes(key) && Object.hasOwn(Object.getOwnPropertyDescriptor(value,key) ?? {},'value'))
+    && required.every(key=>Object.hasOwn(value,key));
+}
+/** @param {any} value */
+const slotIdentifier=value=>typeof value==='string' && /^[a-z0-9][a-z0-9-]{1,39}$/.test(value);
+/** @param {any} value */
+export function stateRequest(value) {
+  const required=['schema','operation_id','op','profile_id','slot_id','credential_copy_confirmed'];
+  if (!stateKeys(value,required,value?.op==='copy'?['destination_profile_id']:[])
+      || value.schema!=='capsule_state_request/v0.2'
+      || typeof value.operation_id!=='string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.operation_id)
+      || !['save','overwrite','load','copy','list','delete'].includes(value.op)
+      || !slotIdentifier(value.profile_id) || !slotIdentifier(value.slot_id)
+      || typeof value.credential_copy_confirmed!=='boolean'
+      || (value.op==='copy' && (!slotIdentifier(value.destination_profile_id) || value.destination_profile_id===value.profile_id))) throw new Error('CAPSULE_STATE_REQUEST');
+  return Object.freeze({...value});
+}
+/** @param {any} value */
+export function stateEvent(value) {
+  const required=['schema','operation_id','op','profile_id','slot_id','event'];
+  const optional=value?.event==='completed'?['generation','sha256','slots']:value?.event==='refused'?['reason_code']:[];
+  if (!stateKeys(value,required,optional) || value.schema!=='capsule_state_event/v0.2'
+      || !['accepted','completed','refused'].includes(value.event)) throw new Error('CAPSULE_STATE_EVENT');
+  stateRequest({schema:'capsule_state_request/v0.2',operation_id:value.operation_id,op:value.op==='copy'?'load':value.op,
+    profile_id:value.profile_id,slot_id:value.slot_id,credential_copy_confirmed:true});
+  if (value.event==='refused' && (typeof value.reason_code!=='string'||!/^[A-Z][A-Z0-9_]{0,127}$/.test(value.reason_code))) throw new Error('CAPSULE_STATE_EVENT');
+  if (value.generation!==undefined && (!Number.isSafeInteger(value.generation)||value.generation<1)) throw new Error('CAPSULE_STATE_EVENT');
+  if (value.sha256!==undefined && (typeof value.sha256!=='string'||!/^[a-f0-9]{64}$/.test(value.sha256))) throw new Error('CAPSULE_STATE_EVENT');
+  if (value.slots!==undefined && (value.op!=='list'||!Array.isArray(value.slots)||value.slots.length>256
+      || !value.slots.every((/** @type {any} */row)=>stateKeys(row,['slot_id','name','saved_at','generation'],['size_bytes']) && slotIdentifier(row.slot_id)
+        && (row.size_bytes===undefined || (Number.isSafeInteger(row.size_bytes) && row.size_bytes>=0))
+        && row.name===row.slot_id && typeof row.saved_at==='string' && row.saved_at.length<=64 && Number.isFinite(Date.parse(row.saved_at))
+        && Number.isSafeInteger(row.generation) && row.generation>=1))) throw new Error('CAPSULE_STATE_EVENT');
+  if (value.event==='completed' && value.op==='list' && !Array.isArray(value.slots)) throw new Error('CAPSULE_STATE_EVENT');
+  return Object.freeze({...value,...(value.slots?{slots:Object.freeze(value.slots.map((/** @type {any} */row)=>Object.freeze({...row})))}:{})});
 }

@@ -300,3 +300,40 @@ test('V024 cuentas-1 and perplexity-1 are normal capsules (open as human/agent a
  assert.equal(mutantProtMod.isForeignIdentity('cuentas-1'),true,'restoring prefix blocks cuentas-1');
  assert.equal(mutantProtMod.isProtectedIdentity('perplexity-1'),true,'restoring prefix blocks perplexity-1');
 });
+
+test('orphan row requires confirmation, snapshots holder, and stays open for same-session reuse',async t=>{
+  let released=0,held=true;
+  globalThis.metaviewerRoles={
+    choices:async()=>[{profileId:'account-a',available:true,currentMode:'closed',held,holder:held?'srf-id-orphan':null}],
+    releaseIdentity:async choice=>{assert.equal(vue.isProxy(choice),false,'contextBridge requires a plain snapshot');assert.deepEqual(choice,{profileId:'account-a',holder:'srf-id-orphan'});released++;held=false;return {ok:true};},
+  };
+  t.after(()=>{delete globalThis.metaviewerRoles;});
+  const view=mount(await dialog(),{open:true,host:{identity:{list:async()=>({ok:true,rows:[{id:'account-a',label:'Account',domains:[]}]})}}});
+  t.after(()=>view.close());
+  await tick();
+  assert.match(text(view.root),/Still held by a previous session/);
+  button(view.root,'Release').props.onClick();await tick();
+  assert.equal(released,0,'row action never releases without confirmation');
+  const confirmation=nodes(view.root).find(n=>n.props?.['aria-label']==='Release identity?');
+  assert(confirmation);
+  button(confirmation,'Release').props.onClick();await tick();await tick();
+  assert.equal(released,1);
+  assert.doesNotMatch(text(view.root),/Still held by a previous session/);
+  assert(button(view.root,'Open as human'));
+  assert(button(view.root,'Open as agent'));
+});
+
+test('recovery runner preserves native registry and admission witnesses across its closed environment',async()=>{
+  let captured;
+  const run=identityRunner({tool:'/identity-tool',env:{PATH:'/usr/bin:/bin',SRF_PROXY_REGISTRY:'/isolated/registry.json',MV_RAM_ADMISSION_DIR:'/isolated/admission',UNRELATED_SECRET:'not-forwarded'},spawnTool:(_binary,argv,options)=>{
+    captured={argv,env:options.env};
+    const child=new EventEmitter();child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+    queueMicrotask(()=>{child.stdout.emit('data',Buffer.from(JSON.stringify({schema:'metaviewer.identity/v1',ok:true,result:{released:'account-a',capsule_removed:true}})));child.emit('close',0);});
+    return child;
+  }});
+  assert.deepEqual(await run('recover',{id:'account-a',holder:'srf-id-old',observerPid:42}),{ok:true});
+  assert.deepEqual(captured.argv,['/identity-tool','recover','--id','account-a','--holder','srf-id-old','--observer-pid','42']);
+  assert.equal(captured.env.SRF_PROXY_REGISTRY,'/isolated/registry.json');
+  assert.equal(captured.env.MV_RAM_ADMISSION_DIR,'/isolated/admission');
+  assert.equal(captured.env.UNRELATED_SECRET,undefined);
+});

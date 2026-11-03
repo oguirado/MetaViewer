@@ -24,7 +24,7 @@ function geometryOracle(api,preset) {
       if(preset==='side-by-side')return n===1 ? {id,x:0,y:0,width:1400,height:1000} : {id,x:i ? 700:0,y:0,width:700,height:1000};
       if(preset==='grid')return {id,x:(Math.min(i,3)%2)*700,y:Math.floor(Math.min(i,3)/2)*500,width:700,height:500};
       if(preset==='focus-strip') { if(n===1||i===0)return {id,x:0,y:0,width:n===1?1400:979,height:1000};const y=Math.floor((i-1)*1000/(n-1));return {id,x:979,y,width:421,height:Math.floor(i*1000/(n-1))-y}; }
-      return {id,x:24*i,y:24*i,width:640,height:480};
+      return {id,x:24*i,y:0,width:1260,height:1000};
     });
     assert.deepEqual(rects,expected,preset+' '+n);
     const layout=api.arrangePreset(createWallLayout(SCOPE,rows).dockview,preset,tiles,1400,1000);
@@ -39,7 +39,7 @@ function geometryOracle(api,preset) {
     if(preset==='floating')assert.equal(float.length,n);
   }
 }
-const mutations={single:["if (preset === 'single') return", "if (false) return"], 'side-by-side':["Math.min(index,1)","index"],grid:["Math.min(index,3)","index"],'focus-strip':["width * .7","width * .6"],floating:["24 * index","48 * index"]};
+const mutations={single:["if (preset === 'single') return", "if (false) return"], 'side-by-side':["Math.min(index,columns * rows - 1)","index"],grid:["Math.min(index,columns * rows - 1)","index"],'focus-strip':["width * .7","width * .6"],floating:["24 * index","48 * index"]};
 const awaitedMutants={};
 for(const [preset,[from,to]] of Object.entries(mutations))awaitedMutants[preset]=await load(mut(wallSource,from,to));
 for(const preset of Object.keys(mutations)) {
@@ -193,4 +193,61 @@ test('P18F preserving empty grid cells never retains an empty floating window af
  assert.equal(moved.dockview.floatingGroups.length,0);
  assert.equal(Object.keys(moved.dockview.panels).length,0);
  assert(decodeAndMigrateLayoutProfile(moved,{expectedScope:SCOPE}).ok);
+});
+
+function sixCellOracle(api) {
+  for (let count=1;count<=8;count++) {
+    const rows=Array.from({length:count},(_,i)=>({id:'six-'+i}));
+    const tiles=rows.map(r=>({id:'panel-'+r.id}));
+    const rectangles=api.presetRectangles('grid-3x2',tiles,1401,901);
+    for (const [index,rect] of rectangles.entries()) {
+      const cell=Math.min(index,5),col=cell%3,row=Math.floor(cell/3);
+      const x=Math.floor(col*1401/3),y=Math.floor(row*901/2);
+      assert.deepEqual(rect,{id:tiles[index].id,x,y,width:Math.floor((col+1)*1401/3)-x,height:Math.floor((row+1)*901/2)-y});
+    }
+    const original=createWallLayout(SCOPE,rows);
+    const layout=api.arrangePreset(original.dockview,'grid-3x2',tiles,1401,901);
+    assert.ok(decodeAndMigrateLayoutProfile({...original,dockview:layout},{expectedScope:SCOPE}).ok);
+    const leaves=[];const walk=n=>n.type==='leaf'?leaves.push(n.data):n.data.forEach(walk);walk(layout.grid.root);
+    assert.equal(leaves.length,6,'all six cells remain, including empty homes');
+    assert.deepEqual(leaves.flatMap(cell=>cell.views).sort(),tiles.map(t=>t.id).sort());
+    assert.deepEqual(api.arrangePreset(layout,'grid-3x2',tiles,1401,901),layout,'repeat is idempotent');
+  }
+}
+test('six-cell preset preserves rounding, empty homes, every id and stacked overflow',()=>sixCellOracle(wall));
+
+function runtimeColumnOracle(module) {
+  const groups=[], rightAnchors=[];
+  const group=()=>{const g={id:'g'+groups.length,panels:[],api:{location:{type:'grid'},setSize(){}}};groups.push(g);return g;};
+  const first=group();
+  const panels=['first','second'].map(id=>({id:'panel-'+id,group:first,params:{},api:{setActive(){},setConstraints(){}}}));
+  first.panels.push(...panels);
+  const api={width:1200,height:800,panels,groups,getPanel:id=>panels.find(p=>p.id===id),addPanel(){},
+    addGroup({referenceGroup,direction}){if(direction==='right')rightAnchors.push(referenceGroup);return group();}};
+  for(const panel of panels) panel.api.moveTo=({group:target,position})=>{
+    const destination=position==='center'?target:group();
+    if(position==='right')rightAnchors.push(target);
+    panel.group.panels=panel.group.panels.filter(p=>p!==panel);panel.group=destination;destination.panels.push(panel);
+  };
+  const rows=panels.map(p=>({id:p.id.slice(6),surfaceId:p.id.slice(6),backendLifecycle:'active'}));
+  const controller=module.createWallWorkspaceController({projectionView:{getProjection:()=>({rows})}});
+  controller.handleReady({api,windows:{state:()=>({hidden:false,floating:false}),show(){},hide(){},float(){},dock(){}}});
+  assert.equal(controller.setPreset('grid-3x2').ok,true);
+  assert.equal(rightAnchors.length,2);
+  assert.equal(rightAnchors[0],first);
+  assert.equal(rightAnchors[1],panels[1].group,'third column follows the second, preserving row-major identity order');
+}
+test('live grid assembly preserves row-major order across three columns',()=>runtimeColumnOracle(wall));
+test('inserting every new column beside the first is rejected',async()=>{
+  const mutant=await load(mut(wallSource,'column.at(-1) || placed.at(-1)','column.at(-1) || placed[0]'));
+  assert.throws(()=>runtimeColumnOracle(mutant),{code:'ERR_ASSERTION'});
+});
+test('six-cell preset rejects a two-column geometry mutant',async()=>{
+  const mutant=await load(mut(wallSource,"preset === 'grid-3x2' ? 3 : 2","preset === 'grid-3x2' ? 2 : 2"));
+  assert.throws(()=>sixCellOracle(mutant),{code:'ERR_ASSERTION'});
+});
+test('six-cell preset is admitted by the desktop persistence contract',()=>{
+  const state=desktops.createDesktopState();state.views.human.desktops[0].preset='grid-3x2';
+  assert.equal(desktops.validateDesktopState(JSON.parse(JSON.stringify(state))),true);
+  state.views.human.desktops[0].preset='invented-grid';assert.equal(desktops.validateDesktopState(state),false);
 });

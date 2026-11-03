@@ -4,6 +4,7 @@ import { createXpraRecovery } from './xpraRecovery.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { interceptDesktopShortcut } from './desktopShortcuts.js';
+import { captureNativePreview, nativeThemeScript } from './nativePreview.js';
 
 /** Per-event refusals of the trace recorder: the event is dropped, the view stays. */
 export const DROPPABLE_TRACE_CODES = Object.freeze(new Set(['TRACE_EVENT_REFUSED','TRACE_COORDINATE_REFUSED',
@@ -28,6 +29,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   }
   const isolated = session.fromPartition(`xpra-human-${randomUUID()}`, { cache: false });
   let origin = bridge.origin;
+  let themeScript = '';
   let websocketOrigin = origin.replace(/^http:/, 'ws:');
   /** @param {string} url */
   const localURL = url => url.startsWith(origin + '/') || url.startsWith(websocketOrigin + '/');
@@ -99,7 +101,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     if (!live()) return;
     trace.setActive(state === 'ready');
     onState(state);
-    void wc.executeJavaScript(`{const overlay=document.getElementById('metaviewer-reconnecting');if(overlay){overlay.hidden=${state === 'ready'};overlay.textContent=${JSON.stringify(state === 'reconnecting' ? 'Reconnecting…' : 'Connecting…')};}}`)
+    void wc.executeJavaScript(themeScript+`{const overlay=document.getElementById('metaviewer-reconnecting');if(overlay){overlay.hidden=${state === 'ready'};overlay.textContent=${JSON.stringify(state === 'reconnecting' ? 'Reconnecting…' : 'Connecting…')};}}`)
       .catch(() => {});
   }
   /** @param {{x:number,y:number,width:number,height:number}} rect */
@@ -197,6 +199,9 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
         await waitForXpraClient(wc, {writable, rawKeyboard, isActive:live});
       }, onState:publish});
     return Object.freeze({ view, resize, close, bringToFront,
+      preview: () => captureNativePreview(wc, live),
+      /** @param {{background:string,foreground:string}} theme */
+      setTheme(theme) { if (!live()) throw Error('XPRA_HUMAN_LEASE_LOST'); themeScript=nativeThemeScript(theme); return wc.executeJavaScript(themeScript); },
       /** @param {boolean} visible */
       setVisible(visible) { if (!detached) view.setVisible(visible); } });
   } catch (error) { await close(); throw failure || error; }
