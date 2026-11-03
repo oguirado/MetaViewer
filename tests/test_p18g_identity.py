@@ -150,6 +150,8 @@ class Hardening(unittest.TestCase):
                 self.assertEqual(receipts[0].stat().st_mode & 0o777,0o600)
 
     def fixture(self):
+        image = patch.object(mv, 'profile_image', return_value='opensuperficies-identity-browser-x64:0.1.1')
+        image.start(); self.addCleanup(image.stop)
         temp = tempfile.TemporaryDirectory(prefix='p18g-fixture-')
         self.addCleanup(temp.cleanup)
         root = Path(temp.name)
