@@ -22,7 +22,7 @@ from mw_run_program import (atomic_journal, marks_workspace, private_evidence_ba
                             wait_for_publication)
 from metaviewer_agents.observe import build_observation
 from metaviewer_agents.mw_handoff import HandoffLatch
-from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
+from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, detect_stopstate
 
 
 class BrowserGoalBackend(host.HostBackend):
@@ -34,7 +34,8 @@ class BrowserGoalBackend(host.HostBackend):
         from metaviewer_agents.perception.compiled import compiled_executable
         if compiled_executable('wender-agent', root=self.wender) is None:
             sys.path.insert(0, str(self.wender))
-        self.handoff = HandoffLatch(self.evidence / 'browser-goal.handoff.json')
+        self.handoff = HandoffLatch(self.evidence / 'browser-goal.handoff.json',
+                                    detector=detect_stopstate)
         self.moves, self.attempts, self.program_observations = [], [], []
 
     def guard_wall(self, observed, sensed):
