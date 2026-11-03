@@ -883,7 +883,7 @@ class ReplayOwner:
             required_segments={k: list(v) for k, v in self.inventory(self.corpus.workflow).items()},
             final_task_pass=summary['rc'] == 0)
         need(inventory == expected and (summary['rc'] != 0 or self.final_pass), 'MW_JOURNAL')
-        if self.handoff.latched:
+        if self.handoff.latched and self.handoff.persisted is True:
             summary['evidence_refs'].append(self.handoff.path.name)
         if self.focus_evidence:
             evidence = self.output.with_suffix('.focus.json')
@@ -967,11 +967,13 @@ class ReplayOwner:
                   self.readback_runner(self.mw, self))
         result = runner(self.corpus.path, bundle=self.corpus.bundle, owners=owners, limits=self.limits)
         need(not self.slot_readback_error, 'MW_SLOT_READBACK_DEADLINE')
+        handoff_path = (str(self.handoff.path)
+                        if self.handoff.latched and self.handoff.persisted is True else None)
         if self.rebind_handoff and self.handoff.latched:
             # The pinned workflow conservatively calls every exception after
             # intent uncertain. This local stop occurred before core submission;
             # preserve its journal verbatim and return the explicit handoff.
             return HandoffResult(4, 'HUMAN_HANDOFF', result.summary, result.diagnostic,
-                                 str(self.handoff.path))
+                                 handoff_path)
         return HandoffResult(result.rc, result.verdict_code, result.summary, result.diagnostic,
-                             str(self.handoff.path) if self.handoff.latched else None)
+                             handoff_path)
