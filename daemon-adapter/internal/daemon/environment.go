@@ -518,6 +518,9 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		if err := json.Unmarshal(e.Body, &q); err != nil {
 			return nil, err
 		}
+		if q.Schema == "capsule_state_request/v0.2" {
+			return dispatchState(ctx, m, e)
+		}
 		if q.Schema == "record_request/v0.2" {
 			if recorder == nil {
 				var req struct {

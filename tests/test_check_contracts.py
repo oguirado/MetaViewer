@@ -128,7 +128,7 @@ class VersionedContractTests(unittest.TestCase):
              'observation', 'action_proposal', 'action_verdict', 'action_receipt',
              'hello', 'capsule_meta', 'ui_intent', 'catalog_entry', 'terminal_session',
              'record_request', 'record_event', 'settings', 'mv_tool_call', 'mv_tool_result',
-             'session_record')
+             'session_record', 'capsule_state_request', 'capsule_state_event')
 
     def test_ui_control_fixtures(self):
         validator = Validator(ROOT / 'contracts/v0.2')

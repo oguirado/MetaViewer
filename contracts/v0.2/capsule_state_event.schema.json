@@ -1,0 +1,210 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/capsule_state_event.schema.json",
+  "title": "Capsule State Event",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "capsule_state_event/v0.2"
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "enum": [
+            "save",
+            "overwrite",
+            "load",
+            "copy",
+            "list",
+            "delete"
+          ]
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "slot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "event": {
+          "const": "accepted"
+        }
+      },
+      "required": [
+        "schema",
+        "operation_id",
+        "op",
+        "profile_id",
+        "slot_id",
+        "event"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "capsule_state_event/v0.2"
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "enum": [
+            "save",
+            "overwrite",
+            "load",
+            "copy",
+            "list",
+            "delete"
+          ]
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "slot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "event": {
+          "const": "completed"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "slots": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "type": "object",
+            "properties": {
+              "slot_id": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9-]*$",
+                "minLength": 2,
+                "maxLength": 40
+              },
+              "name": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 40
+              },
+              "saved_at": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "slot_id",
+              "name",
+              "saved_at",
+              "generation"
+            ],
+            "additionalProperties": false,
+            "maxProperties": 256
+          }
+        }
+      },
+      "required": [
+        "schema",
+        "operation_id",
+        "op",
+        "profile_id",
+        "slot_id",
+        "event"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "capsule_state_event/v0.2"
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "enum": [
+            "save",
+            "overwrite",
+            "load",
+            "copy",
+            "list",
+            "delete"
+          ]
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "slot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "event": {
+          "const": "refused"
+        },
+        "reason_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        }
+      },
+      "required": [
+        "schema",
+        "operation_id",
+        "op",
+        "profile_id",
+        "slot_id",
+        "event",
+        "reason_code"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  ]
+}

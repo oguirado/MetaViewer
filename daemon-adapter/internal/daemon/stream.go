@@ -297,7 +297,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		_, sentFrame := frameIDs[body.ProposalID]
 		frameMu.Unlock()
 		isFrameRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "STALE_FRAME" && sentFrame
-		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
+		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)

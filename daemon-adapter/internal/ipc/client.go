@@ -231,7 +231,7 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 			return exitLoop(err)
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
-		if !isHello && body.Schema != "surface_request/v0.2" {
+		if !isHello && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)
