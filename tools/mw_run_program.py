@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'agents'))
 sys.path.insert(0, str(ROOT / 'tools'))
 import mw_run_backend as host
+from metaviewer_agents.mw_refusals import refusal_sentence
 from metaviewer_agents.observe import build_observation
 from metaviewer_agents.perception.vcore import VCorePerceptionAdapter, project_element_table
 from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
@@ -108,7 +109,7 @@ class ProgramBackend(host.HostBackend):
         surface = surfaces[0]
         if surface.get('control') != 'agent':
             raise host.refuse('MW_PROGRAM_CONTROL',
-                'the capsule is under human control; press Release on the tile, then run again')
+                refusal_sentence('MW_PROGRAM_CONTROL'))
         surface_id = surface['surface_id']
         host.need(isinstance(surface_id, str) and
                   re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', surface_id),

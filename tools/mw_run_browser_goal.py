@@ -22,6 +22,7 @@ from mw_run_program import (atomic_journal, marks_workspace, private_evidence_ba
                             wait_for_publication)
 from metaviewer_agents.observe import build_observation
 from metaviewer_agents.mw_handoff import HandoffLatch
+from metaviewer_agents.mw_refusals import refusal_sentence
 from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, detect_stopstate
 
 
@@ -312,8 +313,7 @@ def run_entry(args):
         code = getattr(error, 'code', getattr(error, 'reason_code', 'MW_BROWSER_GOAL_CONFIG'))
         message = str(error)
         if code in ('SURFACE_NOT_AGENT_CONTROLLED', 'MW_PROGRAM_CONTROL'):
-            code, message = 'MW_PROGRAM_CONTROL', ('the capsule is under human control; '
-                'press Release on the tile, then run again')
+            code, message = 'MW_PROGRAM_CONTROL', refusal_sentence('MW_PROGRAM_CONTROL')
         elif isinstance(error, host.subprocess.TimeoutExpired):
             code, message = 'MW_RUN_NATIVE', 'native discovery command timed out'
         elif isinstance(error, host.ClientError):
