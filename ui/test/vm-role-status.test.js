@@ -39,7 +39,6 @@ async function fixture(t, {profiles={guest:profile}, current=surface, lookup=tru
 }
 
 test('owned active VM receives the existing role status without changing the browser picker',async t=>{
-  assert.equal(process.arch,'arm64');
   const f=await fixture(t);
   assert.deepEqual(configuredProfiles(f.env),[]);
   assert.deepEqual(configuredVMProfiles(f.env,process.arch).map(x=>x.id),['guest']);
