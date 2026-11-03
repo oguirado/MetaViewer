@@ -194,10 +194,10 @@ export function validateHostWindowChoice(row) {
 /**
  * Resolve `srf-host-window` from `MV_SRF_BIN_DIR` and run `list --exclude-pid <pid>` without any shell.
  * Whole-list fail-closed: any malformed row or duplicate xid/witness rejects the entire list.
- * @param {{env?:NodeJS.ProcessEnv, excludePid?:number, runTool?:typeof execFile}} [options]
- * @returns {Promise<ReadonlyArray<{xid:number,witness:string,title:string,program:string,width:number,height:number}>>}
+ * @param {{env?:NodeJS.ProcessEnv, excludePid?:number, runTool?:typeof execFile, includeMinimized?:boolean}} [options]
+ * @returns {Promise<ReadonlyArray<{xid:number,witness:string,title:string,program:string,width:number,height:number,minimized?:boolean}>>}
  */
-export function listHostWindows({env = process.env, excludePid = process.pid, runTool = execFile} = {}) {
+export function listHostWindows({env = process.env, excludePid = process.pid, runTool = execFile, includeMinimized = false} = {}) {
   const fail = (/** @type {string} */ detail) => {
     const reason = detail.startsWith('host_window_unavailable:') ? detail : `host_window_unavailable: ${detail}`;
     return Object.assign(refuse('HOST_WINDOW_UNAVAILABLE'), {reason});
@@ -246,7 +246,8 @@ export function listHostWindows({env = process.env, excludePid = process.pid, ru
           if (!item || typeof item !== 'object' || Array.isArray(item)) throw fail('invalid or ambiguous window list');
           const rowPid = item.pid ?? item.owner_pid;
           if (rowPid !== undefined && Number(rowPid) === safePid) continue;
-          if (item.minimized === true || item.visible === false) continue;
+          const minimized = item.minimized === true || item.visible === false;
+          if (minimized && !includeMinimized) continue;
           /** @type {ReturnType<typeof validateHostWindowChoice>} */
           let validated;
           try {
@@ -267,7 +268,8 @@ export function listHostWindows({env = process.env, excludePid = process.pid, ru
           }
           seenXids.add(validated.xid);
           seenWitnesses.add(validated.witness);
-          admitted.push(validated);
+          const hasPresentation = typeof item.minimized === 'boolean' || typeof item.visible === 'boolean';
+          admitted.push(includeMinimized && hasPresentation ? Object.freeze({...validated, minimized}) : validated);
         }
         resolve(Object.freeze(admitted));
       } catch (err) {
@@ -304,7 +306,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   };
   const listHostWindowChoices = typeof customListWindows === 'function'
     ? customListWindows
-    : () => listHostWindows({env:{...process.env, ...env}, excludePid:process.pid});
+    : (options = {}) => listHostWindows({env:{...process.env, ...env}, excludePid:process.pid, ...options});
   const defaultProvisionProgramIdentity = async (/** @type {{id:string,label:string}} */ {id: profileId, label}) => {
     if (typeof env?.SRF_IDENTITY_STORE_ROOT !== 'string' || !env.SRF_IDENTITY_STORE_ROOT) {
       return {ok:true, rows:[{id:profileId, label, domains:[], logged_in:'unknown', browser:'program'}]};
@@ -338,6 +340,24 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const dynamicProfiles = new Map();
   const programProfiles = new Map();
   const windowProfiles = new Map();
+  /** @type {Promise<void>|null} */
+  let presentationRefresh = null;
+  // [TARGET, unit decision] Existing native inventory carries presentation
+  // state outside frozen surface/v0.2. Absence is never evidence of closure.
+  const refreshWindowPresentation = async () => {
+    if (![...windowProfiles.values()].some(w => w.state === 'active')) return;
+    if (!presentationRefresh) presentationRefresh = (async () => {
+      try {
+        const rows = await listHostWindowChoices({includeMinimized:true});
+        for (const entry of windowProfiles.values()) {
+          if (entry.state !== 'active') continue;
+          const row = rows.find((/** @type {any} */ item) => item.xid === entry.xid && item.witness === entry.witness);
+          if (row && typeof row.minimized === 'boolean') entry.minimized = row.minimized;
+        }
+      } catch { /* Keep the last witnessed presentation until inventory recovers. */ }
+    })().finally(() => { presentationRefresh = null; });
+    await presentationRefresh;
+  };
   const browserProfiles = () => [...profiles, ...dynamicProfiles.values()];
   const identityAllowed = (/** @type {string} */ value) => /^[a-z0-9][a-z0-9-]{1,39}$/.test(value) && !isForeignIdentity(value);
   /** @param {string} profile */
@@ -947,6 +967,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       }
       if (op === 'surfaces') {
         pruneProgramProfiles();
+        await refreshWindowPresentation();
         // [TARGET, unit decision] Project window presentation metadata outside
         // the frozen surface contract, including windows in the agent wall.
         return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active'
@@ -973,7 +994,13 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         return {ok:true,lastLogin:await markers.confirm(surface.profile_id)};
       }
       if (op === 'raise') {authoritative(message.surfaceId);sessions.get(message.surfaceId)?.bringToFront();return {ok:true};}
-      if (op === 'status') return status(message.surfaceId);
+      if (op === 'status') {
+        pruneProgramProfiles();
+        if ([...windowProfiles.values()].some(w => w.surfaceId === message.surfaceId && w.state === 'active')) {
+          await refreshWindowPresentation();
+        }
+        return status(message.surfaceId);
+      }
       if (op === 'mount') return await mount(message.surfaceId,message.bounds);
       if (op === 'resize') { authoritative(message.surfaceId); sessions.get(message.surfaceId)?.resize(validateRoleBounds(message.bounds)); return {ok:true}; }
       if (op === 'visibility') {
