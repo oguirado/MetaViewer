@@ -1,16 +1,58 @@
 # MetaViewer
 
-I build MetaViewer as a Linux-first desktop wall of live, isolated application surfaces. I fold, unfold, move, tab, float, hide, show, and take control of surfaces through closed intents admitted and journaled by a Rust authority core (`core/`, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)), while `pin` stays a UI-local presentation state and an agent observes, proposes, and verifies actions through the same core; the Electron renderer paints frames and submits intents, and never injects input directly. I have not measured live wall fps or latency after the current assembly changes; I keep the earlier results in [historical live evidence](#historical-live-evidence). Multi-capsule soak to `>= 4` [TARGET] capsules at `>= 10` [TARGET] fps for `10` [TARGET] min remains a target.
+For current VM/MicroVM limits and the proposed launch flow, see the [VM and MicroVM roadmap](VM_MICROVM_ROADMAP.md).
+
+For refusal codes and source-backed next steps, see [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
+
+After installation, follow the [Judge tour](docs/JUDGE_TOUR.md) with your AI.
+
+Start with the [documentation index](docs/README.md), the
+[pre-existing work declaration](docs/PREEXISTING.md), and the
+[licensing and external component notice](NOTICE-EVALUATION.md). MetaViewer is
+licensed under [AGPL-3.0-only](LICENSE); `wender-agent`, `vision-engine` and `OpenSuperficies` are fully private.
+
+For a fresh Linux judge machine, follow [Judge Quickstart](docs/JUDGE_QUICKSTART.md).
+Fetch verified assets with `python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules`,
+then preserve the capsule tier through the launcher:
+
+```bash
+bash scripts/judge/metaviewer-judge.sh doctor --before-install --capsules
+bash scripts/judge/metaviewer-judge.sh install --capsules
+bash scripts/judge/metaviewer-judge.sh doctor --capsules
+```
+
+For the app-only tier, deliberately omit `--capsules` from fetch, doctor and install.
+A complete public release URL is not established here; obtain the asset directory or
+release URL and checksum digest from the maintainer. Legacy networking reaches no
+public site today; public browsing requires a compatible Open image and firewall.
+
+I build MetaViewer as a Linux-first desktop wall of live application surfaces. I fold, unfold, move, tab, float, hide, show, and take control of surfaces through closed intents admitted and journaled by a Rust authority core (`core/`, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)), while `pin` stays a UI-local presentation state and an agent observes, proposes, and verifies actions through the same core; the Electron renderer paints frames and submits intents, and never injects input directly. I have not measured live wall fps or latency after the current assembly changes; I keep the earlier results in [historical live evidence](#historical-live-evidence). Multi-capsule soak to `>= 4` [TARGET] capsules at `>= 10` [TARGET] fps for `10` [TARGET] min remains a target.
 
 ## Status
 
-`VERSION` is **0.2.4** [CITED: `VERSION`], the release candidate. Changes after the candidate belong to [Unreleased](CHANGELOG.md#unreleased).
+`VERSION` is **0.2.5** [CITED: `VERSION`], the release candidate. Changes after the candidate are recorded in [Unreleased](CHANGELOG.md#unreleased) and [pending fragments](changes/unreleased/), assembled by the conductor using [the fragment workflow](changes/README.md).
 
 I verify this assembly with `bash tools/gate.sh` and `bash tools/gate.sh --self-test`; I do not carry forward suite pass totals from an earlier head. The gate covers manifests, laws, contracts, Python units and agents, kit/JavaScript checks, Rust, Go, UI, Electron smoke, and performance budgets [CITED: `tools/gate.sh`]. I run live acceptance separately; an offline pass does not establish live frame rate.
 
 - **Contracts.** I maintain `10` v0.1 schemas, `21` v0.2 schemas, `20` v0.1 fixtures and `489` v0.2 fixtures [MEASURED: Python `Path.glob` over `contracts/v0.1/*.schema.json`, `contracts/v0.2/*.schema.json`, `contracts/examples/*.json`, `contracts/examples/v0.2/*.json`].
-- **End-to-end journeys.** I keep `37` Node journey files and `3` Python E2E suites [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`; `ls -1 tests/e2e/test_*.py | wc -l`]. I run `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` separately from the default gate [CITED: `tests/e2e/run.py`].
+- **End-to-end journeys.** I keep `40` Node journey files and `6` Python E2E suites [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`; `ls -1 tests/e2e/test_*.py | wc -l`]. I run `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` separately from the default gate [CITED: `tests/e2e/run.py`].
 - **CI workflows (`.github/workflows/`).** `6` workflow files [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] define `20` job definitions [MEASURED: job keys below `jobs:` in each workflow] (`28` raw two-space keys, including triggers) [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`], with `13` job definitions [MEASURED: job keys below `jobs:`] (`15` raw two-space keys) in `.github/workflows/ci.yml` [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/ci.yml | wc -l`] where `ci-required` aggregates `10` required `needs` jobs across `x64` (`ubuntu-24.04`) and `arm64` (`ubuntu-24.04-arm`) [CITED: `.github/workflows/ci.yml`]. See [docs/TESTING.md](docs/TESTING.md) for the full job matrix and local commands.
+
+## Isolation and evaluation limits
+
+Browser capsules and container program capsules use the OpenSuperficies backend.
+**Host program** runs a local executable on your computer and is **not isolated**;
+its separate display and temporary browser profile do not create a sandbox.
+Desktop window tiles attach to an existing X11 window and are also **not isolated**.
+[CITED: `ui/src/catalog/CatalogLauncher.vue`, `daemon-adapter/internal/capsule/host_xpra.go`,
+`daemon-adapter/internal/capsule/host_window.go`]
+
+The live wall and host-window attachment need a graphical session; Electron smoke
+uses a private Xvfb display. Offline contracts and hosted fakes do not demonstrate
+live capsule operation. The [offline conversation fixture](docs/JUDGES.md) needs
+Node and the locked Wender checkout already available locally. A fresh clone alone
+does not supply that dependency or the release assets. Current live performance
+and clean-host capsule acceptance remain unmeasured here.
 
 ## Accounts, automation, and capsule resources
 
@@ -51,8 +93,7 @@ Setup and restrictions are in [INSTALL.md](docs/INSTALL.md).
 - **Contracts first.** `21` versioned JSON schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] in `contracts/v0.2/` and `10` closed schemas [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] in `contracts/v0.1/`; a new message type requires its schema and valid/invalid examples before any producer or consumer code [CITED: `LAWS.md` L3].
 - **Not available yet.** Features not wired end to end report explicit refusal states rather than faking behavior:
   - The Storyboard / creative screen (`ui/src/creative/CreativeCapsule.vue`) has no wire schema yet and reports `Creative service unavailable.` (`CREATIVE_SERVICE_UNAVAILABLE`) [CITED: `ui/src/App.vue`].
-  - Catalog management in the UI beyond the closed `4`-kind launcher set (`identity-browser`, `program`, `holdings-app`, `desktop`) is not available yet [CITED: `ui/src/catalog/CatalogLauncher.vue`].
-  - Legacy `mvctl observe` without `--v02` is not available and exits with `unsupported_operation` (rc `2`; use `mvctl --v02 observe`) [CITED: `agents/metaviewer_agents/mvctl.py`].
+  - Catalog management in the UI beyond the launcher set (`identity-browser`, `program`, `host-program`, `desktop-window`) is not available yet.
   - Direct agent `observation` envelope intake on the core (outside `mv_tool_call`) is not available yet and returns a journaled `POLICY` verdict [CITED: `docs/ARCHITECTURE.md`].
   - The `100,000`-case nightly property entrypoint in `.github/workflows/volume.yml` and the `G-NOVAC` meta-oracle interface in `.github/workflows/ci.yml` are not available yet (`ABSENT — do not invent`) and emit `BLOCKED` / `NOT_APPLICABLE` receipts [CITED: `.github/workflows/volume.yml`, `.github/workflows/ci.yml`].
   - OS-level desktop installers (`.deb`, `.rpm`, Flatpak, AppImage) and macOS/Windows builds are not available [CITED: `docs/INSTALL.md`, `.github/workflows/ci.yml`].
@@ -94,17 +135,17 @@ Electron renders state and submits intents; it never injects input [CITED: `docs
 
 ### Prerequisites
 
-| Tool | Required | Installed on reference host |
-| --- | --- | --- |
-| Rust | `1.97` [CITED: `Cargo.toml` `rust-version`] | `rustc 1.99.1` [MEASURED: `rustc --version`] |
-| Rust formatter | `1.92.0` [CITED: `tools/gate.sh`] | `rustfmt 1.8.0-stable` [MEASURED: `rustup run 1.92.0 cargo fmt --version`] |
-| Go | `1.26.0` [CITED: `daemon-adapter/go.mod`] | `go1.26.4 linux/arm64` [MEASURED: `go version`] |
-| Node | `>=24` [CITED: `ui/package.json` `engines.node`] | `v24.14.0` [MEASURED: `node --version`] |
-| Python | `>=3.11` [CITED: `agents/pyproject.toml`] | `Python 3.12.3` [MEASURED: `python3 --version`] |
-| Capsule UI kit | `0.2.1` (`bf31bc201987206d16dbd88d93102f9d5ce026f9`) [MEASURED: `python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])'`; CITED: `ui/kit.lock.json`] | via `CAPSULE_UI_KIT_REPO` |
-| Electron dist | `44.9.2` local files [CITED: `ui/package.json`] | via `ELECTRON_OVERRIDE_DIST_PATH` |
+| Tool | Required |
+| --- | --- |
+| Rust | `1.97` [CITED: `Cargo.toml` `rust-version`] |
+| Rust formatter | `1.92.0` [CITED: `tools/gate.sh`] |
+| Go | `1.26.0` [CITED: `daemon-adapter/go.mod`] |
+| Node | `>=24` [CITED: `ui/package.json` `engines.node`] |
+| Python | `>=3.11` [CITED: `agents/pyproject.toml`] |
+| Capsule UI kit | `0.2.1`, commit `aaada9dedc177b096e8b4764959e258e76c1ef02` [CITED: `ui/kit.lock.json`]; set `CAPSULE_UI_KIT_REPO` |
+| Electron dist | `44.9.2` [CITED: `ui/package.json`]; set `ELECTRON_OVERRIDE_DIST_PATH` |
 
-External components stay in their own repositories, pinned in `deps.lock` (`3` components [MEASURED: `python3 -c 'import json; print(len(json.load(open("deps.lock"))["components"]))'`]) and never copied: `vision-engine` `v0.2.0` (`3bb54835db8a2e545311cfcc45185a0dfbd9313a`), `wender-agent` `v0.3.0` (`96120967b435b72fc6d29635f3844dae140388a9`), and `opensuperficies` `os-cu-w9-mv1` (`a9ac1ac8543872b428990ea23fa2629cd0a6d1d5`) [CITED: `deps.lock`].
+External components stay in their own repositories, pinned in `deps.lock` (`3` components [MEASURED: `python3 -c 'import json; print(len(json.load(open("deps.lock"))["components"]))'`]) with source kept separate: `vision-engine` `v0.2.0` (`3bb54835db8a2e545311cfcc45185a0dfbd9313a`), `wender-agent` `v0.3.0` (`96120967b435b72fc6d29635f3844dae140388a9`), and `opensuperficies` `os-cu-w9-mv1` (`3cb86d752f38457b6730eefd235d4da4c4039721`) [CITED: `deps.lock`].
 
 
 I assemble MetaViewer, OpenSuperficies, vision-engine, and wender-agent from separate repositories; I keep external component commits in `deps.lock`. Its version fields are release labels, while the exact commit is the checkout authority; I do not imply that a pin equals its release tag. I use persistent `vadapt.vserve` when the pinned checkout supplies it and the `frame_raw`/`raw_shm` handshake succeeds with a typed `ring` capability; otherwise the adapter uses one-shot `vadapt.cu_describe` [CITED: `agents/metaviewer_agents/perception/vcore.py`]. I plan through `wender.plan.cli` over the pipe-only observation/element-table/goal boundary; MetaViewer retains admission and execution authority [CITED: `agents/metaviewer_agents/wender_bridge.py`]. Assembly CI requires the real planner with `--require-planner` [CITED: `.github/workflows/assembly.yml`].
@@ -132,12 +173,21 @@ MV_CORE_CONFIG=/path/to/core.json XDG_RUNTIME_DIR=/run/user/$UID "$CARGO_TARGET_
 go -C daemon-adapter run ./cmd/mv-daemon-adapter
 # UI smoke (needs ELECTRON_OVERRIDE_DIST_PATH + xvfb-run)
 (cd ui && npm run smoke)
-# CLI probe (legacy v0.1 envelope in FILE, or pass --v02 for the v0.2 tool protocol)
-python3 agents/metaviewer_agents/mvctl.py propose --json-arg FILE --timeout-ms 5000 \
+# CLI probe: FILE is an action_proposal/v0.2 JSON object.
+# Source the live attachment first. Select registered agent/core instances from
+# MV_CORE_CONFIG and set MV_AGENT_INSTANCE, MV_CORE_INSTANCE, MV_CORE_SOCKET.
+# MV_CORE_SOCKET is current.json's core_socket.
+PYTHONPATH=agents python3 -m metaviewer_agents.mvctl propose --json-arg FILE --timeout-ms 5000 \
+  --socket "$MV_CORE_SOCKET" --session-id "$MV_SESSION_ID" \
+  --agent-instance "$MV_AGENT_INSTANCE" --core-instance "$MV_CORE_INSTANCE" \
   --max-line-bytes 65536 --max-reply-bytes 65536
 # Hosted slice (no devices needed); --live needs the admitted capsule profile + env in tests/e2e/e2e1_slice/README.md
 node tests/e2e/e2e1_slice/index.js
 ```
+
+`mvctl observe` uses the current tool protocol by default; the optional leading
+`--v02` spelling selects the same protocol and is not a legacy repair. Observe
+also requires the registered bindings and `--surface-id`.
 
 I leave `MV_CAPTURE_RING` unset until the OpenSuperficies ring pin and host mount are ready; `MV_CAPTURE_RING=1` opts into the validated resident reader [CITED: `daemon-adapter/internal/frames/ringsource.go`].
 I use `MV_LIVE_WEB=1` only for the opt-in live web runner; I leave it unset in hosted CI [CITED: `tests/e2e/e2e1_slice/asm_web_live.py`].
@@ -166,7 +216,11 @@ git config core.hooksPath .githooks
 
 | Path | Purpose |
 | --- | --- |
-| `README.md` | Project overview and quickstart (this file) |
+| `README.md`, [docs/README.md](docs/README.md) | Project overview and ordered documentation index |
+| `route/` | Read-only generated code map; coordinates require source verification |
+| `router/`, `catalogue/` | Context-router tooling and identity data; entry routing remains declared unavailable in `AGENTS.md` |
+| `changes/` | Pending release fragments and conductor assembly instructions |
+| `memoryweb-builtin/` | Built-in workflow/site data; private operator data lives separately |
 | `LAWS.md`, [docs/COMMIT_LAWS.md](docs/COMMIT_LAWS.md) | Repository and commit policy |
 | `VERSION`, `CHANGELOG.md`, `deps.lock` | Release identity and external component pins |
 | [contracts/v0.2/](contracts/v0.2/) | `21` versioned v0.2 JSON wire schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] |
@@ -175,7 +229,7 @@ git config core.hooksPath .githooks
 | `daemon-adapter/` | Go surface-daemon bridge (`mv-daemon-adapter`) |
 | `agents/` | Python agent adapters, `mvctl`, MCP server |
 | `ui/` | Electron `44.9.2` + Vue `3.5.43` wall, frame port router, terminal, multislot, capture |
-| `tests/e2e/` | `37` Node E2E journeys [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`], `3` Python E2E suites [MEASURED: `ls -1 tests/e2e/test_*.py | wc -l`], and `e2e1_slice/` |
+| `tests/e2e/` | `40` Node E2E journeys [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`], `6` Python E2E suites [MEASURED: `ls -1 tests/e2e/test_*.py | wc -l`], and `e2e1_slice/` |
 | `tools/gate.sh` | Unified `11`-leg offline gate and harness self-test [CITED: `tools/gate.sh`] |
 | `tools/`, `tests/`, `.githooks/` | Checkers, unit suites, budget gate (`tools/budget_gate.py`), commit hook |
 | `.github/workflows/` | `6` CI workflow files (`ci.yml`, `secrets.yml`, `package.yml`, `build-other.yml`, `volume.yml`, `assembly.yml`) [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] |
@@ -188,9 +242,9 @@ git config core.hooksPath .githooks
 | [docs/TESTING.md](docs/TESTING.md) | Gate legs, live gates, E2E journeys, CI job table, hosted-like checks, and mutation proofs |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Authority, IPC, capture, and replay design |
 | [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | Shared capsule visual architecture |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Hackathon day-by-day plan and gates |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Historical hackathon plan and target gates |
 | [docs/PREEXISTING.md](docs/PREEXISTING.md) | Pre-existing work declaration |
-| [META_AI_USAGE.md](META_AI_USAGE.md) | Meta model usage ledger (`643` lanes across `131` rooms [MEASURED: `python3 -c 'import json; d=json.load(open("docs/meta-ai/muse_lanes.json")); print(len(d["lanes"]), len({x["room"] for x in d["lanes"]}))'`]) |
+| [META_AI_USAGE.md](META_AI_USAGE.md) | Meta model usage ledger (`3538` lanes across `136` rooms [MEASURED: `python3 -c 'import json; d=json.load(open("docs/meta-ai/muse_lanes.json")); print(len(d["lanes"]), len({x["room"] for x in d["lanes"]}))'`]) |
 
 ## Contributing
 
@@ -198,12 +252,12 @@ Set both author and committer to the maintainer identity in [docs/COMMIT_LAWS.md
 
 ## Pre-existing vs built during the event
 
-Everything runnable in this repository is built during the event; the v0.1 scaffold, design notes, and external private components predate it. See [docs/PREEXISTING.md](docs/PREEXISTING.md) for the item-by-item declaration.
+The runtime product assembly was built during the event; the v0.1 scaffold (including schema tooling and tests), design notes, and external component projects predate it. See [docs/PREEXISTING.md](docs/PREEXISTING.md) for the item-by-item declaration.
 
 ## Evaluation by hackathon judges
 
-The licensor (the maintainer, `oguirado`) permits the hackathon judges to install and evaluate MetaViewer for the purpose of judging. This permission is stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); the [LICENSE](LICENSE) text is unchanged. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md) and give [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) to their own AI to configure and explain the full program.
+MetaViewer may be used, modified and redistributed under [AGPL-3.0-only](LICENSE). The licensor (the maintainer, `oguirado`) separately permits hackathon judges to install, run and evaluate the supplied compiled external components for judging, as stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); this grants no redistribution rights in those components. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md) and give [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) to their own AI to configure and explain the full program.
 
 ## License
 
-MetaViewer is licensed under the [PolyForm Strict License 1.0.0](LICENSE). The external components it integrates (`wender-agent`, `vision-engine`, `OpenSuperficies`, and `capsule-ui-kit`) are proprietary and are not covered by this license.
+MetaViewer is licensed under the [GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0-only`). The separate proprietary programs `wender-agent`, `vision-engine` and `OpenSuperficies` are fully private and are not covered by this license; `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only`. See [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md) for the additional permission to run and convey MetaViewer with external components and the limited evaluation permission for their compiled forms.

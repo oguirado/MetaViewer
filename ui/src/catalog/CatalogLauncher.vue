@@ -12,6 +12,7 @@ import { computed, ref, watch } from 'vue';
 import { NewCapsuleDialog } from '../../.kit/capsule-ui-kit/src/index-shell.js';
 import {
   CATALOG_KIND_IDS,
+  availableCatalogKindIds,
   buildCreateIntent,
   createInvokerFocus,
   filterWindowCandidates,
@@ -22,6 +23,7 @@ import {
 const props = defineProps({
   visible: { type: Boolean, default: false },
   kinds: { type: Array, default: () => [...CATALOG_KIND_IDS] },
+  vmAvailable: { type: Boolean, default: false },
   title: { type: String, default: 'Add capsule' },
   subtitle: { type: String, default: 'Choose a capsule kind to open in your wall' },
   emptyText: { type: String, default: 'No capsule kinds match this search.' },
@@ -30,28 +32,31 @@ const emit = defineEmits(['update:visible', 'create', 'close']);
 
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
+const roleEdited = ref(false);
+const editedRoleChoice = ref('agent');
 const choosingProgram = ref(false), programBinary = ref(''), programRole = ref('human'), programError = ref(''), programBusy = ref(false);
 const choosingWindow = ref(false), windowSearch = ref(''), windowChoices = ref(/** @type {Array<{xid:number,witness:string,title:string,program:string,width:number,height:number}>} */ ([]));
 const windowChoiceXid = ref(0), windowError = ref(''), windowBusy = ref(false);
 const filteredWindows = computed(() => filterWindowCandidates(windowChoices.value, windowSearch.value));
-const selectedWindow = computed(() => windowChoices.value.find(w => w.xid === windowChoiceXid.value) || null);
+const selectedWindow = computed(() => filteredWindows.value.find(w => w.xid === windowChoiceXid.value) || null);
 let choiceGeneration = 0;
-watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
+watch(() => props.visible,visible=>{choiceGeneration++;programBusy.value=false;windowBusy.value=false;if(!visible){choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}},{flush:'sync'});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
-watch(profileChoice, id => { roleChoice.value = profileChoices.value.find(p => p.profileId === id)?.role || 'agent'; });
+watch(profileChoice, id => { if (!roleEdited.value) roleChoice.value = profileChoices.value.find(p => p.profileId === id)?.role || 'agent'; });
 function confirmRole() {
   const profile = matchingProfiles.value.find(p => p.profileId === profileChoice.value);
-  if (/** @type {any} */ (profile)?.busy) return;
-  if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND' : 'NO_IDENTITY'; return; }
+  if (/** @type {any} */ (profile)?.busy) { roleError.value = 'SURFACE_CREATE_BUSY: A capsule is already starting. Wait for it to finish, then try again.'; return; }
+  if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND: Check this identity in Identities and stop or reuse its existing capsule.' : 'NO_IDENTITY: Open Identities to add or check an available identity, then try Add capsule again.'; return; }
   emit('create', {...pendingIntent.value,choice:{role:roleChoice.value,profileId:profile.profileId}});
   choosingRole.value = false;
   emit('update:visible', false);
 }
 async function confirmProgram() {
+  const invocation = choiceGeneration;
   const result = buildCreateIntent({
-    kind: 'program',
+    kind: pendingIntent.value?.kind || 'program',
     placement: pendingIntent.value?.placement,
     binary: programBinary.value,
     ...(typeof programRole !== 'undefined' && programRole?.value ? { role: programRole.value } : {}),
@@ -77,6 +82,7 @@ async function confirmProgram() {
     }
     if (outcome && typeof outcome.then === 'function') {
       outcome = await outcome;
+      if (invocation !== choiceGeneration) return;
     }
     if (outcome && outcome.ok === false) {
       programError.value = outcome.reason || outcome.message || outcome.code || 'Program could not be started.';
@@ -89,13 +95,15 @@ async function confirmProgram() {
     choosingProgram.value = false;
     emit('update:visible', false);
   } catch (err) {
+    if (invocation !== choiceGeneration) return;
     const e = /** @type {any} */ (err);
     programError.value = e?.reason || e?.message || e?.code || 'Program could not be started.';
   } finally {
-    programBusy.value = false;
+    if (invocation === choiceGeneration) programBusy.value = false;
   }
 }
 function cancelProgram() {
+  if (programBusy.value) return;
   choosingProgram.value = false;
   programError.value = '';
   emit('update:visible', false);
@@ -107,6 +115,7 @@ function selectWindowRow(/** @type {number} */ xid) {
 async function confirmWindow() {
   if (typeof choosingWindow === 'undefined') return;
   const chosen = selectedWindow.value;
+  const invocation = choiceGeneration;
   const result = buildCreateIntent({
     kind: 'desktop-window',
     placement: pendingIntent.value?.placement,
@@ -133,6 +142,7 @@ async function confirmWindow() {
     }
     if (outcome && typeof outcome.then === 'function') {
       outcome = await outcome;
+      if (invocation !== choiceGeneration) return;
     }
     if (outcome && outcome.ok === false) {
       windowError.value = outcome.reason || outcome.message || outcome.code || 'Desktop window could not be attached.';
@@ -146,20 +156,22 @@ async function confirmWindow() {
     windowChoiceXid.value = 0;
     emit('update:visible', false);
   } catch (err) {
+    if (invocation !== choiceGeneration) return;
     const e = /** @type {any} */ (err);
     windowError.value = e?.reason || e?.message || e?.code || 'Desktop window could not be attached.';
   } finally {
-    windowBusy.value = false;
+    if (invocation === choiceGeneration) windowBusy.value = false;
   }
 }
 function cancelWindow() {
+  if (windowBusy.value) return;
   if (typeof choosingWindow !== 'undefined') choosingWindow.value = false;
   if (typeof windowChoiceXid !== 'undefined') windowChoiceXid.value = 0;
   if (typeof windowError !== 'undefined') windowError.value = '';
   emit('update:visible', false);
 }
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
-const dialogTypes = computed(() => [...normalized.value.types]);
+const dialogTypes = computed(() => normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable).includes(type.id)));
 const catalogErrors = computed(() => normalized.value.errors);
 
 const invokerFocus = createInvokerFocus();
@@ -182,8 +194,8 @@ function forwardVisible(value) {
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
-  if (payload?.type?.id === 'program') {
-    pendingIntent.value = { kind: 'program', placement: payload?.placement };
+  if (payload?.type?.id === 'program' || payload?.type?.id === 'host-program') {
+    pendingIntent.value = { kind: payload.type.id, placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
       programBinary.value = typeof payload?.binary === 'string' ? payload.binary : '';
       if (typeof programRole !== 'undefined') programRole.value = payload?.role === 'agent' ? 'agent' : 'human';
@@ -231,16 +243,20 @@ async function onCreate(payload) {
   if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create', result.intent); return; }
   const generation = ++choiceGeneration;
   pendingIntent.value = result.intent; roleChoice.value = 'agent'; roleError.value = '';
+  if (typeof roleEdited !== 'undefined') roleEdited.value = false;
   profileChoices.value = []; profileChoice.value = '';
   choosingRole.value = true;
   try {
     const choices = await api.choices();
-    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }
+    if (!props.visible) { choosingRole.value = false; return; }
+    if (generation !== choiceGeneration) return;
     profileChoices.value = choices;
     if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');
     profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';
+    if (profileChoice.value && roleError.value.startsWith('NO_IDENTITY:')) roleError.value = '';
     roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';
-  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
+  } catch {if(!props.visible){choosingRole.value=false;return;}if(generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
+  if (typeof roleEdited !== 'undefined' && roleEdited.value) roleChoice.value = editedRoleChoice.value;
 }
 
 function onClose() {
@@ -252,9 +268,9 @@ function onClose() {
 <template>
   <div v-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity">
     <h2>Capsule role and identity</h2>
-    <label>Role <select v-model="roleChoice" autofocus><option value="agent">Agent</option><option value="human">Human</option></select></label>
+    <label>Role <select v-model="roleChoice" autofocus @change="roleEdited = true; editedRoleChoice = roleChoice"><option value="agent">Agent</option><option value="human">Human</option></select></label>
     <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? (profile.currentMode && profile.currentMode !== 'closed' ? ' — ' + profile.currentMode : '') : ' — unavailable' }}</option></select></label>
-    <p v-if="roleError" role="alert">{{ roleError }}</p>
+    <p v-if="roleError" role="alert">{{ roleError === 'IDENTITY_LIST_UNAVAILABLE' ? 'IDENTITY_LIST_UNAVAILABLE: Open Identities to check the identity list, then try Add capsule again.' : roleError }}</p>
     <button type="button" @click="confirmRole">Open capsule</button>
     <button type="button" @click="choosingRole = false; emit('update:visible', false)">Cancel</button>
   </div>
@@ -267,7 +283,8 @@ function onClose() {
     aria-modal="true"
     aria-label="Program capsule"
   >
-    <h2>Program</h2>
+    <h2>{{ pendingIntent?.kind === 'host-program' ? 'Host program' : 'Program' }}</h2>
+    <p v-if="pendingIntent?.kind === 'host-program'">Runs on your computer — not isolated. Browsers use a fresh temporary profile in RAM, never your personal profile.</p>
     <label for="shell/new-capsule/program-role">Role</label>
     <select
       id="shell/new-capsule/program-role"
@@ -304,6 +321,7 @@ function onClose() {
       id="shell/new-capsule/program-cancel"
       data-semantic-anchor="dialog/new-capsule/program-cancel"
       type="button"
+      :disabled="programBusy"
       @click="cancelProgram"
     >Cancel</button>
   </div>
@@ -358,7 +376,7 @@ function onClose() {
       id="shell/new-capsule/window-empty"
       data-semantic-anchor="dialog/new-capsule/window-empty"
       class="mv-window-empty"
-    >No open desktop windows match this filter.</p>
+    >{{ windowSearch.trim() ? 'No open desktop windows match this filter.' : 'No attachable X11 windows are open. Native Wayland windows are not listed.' }}</p>
     <p
       v-if="windowError"
       id="shell/new-capsule/window-error"
@@ -376,6 +394,7 @@ function onClose() {
       id="shell/new-capsule/window-cancel"
       data-semantic-anchor="dialog/new-capsule/window-cancel"
       type="button"
+      :disabled="windowBusy"
       @click="cancelWindow"
     >Cancel</button>
   </div>

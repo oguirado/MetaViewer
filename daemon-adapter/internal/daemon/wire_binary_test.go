@@ -339,6 +339,11 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 	if event.Event != "state_changed" {
 		t.Fatal("release failed")
 	}
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "frame_ready" || event.Data.FrameRef.SurfaceID != id || event.Data.FrameRef.Generation <= lastGeneration {
+		t.Fatalf("release missing ordered forced frame: %+v", event)
+	}
+	lastGeneration = event.Data.FrameRef.Generation
 	request("frame_subscribe", map[string]string{"surface_id": id})
 	for i := 0; i < 2; i++ {
 		_ = json.Unmarshal(read(), &event)
@@ -377,14 +382,24 @@ func binaryOracle(t *testing.T, live bool, negative string) {
 			t.Fatalf("unsubscribe failed: %+v", event)
 		}
 	}
-	// Wait across several poll intervals, then verify the next response is still
-	// the list barrier, rather than an unsolicited frame.
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "frame_ready" || event.Data.FrameRef.SurfaceID != id || event.Data.FrameRef.Generation <= lastGeneration {
+		t.Fatalf("list missing ordered refresh: %+v", event)
+	}
+	lastGeneration = event.Data.FrameRef.Generation
+	// Consume the explicit list refresh, then wait across several poll intervals.
+	// The next response must be the next list state, with no unsolicited frame.
 	time.Sleep(250 * time.Millisecond)
 	request("list", map[string]any{})
 	_ = json.Unmarshal(read(), &event)
 	if event.Event != "state_changed" || event.Data.Surface.SurfaceID != id {
 		t.Fatalf("frame delivered after unsubscribe barrier: %+v", event)
 	}
+	_ = json.Unmarshal(read(), &event)
+	if event.Event != "frame_ready" || event.Data.FrameRef.SurfaceID != id || event.Data.FrameRef.Generation <= lastGeneration {
+		t.Fatalf("second list missing ordered refresh: %+v", event)
+	}
+	lastGeneration = event.Data.FrameRef.Generation
 	request("frame_subscribe", map[string]string{"surface_id": id})
 	_ = json.Unmarshal(read(), &event)
 	if event.Event != "frame_ready" || event.Data.FrameRef.Generation <= lastGeneration {

@@ -1,8 +1,12 @@
 package frames
 
 // [TARGET, unit decision] Capture pacing belongs to the session, independently
-// of UI visibility. Emit must honor its context; delivery failure terminates the
-// subscription instead of growing a queue. Unsubscribe drains in-flight work.
+// of UI visibility. Emit must honor its context. A failed publication or delivery
+// drops that frame and retries at the next capture deadline; two consecutive
+// failures terminate instead of growing a queue. Unsubscribe drains in-flight work.
+// [TARGET, unit decision] Never replay a possibly delivered ref. Reset digest
+// confirmation on failure so unchanged pixels still produce a fresh generation.
+// Proven capture loss retains its existing confirmation and wire-order policy.
 // [TARGET, unit decision] Terminal tasks release capacity automatically. Retain
 // at most MaxSubscriptions recent failures for TerminalError, clearing a
 // surface's prior failure on resubscription or explicit unsubscribe.
@@ -56,6 +60,8 @@ type lostDeliveryWaiter interface {
 // absence faults (unavailable or refused) before confirming loss and emitting
 // state_changed{state:"lost"}.
 const confirmedLossCaptureFailures = 2
+
+const maxConsecutiveFrameFailures = 2
 
 func shouldMarkCaptureLost(err error) bool {
 	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -459,6 +465,11 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		close(pipeCh)
 		wg.Wait()
 		t.cancel()
+		// Capture can enqueue a resident payload just before cancellation wins
+		// the publication handoff. Both stages are drained before releasing it.
+		if source, ok := s.source.(interface{ Forget(string) }); ok {
+			source.Forget(id)
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.tasks[id] == t {
@@ -523,9 +534,18 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		cancel()
 		markLost := false
 		transientFailure := false
-		if e == nil {
+		resized := capsule.IsHostWindowResize(e)
+		if resized || capsule.IsHostWindowWaiting(e) {
+			// Resize proves a live window. Reset loss evidence and retry only
+			// at the next scheduled poll, including through a continuous drag.
 			consecutiveFailures = 0
 			consecutiveAbsenceFailures = 0
+			transientFailure = true
+		} else if e == nil {
+			consecutiveFailures = 0
+			consecutiveAbsenceFailures = 0
+		} else if e != nil && binding.Surface.State == "lost" {
+			markLost = true
 		} else if !t.cancelled.Load() && ctx.Err() == nil {
 			consecutiveFailures++
 			if attemptedCapture && shouldMarkCaptureLost(e) {
@@ -546,7 +566,9 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			return
 		}
 		if transientFailure {
-			s.recordDiagnosticWarning(id, fmt.Sprintf("transient capture failure (%d/%d): %v", consecutiveFailures, confirmedLossCaptureFailures, e))
+			if !resized {
+				s.recordDiagnosticWarning(id, fmt.Sprintf("transient capture failure (%d/%d): %v", consecutiveFailures, confirmedLossCaptureFailures, e))
+			}
 			next = next.Add(s.cfg.PollInterval)
 			now := s.clock.Now()
 			if !next.After(now) {
@@ -601,7 +623,20 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 	}
 }
 
+// retryFrame refuses unbounded retry and invalidates delivery-based dedup state.
+func (s *Subscriptions) retryFrame(id string, failures int, err error) bool {
+	s.mu.Lock()
+	s.confirmed[id] = 0
+	s.mu.Unlock()
+	if failures >= maxConsecutiveFrameFailures {
+		return false
+	}
+	s.recordDiagnosticWarning(id, fmt.Sprintf("frame failure (%d/%d), dropped; retry with next capture: %v", failures, maxConsecutiveFrameFailures, err))
+	return true
+}
+
 func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pipeCh <-chan capturedItem) {
+	consecutiveFrameFailures := 0
 	for {
 		var item capturedItem
 		var ok bool
@@ -648,6 +683,15 @@ func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pip
 				}{Schema: "surface_event/v0.2", Event: "frame_ready", Data: struct {
 					FrameRef Ref `json:"frame_ref"`
 				}{ref}})
+			}
+		}
+		if e != nil && item.err == nil {
+			consecutiveFrameFailures++
+			if s.retryFrame(id, consecutiveFrameFailures, e) {
+				if item.ack != nil {
+					close(item.ack)
+				}
+				continue
 			}
 		}
 		failed := e != nil
@@ -710,6 +754,15 @@ func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pip
 				if t.cancelled.Load() || ctx.Err() != nil {
 					return
 				}
+				if !failed {
+					consecutiveFrameFailures++
+					if s.retryFrame(id, consecutiveFrameFailures, deliveryErr) {
+						if item.ack != nil {
+							close(item.ack)
+						}
+						continue
+					}
+				}
 				s.recordDiagnosticError(id, deliveryErr)
 				t.err = errors.Join(e, deliveryErr)
 				// A failed frame delivery gets one bounded failure notification.
@@ -727,6 +780,7 @@ func (s *Subscriptions) publishLoop(ctx context.Context, id string, t *task, pip
 				t.err = e
 				return
 			}
+			consecutiveFrameFailures = 0
 			t.emitted++
 			s.mu.Lock()
 			s.confirmed[id]++

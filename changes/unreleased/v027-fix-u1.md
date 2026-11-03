@@ -1,0 +1,6 @@
+- Keep recovered undispatched admissions cancellable on reconnect while retaining fences for dispatched work (V027-CA01).
+- Bound journal Drop when storage sync stalls; retain the writer lock until the aborted worker exits and prevent pending checkpoint publication (V027-CJ01).
+- Report replay exhaustion through a typed terminal on active connections and reconnect without clearing replay evidence (V027-CR01).
+- Roll back failed session initialization under the writer lock so the same session can be retried without deleting existing sessions (V027-CJ02).
+- Preserve the reserved overflow diagnostic when a keepalive saturates a backpressured daemon connection (V027-CR02).
+- Cap supervisor polling sleeps at the remaining startup and shutdown deadlines (V027-CR03).

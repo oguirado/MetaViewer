@@ -76,11 +76,8 @@ export function identityErrorText(code, id) {
   const target = typeof id === 'string' && /^[a-z0-9][a-z0-9-]{1,39}$/.test(id) ? id : '<id>';
   if (code === 'IDENTITY_PROTECTED') return 'Managed outside MetaViewer (IDENTITY_PROTECTED).';
   if (code === 'IDENTITY_BOUND') return 'This identity has an open capsule. Stop it first, then delete it.';
-  if (code === 'PROFILE_NOT_PROVISIONED') {
-    return `The identity profile is not provisioned for the native browser capsule: PROFILE_NOT_PROVISIONED. Before login, profiles/<id> must be a private 0700 directory owned by uid 10001; run once on the host: sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/${target}" (see docs/INSTALL.md#identity-store).`;
-  }
-  if (code === 'PROFILE_MISSING') {
-    return `The identity profile directory is missing: PROFILE_MISSING. Before login, create profiles/<id> as a private 0700 directory owned by uid 10001; run once on the host: sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/${target}" (see docs/INSTALL.md#identity-store).`;
+  if (code === 'PROFILE_NOT_PROVISIONED' || code === 'PROFILE_MISSING') {
+    return `Docker profile provisioning failed: ${code}. profiles/<id> must be private 0700 owned by uid 10001. Check Docker access and the installed judge images, then retry identity creation for "${target}" (see docs/INSTALL.md#identity-store).`;
   }
   if (code === 'IDENTITY_REFUSED') {
     return 'The identity tool refused the request: IDENTITY_REFUSED. The identity may be in use by a running capsule or an open login view, or a native prerequisite is missing (profile directory private and owned by the native uid).';

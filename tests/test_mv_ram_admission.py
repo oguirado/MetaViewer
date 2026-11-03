@@ -26,6 +26,12 @@ class ReclaimTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        # Native tests use an explicitly empty process inventory, never host state.
+        proc_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(proc_temp.cleanup)
+        process_patch = patch.object(ram, "HOST_PROC", Path(proc_temp.name))
+        process_patch.start()
+        self.addCleanup(process_patch.stop)
         self.path = self.root / NAME
         self.path.touch(mode=0o600)
 
@@ -133,7 +139,7 @@ class ReclaimTests(unittest.TestCase):
         with patch.dict(os.environ, {"DOCKER_HOST": "tcp://remote:2375"}, clear=True):
             self.assertIsNone(ram.NativeInventory(lambda argv: self.fail("remote call")).absent())
 
-    def test_per_profile_inventory_ignores_protected_and_unrelated(self):
+    def test_random_browser_inventory_cannot_prove_profile_absence(self):
         import hashlib
         profile = 'mv-example'
         self.path.unlink()
@@ -141,7 +147,7 @@ class ReclaimTests(unittest.TestCase):
             hashlib.sha256(profile.encode()).hexdigest() + "--" + profile)
         self.path.touch(mode=0o600)
         protected = "srf-id-cuentas-1\nsrf-id-perplexity-1\nsrf-pg-notepad-1\nsrf-egress-proxy\nsrf-id-other\n"
-        for extra, expected in (("", "would_remove"), ("srf-id-mv-example\n", "keep"),
+        for extra, expected in (("", "keep"), ("srf-id-mv-example\n", "keep"),
                                 ("srf-pg-mv-example\n", "keep"),
                                 ("srf-ng-hcap-hc-abcdef123456-1\n", "keep")):
             def run(argv):
@@ -151,8 +157,8 @@ class ReclaimTests(unittest.TestCase):
             self.assertEqual(result[0]['action'], expected)
             self.assertTrue(self.path.exists())
 
-    def test_legacy_only_blocks_metaviewer_capsules(self):
-        for raw, expected in (("srf-id-cuentas-1\nsrf-egress-proxy\n", "removed"),
+    def test_legacy_blocks_natives_without_profile_proof(self):
+        for raw, expected in (("srf-id-cuentas-1\nsrf-egress-proxy\n", "keep"),
                               ("srf-id-mv-live\n", "keep"), ("srf-pg-mv-live\n", "keep"),
                               ("srf-vm-mv-x\n", "keep")):
             self.path.touch(mode=0o600)
@@ -168,7 +174,7 @@ class ReclaimTests(unittest.TestCase):
         self.path.unlink()
         self.path = self.root / ("12345-" + "a" * 32 + "-" +
             hashlib.sha256(profile.encode()).hexdigest() + "--" + profile)
-        unrelated = "srf-id-cuentas-1\nsrf-egress-proxy\nsrf-vm-other\n"
+        unrelated = "srf-pg-notepad-1\nsrf-egress-proxy\nsrf-vm-other\n"
         for extra, expected in (("srf-vm-mv-vm1\n", "keep"), ("", "removed")):
             with self.subTest(capsule_present=bool(extra)):
                 self.path.touch(mode=0o600)

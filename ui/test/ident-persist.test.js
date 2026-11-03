@@ -53,7 +53,7 @@ if verb == 'create':
     if meta.exists(): sys.exit(4)
     profile.mkdir(mode=0o750)
     profile.chmod(0o750)
-    meta.write_text(json.dumps(dict(profile_id=identity, account_label=arg('--label'), allowed_domains=arg('--domains').split(','), created_unix=1)))
+    meta.write_text(json.dumps(dict(profile_id=identity, account_label=arg('--label'), allowed_domains=arg('--domains').split(',') if '--domains' in a else [], browser=arg('--browser') if '--browser' in a else 'chromium', created_unix=1)))
     meta.chmod(0o600)
 elif verb == 'start':
     if not profile.is_dir() or (profile.stat().st_mode & 0o777) != 0o700: sys.exit(4)
@@ -96,6 +96,7 @@ function world(t, { provisioned = true } = {}) {
   writeFileSync(join(dirs.bin, 'docker'), `#!/usr/bin/env python3
 import os, pathlib, shutil, sys
 a = sys.argv[1:]
+if a[:2] == ['image', 'inspect']: sys.exit(0)
 if a[0] == 'rm': sys.exit(0)
 mount = a[a.index('--mount')+1]
 root = pathlib.Path(mount.split('src=',1)[1].split(',dst=',1)[0])
@@ -237,7 +238,7 @@ test('IDENT-E2E-PROVISION-AND-MUTANTS: renderer dialog -> preload -> bridge -> t
   await until(() => loginButton() && !loginButton().props.disabled, 'login button enabled');
   loginButton().props.onClick();
   await until(() => allText(view.root).includes('PROFILE_NOT_PROVISIONED'), 'PROFILE_NOT_PROVISIONED in renderer alert');
-  assert.match(allText(view.root), /profiles\/<id>.*0700.*uid 10001.*sudo install -d -m 0700 -o 10001 -g 10001 "\$SRF_IDENTITY_STORE_ROOT\/profiles\/account-a".*docs\/INSTALL\.md#identity-store/);
+  assert.match(allText(view.root), /Docker.*PROFILE_.*profiles\/<id>.*0700.*uid 10001.*judge images.*account-a.*docs\/INSTALL\.md#identity-store/);
   assert.deepEqual(opened, []);
 
   // 3. Removing profiles/<id> surfaces PROFILE_MISSING to the renderer dialog.
@@ -245,7 +246,7 @@ test('IDENT-E2E-PROVISION-AND-MUTANTS: renderer dialog -> preload -> bridge -> t
   rmSync(join(w.store, 'profiles/account-a'), { recursive: true, force: true });
   loginButton().props.onClick();
   await until(() => allText(view.root).includes('PROFILE_MISSING'), 'PROFILE_MISSING in renderer alert');
-  assert.match(allText(view.root), /PROFILE_MISSING.*sudo install -d -m 0700 -o 10001 -g 10001 "\$SRF_IDENTITY_STORE_ROOT\/profiles\/account-a".*docs\/INSTALL\.md#identity-store/);
+  assert.match(allText(view.root), /Docker.*PROFILE_.*profiles\/<id>.*0700.*uid 10001.*judge images.*account-a.*docs\/INSTALL\.md#identity-store/);
 
   // 4. Running the one-time operator provisioning step lets Log in succeed end to end.
   await until(() => !loginButton().props.disabled, 'login button idle after missing refusal');
@@ -260,7 +261,7 @@ test('IDENT-E2E-PROVISION-AND-MUTANTS: renderer dialog -> preload -> bridge -> t
   for (const code of ['PROFILE_NOT_PROVISIONED', 'PROFILE_MISSING']) {
     assert.deepEqual(assertOperatorReply('identity.login', { ok: false, code }), { ok: false, code });
     const msg = identityErrorText(code);
-    assert.match(msg, new RegExp(`${code}.*profiles/<id>.*0700.*uid 10001.*sudo install -d -m 0700 -o 10001 -g 10001 "\\$SRF_IDENTITY_STORE_ROOT/profiles/<id>".*docs/INSTALL\\.md#identity-store`));
+    assert.match(msg, new RegExp(`Docker.*${code}.*profiles/<id>.*0700.*uid 10001.*judge images.*docs/INSTALL\\.md#identity-store`));
   }
   for (const unlisted of ['RESERVED_ID', 'LOGIN_IN_PROGRESS', 'UNKNOWN_REFUSAL']) {
     assert.equal(toolRefusedCode(JSON.stringify({ schema: 'metaviewer.identity/v1', ok: false, error: unlisted })), 'IDENTITY_REFUSED');
@@ -360,4 +361,14 @@ test('IDENT-WIRING: bridge teardown stops in-flight identity children', async t 
   const { bridge } = wiring(t, { env: {}, tool: 'unused', runIdentity });
   await bridge.dispose();
   assert.equal(disposed, 1);
+});
+
+test('V027: async identity runner retains Docker repair reason for Program refusal', async (t) => {
+  const w = world(t, {provisioned:false});
+  const run = identityRunner({tool:w.tool, env:identityEnvironment(w.env, TOOL)});
+  await assert.rejects(run('create', {id:'gedit', label:'gedit', domains:[], browser:'program'}), error => {
+    assert.equal(error.message, 'PROFILE_NOT_PROVISIONED');
+    assert.match(error.reason, /Docker.*judge images.*retry identity creation/);
+    return true;
+  });
 });

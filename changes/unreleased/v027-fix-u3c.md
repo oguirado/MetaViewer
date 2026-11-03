@@ -1,0 +1,11 @@
+- V027-CP06: Retain lost browser bindings as destroyable host rows and reserve their profiles until destruction.
+- Desktop window tabs: Refresh existing Dockview titles when native window metadata arrives after the core row.
+- V027-TD06: Release host terminal entries after delivering exit, preserving pre-attach output within the existing attach deadline and normal deck close behavior [TARGET, unit decision].
+- V027-LP08: Allocate desktop IDs from the validated saved next allocator, preserving uniqueness across gaps.
+- V027-AS05: Dismiss Settings after successfully revealing the selected capsule.
+- V027-CL06: Disable attachment when search filters the chosen desktop window out of the visible results.
+- V027-CL05: Disable and guard program/window cancellation while the dispatched create is pending.
+- V027-ID02: Accept lowercase aliases when selecting browser templates for dynamic identities.
+- V027-HP02: Refuse unsupported desktop-window Watch mounts with a typed binding refusal before filesystem access.
+- V027-RS03: Guard in-flight screenshots, expose capture busy state, and clear pending state during disposal.
+- V027-RS04: Retain a sealed screenshot export row from its successful receipt when the automatic relist fails, within the existing row cap.

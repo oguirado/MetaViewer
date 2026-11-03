@@ -1,0 +1,2 @@
+- Let lost agent-controlled host window tiles close locally without requesting forbidden destruction, and hide unavailable recovery actions.
+- Verify the UI-only lost human window destroy exception and preservation of pending host loss events during input completion.

@@ -1,0 +1,1 @@
+- Tell the operator how to reuse a window id still held by a closed tile.

@@ -2,7 +2,7 @@ import { createWallProjection } from './projection.js';
 import { buildAuthorityIntent, createWallIntentBuilders } from './intents.js';
 
 /** @typedef {{schema:'action_verdict/v0.2',proposal_id:string,core_seq:number,decision:'admitted'|'refused',reason_code?:string}} ActionVerdict */
-/** @typedef {{createSurface?:()=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
+/** @typedef {{vmAvailable?:()=>Promise<boolean>,createSurface?:(selector?:{kind:'vm'})=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
 /** @typedef {{command:string,args:readonly string[],cols:number,rows:number}} TerminalSpec */
 /** @typedef {{open?:(spec:TerminalSpec)=>Promise<{session:string}>,setEnabled?:(enabled:boolean)=>Promise<true>,close?:(spec:{session:string})=>Promise<unknown>}} TerminalPort */
 /** @typedef {{code:string,message:string,tone:'success'|'refusal'}} OutcomeRow */
@@ -39,10 +39,19 @@ export function verdictRow(value) {
 export function createAuthorityAdapter(port) {
   const intent = typeof port?.intent === 'function' ? port.intent.bind(port) : null;
   const propose = typeof port?.propose === 'function' ? port.propose.bind(port) : null;
+  const vmAvailable = typeof port?.vmAvailable === 'function' ? port.vmAvailable.bind(port) : null;
   const createSurface = typeof port?.createSurface === 'function' ? port.createSurface.bind(port) : null;
   return Object.freeze({
-    createSurface: createSurface ? async () => {
-      const reply = await createSurface();
+    // [TARGET, unit decision] Absent, failed or malformed host answers hide VM.
+    vmAvailable: async () => {
+      try { return vmAvailable ? await vmAvailable() === true : false; }
+      catch { return false; }
+    },
+    createSurface: createSurface ? async (/** @type {{kind:'vm'}|undefined} */ selector = undefined) => {
+      if (selector !== undefined && (!selector || Reflect.ownKeys(selector).join(',') !== 'kind' || selector.kind !== 'vm')) {
+        throw Object.assign(new Error('VM_SELECTOR_INVALID'),{code:'VM_SELECTOR_INVALID'});
+      }
+      const reply = selector === undefined ? await createSurface() : await createSurface(selector);
       if (reply?.ok === true) return {code:'INTENT_ACKNOWLEDGED',message:'Request sent.',tone:/** @type {const} */ ('success')};
       const code = typeof reply?.code === 'string' ? reply.code : 'SURFACE_CREATE_FAILED';
       throw Object.assign(new Error(code), {code});
@@ -218,11 +227,12 @@ export function hostOutcomeFor(row) {
     RAM_ADMISSION_REFUSED: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
     SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
     SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
-    SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+    SURFACE_CREATE_FAILED: 'The host could not start the capsule. If this is a core-only installation, install and configure the surface runtime with bash scripts/judge/metaviewer-judge.sh install --capsules, then restart MetaViewer. Otherwise check the host logs and choose Add capsule to try again.',
     SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
     SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
     DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
-    ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+    ADAPTER_SETUP: 'The surface runtime setup is unavailable. Run bash scripts/judge/metaviewer-judge.sh doctor --capsules, repair the reported prerequisite, then try Add capsule again.',
+    ADAPTER_ERROR: 'The surface runtime could not open the capsule. Check that it is installed and configured, then choose Add capsule to try again. A core-only installation cannot run capsules.',
   };
   const missingMatch = typeof row.code === 'string'
     ? ((/^NO_IDENTITY__([A-Z0-9_]{1,48})$/.exec(row.code)?.[1]?.toLowerCase().replace(/__/g, '\0').replace(/_/g, '-').replace(/\0/g, '_'))

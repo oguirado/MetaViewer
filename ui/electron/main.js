@@ -1,6 +1,9 @@
 // @ts-check
 'use strict';
 
+// [TARGET, unit decision] The Settings legal link uses shell.openExternal
+// through an exact repository-URL exception; all new windows remain denied.
+
 // [TARGET, unit decision] Keep main imports inert when host seams are absent.
 // This closed diagnostic vocabulary mirrors hostBindings without eagerly loading it.
 const BINDING_ACQUISITION_CAUSES = Object.freeze([
@@ -50,6 +53,40 @@ const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (
 
 // Track completed boot separately from the frozen AdapterStatus contract.
 const bootedAdapters = new WeakSet();
+/** @type {WeakMap<object, (status: unknown) => void>} */
+const adapterStatusSinks = new WeakMap();
+
+/**
+ * [TARGET, unit decision] Startup failures remain visible without a renderer.
+ * Closed copy prevents raw host diagnostics (including private paths) entering dialogs.
+ * @param {unknown} dialog Trusted Electron dialog handle.
+ * @param {unknown} error Failure.
+ * @param {'boot'|'create'} phase Startup phase.
+ * @returns {Promise<unknown>|undefined} Settles when the notice closes.
+ */
+export function showStartupFailure(dialog, error, phase) {
+  const rawCode = /** @type {{code?:unknown}|null} */ (error)?.code;
+  const code = typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(rawCode)
+    ? rawCode : (phase === 'create' ? 'SURFACE_CREATE_FAILED' : 'STARTUP_FAILED');
+  const title = phase === 'create' ? 'MetaViewer could not open the first capsule' : 'MetaViewer could not start';
+  const next = phase === 'create'
+    ? code === 'RAM_ADMISSION_REFUSED'
+      ? 'The wall is still available. Close unused capsules or other applications to free host memory. If memory remains reserved after a capsule exits, check the runtime reservation recovery before trying Add capsule again.'
+      : code.startsWith('ADAPTER_')
+        ? 'The wall is still available. Run bash scripts/judge/metaviewer-judge.sh doctor --capsules to check the surface runtime setup, repair the reported prerequisite, then choose Add capsule again.'
+        : 'The wall is still available. Open Identities to create or check a browser identity, then choose Add capsule to try again. If this is a core-only installation, install and configure the surface runtime before opening capsules.'
+    : code.startsWith('ADAPTER_')
+      ? 'The surface runtime could not start. Check the adapter installation and MV_SRF_BIN_DIR configuration, then restart MetaViewer. For a core-only wall, unset MV_SRF_BIN_DIR; capsules require the surface runtime.'
+      : 'Check the installation and the startup error in the host logs, then restart MetaViewer.';
+  try {
+    const handle = /** @type {{showMessageBox?:(options:object)=>Promise<unknown>}|null} */ (dialog);
+    // Never a modal: with nobody at the screen it would hang the app, the kit and its smoke test.
+    const shown = handle?.showMessageBox?.({type:'warning', title, message:`${code}: ${title}.`, detail:next});
+    return shown ? Promise.resolve(shown).then(() => {}, () => {}) : undefined;
+  } catch {
+    /* stderr diagnostics and fail-closed cleanup still run if a dialog fails */
+  }
+}
 
 /**
  * Typed main failure; a failure admits nothing.
@@ -652,9 +689,10 @@ function assertHandleObject(value, label) {
  * is total and default-deny.
  * @param {unknown} win Alleged window with webContents.on/setWindowOpenHandler.
  * @param {unknown} session Alleged session with permission handlers.
+ * @param {((url: string) => Promise<void>) | undefined} openSource Fixed source-link opener.
  * @returns {MainAttachSummary} Frozen summary of attached handlers.
  */
-export function attachWindowPolicy(win, session) {
+export function attachWindowPolicy(win, session, openSource = undefined) {
   const wrec = assertHandleObject(win, 'win');
   const contents = assertHandleObject(wrec.webContents, 'win.webContents');
   if (typeof contents.on !== 'function' || typeof contents.setWindowOpenHandler !== 'function') {
@@ -667,7 +705,7 @@ export function attachWindowPolicy(win, session) {
   // Bound receivers: Electron exposes these as prototype methods that
   // read `this`. Never destructure them; every call below is a method
   // call on the same handle object so the receiver is preserved.
-  const webContents = /** @type {{ on: (eventName: string, listener: Function) => unknown, setWindowOpenHandler: (handler: () => {action: string}) => unknown }} */ (
+  const webContents = /** @type {{ on: (eventName: string, listener: Function) => unknown, setWindowOpenHandler: (handler: (details?: {url?: string}) => {action: string}) => unknown }} */ (
     /** @type {unknown} */ (contents)
   );
   const sess = /** @type {{ setPermissionRequestHandler: (handler: Function) => unknown, setPermissionCheckHandler: (handler: Function) => unknown }} */ (
@@ -675,7 +713,14 @@ export function attachWindowPolicy(win, session) {
   );
   webContents.setWindowOpenHandler(
     /** @returns {{action: string}} */
-    () => ({ action: decideWindowOpen('') }),
+    // [TARGET, unit decision] Reuse shell.openExternal for the exact legal source
+    // URL only; never navigate the privileged renderer or accept arbitrary URLs.
+    (details) => {
+      if (details?.url === 'https://github.com/oguirado/MetaViewer' && openSource) {
+        void openSource(details.url).catch(() => {});
+      }
+      return { action: decideWindowOpen('') };
+    },
   );
   webContents.on(
     'will-navigate',
@@ -1772,6 +1817,7 @@ export function createLayoutBridge({directory,app} = {}) {
  * @property {CoreLauncher} core Constructed core launcher.
  * @property {ReadonlyArray<BridgeEntry>} bridge Parity-gated IPC registry.
  * @property {{width: number, height: number}} geometry Window geometry.
+ * @property {unknown} [dialog] Trusted Electron startup error dialog.
  * @property {any} [wire] Trusted frame and PTY capabilities, never renderer values.
  * @property {AdapterLauncher} [adapter] Optional bundled daemon adapter launcher supervised next to core.
  */
@@ -1978,16 +2024,28 @@ export function buildFirstSurfaceCreateRequest(envRec) {
  * @param {{
  *   onCreated?: (surface: unknown) => void,
  *   onFailure?: (error: unknown) => void,
- * }} [onSettled] Optional settlement callbacks for boot reservation and notice delivery.
+ * }} onSettled Settlement callbacks for boot reservation and notice delivery.
+ * @param {Map<string,any>} states Shared host capsule state.
+ * @param {(() => Promise<number|null> | number|null) | undefined} readFreeMemoryBytes
+ * @param {Pick<typeof import('./profilePicker.js'),'acquireCapsuleCreation'|'CAPSULE_MEMORY_LIMIT_BYTES'|'parseMemAvailableBytes'>} admission
  * @returns {Promise<void>}
  */
-async function requestFirstSurfaceCreate(core, envRec, onSettled) {
+async function requestFirstSurfaceCreate(core, envRec, onSettled, states, readFreeMemoryBytes, admission) {
+  const {acquireCapsuleCreation, CAPSULE_MEMORY_LIMIT_BYTES, parseMemAvailableBytes} = admission;
   const timeoutMs = FIRST_SURFACE_CREATE_TIMEOUT_MS;
   console.log('METAVIEWER_SURFACE_CREATE_PENDING');
   const request = buildFirstSurfaceCreateRequest(envRec);
   /** @type {ReturnType<typeof setTimeout> | null} */
   let timer = null;
+  const releaseCreation = acquireCapsuleCreation(states);
   try {
+    if (!releaseCreation) throw Object.assign(Error('SURFACE_CREATE_BUSY'), {code:'SURFACE_CREATE_BUSY'});
+    let freeBytes = null;
+    try { freeBytes = typeof readFreeMemoryBytes === 'function'
+      ? await readFreeMemoryBytes() : parseMemAvailableBytes(readFileSync('/proc/meminfo','utf8')); } catch { /* fail closed */ }
+    if (!Number.isSafeInteger(freeBytes) || freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {
+      throw Object.assign(Error('RAM_ADMISSION_REFUSED'), {code:'RAM_ADMISSION_REFUSED'});
+    }
     const reply = await Promise.race([
       core.request(request),
       new Promise((_, reject) => {
@@ -2074,6 +2132,7 @@ async function requestFirstSurfaceCreate(core, envRec, onSettled) {
     if (timer !== null) {
       clearTimeout(timer);
     }
+    releaseCreation?.();
   }
 }
 
@@ -2121,7 +2180,7 @@ export async function bootProductionMain(handles) {
     fail('BOOT_HANDLES', 'handles must be an object');
   }
   const typed = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (handles));
-  const ownKeys = Object.keys(typed).filter(key => key !== 'wire' && key !== 'adapter');
+  const ownKeys = Object.keys(typed).filter(key => key !== 'wire' && key !== 'adapter' && key !== 'dialog');
   if (ownKeys.length !== HANDLE_KEYS.length) {
     fail('BOOT_HANDLES', 'handles must carry exactly the boot keys');
   }
@@ -2242,6 +2301,7 @@ export async function bootProductionMain(handles) {
       return;
     }
     unwound = true;
+    if (adapter !== null) adapterStatusSinks.delete(adapter);
     // PKG-FIX QC-04: hide the window first so a slow bridge teardown (a demo
     // recording stop waits up to 10 s) never leaves a frozen window on screen.
     if (window !== null) {
@@ -2492,6 +2552,7 @@ export async function bootProductionMain(handles) {
         adapterStatus.availability === 'live' &&
         adapterStatus.handshakeSeen === true
       ) {
+        const admission = await import('./profilePicker.js');
         const bootProfile = buildFirstSurfaceCreateRequest(envRec).params.profile_id;
         const pendingKey = `pending:${bootProfile}`;
         capsuleStates.set(pendingKey, {profile_id:bootProfile,state:'creating'});
@@ -2513,13 +2574,14 @@ export async function bootProductionMain(handles) {
           onFailure: (error) => {
             capsuleStates.delete(pendingKey);
             if (unwound) return;
+            showStartupFailure(handles.dialog, error, 'create');
             if (bootReadyForNotices && wireBridge !== null && typeof wireBridge.notifyCreateRefusal === 'function') {
               wireBridge.notifyCreateRefusal(error);
             } else {
               pendingBootCreateError = error;
             }
           },
-        });
+        }, capsuleStates, /** @type {any} */ (typed.wire)?.readFreeMemoryBytes, admission);
       }
     }
   }
@@ -2536,7 +2598,10 @@ export async function bootProductionMain(handles) {
   try {
     const winRec = /** @type {{webContents?: unknown}} */ (/** @type {unknown} */ (built));
     const contentsRec = assertHandleObject(winRec.webContents, 'win.webContents');
-    attachWindowPolicy(built, contentsRec.session);
+    attachWindowPolicy(built, contentsRec.session, async (url) => {
+      const { shell } = await import('electron');
+      await shell.openExternal(url);
+    });
     // [TARGET, unit decision] Convey the admitted nested-depth signal through
     // the native document user agent before preload runs, without host globals.
     if (retail.nested && typeof contentsRec.setUserAgent === 'function') {
@@ -2708,6 +2773,11 @@ export async function bootProductionMain(handles) {
   }
   if (!retail.nested && adapter !== null) {
     try {
+      adapterStatusSinks.set(adapter, status => {
+        try {
+          if (typeof contentsHandle.send === 'function') contentsHandle.send.call(contentsHandle, 'metaviewer:adapter-status', status);
+        } catch { /* Window teardown may race an adapter exit. */ }
+      });
       const adapterStatus = adapter.getStatus();
       if (typeof contentsHandle.send === 'function') {
         /** @type {(channel: string, payload: unknown) => void} */ (contentsHandle.send).call(
@@ -2733,19 +2803,20 @@ export async function bootProductionMain(handles) {
     }
   }
   let quitting = false;
+  let quitReady = false;
   try {
     app.on('will-quit', (event) => {
-      if (quitting) {
-        return;
-      }
-      quitting = true;
-      console.info('METAVIEWER_QUIT reason=will-quit');
+      if (quitReady) return;
       try {
         /** @type {{preventDefault: () => void}} */ (/** @type {unknown} */ (event)).preventDefault();
       } catch {
         /* prevent best-effort */
       }
+      if (quitting) return;
+      quitting = true;
+      console.info('METAVIEWER_QUIT reason=will-quit');
       void dispose().finally(() => {
+        quitReady = true;
         try {
           app.quit();
         } catch {
@@ -2757,6 +2828,8 @@ export async function bootProductionMain(handles) {
       app.on('render-process-gone', (_event, _contents, details) => {
         const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
         console.info(`METAVIEWER_PROCESS_GONE kind=renderer reason=${reason}`);
+        // A crashed authority renderer cannot safely retain an interactive window.
+        if (_contents === contentsHandle && !unwound && !quitting) app.quit();
       });
       app.on('child-process-gone', (_event, details) => {
         const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
@@ -2940,6 +3013,7 @@ export async function loadMainBindings(env = process.env, options = {}) {
         spawn: typeof customSpawn === 'function' ? customSpawn : defaultSpawn,
         callbacks: {
           onStatus: (status) => {
+            if (bindings.adapter) adapterStatusSinks.get(bindings.adapter)?.(status);
             if (status.availability === 'degraded' && (!env.MV_SRF_BIN_DIR || bootedAdapters.has(bindings.adapter))) {
               try {
                 console.error(`METAVIEWER_ADAPTER_DEGRADED ${JSON.stringify({ code: status.code, reason: status.reason, userMessage: status.userMessage })}`);
@@ -2981,14 +3055,30 @@ async function mainDirectEntry() {
   );
   /**
    * @param {unknown} error Failure.
-   * @returns {void}
+   * @returns {Promise<void>}
    */
-  const failClosed = (error) => {
+  const failClosed = async (error) => {
     try {
       const message = error instanceof Error ? error.message : String(error);
       console.error(message);
     } catch {
       /* diagnostics best-effort */
+    }
+    // CLI policy refusals must exit before readiness or host bootstrap.
+    // Linux startup dialogs otherwise need ready to appear beyond stderr.
+    const code = /** @type {{code?:unknown}|null} */ (error)?.code;
+    if (code !== 'RETAIL_FLAG' && code !== 'RETAIL_ENV') {
+      try {
+        await /** @type {{whenReady?:()=>Promise<unknown>}|null} */ (app)?.whenReady?.();
+      } catch { /* still attempt the diagnostic and preserve exit failure */ }
+      // Leave the notice up for a person to read, then still exit: the failure must not hang.
+      const shown = showStartupFailure(electron.dialog, error, 'boot');
+      if (shown) {
+        await Promise.race([shown, new Promise(resolve => {
+          if (typeof setTimeout === 'function') setTimeout(resolve, 15000).unref?.();
+          else resolve(undefined);
+        })]);
+      }
     }
     try {
       if (app !== null && typeof app.exit === 'function') {
@@ -3021,7 +3111,7 @@ async function mainDirectEntry() {
     }
     const bindings = await loadMainBindings();
     const boot = await bootProductionMain({ core:bindings.core, wire:bindings.wire, ...(bindings.adapter ? {adapter:bindings.adapter} : {}), electronVersion: running,
-      app: electron.app, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
+      app: electron.app, dialog: electron.dialog, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
       protocol: electron.protocol, session: electron.session, argv, env: process.env,
       shellRoot: fileURLToPath(new URL('..',import.meta.url)),
       runtime: {xdgRuntimeDir:process.env.XDG_RUNTIME_DIR || '',uid:process.getuid ? process.getuid() : -1},
@@ -3029,7 +3119,7 @@ async function mainDirectEntry() {
     console.log('METAVIEWER_MAIN_READY');
     return boot;
   } catch (error) {
-    failClosed(error);
+    await failClosed(error);
   }
 }
 

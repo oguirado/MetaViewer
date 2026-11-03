@@ -1,0 +1,8 @@
+- Preserve visible human control until Release is acknowledged and prevent delayed control grants from stealing another canvas's focus (F07, F08).
+- Reuse live saved programs, retain lost bindings and corrupt-sidecar recovery handles, retain identity states on refresh failure, and show program launch recovery guidance (F10, F16, F17, F24, F44).
+- Show browser creation progress, switch views after successful creation, preserve edited roles, retain busy-switch confirmation, and direct lost identities to Stop recovery (F18, F19, F20, F21, F22, F46, F47).
+- Publish supervised adapter outages after boot and provide memory, runtime setup, capsule installation, reservation recovery, and unreadable-probe guidance (F06, F34, F35, F37, F38, F58).
+- Show the Bootstrap paste destination and retained capsule identity beside workflow actions; prevent stale close confirmations and duplicate desktop-window detach requests; provide terminal package repair guidance (F09, F50, F51, F52, F53).
+- Retain the last trusted desktop-window title on lost tiles, preserve active panels during preset refresh, and retain custom sizes across viewport changes (F28, F54, F55).
+- Keep sealed recording receipts exportable when list refresh fails; use a known creation timestamp or the measured local receipt time for the UI row when the host omits it [TARGET, unit decision] (F29).
+- Release closed display-peer streams while retaining temporary unbind/rebind behavior (F59).

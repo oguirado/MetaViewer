@@ -335,7 +335,7 @@ class IdentityTests(unittest.TestCase):
         env = dict(os.environ, SRF_IDENTITY_STORE_ROOT=str(self.root), MV_MW_HOME=str(self.home),
                    MV_SRF_BIN_DIR=str(self.bin), MV_SRF_STATE_DIR=str(self.state))
         tool = str(REPO / "tools/mv_identity.py")
-        cmd_hint = 'sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/<id>"'
+        cmd_hint = 'Docker'
         made = subprocess.run([sys.executable, tool, "create", "--id", "account-a", "--label", "a", "--domains", "example.com"],
                               env=env, capture_output=True, text=True)
         self.assertEqual(made.returncode, 6)

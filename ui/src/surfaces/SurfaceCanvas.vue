@@ -268,6 +268,7 @@ let fpsFlushTimer = null;
 let fpsStallTimer = null;
 /** @type {number} */
 let lastObservedPresentCount = 0;
+let presentationBaselined = false;
 /** @type {string} */
 let lastObservedPresentedHandle = '';
 
@@ -436,6 +437,7 @@ function resetFpsState() {
   totalPaintedFrames = 0;
   lastFpsFlushAtMs = null;
   lastObservedPresentCount = 0;
+  presentationBaselined = false;
   lastObservedPresentedHandle = '';
   const initialCap = parseCaptureUsValue(props.captureUs) ?? parseCaptureUsValue(props.frameRef);
   if (initialCap !== null) latestCaptureUs = initialCap;
@@ -473,6 +475,12 @@ function checkSchedulerPresentation() {
     ? info.presentCount
     : 0;
   const handle = typeof info.lastPresentedHandle === 'string' ? info.lastPresentedHandle : '';
+  if (!presentationBaselined) {
+    presentationBaselined = true;
+    lastObservedPresentCount = presentCount;
+    lastObservedPresentedHandle = handle;
+    return;
+  }
   const capHint = parseCaptureUsValue(info);
   if (presentCount > lastObservedPresentCount) {
     const delta = presentCount - lastObservedPresentCount;
@@ -861,7 +869,7 @@ function isTypingInTextField() {
   if (!active || typeof active !== 'object' || active === canvasRef.value) return false;
   if (active.isContentEditable === true || active.contentEditable === 'true') return true;
   const tag = typeof active.tagName === 'string' ? active.tagName.toUpperCase() : '';
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'CANVAS';
 }
 
 function focusCanvasOnEnable() {
@@ -872,7 +880,7 @@ function focusCanvasOnEnable() {
 
 // Losing the gate releases focus, so a stale focused canvas can never keep
 // capturing after a control handoff or a READ switch. Enabling input focuses
-// the canvas unless the operator is typing in another text field of the app.
+// the canvas unless the operator is typing in another field or canvas.
 // MVUI32 lane I (R3-INPUT-1): the gate closure also drops queued input.
 watch(() => props.inputEnabled, (enabled, previous) => {
   if (enabled !== true) {
@@ -894,7 +902,7 @@ watch(() => props.inputEnabled, (enabled, previous) => {
 // MVUI32 lane I (R3-INPUT-1): a stream change closes the previous stream's
 // gate — input queued under the old stream is dropped, never dispatched.
 watch(() => props.streamId, (next, previous) => {
-  if (next !== previous) closeInputGate(props.surfaceId);
+  if (next !== previous) { activePress = null; closeInputGate(props.surfaceId); }
 });
 
 // MVUI30 lane L: the lost transition releases the scheduler binding, so no
@@ -926,6 +934,7 @@ function attachCanvas() {
     // its notice; the scheduler's identity check stays intact. Only the
     // legacy path (no router notice yet) uses the projection props.
     const identity = registeredIdentity;
+    if (!presentationBaselined) checkSchedulerPresentation();
     const result = scheduler.attachCanvas({ surfaceId: props.surfaceId,
       surfaceGeneration: identity !== null ? identity.surfaceGeneration : bindingNumber(props.generation),
       epoch: identity !== null ? identity.epoch : bindingNumber(props.epoch),
@@ -1340,5 +1349,20 @@ onBeforeUnmount(() => {
   font-weight: 600;
   line-height: 14px;
   pointer-events: none;
+}
+/* The strip is part of the frame's flex height: wrapping consumes body space
+ * without overlapping pixels or clipping the safety labels mid word. */
+@container tile-chrome (max-width: 499px) {
+  .mv-surface:has(> .mv-surface__strip) { width:100%; height:100%; }
+  .mv-surface__strip {
+    flex-wrap:wrap;
+    gap:2px 8px;
+    padding:2px 8px;
+    white-space:normal;
+    overflow:visible;
+  }
+  .mv-surface__key { white-space:nowrap; }
+  .mv-surface__guard { margin-left:0; flex:0 1 auto; overflow-wrap:normal; }
+  .mv-surface__display-chip { flex:0 1 auto; overflow-wrap:normal; }
 }
 </style>

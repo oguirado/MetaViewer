@@ -1948,3 +1948,88 @@ fn w3_r2_ad6_frame_subscribe_and_destroy_on_lost_surface_refused_with_policy_wit
         close_server(server, task, daemon, _agent, ui).await;
     });
 }
+
+#[test]
+fn window_close_human_loss_stops_through_destroy_receipt() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        created(&mut daemon, &mut ui).await;
+        ui.send(control("take_control")).await;
+        let _ = daemon.receive().await;
+        let mut human = surface();
+        human["control"] = "human".into();
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human}})).await;
+        let _ = ui.receive().await;
+        let mut lost = surface();
+        lost["state"] = "lost".into();
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":lost}})).await;
+        let ended = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(ended["data"]["surface"]["state"], "lost");
+        assert_eq!(ended["data"]["surface"]["control"], "human");
+        // Agent callers cannot use the explicit human cleanup exception.
+        agent.send(json!({"schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-demo"}})).await;
+        agent.verdict("refused", Some("POLICY")).await;
+        // Loss never restores frame subscription or input authority.
+        ui.send(json!({"schema":"surface_request/v0.2","op":"frame_subscribe","params":{"surface_id":"surface-demo"}})).await;
+        ui.verdict("refused", Some("POLICY")).await;
+        let destroy = json!({"schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-demo"}});
+        ui.send(destroy.clone()).await;
+        // Same-peer barrier proves destroy was forwarded without hanging on a refusal.
+        ui.send(control("take_control")).await;
+        let barrier_id = "control-take_control";
+        let refused_control = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(refused_control["proposal_id"], barrier_id);
+        assert_eq!(refused_control["reason_code"], "POLICY");
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            destroy
+        );
+        let mut destroyed = surface();
+        destroyed["state"] = "destroyed".into();
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":destroyed}})).await;
+        let stopped = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(stopped["data"]["surface"]["state"], "destroyed");
+        ui.send(destroy).await;
+        ui.verdict("refused", Some("POLICY")).await;
+        close_server(server, task, daemon, agent, ui).await;
+    });
+}
+
+// [TARGET, unit decision] SurfaceRequest's replay input contains no component.
+// Authenticate the UI-only lost-human destroy exception at the serve boundary.
+#[test]
+fn v027_lost_human_destroy_refuses_agent_but_allows_ui() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        let mut human = surface();
+        human["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":human}}))
+            .await;
+        ui.receive().await;
+        human["state"] = "lost".into();
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human}})).await;
+        ui.receive().await;
+        let budget = server.lock().unwrap().authority.state().remaining_budget;
+        let destroy = json!({"schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-demo"}});
+        agent.send(destroy.clone()).await;
+        agent.verdict("refused", Some("POLICY")).await;
+        assert_eq!(
+            server.lock().unwrap().authority.state().remaining_budget,
+            budget
+        );
+        daemon_barrier(&mut daemon).await;
+        // Negative control: the very same lost human binding remains stoppable
+        // by UI, proving the agent test actually exercises the exception.
+        ui.send(destroy.clone()).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            destroy
+        );
+        assert_eq!(
+            server.lock().unwrap().authority.state().remaining_budget,
+            budget - 1
+        );
+        close_server(server, task, daemon, agent, ui).await;
+    });
+}

@@ -5,7 +5,7 @@ import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.
 import { operatorHost } from '../operatorHost.js';
 import { identityErrorText, identityFormRequest, validLabel, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
 import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityProtection.js';
-const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost}});
+const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
@@ -20,6 +20,8 @@ function updateName(value) {
 }
 const modes=ref(/** @type {any[]} */ ([]));
 const modeFor = (/** @type {string} */ id) => modes.value.find(row => row.profileId === id);
+let invocationGeneration=0;
+let failedDelete='';
 const busy=ref(false), login=ref(false), error=ref(''), pendingDelete=ref('');
 const form=computed(()=>identityFormRequest(id.value,displayName.value,domains.value));
 const validForm=computed(()=>form.value!==null);
@@ -31,7 +33,7 @@ const isOpen=(/** @type {string} */ name)=>{
 function askDelete(/** @type {string} */ name){
   if(isProtectedIdentity(name)){error.value=identityErrorText('IDENTITY_PROTECTED',name);return;}
   if(isOpen(name)){error.value=identityErrorText('IDENTITY_BOUND',name);return;}
-  error.value='';pendingDelete.value=name;
+  failedDelete='';error.value='';pendingDelete.value=name;
 }
 function deleteIdentity(){
   if(isProtectedIdentity(pendingDelete.value)){error.value=identityErrorText('IDENTITY_PROTECTED',pendingDelete.value);pendingDelete.value='';return;}
@@ -42,25 +44,84 @@ function deleteIdentity(){
 async function invoke(method,request) {
   if(busy.value)return;
   if(request?.id && isForeignIdentity(request.id)){error.value=identityErrorText('IDENTITY_PROTECTED',request.id);return;}
-  busy.value=true;error.value='';login.value=method==='login';
+  const generation=invocationGeneration;
+  busy.value=true;error.value=method==='list' ? failedDelete : '';login.value=method==='login';
   try {
     const api=props.host?.identity;if(!api)throw new Error('IDENTITY_HOST_ABSENT');
     const result=await (request===undefined?api[method]():api[method](request));
     if(!result.ok)throw new Error(result.code);
+    if(method==='delete'){pendingDelete.value='';failedDelete='';}
+    if(generation!==invocationGeneration)return;
     const listed=method==='list'?result:await api.list();
+    if(generation!==invocationGeneration)return;
     if(!listed.ok)throw new Error(listed.code);rows.value=listed.rows;
     const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
-    if (roleApi) {try {const result = await roleApi.choices(); if (Array.isArray(result)) modes.value = result;} catch {modes.value = [];} }
+    if (roleApi) {try {const result = await roleApi.choices(); if(generation!==invocationGeneration)return; if (Array.isArray(result)) {
+      const programs = typeof roleApi.programs === 'function' ? await roleApi.programs() : [];
+      if(generation!==invocationGeneration)return;
+      modes.value = [...result, ...(Array.isArray(programs) ? programs : [])];
+      for (const program of (Array.isArray(programs) ? programs : [])) if (program.hostXpra && !rows.value.some(row => row.id === program.profileId)) rows.value.push({id:program.profileId,label:program.profileId,browser:'program'});
+    }} catch {if(generation!==invocationGeneration)return;error.value = 'Capsule status is unavailable. Previously known states are retained; refresh Identities before opening another capsule.';} }
     if(method==='create'){id.value='';typedName.value='';labelEdited.value=false;label.value='';domains.value='';}
-    pendingDelete.value='';
-  }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);}
-  finally{busy.value=false;login.value=false;}
+  }catch(reason){
+    const diagnostic=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);
+    if(method==='delete')failedDelete=diagnostic;
+    if(generation===invocationGeneration)error.value=diagnostic;
+  }
+  finally{if(generation===invocationGeneration){busy.value=false;login.value=false;}}
 }
 /** @param {string} profileId @param {string} role */
-function openIdentity(profileId,role){
+async function openIdentity(profileId,role){
   if(isForeignIdentity(profileId)){error.value=identityErrorText('IDENTITY_PROTECTED',profileId);return;}
-  if(rows.value.find(r=>r.id===profileId)?.browser==='program')return;
+  if(busy.value)return;
+  if(rows.value.find(r=>r.id===profileId)?.browser==='program') {
+    const mode=modeFor(profileId);
+    if (mode?.surfaceId) {
+      if (mode.currentMode === 'lost') {error.value='Stop lost capsule before reopening this program.';return;}
+      if (role !== mode.currentMode) {
+        error.value=`This program is still open in ${mode.currentMode} mode. Stop the capsule before opening it in ${role} mode.`;
+        return;
+      }
+      emit('open-identity',{profileId,surfaceId:mode.surfaceId,role:mode.currentMode});
+      emit('close');return;
+    }
+    if(!mode?.available || mode.busy || !mode.binary || !roleApi?.createProgram) {
+      error.value='Saved program binary unavailable. Open the program through Add capsule first.';return;
+    }
+    const generation=invocationGeneration;
+    busy.value=true;error.value='';
+    try {
+      const choice={binary:mode.binary,role};
+      if (mode.hostXpra) Object.assign(choice,{hostXpra:true});
+      const reply=await (props.openProgram ? props.openProgram(choice) : roleApi.createProgram(choice));
+      if(generation!==invocationGeneration)return;
+      if(reply?.ok!==true)throw Object.assign(Error(reply?.code || 'PROGRAM_OPEN_FAILED'),{reason:reply?.reason});
+      emit('close');
+    } catch(reason) {
+      if(generation!==invocationGeneration)return;
+      const failure=/** @type {{reason?:unknown,message?:unknown}} */(reason);
+      error.value=typeof failure?.reason === 'string' && failure.reason.trim()
+        ? failure.reason : `Program could not be opened: ${typeof failure?.message === 'string' ? failure.message : 'PROGRAM_OPEN_FAILED'}. Try Add capsule to check the program setup.`;
+    }
+    finally {if(generation===invocationGeneration)busy.value=false;}
+    return;
+  }
   emit('open-identity',{profileId,role});emit('close');
+}
+/** @param {string} profileId */
+async function stopIdentity(profileId) {
+  if (busy.value) return;
+  if (isForeignIdentity(profileId)) { error.value=identityErrorText('IDENTITY_PROTECTED',profileId); return; }
+  const surfaceId=modeFor(profileId)?.surfaceId;
+  if (!surfaceId || !roleApi?.stop) return;
+  busy.value=true;error.value='';
+  try {
+    const reply=await roleApi.stop(surfaceId);
+    if (reply?.ok !== true) throw Error(reply?.code || 'CAPSULE_STOP_UNPROVEN');
+    busy.value=false;
+    await invoke('list');
+  } catch (reason) {error.value=identityErrorText(reason instanceof Error ? reason.message : '',profileId);}
+  finally {busy.value=false;}
 }
 function create(){if(form.value)void invoke('create',form.value);}
 // App owns the marker during normal use. Also cover isolated dialog mounts;
@@ -73,22 +134,24 @@ function syncModal(/** @type {boolean} */ open){
 }
 watch(()=>props.open,open=>syncModal(open),{immediate:true,flush:'sync'});
 onBeforeUnmount(()=>syncModal(false));
-watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
+watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=false;if(open)void invoke('list');},{immediate:true,flush:'sync'});
 </script>
 <template>
   <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Keep a separate browser session for each account." confirm-label="Add identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
     <p v-if="login" role="status">Operator login view is open. Agent input stays refused until it closes.</p>
-    <p v-if="!rows.length && !busy">No identities yet. Add your first identity below.</p>
+    <p v-if="!rows.length && !busy">No identities yet. Add your first identity below. No MetaViewer account is needed. For a browser identity, choose Log in to sign in to your site, then Open as human or Open as agent. If login reports a missing profile, ask the host operator to provision it using the reported instructions.</p>
     <ul class="identity-list" aria-label="Saved identities">
       <li v-for="row in rows" :key="row.id" class="identity-row">
         <div class="identity-summary"><code>{{ row.id }}</code><strong>{{ row.label }}</strong>
-          <span class="identity-mode">{{ row.browser === 'program' ? 'program' : (modeFor(row.id)?.currentMode || 'closed') }}</span>
-          <span class="identity-last-login">Last login: {{ modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded' }}</span>
+          <span class="identity-mode">{{ modeFor(row.id)?.currentMode || (row.browser === 'program' ? 'program' : 'closed') }}</span>
+          <span v-if="row.browser === 'program' && !busy && !modeFor(row.id)?.available">Saved binary unavailable. Open through Add capsule first.</span>
+          <span v-if="row.browser !== 'program'" class="identity-last-login">Last login: {{ modeFor(row.id)?.markerError || (modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded') }}</span>
         </div>
         <div class="identity-actions">
         <UiButton v-if="!roleApi" label="Log in" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program'" @click="invoke('login',{id:row.id})" />
-        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program' || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'human')" />
-        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program' || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'agent')" />
+        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy || modeFor(row.id)?.currentMode === 'lost'" @click="openIdentity(row.id,'human')" />
+        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy || modeFor(row.id)?.currentMode === 'lost'" @click="openIdentity(row.id,'agent')" />
+        <UiButton v-if="roleApi && modeFor(row.id)?.currentMode === 'lost' && modeFor(row.id)?.surfaceId" label="Stop lost capsule" :disabled="busy || isForeignIdentity(row.id)" @click="stopIdentity(row.id)" />
         <UiButton label="Delete" :disabled="busy || isProtectedIdentity(row.id)" :title="isProtectedIdentity(row.id) ? 'Managed outside MetaViewer' : undefined" @click="askDelete(row.id)" />
         </div>
       </li>
