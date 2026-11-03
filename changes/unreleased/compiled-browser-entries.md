@@ -1,0 +1,2 @@
+- Route browser stop detection and state construction through verified standalone entries when compiled mode is selected. Preserve the real absorbing CAPTCHA/login detector, same-acquisition canonical state validation and source-checkout behavior, without importing the compiled distribution into host Python.
+- Refuse malformed, unpinned, timed-out or oversized compiled replies without source fallback or private payload diagnostics. Actual standalone/source equivalence remains an artifact acceptance gate.

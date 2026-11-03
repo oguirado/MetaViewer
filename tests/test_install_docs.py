@@ -659,7 +659,9 @@ class BuildReleaseAssetsToolTests(unittest.TestCase):
             exe.write_bytes(b"#!/bin/sh\nexit 0\n")
             exe.chmod(0o755)
 
-            node_bin = base / "node"
+            node_bin = base / "runtime/bin/node"
+            node_bin.parent.mkdir(parents=True)
+            (node_bin.parent.parent / "LICENSE").write_text("Node fixture license\n")
             node_bin.write_bytes(b"#!/bin/sh\necho v24.14.0\n")
             node_bin.chmod(0o755)
 

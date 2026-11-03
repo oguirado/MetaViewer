@@ -5,6 +5,7 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
   const invoke = (op, body = {}) => ipcRenderer.invoke(channel, {schema:'metaviewer.roles/v0.3', op, ...body});
   contextBridge.exposeInMainWorld('metaviewerRoles', Object.freeze({
     choices: () => invoke('choices'),
+    programs: () => invoke('programs'),
     listWindows: () => invoke('list-windows'),
     surfaces: () => invoke('surfaces'),
     create: choice => invoke('create', {choice}),

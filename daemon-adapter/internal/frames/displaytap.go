@@ -260,7 +260,23 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 		if err != nil {
 			d.setErr(id, err)
 			d.diag("adapter: DISPLAY tap %s: resolve: %v", id, err)
-			return
+			var refusal *cli.Fault
+			var errno syscall.Errno
+			retryIO := errors.As(err, &errno) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+			if !retryIO || errors.As(err, &refusal) || ctx.Err() != nil {
+				return
+			}
+			// Inventory I/O may recover without any new surface event. Keep the
+			// existing task alive, with the same bounded restart backoff.
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			delay = min(2*time.Second, delay*2)
+			continue
 		}
 		if err = validDisplayTarget(target); err != nil {
 			d.setErr(id, err)
@@ -408,13 +424,13 @@ func (d *DisplayTaps) session(parent context.Context, id, path string, target Di
 	body, digest := displayBinding(target)
 	decodeDone := make(chan error, 1)
 	publishFrame := func(rgb []byte, mono uint64, frameTarget DisplayTarget) error {
-		if target.HostWindow {
-			if frameTarget.Width != target.Width || frameTarget.Height != target.Height {
-				if d.cfg.OnResize != nil {
-					d.cfg.OnResize(id, frameTarget.Width, frameTarget.Height)
-				}
-				return errDisplayResized
+		if frameTarget.Width != target.Width || frameTarget.Height != target.Height {
+			if d.cfg.OnResize != nil {
+				d.cfg.OnResize(id, frameTarget.Width, frameTarget.Height)
 			}
+			return errDisplayResized
+		}
+		if target.HostWindow {
 			if d.cfg.OnMinimized != nil {
 				d.cfg.OnMinimized(id, false)
 			}
@@ -479,6 +495,14 @@ loop:
 			result = fmt.Errorf("%w (sender stderr: %s)", result, tail)
 		}
 	}
+	if target.HostWindow && result != nil && parent.Err() == nil {
+		if w, h, ok := capsule.HostWindowResizeGeometry(extractHostTapReason(result.Error())); ok {
+			if d.cfg.OnResize != nil {
+				d.cfg.OnResize(id, w, h)
+			}
+			return errDisplayResized
+		}
+	}
 	return result
 }
 
@@ -530,7 +554,7 @@ func displayAck(w io.Writer, digest [32]byte, seq uint64) error {
 // an empty value keeps the native default <RAM root>/identity-state.
 func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, error) {
 	var t DisplayTarget
-	if b.NativeKind == "host-window" && b.Window != "" {
+	if (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") && b.Window != "" {
 		t = DisplayTarget{
 			Container:      b.Container,
 			Run:            b.RunID,
@@ -759,7 +783,7 @@ func displayDecodeXWD(r io.Reader, t DisplayTarget, publish func([]byte, uint64,
 		size := int(be.Uint32(h[0:]))
 		w, ht := int(be.Uint32(h[16:])), int(be.Uint32(h[20:]))
 		order, bpp, bpl, ncolors := be.Uint32(h[28:]), be.Uint32(h[44:]), int(be.Uint32(h[48:])), int(be.Uint32(h[76:]))
-		geomOK := (w == t.Width && ht == t.Height) || (t.HostWindow && w >= 1 && ht >= 1 && w <= 4096 && ht <= 4096)
+		geomOK := w >= 1 && ht >= 1 && w <= 4096 && ht <= 4096
 		if size < 100 || size > 4096 || be.Uint32(h[4:]) != 7 || be.Uint32(h[8:]) != 2 || order > 1 || bpp != 32 || !geomOK || bpl < 4*w || bpl > 4*w+64 || ncolors < 0 || ncolors > 256 {
 			return errors.New("DISPLAY XWD header")
 		}
