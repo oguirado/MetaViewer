@@ -885,6 +885,11 @@ defineExpose({
             @keydown="onBootstrapKeyDown"
             @click="onBootstrap"
           >🚀 Bootstrap</button>
+          <span role="status" aria-live="polite">
+            Paste Copy ID for AI here to select the capsule for workflow actions.
+            <template v-if="pastedBootstrapText">Selected capsule identity: <code>{{ pastedBootstrapText }}</code></template>
+            <template v-else>No capsule identity selected.</template>
+          </span>
           <button
             v-for="action in [{kind:'automate',label:'Automate'}, {kind:'use-automation',label:'Use automation'}, {kind:'no-automation',label:'No automation'}]"
             :key="action.kind"

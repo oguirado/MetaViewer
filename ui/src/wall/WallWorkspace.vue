@@ -575,6 +575,7 @@ export function createWallWorkspaceController(options = {}) {
     }
   }
   function applyPreset(now = Date.now()) {
+    const activePanelId = /** @type {any} */ (api)?.activePanel?.id;
     if (api) {
       for (const row of projectionView?.getProjection()?.rows || []) {
         if (row?.backendLifecycle === 'destroyed') {
@@ -643,7 +644,8 @@ export function createWallWorkspaceController(options = {}) {
         placed.push({...cell,group});
       }
       for (const cell of placed) cell.group.api.setSize({width:cell.width,height:cell.height});
-      first.api.setActive();
+      const priorActive = activePanelId ? api.getPanel(activePanelId) : null;
+      (priorActive || first).api.setActive();
     }
     layoutSignature = JSON.stringify([preset,api.width,api.height,presentationRows().map(({id,hidden})=>({id,hidden}))]);
     void host?.completeUserGesture?.();
@@ -701,6 +703,9 @@ export function createWallWorkspaceController(options = {}) {
         const titleHeight = !horizontal && outer ? group.element.closest('.dv-resize-container').querySelector('.dv-floating-titlebar')?.offsetHeight || 0 : 0;
         group.api.setSize({[dimension]:value-titleHeight});
       }
+      // Manual sizing becomes a custom layout. Dockview preserves its ratios
+      // across viewport changes; a preset refresh must not replace them.
+      preset = null; layoutSignature = '';
       void host?.completeUserGesture?.();
       return succeed({action});
     } catch { return fail('LAYOUT_SIZE_FAILED','Tile size is unavailable.'); }

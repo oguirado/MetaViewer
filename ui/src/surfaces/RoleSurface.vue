@@ -293,7 +293,7 @@ function bindScrollListeners() {
   }
 }
 async function detachHostWindow() {
-  if (ended) return;
+  if (ended || progress.value) return;
   menuOpen.value = false;
   progress.value = 'Detaching window…';
   error.value = '';

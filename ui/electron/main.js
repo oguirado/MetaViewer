@@ -50,6 +50,8 @@ const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (
 
 // Track completed boot separately from the frozen AdapterStatus contract.
 const bootedAdapters = new WeakSet();
+/** @type {WeakMap<object, (status: unknown) => void>} */
+const adapterStatusSinks = new WeakMap();
 
 /**
  * [TARGET, unit decision] Startup failures remain visible without a renderer.
@@ -65,7 +67,11 @@ export function showStartupFailure(dialog, error, phase) {
     ? rawCode : (phase === 'create' ? 'SURFACE_CREATE_FAILED' : 'STARTUP_FAILED');
   const title = phase === 'create' ? 'MetaViewer could not open the first capsule' : 'MetaViewer could not start';
   const next = phase === 'create'
-    ? 'The wall is still available. Open Identities to create or check a browser identity, then choose Add capsule to try again. If this is a core-only installation, install and configure the surface runtime before opening capsules.'
+    ? code === 'RAM_ADMISSION_REFUSED'
+      ? 'The wall is still available. Close unused capsules or other applications to free host memory. If memory remains reserved after a capsule exits, check the runtime reservation recovery before trying Add capsule again.'
+      : code.startsWith('ADAPTER_')
+        ? 'The wall is still available. Run bash scripts/judge/metaviewer-judge.sh doctor --capsules to check the surface runtime setup, repair the reported prerequisite, then choose Add capsule again.'
+        : 'The wall is still available. Open Identities to create or check a browser identity, then choose Add capsule to try again. If this is a core-only installation, install and configure the surface runtime before opening capsules.'
     : code.startsWith('ADAPTER_')
       ? 'The surface runtime could not start. Check the adapter installation and MV_SRF_BIN_DIR configuration, then restart MetaViewer. For a core-only wall, unset MV_SRF_BIN_DIR; capsules require the surface runtime.'
       : 'Check the installation and the startup error in the host logs, then restart MetaViewer.';
@@ -73,7 +79,7 @@ export function showStartupFailure(dialog, error, phase) {
     const handle = /** @type {{showMessageBox?:(options:object)=>Promise<unknown>}|null} */ (dialog);
     // Never a modal: with nobody at the screen it would hang the app, the kit and its smoke test.
     const shown = handle?.showMessageBox?.({type:'warning', title, message:`${code}: ${title}.`, detail:next});
-    return shown ? Promise.resolve(shown).catch(() => {}) : undefined;
+    return shown ? Promise.resolve(shown).then(() => {}, () => {}) : undefined;
   } catch {
     /* stderr diagnostics and fail-closed cleanup still run if a dialog fails */
   }
@@ -2284,6 +2290,7 @@ export async function bootProductionMain(handles) {
       return;
     }
     unwound = true;
+    if (adapter !== null) adapterStatusSinks.delete(adapter);
     // PKG-FIX QC-04: hide the window first so a slow bridge teardown (a demo
     // recording stop waits up to 10 s) never leaves a frozen window on screen.
     if (window !== null) {
@@ -2752,6 +2759,11 @@ export async function bootProductionMain(handles) {
   }
   if (!retail.nested && adapter !== null) {
     try {
+      adapterStatusSinks.set(adapter, status => {
+        try {
+          if (typeof contentsHandle.send === 'function') contentsHandle.send.call(contentsHandle, 'metaviewer:adapter-status', status);
+        } catch { /* Window teardown may race an adapter exit. */ }
+      });
       const adapterStatus = adapter.getStatus();
       if (typeof contentsHandle.send === 'function') {
         /** @type {(channel: string, payload: unknown) => void} */ (contentsHandle.send).call(
@@ -2987,6 +2999,7 @@ export async function loadMainBindings(env = process.env, options = {}) {
         spawn: typeof customSpawn === 'function' ? customSpawn : defaultSpawn,
         callbacks: {
           onStatus: (status) => {
+            if (bindings.adapter) adapterStatusSinks.get(bindings.adapter)?.(status);
             if (status.availability === 'degraded' && (!env.MV_SRF_BIN_DIR || bootedAdapters.has(bindings.adapter))) {
               try {
                 console.error(`METAVIEWER_ADAPTER_DEGRADED ${JSON.stringify({ code: status.code, reason: status.reason, userMessage: status.userMessage })}`);
