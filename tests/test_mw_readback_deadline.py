@@ -64,7 +64,7 @@ def run_workflow(predicate, state, owners, deadline):
         self.assertEqual(owner.slot_readback_window_ns(), 10_000_000_000)
         self.assertEqual(owner.slot_readback_window_ns(ci=True), 20_000_000_000)
         workflow = json.loads((ROOT / 'tests/e2e/fixtures/mw_perplexity/site/workflows/ask.json').read_text())
-        self.assertEqual(workflow['text_slots'][0]['budget_ms'], 10_000)
+        self.assertEqual(workflow['text_slots'][0]['budget_ms'], 30_000)
         self.assertEqual(workflow['steps'][1]['action']['delivery_budget_ms'], 30_000)
 
     def test_real_workflow_expiry_surfaces_typed_error_and_never_enters(self):

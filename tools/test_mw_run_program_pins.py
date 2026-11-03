@@ -76,6 +76,39 @@ class PinnedProgramTests(unittest.TestCase):
         finally:
             adapter.close()
 
+    def test_actual_vision_and_wender_follow_a_control_moved_between_acquisitions(self):
+        root=resolve_locked_component('wender-agent')
+        planner=program.WenderSubprocessAdapter(wender_root=root,verify_lock=True,
+            command=[sys.executable,'-m','wender.plan.cli'])
+        clicks=[];digests=[]
+        with program.marks_workspace() as marks:
+            adapter=program.VCorePerceptionAdapter(verify_lock=True,timeout=10,marks_out=marks)
+            try:
+                for generation,(left,top) in enumerate(((20,20),(55,45)),1):
+                    pixels=bytearray(b'\xff'*(100*80*3))
+                    for y in range(top,top+20):
+                        for x in range(left,left+32):
+                            if y in (top,top+19) or x in (left,left+31):
+                                offset=(y*100+x)*3;pixels[offset:offset+3]=b'\0\0\0'
+                    image=Frame(100,80,bytes(pixels));digest=hashlib.sha256(image.data).hexdigest()
+                    ref=dict(frame(generation),sha256=digest)
+                    vision=adapter.perceive(ref,image)
+                    table=program.project_element_table(ref,vision)
+                    self.assertTrue(table['elements'])
+                    goal=table['elements'][0]['name']
+                    observation=program.build_observation(ref,surface_id=ref['surface_id'],generation=generation)
+                    action,expectation,state,target=planner.plan_step(observation,table,goal)
+                    program.require_grounded_goal(table,goal,target)
+                    program.require_click_target(action,target)
+                    self.assertEqual(adapter.last_c2_payload['frame_sha256'],digest)
+                    self.assertTrue(left-2<=action['x']<=left+33 and top-2<=action['y']<=top+21)
+                    self.assertEqual(expectation['type'],'changed_region')
+                    clicks.append((action['x'],action['y']));digests.append(digest)
+            finally:adapter.close()
+        self.assertNotEqual(digests[0],digests[1])
+        self.assertGreater(clicks[1][0],clicks[0][0])
+        self.assertGreater(clicks[1][1],clicks[0][1])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,0 +1,1 @@
+- The browser goal lane uses the compiled wall detector when the compiled runtime is selected, so it works on the x64 kit.

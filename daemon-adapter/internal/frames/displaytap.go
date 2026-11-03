@@ -260,7 +260,23 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 		if err != nil {
 			d.setErr(id, err)
 			d.diag("adapter: DISPLAY tap %s: resolve: %v", id, err)
-			return
+			var refusal *cli.Fault
+			var errno syscall.Errno
+			retryIO := errors.As(err, &errno) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+			if !retryIO || errors.As(err, &refusal) || ctx.Err() != nil {
+				return
+			}
+			// Inventory I/O may recover without any new surface event. Keep the
+			// existing task alive, with the same bounded restart backoff.
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			delay = min(2*time.Second, delay*2)
+			continue
 		}
 		if err = validDisplayTarget(target); err != nil {
 			d.setErr(id, err)
@@ -530,7 +546,7 @@ func displayAck(w io.Writer, digest [32]byte, seq uint64) error {
 // an empty value keeps the native default <RAM root>/identity-state.
 func ResolveDisplayTarget(b capsule.Binding, stateDir string) (DisplayTarget, error) {
 	var t DisplayTarget
-	if b.NativeKind == "host-window" && b.Window != "" {
+	if (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") && b.Window != "" {
 		t = DisplayTarget{
 			Container:      b.Container,
 			Run:            b.RunID,
