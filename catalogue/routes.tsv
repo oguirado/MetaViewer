@@ -154,6 +154,7 @@ e2eprog-35fc358d18bd	changes/unreleased/e2e-program-clipboard.md
 e4-create.md	changes/unreleased/e4-create.md
 e4-list.md	changes/unreleased/e4-list.md
 e5-fixtures.md	changes/unreleased/e5-fixtures.md
+firstvi-f9f97c74eb21	changes/unreleased/first-view-shows-capsule.md
 flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
@@ -224,11 +225,18 @@ v026kit-286e58a540a9	changes/unreleased/v026-kit-sidecars-2.md
 v027doc-551a5a691436	changes/unreleased/v027-doc-commands-count.md
 v027-errors.md	changes/unreleased/v027-errors.md
 v027-firstrun.md	changes/unreleased/v027-firstrun.md
+v027-fix-u1.md	changes/unreleased/v027-fix-u1.md
+v027-fix-u2.md	changes/unreleased/v027-fix-u2.md
+v027-fix-u3.md	changes/unreleased/v027-fix-u3.md
+v027-fix-u4.md	changes/unreleased/v027-fix-u4.md
+v027-fix-u5.md	changes/unreleased/v027-fix-u5.md
+v027-fix-u6.md	changes/unreleased/v027-fix-u6.md
 v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
 v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-repo.md	changes/unreleased/v027-repo.md
+v027-review-fix-2.md	changes/unreleased/v027-review-fix-2.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
@@ -811,6 +819,7 @@ tests.rs	core/src/control/tests.rs
 anchor.rs	core/src/journal/anchor.rs
 journal-mod.rs	core/src/journal/mod.rs
 sha256.rs	core/src/journal/sha256.rs
+v027_tests.rs	core/src/journal/v027_tests.rs
 lib.rs	core/src/lib.rs
 capture.rs	core/src/record/capture.rs
 export.rs	core/src/record/capture/export.rs
@@ -831,6 +840,7 @@ serve-tests.rs	core/src/serve/tests.rs
 timings.rs	core/src/serve/timings.rs
 tools.rs	core/src/serve/tools.rs
 toolsst-160a6e8f731c	core/src/serve/tools_state_regression.rs
+serve-v027_tests.rs	core/src/serve/v027_tests.rs
 supervisor-launch.rs	core/src/supervisor/launch.rs
 supervisor-mod.rs	core/src/supervisor/mod.rs
 process.rs	core/src/supervisor/process.rs
@@ -838,7 +848,9 @@ reaper.py	core/src/supervisor/reaper.py
 reaper_tests.py	core/src/supervisor/reaper_tests.py
 evidence-runtime.sh	core/src/supervisor/testdata/evidence-runtime.sh
 receipt-runtime.sh	core/src/supervisor/testdata/receipt-runtime.sh
+v027-delayed-stop.sh	core/src/supervisor/testdata/v027-delayed-stop.sh
 types.rs	core/src/supervisor/types.rs
+v027tes-e1246c2b6a52	core/src/supervisor/v027_tests.rs
 transport-mod.rs	core/src/transport/mod.rs
 verify-mod.rs	core/src/verify/mod.rs
 ownership_tests.rs	core/src/verify/ownership_tests.rs
@@ -894,6 +906,7 @@ support-mod.rs	core/tests/support/mod.rs
 t1_anchor.rs	core/tests/t1_anchor.rs
 t1_journal_verify.rs	core/tests/t1_journal_verify.rs
 t1socke-3fc3474cb77f	core/tests/t1_socket_publication.rs
+v027_triage.rs	core/tests/v027_triage.rs
 verdict_parity.rs	core/tests/verdict_parity.rs
 ws3_gap_admission.rs	core/tests/ws3_gap_admission.rs
 ws3_gap_serve.rs	core/tests/ws3_gap_serve.rs
@@ -970,6 +983,7 @@ list.json	daemon-adapter/internal/capsule/testdata/host-xpra/list.json
 srf-identity-surface	daemon-adapter/internal/capsule/testdata/srf-identity-surface
 text_input_test.go	daemon-adapter/internal/capsule/text_input_test.go
 textcap_test.go	daemon-adapter/internal/capsule/textcap_test.go
+v027_triage_test.go	daemon-adapter/internal/capsule/v027_triage_test.go
 runner.go	daemon-adapter/internal/cli/runner.go
 runner_test.go	daemon-adapter/internal/cli/runner_test.go
 b1stale-813879d52247	daemon-adapter/internal/daemon/b1_stale_verdict_test.go
@@ -1013,6 +1027,7 @@ streamk-bc181826c3fe	daemon-adapter/internal/daemon/stream_keepalive_test.go
 subscriptions.go	daemon-adapter/internal/daemon/subscriptions.go
 subscri-0459b581f5af	daemon-adapter/internal/daemon/subscriptions_dynamic_program_test.go
 subscriptions_test.go	daemon-adapter/internal/daemon/subscriptions_test.go
+v027tri-8719847b9ad2	daemon-adapter/internal/daemon/v027_triage_test.go
 verdict-14622cfe90c9	daemon-adapter/internal/daemon/verdict_parity_test.go
 view_wire_test.go	daemon-adapter/internal/daemon/view_wire_test.go
 wire_binary_test.go	daemon-adapter/internal/daemon/wire_binary_test.go
@@ -1052,6 +1067,7 @@ subscri-45e158044ffa	daemon-adapter/internal/frames/subscriptions_lock_timeout_t
 subscri-258b9e5e0942	daemon-adapter/internal/frames/subscriptions_reap_test.go
 subscri-84a98cfe9a77	daemon-adapter/internal/frames/subscriptions_robust_test.go
 subscri-c23a6160df7a	daemon-adapter/internal/frames/subscriptions_test.go
+v027tri-ab1ca1942408	daemon-adapter/internal/frames/v027_triage_test.go
 vm_pair_test.go	daemon-adapter/internal/frames/vm_pair_test.go
 ipc-bounds_test.go	daemon-adapter/internal/ipc/bounds_test.go
 client.go	daemon-adapter/internal/ipc/client.go
@@ -1512,6 +1528,8 @@ testt7r-688a9d320512	tests/test_t7r2c_gate_admission.py
 testt7r-5a9023bea873	tests/test_t7r2c_reproducibility.py
 test_theme.py	tests/test_theme.py
 testv02-bfa3520ba0b7	tests/test_v026_sidecar_assets.py
+testv02-4fc2cd804a0a	tests/test_v027_judge_triage.py
+testv02-d4158620998e	tests/test_v027_mw_triage.py
 test_video_seal.py	tests/test_video_seal.py
 assembly_smoke.py	tools/assembly_smoke.py
 budget_gate.py	tools/budget_gate.py
@@ -2101,7 +2119,11 @@ v026hos-e5825ac19a7e	ui/test/v026-host-polish.test.js
 v026hos-0989adc7fb8b	ui/test/v026-host-xpra.test.js
 v026kit-ed2db276dbdb	ui/test/v026-kit-sidecars.test.js
 v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
+v027dec-4c1c105b1058	ui/test/v027-deck-triage.test.js
+v027fir-79fcc62bbe59	ui/test/v027-first-view-visual.js
+v027-first-view.html	ui/test/v027-first-view.html
 v027-firstrun.test.js	ui/test/v027-firstrun.test.js
+v027hos-06c56f4d7d15	ui/test/v027-host-wall-triage.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
