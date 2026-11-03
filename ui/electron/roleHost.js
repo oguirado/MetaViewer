@@ -564,17 +564,19 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const rows = [...reply.rows, ...hostRows.filter(row => !reply.rows.some((/** @type {any} */ r) => r.id === row.id))];
     return await Promise.all(rows.filter((/** @type {any} */ row) => row.browser === 'program' && !isForeignIdentity(row.id)).map(async (/** @type {any} */ row) => {
       // Older program identities have no saved binary: their id is the binary's name.
+      const entry = [...capsuleStates.values()].find(s => s.profile_id === row.id && !['destroyed','closed'].includes(s.state));
       let launch;
       try { launch = await savedPrograms.readLaunch(row.id); }
-      catch { return {profileId:row.id,kind:'program',hostXpra:false,available:false,currentMode:'closed',surfaceId:null,busy:false}; }
+      catch { return {profileId:row.id,kind:'program',hostXpra:false,available:false,
+        currentMode:entry?.state === 'lost' ? 'lost' : entry?.surface_id ? roleFor(entry) : 'closed',
+        surfaceId:entry?.surface_id || null,busy:creating || transitions.has(row.id)}; }
       let binary = launch?.binary;
       if (!binary) {
         try { binary = resolveHostBinary(row.id, {...process.env, ...env}).path; }
         catch { /* not on this host: stays unavailable, and other rows still list */ }
       }
-      const entry = [...capsuleStates.values()].find(s => s.profile_id === row.id && !['destroyed','closed'].includes(s.state));
       return {profileId:row.id,kind:'program',binary,hostXpra:launch?.hostXpra === true,available:!!binary,
-        currentMode:entry?.surface_id ? roleFor(entry) : 'closed',surfaceId:entry?.surface_id || null,
+        currentMode:entry?.state === 'lost' ? 'lost' : entry?.surface_id ? roleFor(entry) : 'closed',surfaceId:entry?.surface_id || null,
         busy:creating || transitions.has(row.id)};
     }));
   }
@@ -785,7 +787,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
           : code === 'CAPSULE_SLOT_UNAVAILABLE' || code === 'SURFACE_CAPACITY_OR_QUARANTINE'
             ? formatCapsuleSlotReason(live)
             : code === 'RAM_ADMISSION_REFUSED'
-              ? formatMemoryRefusalReason(freeBytes, live)
+              ? (typeof reply?.data?.detail === 'string' && reply.data.detail.trim().length > 0
+                  && reply.data.detail.length <= 256 && !/[\x00-\x1f\x7f]/.test(reply.data.detail)
+                ? reply.data.detail.trim()
+                : 'The surface runtime refused memory admission. Check retained capsule reservations and the documented reservation recovery before retrying.')
               : createRefusalReason(code);
         throw Object.assign(refuse(code), {reason});
       }

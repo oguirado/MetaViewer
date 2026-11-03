@@ -96,8 +96,8 @@ const CANONICAL_PROVIDER_LABELS = Object.freeze({
  * @type {Readonly<Record<string, string>>}
  */
 export const TERMINAL_REFUSAL_HINTS = Object.freeze({
-  TERMINAL_UNAVAILABLE: 'Terminal support is unavailable in this package; verify the bundled node-pty native runtime and retry.',
-  NATIVE_ABSENT: 'Terminal native runtime is missing; stage node-pty in build-native/pty-runtime/node-pty and retry.',
+  TERMINAL_UNAVAILABLE: 'Terminal support is unavailable. Repair or reinstall the MetaViewer package, restart it, then open a terminal again.',
+  NATIVE_ABSENT: 'Terminal support is missing from this installation. Repair or reinstall the MetaViewer package and restart it.',
   TERMINAL_DISABLED: 'Enable terminal access before opening a terminal session.',
   COMMAND_NOT_ALLOWED: 'Select an admitted terminal profile from the launcher and try again.',
   SESSION_LIMIT: 'Close an existing terminal session to free a broker slot, then retry.',
@@ -116,7 +116,7 @@ export const TERMINAL_REFUSAL_HINTS = Object.freeze({
   TERMINAL_BROKER_UNAVAILABLE: 'The terminal broker is not connected in this view; retry after host initialization.',
   TERMINAL_LAUNCH_UNAVAILABLE: 'Terminal launch is currently busy or disabled; wait for the active launch to settle and retry.',
   TERMINAL_ACCESS_UNAVAILABLE: 'Terminal opt-in access could not be enabled; check host permissions and retry.',
-  TERMINAL_ATTACH_FAILED: 'The terminal session opened but its MessagePort could not be attached across the preload bridge.',
+  TERMINAL_ATTACH_FAILED: 'The terminal connection failed. Close this terminal and open another; if it fails again, repair or reinstall MetaViewer and restart it.',
   TERMINAL_SESSION_UNAVAILABLE: 'The terminal session transport is unavailable or has already closed; open a new session.',
   TERMINAL_UNKNOWN_SESSION: 'The requested terminal session is no longer active on the host; open a new session.',
   TERMINAL_BINDING_REFUSED: 'The terminal session port binding was refused; open a new terminal session.',
@@ -1487,6 +1487,7 @@ export function createTerminalDeckController(options = {}) {
     const found = findSlot(slotId);
     if (!found) return { closed: false };
     const { slot } = found;
+    if (slot.sessionId && closingSessions.has(slot.sessionId)) return { closed: false };
     const isBusy = slot.status === 'running' && slot.busy !== false;
 
     if (isBusy && closeOpts.force !== true) {

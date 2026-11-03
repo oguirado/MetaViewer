@@ -1,4 +1,8 @@
 /**
+ * [TARGET, unit decision] Stop receipts omit a creation timestamp. Sealed
+ * recording list rows retain a known timestamp or measure local receipt time;
+ * this fallback never claims to be the native recording start time.
+ *
  * MetaViewer capture port (MVUI9 lane C): renderer-side adapter over the
  * host capture facade `window.metaviewer.capture`.
  *
@@ -648,6 +652,11 @@ export function createCaptureState(port) {
       const stopped = await typed.recordStop(entry.recordingId);
       if (disposed) return unavailable();
       if (stopped.ok) {
+        const recording = stopped.recording;
+        const created = rows.find(row => row.id === recording.id)?.created_ms ?? Date.now();
+        storeRows([{id:recording.id,kind:'recording',surface_id:recording.surface_id,
+          phase:'sealed',frames:recording.frames,duration_ms:recording.duration_ms,
+          sealed:true,created_ms:created}, ...rows], undefined);
         entry.phase = 'idle';
         entry.recordingId = null;
         entry.frames = 0;

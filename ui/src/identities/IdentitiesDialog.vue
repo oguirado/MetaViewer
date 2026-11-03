@@ -54,7 +54,7 @@ async function invoke(method,request) {
       const programs = typeof roleApi.programs === 'function' ? await roleApi.programs() : [];
       modes.value = [...result, ...(Array.isArray(programs) ? programs : [])];
       for (const program of (Array.isArray(programs) ? programs : [])) if (program.hostXpra && !rows.value.some(row => row.id === program.profileId)) rows.value.push({id:program.profileId,label:program.profileId,browser:'program'});
-    }} catch {modes.value = [];} }
+    }} catch {error.value = 'Capsule status is unavailable. Previously known states are retained; refresh Identities before opening another capsule.';} }
     if(method==='create'){id.value='';typedName.value='';labelEdited.value=false;label.value='';domains.value='';}
     pendingDelete.value='';
   }catch(reason){error.value=identityErrorText(reason instanceof Error ? reason.message : '',request?.id);}
@@ -66,6 +66,11 @@ async function openIdentity(profileId,role){
   if(busy.value)return;
   if(rows.value.find(r=>r.id===profileId)?.browser==='program') {
     const mode=modeFor(profileId);
+    if (mode?.surfaceId) {
+      if (mode.currentMode === 'lost') {error.value='Stop lost capsule before reopening this program.';return;}
+      emit('open-identity',{profileId,surfaceId:mode.surfaceId,role:mode.currentMode});
+      emit('close');return;
+    }
     if(!mode?.available || mode.busy || !mode.binary || !roleApi?.createProgram) {
       error.value='Saved program binary unavailable. Open the program through Add capsule first.';return;
     }
@@ -74,9 +79,13 @@ async function openIdentity(profileId,role){
       const choice={binary:mode.binary,role};
       if (mode.hostXpra) Object.assign(choice,{hostXpra:true});
       const reply=await (props.openProgram ? props.openProgram(choice) : roleApi.createProgram(choice));
-      if(reply?.ok!==true)throw Error(reply?.code || 'PROGRAM_OPEN_FAILED');
+      if(reply?.ok!==true)throw Object.assign(Error(reply?.code || 'PROGRAM_OPEN_FAILED'),{reason:reply?.reason});
       emit('close');
-    } catch(reason) {error.value=identityErrorText(reason instanceof Error ? reason.message : '');}
+    } catch(reason) {
+      const failure=/** @type {{reason?:unknown,message?:unknown}} */(reason);
+      error.value=typeof failure?.reason === 'string' && failure.reason.trim()
+        ? failure.reason : `Program could not be opened: ${typeof failure?.message === 'string' ? failure.message : 'PROGRAM_OPEN_FAILED'}. Try Add capsule to check the program setup.`;
+    }
     finally {busy.value=false;}
     return;
   }

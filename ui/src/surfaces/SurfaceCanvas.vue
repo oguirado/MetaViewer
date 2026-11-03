@@ -861,7 +861,7 @@ function isTypingInTextField() {
   if (!active || typeof active !== 'object' || active === canvasRef.value) return false;
   if (active.isContentEditable === true || active.contentEditable === 'true') return true;
   const tag = typeof active.tagName === 'string' ? active.tagName.toUpperCase() : '';
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'CANVAS';
 }
 
 function focusCanvasOnEnable() {
@@ -872,7 +872,7 @@ function focusCanvasOnEnable() {
 
 // Losing the gate releases focus, so a stale focused canvas can never keep
 // capturing after a control handoff or a READ switch. Enabling input focuses
-// the canvas unless the operator is typing in another text field of the app.
+// the canvas unless the operator is typing in another field or canvas.
 // MVUI32 lane I (R3-INPUT-1): the gate closure also drops queued input.
 watch(() => props.inputEnabled, (enabled, previous) => {
   if (enabled !== true) {
