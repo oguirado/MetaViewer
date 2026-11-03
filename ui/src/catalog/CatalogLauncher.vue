@@ -34,7 +34,7 @@ const choosingProgram = ref(false), programBinary = ref(''), programRole = ref('
 const choosingWindow = ref(false), windowSearch = ref(''), windowChoices = ref(/** @type {Array<{xid:number,witness:string,title:string,program:string,width:number,height:number}>} */ ([]));
 const windowChoiceXid = ref(0), windowError = ref(''), windowBusy = ref(false);
 const filteredWindows = computed(() => filterWindowCandidates(windowChoices.value, windowSearch.value));
-const selectedWindow = computed(() => windowChoices.value.find(w => w.xid === windowChoiceXid.value) || null);
+const selectedWindow = computed(() => filteredWindows.value.find(w => w.xid === windowChoiceXid.value) || null);
 let choiceGeneration = 0;
 watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
 const pendingIntent = ref(/** @type {any} */ (null));
@@ -96,6 +96,7 @@ async function confirmProgram() {
   }
 }
 function cancelProgram() {
+  if (programBusy.value) return;
   choosingProgram.value = false;
   programError.value = '';
   emit('update:visible', false);
@@ -153,6 +154,7 @@ async function confirmWindow() {
   }
 }
 function cancelWindow() {
+  if (windowBusy.value) return;
   if (typeof choosingWindow !== 'undefined') choosingWindow.value = false;
   if (typeof windowChoiceXid !== 'undefined') windowChoiceXid.value = 0;
   if (typeof windowError !== 'undefined') windowError.value = '';
@@ -305,6 +307,7 @@ function onClose() {
       id="shell/new-capsule/program-cancel"
       data-semantic-anchor="dialog/new-capsule/program-cancel"
       type="button"
+      :disabled="programBusy"
       @click="cancelProgram"
     >Cancel</button>
   </div>
@@ -377,6 +380,7 @@ function onClose() {
       id="shell/new-capsule/window-cancel"
       data-semantic-anchor="dialog/new-capsule/window-cancel"
       type="button"
+      :disabled="windowBusy"
       @click="cancelWindow"
     >Cancel</button>
   </div>

@@ -208,6 +208,8 @@ export function summarizeSurfaces(surfaces) {
   const states = surfaces instanceof Map ? surfaces.values() : surfaces;
   for (const state of states) {
     if (!plain(state)) continue;
+    // A lost browser still pins its profile until an explicit destroy proves release.
+    if (state.state === 'lost' && state.kind === 'browser' && validId(state.profile_id)) bound.add(state.profile_id);
     if (state.state === 'destroyed' || state.state === 'lost') continue;
     live += 1;
     if (validId(state.profile_id)) bound.add(state.profile_id);

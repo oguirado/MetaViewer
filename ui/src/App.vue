@@ -1493,7 +1493,10 @@ function openCapsule(payload) {
   if (id === 'add') { launcherOpen.value = true; return; }
   if (typeof id === 'string') selectedCapsuleId.value = id;
   if (rows.value.some(row => row.id === id)) void wall.value?.followSurface?.(id,capsuleModes.value[id]);
-  if (rows.value.some(row => row.id === id) && wall.value?.revealSurface(id, payload?.placement ?? 'tab')?.ok === true) markPanelOpen(id);
+  if (rows.value.some(row => row.id === id) && wall.value?.revealSurface(id, payload?.placement ?? 'tab')?.ok === true) {
+    settingsOpen.value = false;
+    markPanelOpen(id);
+  }
 }
 const chromeWorkspace = markRaw(defineComponent({
   inheritAttrs: false,
