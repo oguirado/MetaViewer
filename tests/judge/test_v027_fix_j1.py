@@ -1,5 +1,4 @@
 """Offline ordered regressions for judge admission and crash recovery."""
-import platform
 import json
 from pathlib import Path
 import sys
@@ -116,7 +115,7 @@ class JudgeFixJ1(unittest.TestCase):
                 self.sb.full_kit(t2=True)
                 make_tar(self.sb.assets / (component + '.tar.gz'), [
                     (component + '/', None, 0o755),
-                    (component + '/' + executable, elf(183 if platform.machine() == 'x86_64' else 62), 0o755)])
+                    (component + '/' + executable, elf(62 if ELF_MACHINE[self.sb.arch] == 183 else 183), 0o755)])
                 self.sb.write_sums()
                 result = self.sb.judge('install', '--capsules', '--no-firewall')
                 self.assertEqual(result.rc, 2, result.text)
