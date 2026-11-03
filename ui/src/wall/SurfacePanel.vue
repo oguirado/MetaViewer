@@ -691,3 +691,9 @@ function onActivateSurface() {
   }
 }
 </style>
+
+<style>
+/* A settled screenshot remains visible when the compact rail hides its label. */
+.mv-tile-chrome__shot[data-captured="true"]::after { content: "✓"; }
+.mv-tile-chrome__refusal { white-space: normal; overflow-wrap: anywhere; }
+</style>
