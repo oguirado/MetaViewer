@@ -1246,27 +1246,22 @@ onBeforeUnmount(() => {
   overflow: hidden;
   width: 100%;
   height: 100%;
-  width: min(100cqw, calc(100cqh * var(--mv-frame-aspect)));
-  height: min(100cqh, calc(100cqw / var(--mv-frame-aspect)));
-  flex: 0 0 auto;
+  flex: 1 1 0;
   background: var(--cuk-semantic-surface-canvas);
   color: var(--cuk-semantic-text-primary);
 }
-.mv-surface:has(> .mv-surface__strip) {
-  width: min(100cqw, calc((100cqh - 23px) * 1280 / 900));
-  height: min(100cqh, calc(100cqw * 900 / 1280 + 23px));
-  width: min(100cqw, calc(max(0px, 100cqh - 23px) * var(--mv-frame-aspect)));
-  height: min(100cqh, calc(100cqw / var(--mv-frame-aspect) + 23px));
-}
+/* [TARGET, unit decision] Let flex reserve the actual wrapped witness height.
+ * The remaining canvas box uses contain; its margins match the tile, never
+ * black. Container-query arithmetic cannot account for a wrapping footer. */
 .mv-surface__canvas {
   display: block;
   width: 100%;
-  flex: 1;
+  height: 0;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
-  aspect-ratio: 1280 / 900;
-  aspect-ratio: var(--mv-frame-aspect);
   object-fit: contain;
-  background-color: var(--mv-primitive-color-neutral-1100, #000000);
+  background-color: var(--cuk-semantic-surface-canvas);
 }
 .mv-surface__canvas[hidden] {
   display: none;
@@ -1371,11 +1366,10 @@ onBeforeUnmount(() => {
 /* The strip is part of the frame's flex height: wrapping consumes body space
  * without overlapping pixels or clipping the safety labels mid word. */
 @container tile-chrome (max-width: 499px) {
-  .mv-surface:has(> .mv-surface__strip) { width:100%; height:100%; }
   .mv-surface__strip {
     flex-wrap:wrap;
     gap:2px 8px;
-    padding:2px 8px;
+    padding:2px 8px 2px 48px;
     white-space:normal;
     overflow:visible;
   }
