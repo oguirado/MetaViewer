@@ -11,7 +11,6 @@ import os
 from pathlib import Path
 import platform
 import stat
-import subprocess
 
 from .deps_lock import DependencyLockError, _locked_commit
 
@@ -27,7 +26,7 @@ def compiled_browser_entry(mode, request, *, root=None, timeout=30):
     An explicitly selected but unusable runtime never falls back to source.
     """
     from ..observe import ObservationError
-    from ..wender_bridge import _run_bounded
+    from ..wender_bridge import BoundedProcessTimeout, _run_bounded
     if mode not in ('state', 'stopstate') or type(request) is not dict:
         raise ObservationError('bad_shape', 'compiled browser request invalid')
     executable = compiled_executable('wender-agent', root=root)
@@ -45,12 +44,13 @@ def compiled_browser_entry(mode, request, *, root=None, timeout=30):
     if len(payload) > 1024 * 1024:
         raise ObservationError('bad_shape', 'compiled browser request too large')
     env = {'PATH': os.defpath}
-    if 'LANG' in os.environ:
-        env['LANG'] = os.environ['LANG']
+    language = os.environ.get('LANG')
+    if language is not None:
+        env['LANG'] = language
     try:
         result = _run_bounded([str(executable), mode], cwd=executable.parent,
                               env=env, request=payload, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    except BoundedProcessTimeout:
         raise ObservationError('timeout', 'compiled browser entry timed out') from None
     except OSError:
         raise ObservationError('unavailable', 'compiled browser entry unavailable') from None

@@ -17,6 +17,7 @@ from metaviewer_agents.observe import ObservationError
 from metaviewer_agents.perception import compiled
 from metaviewer_agents.perception.deps_lock import DependencyLockError
 from metaviewer_agents.mw_handoff import HandoffLatch
+from metaviewer_agents.wender_bridge import detect_stopstate
 
 
 class CompiledBrowserEntryTests(unittest.TestCase):
@@ -66,6 +67,17 @@ class CompiledBrowserEntryTests(unittest.TestCase):
         self.assertNotIn(str(self.dist),sys.path)
         self.assertTrue(ssl.OPENSSL_VERSION)
 
+    def test_raw_ax_stopstate_is_forwarded_without_object_coercion(self):
+        # Raw or malformed AX must reach the actual detector unchanged: URL and
+        # header wall cues remain meaningful independently of AX validity.
+        for rows in ([], [{'role': None, 'name': 7}]):
+            with self.subTest(rows=rows):
+                request = dict(state=rows, url='https://example.invalid/',
+                               frame_urls=[], headers={'cf-mitigated': 'challenge'})
+                response = compiled.compiled_browser_entry('stopstate', request)
+                self.assertEqual(response['request'], request)
+                self.assertIsInstance(response['request']['state'], list)
+
     def test_explicit_invalid_distribution_refuses_before_launch(self):
         self.collision.write_bytes(b'drift')
         with patch('metaviewer_agents.wender_bridge._run_bounded') as launch:
@@ -77,6 +89,22 @@ class CompiledBrowserEntryTests(unittest.TestCase):
         with patch.dict(os.environ,{},clear=True),patch('metaviewer_agents.wender_bridge._run_bounded') as launch:
             self.assertIsNone(compiled.compiled_browser_entry('state',{}))
         launch.assert_not_called()
+
+    def test_child_environment_is_closed_and_language_is_optional(self):
+        for language in (None, 'C.UTF-8'):
+            environment = {'MV_WENDER_EXECUTABLE': str(self.exe),
+                           'ACCESS_TOKEN': 'synthetic-must-not-enter-child',
+                           'LD_PRELOAD': 'synthetic-must-not-enter-child'}
+            if language is not None:
+                environment['LANG'] = language
+            with self.subTest(language=language), patch.dict(os.environ, environment, clear=True), \
+                    patch('metaviewer_agents.wender_bridge._run_bounded',
+                          return_value=SimpleNamespace(returncode=0, stdout=b'{}')) as launch:
+                compiled.compiled_browser_entry('state', self.request('state'))
+                expected = {'PATH': os.defpath}
+                if language is not None:
+                    expected['LANG'] = language
+                self.assertEqual(launch.call_args.kwargs['env'], expected)
 
     def test_invalid_json_receipts_never_become_an_empty_success(self):
         cases=[b'[]',b'null',b'{"x":1,"x":2}',b'{"x":NaN}',b'{"x":Infinity}',
@@ -118,7 +146,7 @@ class CompiledBrowserEntryTests(unittest.TestCase):
                 self.assertEqual(caught.exception.code,code)
 
     def test_compiled_handoff_uses_original_observation_and_absorbs_write_failure(self):
-        latch=HandoffLatch(self.root/'handoff.json')
+        latch=HandoffLatch(self.root/'handoff.json', detector=detect_stopstate)
         sensed=dict(frame=dict(surface_id='owned'),state=dict(nodes=[]),
             observed=dict(url=None,frame_urls=None,headers=None))
         receipt=dict(is_stop=True,reason='captcha_wall',confidence=100,
@@ -148,7 +176,7 @@ class CompiledBrowserEntryTests(unittest.TestCase):
             with self.subTest(receipt=receipt),patch.object(compiled,'compiled_browser_entry',return_value=receipt):
                 write=unittest.mock.Mock()
                 with self.assertRaises(ObservationError):
-                    HandoffLatch(self.root/'handoff.json').inspect(dict(frame={},state={}),0,write)
+                    HandoffLatch(self.root/'handoff.json', detector=detect_stopstate).inspect(dict(frame={},state={}),0,write)
                 write.assert_not_called()
 
     def test_compiled_no_stop_still_honors_explicit_observed_wall(self):
@@ -156,10 +184,10 @@ class CompiledBrowserEntryTests(unittest.TestCase):
         with patch.object(compiled,'compiled_browser_entry',return_value=receipt):
             sensed=dict(frame=dict(surface_id='owned'),state=dict(nodes=[]))
             write=unittest.mock.Mock()
-            self.assertFalse(HandoffLatch(self.root/'ordinary.json').inspect(sensed,0,write))
+            self.assertFalse(HandoffLatch(self.root/'ordinary.json', detector=detect_stopstate).inspect(sensed,0,write))
             write.assert_not_called()
             sensed['observed']=dict(observed_wall=dict(kind='login_wall',observed=True))
-            self.assertTrue(HandoffLatch(self.root/'wall.json').inspect(sensed,0,write))
+            self.assertTrue(HandoffLatch(self.root/'wall.json', detector=detect_stopstate).inspect(sensed,0,write))
         self.assertEqual(json.loads(write.call_args.args[1])['reason'],'login_wall')
 
     def test_source_detector_receives_unchanged_tuple_defaults_without_compiled_import(self):
@@ -168,7 +196,7 @@ class CompiledBrowserEntryTests(unittest.TestCase):
         module=ModuleType('wender.perceive.stopstate');module.detect=detector
         with patch.object(compiled,'compiled_browser_entry',return_value=None), \
              patch.dict(sys.modules,{'wender.perceive.stopstate':module}):
-            self.assertFalse(HandoffLatch(self.root/'source.json').inspect(dict(frame={},state={}),0,lambda *args:None))
+            self.assertFalse(HandoffLatch(self.root/'source.json', detector=detect_stopstate).inspect(dict(frame={},state={}),0,lambda *args:None))
         detector.assert_called_once_with({},url='',frame_urls=(),headers=None)
 
 

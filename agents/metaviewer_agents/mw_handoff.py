@@ -4,6 +4,7 @@
 kind login_wall or captcha_wall supplies the missing observed-wall seam.
 Login controls alone are not walls. A new ReplayOwner is a new authorized run.
 The path is returned directly and through the closed run schema's evidence_refs.
+Optional detector injection keeps process dispatch at the existing bridge.
 """
 from dataclasses import dataclass
 import json
@@ -19,9 +20,10 @@ class HandoffResult:
 
 
 class HandoffLatch:
-    def __init__(self, path):
+    def __init__(self, path, *, detector=None):
         self.path = path
         self.latched = False
+        self.detector = detector
 
     def inspect(self, sensed, seq, write):
         if self.latched:
@@ -33,22 +35,13 @@ class HandoffLatch:
         request = dict(state=state, url=observed.get('url', ''),
                        frame_urls=observed.get('frame_urls', state.get('frame_urls', ())),
                        headers=observed.get('headers', state.get('headers')))
-        from .perception.compiled import compiled_browser_entry
-        receipt = compiled_browser_entry('stopstate', request)
-        if receipt is None:
+        if self.detector is None:
             from wender.perceive.stopstate import detect
             receipt = detect(request['state'], url=request['url'],
                              frame_urls=request['frame_urls'], headers=request['headers'])
         else:
-            from .observe import ObservationError
-            fields = {'is_stop', 'reason', 'confidence', 'evidence'}
-            if (type(receipt) is not dict or set(receipt) != fields or type(receipt['is_stop']) is not bool or
-                    (receipt['reason'] is not None and type(receipt['reason']) is not str) or
-                    type(receipt['confidence']) is not int or type(receipt['evidence']) is not list or
-                    any(type(item) is not dict or type(item.get('kind')) is not str or
-                        ('value' in item and type(item['value']) is not str)
-                        for item in receipt['evidence'])):
-                raise ObservationError('bad_shape', 'compiled detector receipt invalid')
+            receipt = self.detector(request['state'], url=request['url'],
+                                    frame_urls=request['frame_urls'], headers=request['headers'])
         wall = observed.get('observed_wall')
         if (not receipt['is_stop'] and type(wall) is dict and
                 wall.get('observed') is True and

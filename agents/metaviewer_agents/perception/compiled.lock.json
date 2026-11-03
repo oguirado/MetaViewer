@@ -72,7 +72,7 @@
       }
     },
     "wender-agent": {
-      "archive_sha256": "77b567a4cba640f1ea09cc65871f0d54f9b57c613a372736356ff506800f1b4d",
+      "archive_sha256": "8c4ecc20e8d5b8cb687fcf0aa0388cbe68f155259398656a0351dd50b40e82b3",
       "commit": "96120967b435b72fc6d29635f3844dae140388a9",
       "executable": "wender-runtime",
       "files": {
@@ -117,7 +117,7 @@
         "numpy/random/bit_generator.so": "7b9b1de161f08b82117b183e6d21343c6892b8b01ff36afe57e2bd6ea4bf3e9a",
         "numpy/random/mtrand.so": "e55b7c8b07a260912019e6844aa545ac1aba8fc3d335c0405dcb4d3e672ac84c",
         "termios.so": "9ab4d825ea85bdda436568ea3eb3c86ae583bcde9c99aca112236659fd3d4c9a",
-        "wender-runtime": "259e396d2b0a4ad971a25c2f98de79e8cec8dc65a681b15a37b19bc7f22a6906",
+        "wender-runtime": "991a7a82627658e8ce8196503a6d95d137ee2918b236cda382b1e425ba769faf",
         "wender/learn/cu_action.schema.json": "52948ac097dffa74cccdfabbd477d39d43b622bd60f2a02b501469f89f799203"
       }
     }

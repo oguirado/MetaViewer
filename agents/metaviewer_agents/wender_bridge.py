@@ -35,6 +35,28 @@ from .observe import (
 )
 from .tools import ToolValidationError, _check_action, _check_expectation
 
+# [TARGET, unit decision] Share the pipe timeout type without another spawn site.
+BoundedProcessTimeout = subprocess.TimeoutExpired
+
+
+def detect_stopstate(state, *, url, frame_urls, headers):
+    """Keep compiled IPC and receipt validation at the existing process boundary."""
+    from .perception.compiled import compiled_browser_entry
+    receipt = compiled_browser_entry('stopstate', dict(
+        state=state, url=url, frame_urls=frame_urls, headers=headers))
+    if receipt is None:
+        from wender.perceive.stopstate import detect
+        return detect(state, url=url, frame_urls=frame_urls, headers=headers)
+    fields = {'is_stop', 'reason', 'confidence', 'evidence'}
+    if (type(receipt) is not dict or set(receipt) != fields or type(receipt['is_stop']) is not bool or
+            (receipt['reason'] is not None and type(receipt['reason']) is not str) or
+            type(receipt['confidence']) is not int or type(receipt['evidence']) is not list or
+            any(type(item) is not dict or type(item.get('kind')) is not str or
+                ('value' in item and type(item['value']) is not str)
+                for item in receipt['evidence'])):
+        raise ObservationError('bad_shape', 'compiled detector receipt invalid')
+    return receipt
+
 __all__ = [
     "ALLOWED_MODEL_BACKENDS",
     "DEFAULT_WENDER_PLANNER_CMD",
