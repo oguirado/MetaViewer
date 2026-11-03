@@ -88,7 +88,7 @@ test('attached window status follows native minimize and restore without changin
  globalThis.metaviewerRoles={status:async()=>status(),close:async()=>({ok:true}),detachWindow:surfaceId=>invoke('stop',{surfaceId}),listWindows:async()=>listWindows()};
  t.after(()=>{globalThis.metaviewerRoles=prior;});
  const component=await compileRoleSurface(readFileSync(new URL('../src/surfaces/RoleSurface.vue',import.meta.url),'utf8'));
- const mounted=mountRoleSurface(component,{surfaceId:first.surfaceId,control:'agent'});
+ const mounted=mountRoleSurface(component,{surfaceId:first.surfaceId,control:'human'});
  t.after(()=>mounted.app.unmount());
  const waitFor=async predicate=>{
   const deadline=Date.now()+2000;
