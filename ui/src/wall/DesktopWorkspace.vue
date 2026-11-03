@@ -17,6 +17,9 @@ const state = ref(createDesktopState()), loaded = ref(false);
 const walls = new Map(), ready = new Set(), adapters = new Map(), listeners = new Set();
 const revealed = new Map();
 let alive = true, readOnly = false, dirty = false, saving = /** @type {Promise<void>|null} */ (null), pruneTimer = /** @type {ReturnType<typeof setTimeout>|undefined} */ (undefined);
+// [TARGET, unit decision] Fresh sessions may follow the first reported agent role.
+// Saved layouts and explicit navigation close this startup-only choice.
+let initialViewPending = true;
 let requestedView = /** @type {string|null} */ (null);
 const desktopKeys = new WeakMap(), usedKeys = new Set();
 /** @param {string} view @param {number} id */
@@ -56,7 +59,7 @@ function persist() {
       dirty = false;
       await props.storage.writeAtomic(JSON.stringify(cleanLayouts(JSON.parse(JSON.stringify(state.value)))));
     }
-  }).catch(error => {readOnly = true; emit('layout-error',error); throw error;}).finally(() => {
+  }).catch(error => {emit('layout-error',error); throw error;}).finally(() => {
     saving = null;
     if (dirty && alive && !readOnly) void persist().catch(() => {});
   });
@@ -67,6 +70,11 @@ function reconcile() {
   for (const row of props.rows) {
     const view = props.modes[row.id] || 'agent';
     if (VIEWS.includes(view)) assignSurface(state.value,row.id,view);
+  }
+  if (initialViewPending && props.rows.length > 0
+      && props.rows.every(row => props.modes[row.id] === 'agent')) {
+    state.value.activeView = 'agent';
+    initialViewPending = false;
   }
   for (const [key,seen] of revealed) for (const id of seen) {
     const home = homeOf(id);
@@ -122,11 +130,13 @@ function wallReady(key) {
 /** @param {string} view */
 function selectView(view) {
   if (!VIEWS.includes(view)) return;
+  initialViewPending = false;
   if (!loaded.value) { requestedView = view; return; }
   state.value.activeView = view;
 }
 /** @param {number} id */
 function selectDesktop(id) {
+  initialViewPending = false;
   const group = state.value.views[state.value.activeView];
   if (group.desktops.some(d => d.id === id)) group.active = id;
 }
@@ -140,6 +150,7 @@ function removeDesktop(id) {
 }
 /** @param {string} id @param {string} [mode] */
 async function followSurface(id, mode) {
+  initialViewPending = false;
   if (!loaded.value) return;
   if (mode && VIEWS.includes(mode)) assignSurface(state.value,id,mode);
   const home = homeOf(id); if (!home) return;
@@ -232,6 +243,7 @@ onMounted(async () => {
     const raw = await props.storage.readRaw();
     if (!alive) return;
     if (raw !== null) {
+      initialViewPending = false;
       const value = JSON.parse(raw);
       if (value?.schema === DESKTOP_SCHEMA) {
         if (!validateDesktopState(value,layout => decodeAndMigrateLayoutProfile(layout,{expectedScope:props.scope}).ok)) throw Error('LAYOUT_CONTRACT_INVALID');
@@ -248,7 +260,7 @@ onMounted(async () => {
         for (const view of VIEWS) state.value.views[view].desktops[0].layout = normalizeDesktopLayout(checked.profile);
       }
     }
-  } catch (error) { readOnly = true; emit('layout-error',error); }
+  } catch (error) { initialViewPending = false; readOnly = true; emit('layout-error',error); }
   if (!alive) return;
   if (requestedView) state.value.activeView = requestedView;
   loaded.value = true; reconcile(); announce();

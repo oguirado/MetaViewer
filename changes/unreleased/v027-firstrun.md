@@ -1,0 +1,2 @@
+- Show startup and first-capsule failures in a dialog with recovery steps, including when no wall window opens.
+- Explain core-only capsule failures and guide new users through identities and the Humans and Agents views.

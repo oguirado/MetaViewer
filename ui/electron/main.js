@@ -52,6 +52,31 @@ const PACKAGED_ASSET_DIGESTS = /** @type {Readonly<Record<string, string>>} */ (
 const bootedAdapters = new WeakSet();
 
 /**
+ * [TARGET, unit decision] Startup failures remain visible without a renderer.
+ * Closed copy prevents raw host diagnostics (including private paths) entering dialogs.
+ * @param {unknown} dialog Trusted Electron dialog handle.
+ * @param {unknown} error Failure.
+ * @param {'boot'|'create'} phase Startup phase.
+ */
+export function showStartupFailure(dialog, error, phase) {
+  const rawCode = /** @type {{code?:unknown}|null} */ (error)?.code;
+  const code = typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(rawCode)
+    ? rawCode : (phase === 'create' ? 'SURFACE_CREATE_FAILED' : 'STARTUP_FAILED');
+  const title = phase === 'create' ? 'MetaViewer could not open the first capsule' : 'MetaViewer could not start';
+  const next = phase === 'create'
+    ? 'The wall is still available. Open Identities to create or check a browser identity, then choose Add capsule to try again. If this is a core-only installation, install and configure the surface runtime before opening capsules.'
+    : code.startsWith('ADAPTER_')
+      ? 'The surface runtime could not start. Check the adapter installation and MV_SRF_BIN_DIR configuration, then restart MetaViewer. For a core-only wall, unset MV_SRF_BIN_DIR; capsules require the surface runtime.'
+      : 'Check the installation and the startup error in the host logs, then restart MetaViewer.';
+  try {
+    const handle = /** @type {{showErrorBox?:(title:string,content:string)=>void}|null} */ (dialog);
+    handle?.showErrorBox?.(title, `${code}: ${title}.\n\n${next}`);
+  } catch {
+    /* stderr diagnostics and fail-closed cleanup still run if a dialog fails */
+  }
+}
+
+/**
  * Typed main failure; a failure admits nothing.
  */
 export class MainError extends Error {
@@ -1772,6 +1797,7 @@ export function createLayoutBridge({directory,app} = {}) {
  * @property {CoreLauncher} core Constructed core launcher.
  * @property {ReadonlyArray<BridgeEntry>} bridge Parity-gated IPC registry.
  * @property {{width: number, height: number}} geometry Window geometry.
+ * @property {unknown} [dialog] Trusted Electron startup error dialog.
  * @property {any} [wire] Trusted frame and PTY capabilities, never renderer values.
  * @property {AdapterLauncher} [adapter] Optional bundled daemon adapter launcher supervised next to core.
  */
@@ -1978,16 +2004,28 @@ export function buildFirstSurfaceCreateRequest(envRec) {
  * @param {{
  *   onCreated?: (surface: unknown) => void,
  *   onFailure?: (error: unknown) => void,
- * }} [onSettled] Optional settlement callbacks for boot reservation and notice delivery.
+ * }} onSettled Settlement callbacks for boot reservation and notice delivery.
+ * @param {Map<string,any>} states Shared host capsule state.
+ * @param {(() => Promise<number|null> | number|null) | undefined} readFreeMemoryBytes
+ * @param {Pick<typeof import('./profilePicker.js'),'acquireCapsuleCreation'|'CAPSULE_MEMORY_LIMIT_BYTES'|'parseMemAvailableBytes'>} admission
  * @returns {Promise<void>}
  */
-async function requestFirstSurfaceCreate(core, envRec, onSettled) {
+async function requestFirstSurfaceCreate(core, envRec, onSettled, states, readFreeMemoryBytes, admission) {
+  const {acquireCapsuleCreation, CAPSULE_MEMORY_LIMIT_BYTES, parseMemAvailableBytes} = admission;
   const timeoutMs = FIRST_SURFACE_CREATE_TIMEOUT_MS;
   console.log('METAVIEWER_SURFACE_CREATE_PENDING');
   const request = buildFirstSurfaceCreateRequest(envRec);
   /** @type {ReturnType<typeof setTimeout> | null} */
   let timer = null;
+  const releaseCreation = acquireCapsuleCreation(states);
   try {
+    if (!releaseCreation) throw Object.assign(Error('SURFACE_CREATE_BUSY'), {code:'SURFACE_CREATE_BUSY'});
+    let freeBytes = null;
+    try { freeBytes = typeof readFreeMemoryBytes === 'function'
+      ? await readFreeMemoryBytes() : parseMemAvailableBytes(readFileSync('/proc/meminfo','utf8')); } catch { /* fail closed */ }
+    if (!Number.isSafeInteger(freeBytes) || freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {
+      throw Object.assign(Error('RAM_ADMISSION_REFUSED'), {code:'RAM_ADMISSION_REFUSED'});
+    }
     const reply = await Promise.race([
       core.request(request),
       new Promise((_, reject) => {
@@ -2074,6 +2112,7 @@ async function requestFirstSurfaceCreate(core, envRec, onSettled) {
     if (timer !== null) {
       clearTimeout(timer);
     }
+    releaseCreation?.();
   }
 }
 
@@ -2121,7 +2160,7 @@ export async function bootProductionMain(handles) {
     fail('BOOT_HANDLES', 'handles must be an object');
   }
   const typed = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (handles));
-  const ownKeys = Object.keys(typed).filter(key => key !== 'wire' && key !== 'adapter');
+  const ownKeys = Object.keys(typed).filter(key => key !== 'wire' && key !== 'adapter' && key !== 'dialog');
   if (ownKeys.length !== HANDLE_KEYS.length) {
     fail('BOOT_HANDLES', 'handles must carry exactly the boot keys');
   }
@@ -2492,6 +2531,7 @@ export async function bootProductionMain(handles) {
         adapterStatus.availability === 'live' &&
         adapterStatus.handshakeSeen === true
       ) {
+        const admission = await import('./profilePicker.js');
         const bootProfile = buildFirstSurfaceCreateRequest(envRec).params.profile_id;
         const pendingKey = `pending:${bootProfile}`;
         capsuleStates.set(pendingKey, {profile_id:bootProfile,state:'creating'});
@@ -2513,13 +2553,14 @@ export async function bootProductionMain(handles) {
           onFailure: (error) => {
             capsuleStates.delete(pendingKey);
             if (unwound) return;
+            showStartupFailure(handles.dialog, error, 'create');
             if (bootReadyForNotices && wireBridge !== null && typeof wireBridge.notifyCreateRefusal === 'function') {
               wireBridge.notifyCreateRefusal(error);
             } else {
               pendingBootCreateError = error;
             }
           },
-        });
+        }, capsuleStates, /** @type {any} */ (typed.wire)?.readFreeMemoryBytes, admission);
       }
     }
   }
@@ -2733,19 +2774,20 @@ export async function bootProductionMain(handles) {
     }
   }
   let quitting = false;
+  let quitReady = false;
   try {
     app.on('will-quit', (event) => {
-      if (quitting) {
-        return;
-      }
-      quitting = true;
-      console.info('METAVIEWER_QUIT reason=will-quit');
+      if (quitReady) return;
       try {
         /** @type {{preventDefault: () => void}} */ (/** @type {unknown} */ (event)).preventDefault();
       } catch {
         /* prevent best-effort */
       }
+      if (quitting) return;
+      quitting = true;
+      console.info('METAVIEWER_QUIT reason=will-quit');
       void dispose().finally(() => {
+        quitReady = true;
         try {
           app.quit();
         } catch {
@@ -2757,6 +2799,8 @@ export async function bootProductionMain(handles) {
       app.on('render-process-gone', (_event, _contents, details) => {
         const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
         console.info(`METAVIEWER_PROCESS_GONE kind=renderer reason=${reason}`);
+        // A crashed authority renderer cannot safely retain an interactive window.
+        if (_contents === contentsHandle && !unwound && !quitting) app.quit();
       });
       app.on('child-process-gone', (_event, details) => {
         const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
@@ -2981,14 +3025,23 @@ async function mainDirectEntry() {
   );
   /**
    * @param {unknown} error Failure.
-   * @returns {void}
+   * @returns {Promise<void>}
    */
-  const failClosed = (error) => {
+  const failClosed = async (error) => {
     try {
       const message = error instanceof Error ? error.message : String(error);
       console.error(message);
     } catch {
       /* diagnostics best-effort */
+    }
+    // CLI policy refusals must exit before readiness or host bootstrap.
+    // Linux startup dialogs otherwise need ready to appear beyond stderr.
+    const code = /** @type {{code?:unknown}|null} */ (error)?.code;
+    if (code !== 'RETAIL_FLAG' && code !== 'RETAIL_ENV') {
+      try {
+        await /** @type {{whenReady?:()=>Promise<unknown>}|null} */ (app)?.whenReady?.();
+      } catch { /* still attempt the diagnostic and preserve exit failure */ }
+      showStartupFailure(electron.dialog, error, 'boot');
     }
     try {
       if (app !== null && typeof app.exit === 'function') {
@@ -3021,7 +3074,7 @@ async function mainDirectEntry() {
     }
     const bindings = await loadMainBindings();
     const boot = await bootProductionMain({ core:bindings.core, wire:bindings.wire, ...(bindings.adapter ? {adapter:bindings.adapter} : {}), electronVersion: running,
-      app: electron.app, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
+      app: electron.app, dialog: electron.dialog, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
       protocol: electron.protocol, session: electron.session, argv, env: process.env,
       shellRoot: fileURLToPath(new URL('..',import.meta.url)),
       runtime: {xdgRuntimeDir:process.env.XDG_RUNTIME_DIR || '',uid:process.getuid ? process.getuid() : -1},
@@ -3029,7 +3082,7 @@ async function mainDirectEntry() {
     console.log('METAVIEWER_MAIN_READY');
     return boot;
   } catch (error) {
-    failClosed(error);
+    await failClosed(error);
   }
 }
 

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"metaviewer/daemon-adapter/internal/capsule"
+	"metaviewer/daemon-adapter/internal/frames"
 	"metaviewer/daemon-adapter/internal/ipc"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +14,7 @@ import (
 )
 
 type nvWireRunner struct {
+	postInputTestRunner
 	started, finish chan struct{}
 	stops           atomic.Int32
 }
@@ -28,12 +31,30 @@ func (r *nvWireRunner) Run(ctx context.Context, args []string, _ []byte) ([]byte
 	case "stop":
 		r.stops.Add(1)
 		return []byte(`{"stopped":"srf-id-demo","removed_verified":true}`), nil
+	case "frame":
+		out, err := r.postInputTestRunner.Run(ctx, args, nil)
+		if err != nil {
+			return nil, err
+		}
+		var frame capsule.NativeFrame
+		if err := json.Unmarshal(out, &frame); err != nil {
+			return nil, err
+		}
+		frame.CaptureMonoNS = 200 // The manager's existing synthetic clock.
+		return json.Marshal(frame)
 	}
 	return nil, context.Canceled
 }
 func TestNVWireTakeoverDrains(t *testing.T) {
 	r := &nvWireRunner{started: make(chan struct{}), finish: make(chan struct{})}
-	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), OriginNS: 100, MaxSurfaces: 4, MaxOutputBytes: 4096, Timeout: time.Second, Profiles: map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", Width: 2, Height: 1, Display: ":100", RAMRoot: "/dev/shm"}}}, r, func() uint64 { return 200 })
+	root, err := os.MkdirTemp("/dev/shm", "mv-nv-drain-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	r.pngPath, r.sha = writeTestPNG(t, root)
+	profiles := map[string]capsule.Profile{"demo": {Kind: "browser", NativeKind: "browser", Width: 2, Height: 1, Display: ":100", RAMRoot: root}}
+	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), OriginNS: 100, MaxSurfaces: 4, MaxOutputBytes: 4096, Timeout: time.Second, Profiles: profiles}, r, func() uint64 { return 200 })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +76,21 @@ func TestNVWireTakeoverDrains(t *testing.T) {
 	if _, err = m.Handle(context.Background(), request("release_control", surface)); err == nil {
 		t.Fatal("release without takeover")
 	}
-	h := isolatedWireHandler(t, m, nil, nil, 100)
+	// Provision the actual pre-input publication while preserving the blocked
+	// native input and all takeover/drain assertions below.
+	pub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 8192, MaxPixels: 64, MaxSurfaces: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pub.Close() })
+	binding, native, err := m.Capture(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pub.Publish(id, binding, native); err != nil {
+		t.Fatal(err)
+	}
+	h := isolatedWireHandler(t, m, profiles, map[string]*frames.Publisher{root: pub}, 100)
 	done := make(chan error, 1)
 	go func() {
 		body, _ := json.Marshal(request("input", `{"surface_id":"`+id+`","proposal_id":"nv","action":{"type":"key","keys":["a"]}}`))

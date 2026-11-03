@@ -28,14 +28,14 @@
 #     opensuperficies-linux-<arch>.tar.gz (opensuperficies/{bin,firewall}),
 #     images-linux-<arch>.tar (docker save), vision-engine.tar.gz and
 #     wender-agent.tar.gz (one top-level directory named after the component).
-#   - SHA256SUMS must ship inside the kit; it is never downloaded.
+#   - Install never downloads SHA256SUMS; fetch_assets.py provisions it explicitly.
 #   - State lives under MV_JUDGE_HOME (default $XDG_DATA_HOME/metaviewer-judge):
 #     app/, deps/, node/, run/, logs/ and judge_receipt.json. No timestamp, pid
 #     or host path is written to the receipt.
 #   - Network by default is open: install installs the egress firewall in ONE
 #     confirmed administrator step; if it is declined or unavailable, install
 #     falls back to the legacy network (`net up`, no administrator rights).
-#   - `stop` also runs `net down`, so no srf-* container is left behind.
+#   - `stop` stops scoped capsules; the shared proxy remains running.
 # Lines marked `# MUT:<code>` are deciding predicates that the offline
 # mutation tests negate.
 set -u
@@ -53,7 +53,7 @@ say() { printf '%s\n' "$*"; }
 note() { printf 'JUDGE_NOTE: %s\n' "$*" >&2; }
 
 usage() {
-    printf 'JUDGE_USAGE: metaviewer-judge.sh doctor|install|run|stop [--capsules] [--yes] [--no-firewall] -- fix: use one of the documented subcommands\n' >&2
+    printf 'JUDGE_USAGE: metaviewer-judge.sh doctor|install|run|stop [--before-install] [--capsules] [--yes] [--no-firewall] -- fix: use one of the documented subcommands\n' >&2
     exit 64
 }
 
@@ -64,8 +64,10 @@ SUB=${1:-}
 ASSUME_YES=0
 CAPSULES=0
 NO_FIREWALL=0
+BEFORE_INSTALL=0
 while [ $# -gt 0 ]; do
     case $1 in
+        --before-install) BEFORE_INSTALL=1 ;;
         --yes) ASSUME_YES=1 ;;
         --capsules) CAPSULES=1 ;;
         --no-firewall) NO_FIREWALL=1 ;;
@@ -223,9 +225,10 @@ verify_asset() { # name; removes it when this run downloaded it
 
 DOWNLOADED=
 ensure_assets() { # asset names
-    local n missing="" tmp
+    local n missing="" tmp fetch_flags=""
+    [ "$TIER" = T2 ] && fetch_flags=--capsules
     mkdir -p "$ASSET_DIR" 2>/dev/null || fail JUDGE_ASSET "cannot create $ASSET_DIR" "choose a writable MV_JUDGE_ASSET_DIR"
-    [ -f "$ASSET_DIR/SHA256SUMS" ] || fail JUDGE_ASSET "SHA256SUMS is missing from $ASSET_DIR" "extract the judge kit again; SHA256SUMS ships inside it and is never downloaded"
+    [ -f "$ASSET_DIR/SHA256SUMS" ] || fail JUDGE_ASSET "SHA256SUMS is missing from $ASSET_DIR" "python3 \"$SELF_DIR/fetch_assets.py\" --source <complete-release-directory> --dest \"$ASSET_DIR\" $fetch_flags"
     for n in "$@"; do
         [ -f "$ASSET_DIR/$n" ] || missing="$missing $n"
     done
@@ -296,8 +299,8 @@ step_node() {
     tar_names_ok "$ASSET_DIR/$asset" '^[^/]+/' || fail JUDGE_ASSET "$asset has unsafe or unexpected members" "download $asset again from $RELEASE_BASE"
     rm -rf -- "$work"
     mkdir -p "$work"
-    # Only the node binary is taken from the archive; links and other members are not extracted.
-    tar --no-same-owner -xf "$ASSET_DIR/$asset" -C "$work" --strip-components=1 --wildcards '*/bin/node' || fail JUDGE_ASSET "cannot unpack node from $asset" "download $asset again from $RELEASE_BASE"
+    # Copy regular members only; npm links are recreated as local wrappers.
+    python3 "$SELF_DIR/unpack_node.py" "$ASSET_DIR/$asset" "$work" || fail JUDGE_ASSET "cannot unpack node from $asset" "download $asset again from $RELEASE_BASE"
     rm -rf -- "$JUDGE_HOME/node"
     mv -- "$work" "$JUDGE_HOME/node"
     find_node
@@ -329,12 +332,28 @@ step_apparmor() {
         bash -c 'install -m 0644 -o root -g root "$1" "$2" && apparmor_parser -r "$2"' _ "$PROFILE_SRC" "$APPARMOR_DIR/metaviewer-judge"
 }
 
+# The package tool imports @electron/asar. A kit unpacked from source has no ui/node_modules,
+# so install the lockfile's exact versions; --ignore-scripts skips the Electron download and
+# native builds, because the app under test comes from the release tarball.
+ensure_pkg_tool_deps() {
+    local log=$1 ui
+    ui=$KIT/ui
+    [ -f "$ui/package-lock.json" ] || return 0
+    [ ! -d "$ui/node_modules/@electron/asar" ] || return 0
+    PATH="$(dirname "$NODE_BIN"):$PATH" command -v npm >/dev/null 2>&1 ||
+        fail JUDGE_NPM "the Node asset has no npm and package verification needs it" "sudo apt-get install -y npm"
+    if ! PATH="$(dirname "$NODE_BIN"):$PATH" npm --prefix "$ui" ci --ignore-scripts --no-audit --no-fund >"$log" 2>&1; then
+        fail JUDGE_SMOKE "cannot install the package tool dependencies: $(tail -n 3 "$log" | tr '\n' ' ')" "check the network, then run: npm --prefix $ui ci --ignore-scripts"
+    fi
+}
+
 step_verify_smoke() {
     local log=$JUDGE_HOME/logs/smoke.log rc
     mkdir -p "$JUDGE_HOME/logs"
     if [ ! -f "$PKG_TOOL" ]; then
         fail JUDGE_SMOKE "the package verification tool is missing from the kit ($PKG_TOOL)" "extract the full judge kit again"
     fi
+    ensure_pkg_tool_deps "$log"
     if "$NODE_BIN" "$PKG_TOOL" --verify-install "$APP_DIR" >"$log" 2>&1; then
         :
     else
@@ -440,16 +459,26 @@ step_firewall() { # returns 1 when the install falls back to the legacy network
 
 net_mode_now() { pf --facts --tier "$TIER" | sed -n 's/^network=//p'; }
 
-ensure_capsule_net() { # scoped Docker bridge + proxy when open firewall is absent; needs docker group only
-    [ -x "$SRF_BIN/srf-identity-surface" ] && "$SRF_BIN/srf-identity-surface" capabilities >/dev/null 2>&1 || true
-    command -v docker >/dev/null 2>&1 || return 0
-    docker network inspect srf-idnet >/dev/null 2>&1 ||
-        docker network create --internal --subnet 172.30.80.0/24 srf-idnet >/dev/null 2>&1 ||
-        note "docker network create srf-idnet failed; JUDGE_NET will say what is missing"
-    if [ "$(docker inspect --format '{{.State.Running}}' srf-egress-proxy 2>/dev/null || printf '')" != true ]; then
-        docker start srf-egress-proxy >/dev/null 2>&1 ||
-            docker run -d --name srf-egress-proxy --network srf-idnet "opensuperficies-desktop-$ARCHN:1.1.0" >/dev/null 2>&1 ||
-            note "starting srf-egress-proxy failed; JUDGE_NET will say what is missing"
+ensure_capsule_net() { # supported launcher; all private metadata belongs to the CLI principal
+    local netroot=$JUDGE_HOME/network statedir
+    statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
+    [ -x "$SRF_BIN/srf-identity-surface" ] && [ -x "$SRF_BIN/srf-egress-proxy" ] ||
+        fail JUDGE_NET "kit surface or proxy executable is absent" "restore opensuperficies/bin from the verified kit"
+    (
+        umask 077
+        mkdir -p "$netroot/policy" "$netroot/registry" "$netroot/audit" "$statedir" &&
+            chmod 0700 "$netroot" "$netroot/policy" "$netroot/registry" "$netroot/audit" "$statedir" || exit 1
+        # [TARGET, unit decision] Exact-host approvals require operator input.
+        # The upstream schema has no wildcard: never invent an open-policy API.
+        if [ ! -e "$netroot/policy/policy.json" ]; then
+            printf '%s\n' '{"schema":"browserid.proxy-policy/v1","approved":{},"denied":[],"connect_ports":{}}' >"$netroot/policy/policy.json" || exit 1
+        fi
+        chmod 0600 "$netroot/policy/policy.json"
+    ) || fail JUDGE_NET "cannot provision private proxy metadata" "check ownership and permissions under $netroot"
+    if "$SRF_BIN/srf-identity-surface" net up --proxy-bin "$SRF_BIN/srf-egress-proxy" --policy "$netroot/policy/policy.json" --registry "$netroot/registry/registry.json" --audit-dir "$netroot/audit" --state-dir "$statedir"; then # MUT:JUDGE_PROXY_UP
+        :
+    else
+        fail JUDGE_NET "supported proxy net up failed" "check kit binaries and $netroot metadata; an existing mismatched proxy requires explicit operator recovery"
     fi
 }
 
@@ -495,6 +524,7 @@ cmd_install() {
     pf_or_exit --tier "$TIER" --phase static
     step_sysdeps
     step_node
+    pf_or_exit --tier "$TIER" --phase display
     step_extract_app
     assets_used="metaviewer-linux-$ARCHN.tar.gz"
     step_apparmor
@@ -504,10 +534,20 @@ cmd_install() {
         extract_dep vision-engine.tar.gz vision-engine
         extract_dep wender-agent.tar.gz wender-agent
         assets_used="$assets_used opensuperficies-linux-$ARCHN.tar.gz vision-engine.tar.gz wender-agent.tar.gz images-linux-$ARCHN.tar"
-        step_firewall || true
+        # Load the legacy-compatible set before deciding whether Open is available.
         step_images
+        if docker image inspect "opensuperficies-identity-browser-$ARCHN:0.2.0" >/dev/null 2>&1; then
+            step_firewall || true
+        elif [ -s "$WITNESS" ]; then
+            fail JUDGE_IMAGE "Open firewall is active but the kit lacks the Open browser image" "obtain a kit containing opensuperficies-identity-browser-$ARCHN:0.2.0"
+        else
+            note "Open browser image unavailable; using legacy network without installing a firewall"
+        fi
         step_profile
-        [ "$(net_mode_now)" = open ] || ensure_capsule_net
+        if [ "$(net_mode_now)" != open ]; then
+            ensure_capsule_net
+            say "JUDGE_NOTE: Legacy network reaches no public site today. Open mode requires a compatible browser image and firewall; see docs/JUDGE_QUICKSTART.md."
+        fi
     fi
     pf_or_exit --tier "$TIER" --phase all
     FACTS=$(pf --facts --tier "$TIER")
@@ -532,6 +572,9 @@ cmd_run() {
     tier=$(receipt_tier)
     case $tier in T1 | T2) TIER=$tier ;; *) fail JUDGE_NOT_INSTALLED "the receipt $RECEIPT has no valid tier" "bash $0 install [--capsules]" ;; esac
     if [ "$TIER" = T2 ] && [ "$(net_mode_now)" != open ]; then
+        # Static checks diagnose the Docker endpoint before any network repair.
+        # Full network readiness is checked after the repair, below.
+        pf_or_exit --tier "$TIER" --phase static
         say "ensuring the scoped capsule network"
         ensure_capsule_net
     fi
@@ -551,7 +594,6 @@ cmd_run() {
         statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
         ramroot=$SHM/vqa-ramws/opensuperficies/os-cu-0
         mkdir -p "$statedir" "$ramroot" "$STORE" && chmod 0700 "$statedir" "$ramroot"
-        [ -f "$STORE/proxies.json" ] || printf '{"proxies":{}}\n' >"$STORE/proxies.json" 2>/dev/null || true
         if [ -n "${MV_SRF_PROFILES:-}" ]; then
             profiles_json=$MV_SRF_PROFILES
         else
@@ -564,23 +606,45 @@ cmd_run() {
         fi
         envv+=("MV_SRF_BIN_DIR=$SRF_BIN" "MV_SRF_STATE_DIR=$statedir" "MV_SRF_LIVE_PROFILE=$PROFILE_ID"
             "MV_SRF_LIVE_RAM_ROOT=$ramroot" "MV_SRF_LIVE_TEXT_INPUT=paste" "MV_SRF_PROFILES=$profiles_json"
-            "SRF_IDENTITY_STORE_ROOT=$STORE" "SRF_PROXY_REGISTRY=${SRF_PROXY_REGISTRY:-$STORE/proxies.json}")
+            "SRF_IDENTITY_STORE_ROOT=$STORE" "SRF_PROXY_REGISTRY=$JUDGE_HOME/network/registry/registry.json")
         if [ -d "$JUDGE_HOME/deps/vision-engine" ]; then
-            envv+=("VQA_VE_ROOT=$JUDGE_HOME/deps/vision-engine" "MV_VISION_ENGINE_PATH=$JUDGE_HOME/deps/vision-engine")
+            if [ -x "$JUDGE_HOME/deps/vision-engine/vision-runtime" ]; then
+                envv+=("MV_VISION_EXECUTABLE=$JUDGE_HOME/deps/vision-engine/vision-runtime")
+            else
+                envv+=("VQA_VE_ROOT=$JUDGE_HOME/deps/vision-engine" "MV_VISION_ENGINE_PATH=$JUDGE_HOME/deps/vision-engine")
+            fi
         fi
         if [ -d "$JUDGE_HOME/deps/wender-agent" ]; then
-            envv+=("MV_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent" "MV_MW_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent")
+            if [ -x "$JUDGE_HOME/deps/wender-agent/wender-runtime" ]; then
+                envv+=("MV_WENDER_EXECUTABLE=$JUDGE_HOME/deps/wender-agent/wender-runtime")
+            else
+                envv+=("MV_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent" "MV_MW_WENDER_ROOT=$JUDGE_HOME/deps/wender-agent")
+            fi
         fi
     fi
     mkdir -p "$JUDGE_HOME/run"
     env -i "${envv[@]}" "$APP_BIN" --ozone-platform=x11 &
     child=$!
-    printf '%s\n' "$child" >"$PIDFILE"
+    if ! printf '%s\n' "$child" >"$PIDFILE"; then
+        # A child without a published PID cannot be recovered by a later stop.
+        kill -TERM "$child" 2>/dev/null || true
+        local unwind=0
+        while kill -0 "$child" 2>/dev/null && [ "$unwind" -lt 10 ]; do
+            sleep 0.1
+            unwind=$((unwind + 1))
+        done
+        kill -KILL "$child" 2>/dev/null || true
+        wait "$child" 2>/dev/null || true
+        fail JUDGE_PIDFILE "cannot publish app pid in $PIDFILE; app child was stopped" "make $JUDGE_HOME/run writable and retry run"
+    fi
     trap 'kill -TERM "$child" 2>/dev/null' TERM INT HUP
     rc=0
-    while kill -0 "$child" 2>/dev/null; do
+    # Always collect the child status, including a child reaped before this probe.
+    # A trapped signal can interrupt wait while the child is still shutting down.
+    while :; do
         wait "$child"
         rc=$?
+        kill -0 "$child" 2>/dev/null || break
     done
     rm -f -- "$PIDFILE"
     return "$rc"
@@ -629,6 +693,16 @@ cmd_stop() {
     done
     ram=$SHM/vqa-ramws/opensuperficies/os-cu-0
     if [ -d "$ram" ]; then
+        # A capsule's RAM directory outlives its container. Only an entry whose container
+        # is gone is safe to remove; anything else stays and is reported below.
+        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+            local live
+            live=$(docker ps -a --filter 'name=^srf-id-' --format '{{.Names}}' 2>/dev/null)
+            for f in "$ram"/srf-id-*; do
+                [ -d "$f" ] && [ ! -L "$f" ] || continue
+                printf '%s\n' "$live" | grep -qxF -- "${f##*/}" || rm -rf -- "$f"
+            done
+        fi
         while IFS= read -r name; do
             [ -n "$name" ] || continue
             leaks=$((leaks + 1))
@@ -640,7 +714,9 @@ cmd_stop() {
         while IFS= read -r name; do
             [ -n "$name" ] || continue
             leaks=$((leaks + 1))
-            printf 'JUDGE_STOP_LEAK: admission record %s is still present -- fix: python3 tools/mv_ram_admission.py reclaim --dry-run\n' "$name" >&2
+            printf 'JUDGE_STOP_LEAK: admission record %s is still present -- fix: MV_RAM_ADMISSION_DIR=%q python3 %q reclaim --dry-run && MV_RAM_ADMISSION_DIR=%q python3 %q reclaim --apply\n' \
+                "$name" "$adm" "${MV_JUDGE_RAM_TOOL:-$KIT/tools/mv_ram_admission.py}" \
+                "$adm" "${MV_JUDGE_RAM_TOOL:-$KIT/tools/mv_ram_admission.py}" >&2
         done < <(find "$adm" -mindepth 1 -maxdepth 1 2>/dev/null)
     fi
     if [ "$leaks" -gt 0 ]; then # MUT:JUDGE_STOP_LEAK
@@ -653,8 +729,13 @@ cmd_stop() {
 # ------------------------------------------------------------------- dispatch
 case $SUB in
     doctor)
-        pf_or_exit --tier "$TIER" --phase all
-        say "JUDGE_DOCTOR_OK tier=$TIER"
+        if [ "$BEFORE_INSTALL" = 1 ]; then
+            pf_or_exit --tier "$TIER" --phase static
+            say "JUDGE_DOCTOR_OK tier=$TIER phase=before-install (installed runtime not checked)"
+        else
+            pf_or_exit --tier "$TIER" --phase all
+            say "JUDGE_DOCTOR_OK tier=$TIER"
+        fi
         ;;
     install) cmd_install ;;
     run) cmd_run ;;
