@@ -25,6 +25,7 @@ META_AI_USAGE.md	META_AI_USAGE.md
 NOTICE-EVALUATION.md	NOTICE-EVALUATION.md
 README.md	README.md
 VERSION	VERSION
+VM_MICROVM_ROADMAP.md	VM_MICROVM_ROADMAP.md
 agents-README.md	agents/README.md
 f__init__.py	agents/metaviewer_agents/__init__.py
 f_contracts_v02.py	agents/metaviewer_agents/_contracts_v02.py
@@ -249,6 +250,8 @@ v027-verify-2.md	changes/unreleased/v027-verify-2.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
+vm-capsule-create.md	changes/unreleased/vm-capsule-create.md
+vm-microvm-roadmap.md	changes/unreleased/vm-microvm-roadmap.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
 vm-open-path-held.md	changes/unreleased/vm-open-path-held.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
@@ -2161,6 +2164,8 @@ v027til-aec2d0c0bc3c	ui/test/v027-tile-chrome.test.js
 v027-u3c.test.js	ui/test/v027-u3c.test.js
 v027win-4508650304ef	ui/test/v027-window-resize.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
+vmcapsu-38700e317c0c	ui/test/vm-capsule-open.test.js
+vmroles-63ae8c3ff1ea	ui/test/vm-role-status.test.js
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
 w3frame-6611301ee8f6	ui/test/w3-frame-acquire.test.js
