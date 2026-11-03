@@ -18,7 +18,7 @@ test('V027 documented goal commands pass the public CLI without connecting or re
     return [...source.matchAll(/```sh\n([\s\S]*?)```/g)].map(match => match[1]);
   });
   blocks.push(workflowPrompt('no-automation').split('\n').find(line => line.startsWith('PYTHONPATH=agents python3')));
-  assert.equal(blocks.length, 6, 'all goal command examples and the Terminal command are covered');
+  assert.equal(blocks.length, 8, 'all goal command examples and the Terminal command are covered');
   for (const block of blocks) {
     const syntax = spawnSync('bash', ['-n'], { input: block, encoding: 'utf8' });
     assert.equal(syntax.status, 0, syntax.stderr);
