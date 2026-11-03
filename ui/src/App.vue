@@ -719,6 +719,11 @@ function markPanelOpen(id) {
 const visibleRows = computed(() => desktopStateLoaded.value
   ? desktopRows(desktopState.value,rows.value,desktopState.value.activeView,desktopState.value.views[desktopState.value.activeView].active)
   : rows.value);
+// The empty desktop offers a direct route to capsules in the other view.
+const otherCapsuleView = computed(() => {
+  const other = desktopState.value.activeView === 'human' ? 'agent' : 'human';
+  return rows.value.some(row => desktopState.value.assignments[row.id]?.view === other) ? other : '';
+});
 const allTilesClosed = computed(() => visibleRows.value.length > 0 && visibleRows.value.every(row => closedPanels.value.includes(row.id)));
 /** Reveals every live admitted surface in the wall (a closed tile's panel is gone, its row is not).
  * @returns {boolean} true when at least one tile is shown. */
@@ -1577,7 +1582,13 @@ onMounted(() => {
             </template>
           </template>
         </DesktopWorkspace>
-        <EmptyWallView v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" @add-capsule="launcherOpen = true" />
+        <EmptyWallView :hint="otherCapsuleView ? `Your running capsules are in the ${otherCapsuleView === 'agent' ? 'Agents' : 'Humans'} view.` : undefined" v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" @add-capsule="launcherOpen = true">
+          <template v-if="otherCapsuleView" #action>
+            <UiButton id="empty-wall-other-view" data-semantic-anchor="wall/other-view"
+              :label="`Go to ${otherCapsuleView === 'agent' ? 'Agents' : 'Humans'}`"
+              @click="selectGlobalView(otherCapsuleView)" />
+          </template>
+        </EmptyWallView>
         <section v-if="creativeOpen && selectedSurface && !nestedMode.displayOnly" class="mv-creative-screen" aria-label="Creative capsule">
           <CreativeCapsule :capsule-id="selectedSurface.id" :frames="creativeFrames" title="Storyboard" @submit-intent="dispatch" />
         </section>

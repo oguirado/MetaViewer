@@ -205,7 +205,7 @@ test('P18C mutant: revoking instead of hiding a human view is rejected',async()=
   assert.notEqual(source,mutant);await assert.rejects(()=>hideOracle(mutant),{code:'ERR_ASSERTION'});
 });
 
-async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vue'),initial=null) {
+async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vue'),initial=null, overrides={}, beforeLoad=()=>{}) {
   const restore=environment();let live;const saved=[],mounted=[],retired=[],presetCalls=[],presetReplies=new Map(),reveals=[];
   let stored=initial;
   const Wall=vue.defineComponent({props:['projectionView','storage'],emits:['ready','wall-settled'],setup(p,ctx){
@@ -217,7 +217,8 @@ async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vu
   try {
     const Workspace=await compile(source,{'./WallWorkspace.vue':Wall,'./layout.js':{createWallLayout},'../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js':{decodeAndMigrateLayoutProfile},'../../electron/desktopLayout.js':model,'../../electron/desktopShortcuts.js':keys});
     const props=vue.reactive({storage:{readRaw:async()=>stored,writeAtomic:async raw=>{stored=raw;saved.push(JSON.parse(raw));}},scope:SCOPE,defaultProfile:createWallLayout(SCOPE),projectionView:{getSnapshot:()=>({envelope:{projection:{rows}}})},rows:[...rows],modes:{h:'human',a:'agent'},intentBuilders:{},controlRegistry:{},scheduler:{},tileScheduler:{}});
-    live=mount(Workspace,props);await tick();await tick();
+    Object.assign(props,overrides);
+    live=mount(Workspace,props);beforeLoad(live.vm);await tick();await tick();
     await run({vm:live.vm,props,saved,mounted,retired,presetCalls,presetReplies,reveals,getStored:()=>stored});
   } finally {live?.app.unmount();restore();}
 }
@@ -310,3 +311,67 @@ test('H42 desktop admission and restored-state validation enforce a finite per-v
  const before=JSON.stringify(state);assert.throws(()=>model.addDesktop(state,'human'),/DESKTOP_LIMIT/);assert.equal(JSON.stringify(state),before);
  state.views.human.desktops.push({id:17,preset:null,layout:null});state.views.human.next=18;assert.equal(model.validateDesktopState(state,()=>true),false);
 });
+
+// V027: exercise the production host with asynchronous role discovery.
+const onlyAgent = {rows:[{id:'a',backendLifecycle:'active'}],modes:{a:'agent'}};
+test('V027 first agent capsule selects Agents after its role arrives',()=>workspaceFixture(async({props,saved})=>{
+  props.rows.splice(0,props.rows.length,{id:'a',backendLifecycle:'active'}); await tick();
+  assert.equal(saved.at(-1).activeView,'human','unknown roles must not select a view');
+  props.modes.a='agent'; await tick();
+  assert.equal(saved.at(-1).activeView,'agent');
+  props.rows.push({id:'h'});props.modes.h='human';await tick();
+  assert.equal(saved.at(-1).activeView,'agent','later arrivals must not jump views');
+},undefined,null,{rows:[],modes:{}}));
+test('V027 an explicit choice before role discovery prevents automatic navigation',()=>workspaceFixture(async({vm,props,saved})=>{
+  vm.selectView('human'); props.rows.splice(0,props.rows.length,{id:'a'});props.modes.a='agent';await tick();
+  assert.equal(saved.at(-1).activeView,'human');
+},undefined,null,{rows:[],modes:{}}));
+test('V027 an explicit choice after automatic navigation remains selected',()=>workspaceFixture(async({vm,props,saved})=>{
+  assert.equal(saved.at(-1).activeView,'agent');vm.selectView('human');await tick();
+  props.rows.push({id:'a2'});props.modes.a2='agent';await tick();
+  assert.equal(saved.at(-1).activeView,'human');
+},undefined,null,onlyAgent));
+test('V027 saved Humans profile wins over agent-only startup',()=>workspaceFixture(async({saved})=>{
+  assert.equal(saved.at(-1).activeView,'human');
+},undefined,JSON.stringify(model.createDesktopState()),onlyAgent));
+test('V027 a human capsule prevents automatic Agents selection',()=>workspaceFixture(async({saved})=>{
+  assert.equal(saved.at(-1).activeView,'human');
+}));
+test('V027 negative control detects removal of automatic first-view selection',async()=>{
+  const source=read('../src/wall/DesktopWorkspace.vue');
+  const mutant=source.replace("state.value.activeView = 'agent';", "state.value.activeView = 'human';");
+  assert.notEqual(source,mutant);
+  await assert.rejects(()=>workspaceFixture(async({saved})=>{
+    assert.equal(saved.at(-1).activeView,'agent');
+  },mutant,null,onlyAgent),{code:'ERR_ASSERTION'});
+});
+test('V027 empty view names the other view and its button navigates both ways',async()=>{
+  const source=read('../src/wall/EmptyWallView.vue').replace("import './wall.css';",'');
+  const Button=vue.defineComponent({props:['label'],emits:['click'],setup:(p,{emit})=>()=>vue.h('button',{onClick:()=>emit('click')},p.label)});
+  const Empty=await compile(source,{'capsule-ui-kit/ui':{UiButton:Button}});
+  for(const [view,label] of [['agent','Agents'],['human','Humans']]) {
+    const events=[];
+    const Host=vue.defineComponent({setup:()=>()=>vue.h(Empty,{hint:`Your running capsules are in the ${label} view.`},
+      {action:()=>vue.h(Button,{id:'empty-wall-other-view',label:`Go to ${label}`,onClick:()=>events.push(view)})})});
+    const live=mount(Host,{});
+    try {
+      const flatten=n=>[n,...n.children.flatMap(flatten)],nodes=flatten(live.root);
+      assert(nodes.some(n=>n.text===`Your running capsules are in the ${label} view.`));
+      const button=nodes.find(n=>n.props.id==='empty-wall-other-view');
+      assert.equal(button.text,`Go to ${label}`);button.props.onClick();
+      assert.deepEqual(events,[view]);
+    } finally {live.app.unmount();}
+  }
+  const live=mount(Empty,{});
+  try {assert.equal(live.root.children[0].children.some(n=>n.props.id==='empty-wall-other-view'),false);}
+  finally {live.app.unmount();}
+  const app=read('../src/App.vue');
+  assert.match(app,/<template v-if="otherCapsuleView" #action>/);
+  assert.match(app,/@click="selectGlobalView\(otherCapsuleView\)"/);
+  assert.match(app,/<EmptyWallView :hint="otherCapsuleView/);
+  assert.match(app,/assignments\[row.id\]\?\.view === other/);
+});
+
+test('V027 a choice while layout loading is pending wins over agent-only startup',()=>workspaceFixture(async({saved})=>{
+  assert.equal(saved.at(-1).activeView,'human');
+},undefined,null,onlyAgent,vm=>vm.selectView('human')));
