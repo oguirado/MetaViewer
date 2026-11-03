@@ -215,12 +215,15 @@ v026-ci-assets.md	changes/unreleased/v026-ci-assets.md
 v026-host-polish.md	changes/unreleased/v026-host-polish.md
 v026-host-xpra.md	changes/unreleased/v026-host-xpra.md
 v026kit-286e58a540a9	changes/unreleased/v026-kit-sidecars-2.md
+v027doc-551a5a691436	changes/unreleased/v027-doc-commands-count.md
 v027-firstrun.md	changes/unreleased/v027-firstrun.md
 v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
+v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-repo.md	changes/unreleased/v027-repo.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
+v027-walls.md	changes/unreleased/v027-walls.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
 witness-bind.md	changes/unreleased/witness-bind.md
@@ -1480,6 +1483,7 @@ testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
 testmws-a6db1334a46b	tests/test_mw_slot_length.py
 testmws-8fd51d7e49a9	tests/test_mw_stale_frame.py
 testmww-565d17f6f4d0	tests/test_mw_wall_deadline.py
+test_mw_wall_pages.py	tests/test_mw_wall_pages.py
 test_net_scope.py	tests/test_net_scope.py
 test_novac_matrix.py	tests/test_novac_matrix.py
 testnvo-3cc17c3863ab	tests/test_nv_offline_uid.py
