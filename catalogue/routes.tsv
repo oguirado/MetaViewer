@@ -38,6 +38,7 @@ mvctl.py	agents/metaviewer_agents/mvctl.py
 mw_handoff.py	agents/metaviewer_agents/mw_handoff.py
 mw_home.py	agents/metaviewer_agents/mw_home.py
 mw_owner.py	agents/metaviewer_agents/mw_owner.py
+mw_refusals.py	agents/metaviewer_agents/mw_refusals.py
 mw_run.py	agents/metaviewer_agents/mw_run.py
 observe.py	agents/metaviewer_agents/observe.py
 init-844197da0d1b	agents/metaviewer_agents/perception/__init__.py
@@ -59,6 +60,7 @@ test_ailoop.py	agents/tests/test_ailoop.py
 testbou-9c41687e5027	agents/tests/test_boundary_sweep.py
 test_client.py	agents/tests/test_client.py
 testcli-3ace4ec56b6f	agents/tests/test_client_statemachine.py
+testcom-86e3b307c857	agents/tests/test_compiled_browser_entries.py
 testcom-0d0238f46370	agents/tests/test_compiled_runtime.py
 test_deps_lock.py	agents/tests/test_deps_lock.py
 test_depth_32.py	agents/tests/test_depth_32.py
@@ -134,11 +136,14 @@ adapter-cbafcbab0a3b	changes/unreleased/adapter-epoch-handoff.md
 agentpr-f8d684f8c4df	changes/unreleased/agent-program-starts-agent-controlled.md
 boot-flake.md	changes/unreleased/boot-flake.md
 boot-pending-clr.md	changes/unreleased/boot-pending-clr.md
+browser-ebb6270cc6f8	changes/unreleased/browser-goal-compiled-detector.md
+browser-71ef528e2685	changes/unreleased/browser-goal-compiled.md
 browser-e67161649fc2	changes/unreleased/browser-goal-model-keepalive.md
 browser-goal.md	changes/unreleased/browser-goal.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 cipacka-468d8ecfdb15	changes/unreleased/ci-packaged-display-arm64.md
 cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
+compile-238480708e01	changes/unreleased/compiled-browser-entries.md
 desktop-hidden.md	changes/unreleased/desktop-hidden.md
 display-polish.md	changes/unreleased/display-polish.md
 display-pool-slot.md	changes/unreleased/display-pool-slot.md
@@ -216,6 +221,7 @@ v026-host-polish.md	changes/unreleased/v026-host-polish.md
 v026-host-xpra.md	changes/unreleased/v026-host-xpra.md
 v026kit-286e58a540a9	changes/unreleased/v026-kit-sidecars-2.md
 v027doc-551a5a691436	changes/unreleased/v027-doc-commands-count.md
+v027-errors.md	changes/unreleased/v027-errors.md
 v027-firstrun.md	changes/unreleased/v027-firstrun.md
 v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
@@ -224,6 +230,7 @@ v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-repo.md	changes/unreleased/v027-repo.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
+vmcapsu-c516225ae209	changes/unreleased/vm-capsule-launcher.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
 witness-bind.md	changes/unreleased/witness-bind.md
@@ -1479,6 +1486,7 @@ test_mw_focus_skip.py	tests/test_mw_focus_skip.py
 test_mw_home_cli.py	tests/test_mw_home_cli.py
 testmwr-696ca082e4f0	tests/test_mw_readback_deadline.py
 testmwr-1a182b00c310	tests/test_mw_readback_textof.py
+test_mw_refusals.py	tests/test_mw_refusals.py
 testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
 testmws-a6db1334a46b	tests/test_mw_slot_length.py
 testmws-8fd51d7e49a9	tests/test_mw_stale_frame.py
@@ -2093,6 +2101,7 @@ v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
 v027-firstrun.test.js	ui/test/v027-firstrun.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
+vmcapsu-38700e317c0c	ui/test/vm-capsule-open.test.js
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
 w3frame-6611301ee8f6	ui/test/w3-frame-acquire.test.js
