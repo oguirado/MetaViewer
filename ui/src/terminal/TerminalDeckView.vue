@@ -66,6 +66,8 @@ const viewportElements = new Map();
 const mountedTerminals = new Map();
 /** @type {Map<string, string[]>} */
 const pendingSessionOutput = new Map();
+// [TARGET, unit decision] Retain at most 64 Ki UTF-16 code units per unmounted session.
+const MAX_PENDING_OUTPUT_CHARS = 64 * 1024;
 
 /**
  * @param {string | null | undefined} slotId
@@ -164,8 +166,7 @@ const controller = createTerminalDeckController({
     }
     if (!delivered) {
       const queue = pendingSessionOutput.get(frame.session) ?? [];
-      queue.push(text);
-      pendingSessionOutput.set(frame.session, queue);
+      pendingSessionOutput.set(frame.session, [(queue.join('') + text).slice(-MAX_PENDING_OUTPUT_CHARS)]);
     }
   },
 });
@@ -259,6 +260,7 @@ function destroySlotTerminal(slotId) {
   controller.unregisterTerminal(slotId);
   const existing = mountedTerminals.get(slotId);
   if (!existing) return;
+  pendingSessionOutput.delete(existing.sessionId);
   mountedTerminals.delete(slotId);
   try {
     existing.disposeData?.();
@@ -273,6 +275,10 @@ function destroySlotTerminal(slotId) {
 }
 
 function syncTerminals() {
+  const liveSessions = new Set(allScreenSlots.value.map(({ slot }) => slot.sessionId));
+  for (const sessionId of pendingSessionOutput.keys()) {
+    if (!liveSessions.has(sessionId)) pendingSessionOutput.delete(sessionId);
+  }
   const retainedIds = collectRetainedSlotIds(screens.value, {
     open: props.open,
     activeScreenIndex: activeScreenIndex.value,
@@ -793,6 +799,7 @@ onBeforeUnmount(() => {
   for (const slotId of [...mountedTerminals.keys()]) {
     destroySlotTerminal(slotId);
   }
+  pendingSessionOutput.clear();
   controller.dispose();
 });
 
@@ -878,6 +885,20 @@ defineExpose({
             @keydown="onBootstrapKeyDown"
             @click="onBootstrap"
           >🚀 Bootstrap</button>
+          <span role="status" aria-live="polite">
+            Paste Copy ID for AI here to select the capsule for workflow actions.
+            <template v-if="pastedBootstrapText">Selected capsule identity: <code>{{ pastedBootstrapText }}</code></template>
+            <template v-else>No capsule identity selected.</template>
+          </span>
+          <button
+            v-for="action in [{kind:'automate',label:'Automate'}, {kind:'use-automation',label:'Use automation'}, {kind:'no-automation',label:'No automation'}]"
+            :key="action.kind"
+            type="button"
+            :id="`terminal-deck-${action.kind}`"
+            :data-semantic-anchor="`terminal/${action.kind}`"
+            class="mv-terminal-deck__action-btn"
+            @click="controller.copyWorkflowPrompt(action.kind, pastedBootstrapText)"
+          >{{ action.label }}</button>
           <span
             v-if="toastMessage"
             id="terminal-deck-bootstrap-toast"

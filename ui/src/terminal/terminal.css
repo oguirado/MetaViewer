@@ -119,8 +119,13 @@
 
 .mv-terminal-deck__actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--cuk-semantic-spacing-sm);
+}
+
+.mv-terminal-deck__bootstrap-wrap {
+  flex-wrap: wrap;
 }
 
 .mv-terminal-deck__bootstrap-wrap,

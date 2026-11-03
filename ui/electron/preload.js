@@ -1233,11 +1233,11 @@ function wireFacade(transport) {
         const first=qState.queue[0];
         const firstTypeOnly=first.batch.events.every((/** @type {any} */ev)=>ev.kind==='type');
         if (firstTypeOnly && qState.lastIpcAt>0) {
-          const elapsed=Date.now()-qState.lastIpcAt;
+          const elapsed=performance.now()-qState.lastIpcAt;
           if (elapsed<SURFACE_INPUT_TYPE_COALESCE_MS) {
             await new Promise(r=>globalThis.setTimeout(r,SURFACE_INPUT_TYPE_COALESCE_MS-elapsed));
           }
-          const now=Date.now();
+          const now=performance.now();
           qState.ipcStamps=qState.ipcStamps.filter(t=>now-t<1000);
           if (qState.ipcStamps.length>=50) {
             const waitMs=1005-(now-qState.ipcStamps[0]);
@@ -1300,7 +1300,7 @@ function wireFacade(transport) {
               events:Object.freeze(wireEvents.map(ev=>Object.freeze({...ev}))),
             });
         qState.inFlightMaxSeq=wireBatch.seq;
-        const invokeAt=Date.now();
+        const invokeAt=performance.now();
         qState.lastIpcAt=invokeAt;
         qState.ipcStamps=qState.ipcStamps.filter(t=>invokeAt-t<1000);
         qState.ipcStamps.push(invokeAt);

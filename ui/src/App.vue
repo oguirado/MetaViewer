@@ -293,15 +293,22 @@ function applyWallControl(id, verb, prebuiltIntent) {
     return;
   }
   if (verb === 'release_control') {
-    disarmWallInput(targetId);
     let intent = prebuiltIntent;
     if (intent === undefined) {
       const builders = props.runtime?.intentBuilders;
       if (!builders) return;
       try { intent = builders.control({ capsuleId: targetId, verb: 'release_control' }); }
-      catch { disarmWallInput(targetId); hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
+      catch { hostOutcome.value = { code: 'HOST_REQUEST_REFUSED', message: 'This request is unavailable. Please try again.', tone: 'refusal' }; return; }
     }
-    if (intent !== null && intent !== undefined) dispatch(intent);
+    // Keep the human-control affordance until release is acknowledged. A
+    // refused release leaves authoritative ownership with the operator.
+    if (intent !== null && intent !== undefined) {
+      const sent = dispatch(intent);
+      if (sent !== undefined) void sent.then(result => {
+        if (hostActive && (result === true || (result && typeof result === 'object'
+            && /** @type {{tone?:unknown}} */ (result).tone === 'success'))) disarmWallInput(targetId);
+      });
+    }
     return;
   }
   armWallInput(targetId);
@@ -677,6 +684,8 @@ function onCapsuleLifecycle({surfaceId,completion}) {
   });
 }
 const pendingModeSwitch = ref(/** @type {any} */ (null));
+const browserCreatePending = ref(false);
+const browserCreateNotice = ref('');
 const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value || moreOpen.value || settingsOpen.value || multislotOpen.value || (terminalOpen.value && !terminalDeckOpen.value) || railOpen.value));
 function syncModalAttr(open = modalOpen.value) {
   if (overlayCoordinator) { overlayCoordinator.set(appOverlayOwner, open); return; }
@@ -698,7 +707,7 @@ async function confirmModeSwitch() {
   await submitHost(async () => {
     const result = await /** @type {any} */(globalThis).metaviewerRoles.switchMode(current.surfaceId);
     if (!result.ok) {
-      if (result.code === 'SURFACE_CREATE_BUSY' || result.busy) return null;
+      if (result.code === 'SURFACE_CREATE_BUSY' || result.busy) { pendingModeSwitch.value = current; return null; }
       throw Object.assign(Error(result.code),{code:result.code,...(typeof result.reason === 'string' && result.reason ? {reason:result.reason} : {})});
     }
     await revealOpenedIdentity(result.surfaceId,result.role);
@@ -719,6 +728,11 @@ function markPanelOpen(id) {
 const visibleRows = computed(() => desktopStateLoaded.value
   ? desktopRows(desktopState.value,rows.value,desktopState.value.activeView,desktopState.value.views[desktopState.value.activeView].active)
   : rows.value);
+// The empty desktop offers a direct route to capsules in the other view.
+const otherCapsuleView = computed(() => {
+  const other = desktopState.value.activeView === 'human' ? 'agent' : 'human';
+  return rows.value.some(row => desktopState.value.assignments[row.id]?.view === other) ? other : '';
+});
 const allTilesClosed = computed(() => visibleRows.value.length > 0 && visibleRows.value.every(row => closedPanels.value.includes(row.id)));
 /** Reveals every live admitted surface in the wall (a closed tile's panel is gone, its row is not).
  * @returns {boolean} true when at least one tile is shown. */
@@ -731,7 +745,14 @@ function reopenLiveSurfaces() {
   return shown;
 }
 /** @param {any} choice */
-function openIdentityChoice(choice) { onCreateCapsule({kind:'identity-browser',choice}); }
+function openIdentityChoice(choice) {
+  if (choice.surfaceId) {
+    selectGlobalView(choice.role);
+    void revealOpenedIdentity(choice.surfaceId,choice.role);
+    return;
+  }
+  onCreateCapsule({kind:'identity-browser',choice});
+}
 /** @param {any} body */
 async function createProgramCapsule(body) {
   const roles = /** @type {any} */ (globalThis).metaviewerRoles;
@@ -744,7 +765,7 @@ async function createProgramCapsule(body) {
   }
   let programReply;
   if (body.role === 'human' || body.role === 'agent') {
-    programReply = await roles.createProgram({ binary: body.binary.trim(), role: body.role });
+    programReply = await roles.createProgram({ binary: body.binary.trim(), role: body.role, ...(body.kind === 'host-program' || body.hostXpra === true ? {hostXpra:true} : {}) });
   } else {
     const reply = await roles.createProgram({ binary: body.binary.trim() });
     programReply = reply;
@@ -761,13 +782,9 @@ async function createProgramCapsule(body) {
     await nextTick();
     if (reply.surfaceId) {
       await revealOpenedIdentity(reply.surfaceId, openedRole);
-      if (openedRole === 'agent' && props.runtime?.intentBuilders) {
-        wallInputPending.value = { ...wallInputPending.value, [reply.surfaceId]: true };
-        applyWallControl(reply.surfaceId, 'take_control');
-      }
     }
   } catch {
-    // Post-launch view, reveal, or wall-control errors must not report the launch as failed.
+    // Post-launch view or reveal errors must not report the launch as failed.
   }
   return reply;
 }
@@ -810,7 +827,7 @@ function onCreateCapsule(intent, settle) {
   }
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
-  if (body?.kind === 'program') {
+  if (body?.kind === 'program' || body?.kind === 'host-program') {
     if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id) {
       const reason = 'Renderer cannot select a profile for a program capsule.';
       settle?.({ ok: false, code: 'PROGRAM_PROFILE_FORBIDDEN', reason });
@@ -909,17 +926,26 @@ function onCreateCapsule(intent, settle) {
       if ((body?.kind !== 'browser' && body?.kind !== 'identity-browser') || !props.authorityHost?.createSurface) {
         throw Object.assign(new Error('NO_BROWSER_CAPSULE'), {code:'NO_BROWSER_CAPSULE'});
       }
+      let ownsBrowserCreate = false;
       try {
         if (body.choice && /** @type {any} */ (globalThis).metaviewerRoles) {
-          if (body.choice.busy) return null;
-          selectGlobalView(body.choice.role);
-          await nextTick();
+          if (body.choice.busy || (typeof browserCreatePending !== 'undefined' && browserCreatePending.value)) {
+            if (typeof browserCreateNotice !== 'undefined') browserCreateNotice.value = 'Another capsule is already starting. Wait for it to finish, then try again.';
+            return null;
+          }
+          if (typeof browserCreateNotice !== 'undefined') browserCreateNotice.value = '';
+          if (typeof browserCreatePending !== 'undefined') { browserCreatePending.value = true; ownsBrowserCreate = true; }
           const reply = await /** @type {any} */ (globalThis).metaviewerRoles.open(body.choice);
           if (!reply.ok && reply.code === 'PROFILE_ALREADY_BOUND' && reply.surfaceId) {
+            if (reply.currentMode === 'lost') throw Object.assign(Error('PROFILE_ALREADY_BOUND'),{
+              code:'PROFILE_ALREADY_BOUND',reason:'Open Identities and choose Stop lost capsule before reopening this identity.',
+            });
             if (!reply.requestedMode || reply.requestedMode === reply.currentMode) {
+              selectGlobalView(reply.role || reply.currentMode);
               void revealOpenedIdentity(reply.surfaceId,reply.role || reply.currentMode);
               return null;
             }
+            selectGlobalView(body.choice.role);
             pendingModeSwitch.value = reply;
             return null;
           }
@@ -927,8 +953,12 @@ function onCreateCapsule(intent, settle) {
             const bound = rows.value.find(row => (/** @type {any} */ (row).profile_id || row.title) === body.choice.profileId);
             if (bound) { void revealOpenedIdentity(bound.id,capsuleModes.value[bound.id]); return null; }
           }
-          if (!reply.ok && (reply.code === 'SURFACE_CREATE_BUSY' || reply.busy)) return null;
+          if (!reply.ok && (reply.code === 'SURFACE_CREATE_BUSY' || reply.busy)) {
+            if (typeof browserCreateNotice !== 'undefined') browserCreateNotice.value = 'Another capsule is already starting. Wait for it to finish, then try again.';
+            return null;
+          }
           if (!reply.ok) throw Object.assign(new Error(reply.code), {code:reply.code, ...(typeof reply.reason === 'string' && reply.reason ? {reason:reply.reason} : {})});
+          selectGlobalView(reply.role || reply.currentMode || body.choice.role);
           if (reply.surfaceId) void revealOpenedIdentity(reply.surfaceId,reply.role || reply.currentMode);
           return null;
         }
@@ -941,6 +971,8 @@ function onCreateCapsule(intent, settle) {
           return /** @type {const} */ ({ code: 'INTENT_ACKNOWLEDGED', message: 'Request sent.', tone: 'success' });
         }
         throw error;
+      } finally {
+        if (ownsBrowserCreate) browserCreatePending.value = false;
       }
     });
     return;
@@ -1078,11 +1110,12 @@ async function submitHost(action) {
       RAM_ADMISSION_REFUSED: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
       SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
       SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
-      SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+      SURFACE_CREATE_FAILED: 'The host could not start the capsule. If this is a core-only installation, install and configure the surface runtime with bash scripts/judge/metaviewer-judge.sh install --capsules, then restart MetaViewer. Otherwise check the host logs and choose Add capsule to try again.',
       SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
       SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
       DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
-      ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+      ADAPTER_SETUP: 'The surface runtime setup is unavailable. Run bash scripts/judge/metaviewer-judge.sh doctor --capsules, repair the reported prerequisite, then try Add capsule again.',
+    ADAPTER_ERROR: 'The surface runtime could not open the capsule. Check that it is installed and configured, then choose Add capsule to try again. A core-only installation cannot run capsules.',
     };
     const fallback = 'This request is unavailable. Please try again.';
     const rawReason = typeof (/** @type {{reason?:unknown}} */ (error))?.reason === 'string'
@@ -1328,6 +1361,8 @@ function surfaceWitness(surface) {
 }
 const baseFeed = props.runtime?.projectionView ?? projectionView;
 const nativeRows = shallowRef(/** @type {any[]} */([]));
+/** Last trusted presentation metadata, retained only for current surface ids. */
+const nativeWindowMetadata = new Map();
 const nativeListeners = new Set();
 let nativeRevision = 0, nativePolling = false, nativeLoaded = false, nativePollFailed = false;
 const nativeApi = !props.fixture && !nestedMode.displayOnly ? /** @type {any} */(globalThis).metaviewerRoles : null;
@@ -1335,7 +1370,8 @@ const mergedRows = () => {
   const base = baseFeed.getProjection()?.rows || [];
   const ids = new Set(base.map(row => row.id));
   return [...base.map(row => {
-    const native = nativeRows.value.find(item => item.id === row.id && item.hostWindow);
+    const native = nativeRows.value.find(item => item.id === row.id && item.hostWindow)
+      || (typeof nativeWindowMetadata !== 'undefined' ? nativeWindowMetadata.get(row.id) : undefined);
     return native ? {...row,title:native.title,hostWindow:native.hostWindow} : row;
   }),...nativeRows.value.filter(row => !ids.has(row.id))];
 };
@@ -1370,6 +1406,11 @@ async function pollNativeSurfaces() {
     const next = admitted.map(({surface:s,hostWindow,role}) => ({id:s.surface_id,surfaceId:s.surface_id,title:hostWindow?.title || s.profile_id,profile_id:s.profile_id,hostWindow,role,
       backendLifecycle:s.state,generation:null,visibility:s.visibility,control:s.control,display:s.display,geometry:s.geometry,
       attachmentState:'live',refusal:null}));
+    if (typeof nativeWindowMetadata !== 'undefined') {
+      for (const row of next) if (row.hostWindow) nativeWindowMetadata.set(row.id,row);
+      const retained = new Set([...next, ...(baseFeed.getProjection()?.rows || []).filter(row => row.backendLifecycle !== 'destroyed')].map(row => row.id));
+      for (const id of nativeWindowMetadata.keys()) if (!retained.has(id)) nativeWindowMetadata.delete(id);
+    }
     if (!availabilityChanged && JSON.stringify(next) === JSON.stringify(nativeRows.value)) return;
     nativeRows.value = next; nativeRevision++;
     for (const row of next) onCapsuleMode({surfaceId:row.id,mode:row.role});
@@ -1382,7 +1423,7 @@ async function pollNativeSurfaces() {
 const nativeTimer = nativeApi?.surfaces ? setInterval(() => { void pollNativeSurfaces().catch(() => {}); },250) : undefined;
 nativeTimer?.unref?.();
 onMounted(() => { void pollNativeSurfaces().catch(() => {}); });
-onBeforeUnmount(() => {clearInterval(nativeTimer);nativeListeners.clear();});
+onBeforeUnmount(() => {clearInterval(nativeTimer);nativeListeners.clear();nativeWindowMetadata.clear();});
 const snapshot = shallowRef(feed.getSnapshot());
 const diagnosticTileStates = props.fixture?.key === 'tile-states';
 /** Lost-row admission (MVUI4L lane V, for lane W MV-7): the live runtime
@@ -1489,10 +1530,13 @@ function onSettled() { settled.value = true; revealRows(); }
 function openCapsule(payload) {
   if (nestedMode.displayOnly) return;
   const id = payload?.type?.id ?? payload?.id;
-  if (typeof id === 'string') selectedCapsuleId.value = id;
   if (id === 'add') { launcherOpen.value = true; return; }
+  if (typeof id === 'string') selectedCapsuleId.value = id;
   if (rows.value.some(row => row.id === id)) void wall.value?.followSurface?.(id,capsuleModes.value[id]);
-  if (rows.value.some(row => row.id === id) && wall.value?.revealSurface(id, payload?.placement ?? 'tab')?.ok === true) markPanelOpen(id);
+  if (rows.value.some(row => row.id === id) && wall.value?.revealSurface(id, payload?.placement ?? 'tab')?.ok === true) {
+    settingsOpen.value = false;
+    markPanelOpen(id);
+  }
 }
 const chromeWorkspace = markRaw(defineComponent({
   inheritAttrs: false,
@@ -1558,6 +1602,8 @@ onMounted(() => {
       <div v-if="!nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
       <main id="shell-wall" aria-label="MetaViewer capsule wall">
         <HostOutcome :row="hostOutcome" />
+        <p v-if="browserCreatePending" role="status" aria-live="polite">Opening capsule… Please wait for the host.</p>
+        <p v-if="browserCreateNotice" role="status" aria-live="polite">{{ browserCreateNotice }}</p>
         <section v-if="nestedMode.displayOnly" class="mv-nested-wall" aria-label="Nested capsule wall">
           <article v-for="surface in rows" :key="surface.id" :aria-label="surface.title || surface.id">
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :scroll-enabled="!surface.hostWindow" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
@@ -1574,14 +1620,20 @@ onMounted(() => {
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
               <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? 'Taking control…' }}</span>
               <span v-else-if="wallInputState(surface) === 'unavailable'" class="mv-input-indicator__text" role="status">Input unavailable in this window</span>
-              <template v-else-if="wallInputState(surface) !== 'view'"><span class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? (wallInputState(surface) === 'paused' ? 'Click the tile to type' : 'Interactive') }}</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-indicator__action" label="Release" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
+              <template v-else-if="wallInputState(surface) !== 'view'"><span class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? (wallInputState(surface) === 'paused' ? 'Click the tile to type' : surface.hostWindow ? 'Interactive — your clicks and typing go to this window' : 'Interactive') }}</span><UiButton :id="`mv-input-release-${capsuleId}`" :data-semantic-anchor="`capsule/${capsuleId}/input/release`" class="mv-input-indicator__action" :label="surface.hostWindow ? 'Release to agent' : 'Release'" :aria-label="`Release control of ${surfaceLabel(surface)}`" @click="releaseWallControl(surface)" /></template>
             </div>
             <SurfaceCanvas :surface-id="capsuleId" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :scroll-enabled="!surface.hostWindow" :input-enabled="inputEnabledFor(surface) || wallArmedFor(surface)" :stream-id="surfaceStreamId(surface)" @canvas-escape="onCanvasEscape(capsuleId)" @canvas-focus="onCanvasFocus(capsuleId)" />
             </RoleSurface>
             </template>
           </template>
         </DesktopWorkspace>
-        <EmptyWallView v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" @add-capsule="launcherOpen = true" />
+        <EmptyWallView :hint="otherCapsuleView ? `Your running capsules are in the ${otherCapsuleView === 'agent' ? 'Agents' : 'Humans'} view.` : undefined" v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" @add-capsule="launcherOpen = true">
+          <template v-if="otherCapsuleView" #action>
+            <UiButton id="empty-wall-other-view" data-semantic-anchor="wall/other-view"
+              :label="`Go to ${otherCapsuleView === 'agent' ? 'Agents' : 'Humans'}`"
+              @click="selectGlobalView(otherCapsuleView)" />
+          </template>
+        </EmptyWallView>
         <section v-if="creativeOpen && selectedSurface && !nestedMode.displayOnly" class="mv-creative-screen" aria-label="Creative capsule">
           <CreativeCapsule :capsule-id="selectedSurface.id" :frames="creativeFrames" title="Storyboard" @submit-intent="dispatch" />
         </section>
@@ -1630,7 +1682,7 @@ onMounted(() => {
         </div>
       </div>
     </div>
-    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
+    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :open-program="createProgramCapsule" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>

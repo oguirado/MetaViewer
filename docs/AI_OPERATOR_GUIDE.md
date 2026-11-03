@@ -409,9 +409,9 @@ and execute them inside an isolated identity capsule via `metaviewer_agents.mw_r
 python3 tools/mw_home_check.py --repo .
 ```
 
-Reports `ready: true` when `wender-agent` is reachable (via `MV_MW_WENDER_ROOT` or
-a sibling `wender-agent` checkout) and checks whether each site under
-`$MV_MW_HOME/sites/<site>/` has both `site.json` and `workflows/<workflow>.json`.
+Returns JSON `ok:true` when the admitted MemoryWeb home passes ownership,
+layout and repository checks; it does not prove a running capsule or reachable
+planner. Refusal includes `code`; repair that precondition before continuing.
 
 ### B. Dump Accessibility Tree from a Running Browser Capsule (`tools/mw_ax_dump.py`)
 
@@ -419,81 +419,132 @@ a sibling `wender-agent` checkout) and checks whether each site under
 python3 tools/mw_ax_dump.py \
   --repo . \
   --capsule srf-id-judge \
-  --site example.com \
+  --site example-site \
   --out /tmp/ax_snapshot.json
 ```
 
 ### C. Record and Compile a Demo (`tools/mv_demo.py`)
 
-Use `tools/mv_demo.py`:
+Source the running app attachment as in the goal instructions below. Set
+`MV_MW_HOME` to the admitted MemoryWeb home and `MV_MEMORYWEB_REPO` to the
+operator-provided authoring checkout. Use a fresh demo identifier and a site
+identifier; these are identifiers, not filesystem paths or URLs.
 
 ```bash
-# 1. Record a demonstration bundle from a running browser capsule
-python3 tools/mv_demo.py record \
-  --bundle-dir /tmp/demo-bundle \
-  --site example.com \
-  --workflow smoke \
-  --goal "Open the docs page" \
-  --start-url "https://example.com/" \
-  --capsule srf-id-judge \
-  --step "click:More information"
-
-# 2. Emit the authoring prompt for an AI to compile site.json + workflows/<workflow>.json
-python3 tools/mv_demo.py prompt \
-  --bundle-dir /tmp/demo-bundle \
-  --memoryweb-home "$HOME/.local/share/metaviewer-memoryweb"
-
-# 3. Validate the compiled site.json and workflow JSON against wender-agent
-python3 tools/mv_demo.py check \
-  --site example.com \
-  --workflow smoke \
-  --memoryweb-home "$HOME/.local/share/metaviewer-memoryweb" \
-  --wender-root "${MV_MW_WENDER_ROOT:-$MV_WENDER_ROOT}"
+python3 tools/mv_demo.py record --identity judge --demo judge-demo
+python3 tools/mv_demo.py prompt --demo judge-demo --site example-site
+python3 tools/mv_demo.py check --site example-site
 ```
+
+`record` opens the existing identity's recorder for the person's demonstration;
+it does not create a capsule. `prompt` emits the authoring instructions from
+sealed evidence; the AI must create and review the site/workflow before `check`.
+Success returns rc `0`; `DEMO_REFUSED` returns rc `6` [CITED:
+`tools/mv_demo.py` (`main`)]. Inspect custody, evidence and authoring configuration
+before trying again; never fabricate a demonstration.
 
 ### D. Run a Compiled MemoryWeb Workflow (`metaviewer_agents.mw_run`)
 
-Run `mw_run`
-from the CLI:
+Here “compiled workflow” means a stored site/workflow, not the compiled Wender
+runtime. Source the running app attachment and select an admitted workflow from
+`MV_MW_HOME` before running from the checkout:
 
 ```bash
 PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
-  --identity judge \
-  --site example.com \
-  --workflow smoke \
-  --slot 0 \
-  --memoryweb-home "$HOME/.local/share/metaviewer-memoryweb" \
-  --store-root "$HOME/.local/share/srf-identity-store"
+  --identity judge --site example-site --workflow smoke
 ```
 
-Supported `mw_run` flags (verified against `agents/metaviewer_agents/mw_run.py`):
+The public parser accepts `--identity`, `--site`, `--workflow` and repeatable
+`--slot name=value` for declared operator-supplied inputs. Slots are values, not
+RAM workspace indices. Home, core attachment and native paths come from the
+environment; this entry does not accept `--input`, `--memoryweb-home`,
+`--store-root`, `--ram-Base`, `--bin-dir`, `--state-dir`, `--display`,
+`--attach-capsule` or `--attach-socket`. See `docs/MW_RUN_FIRST_RUN.md` for stored
+workflow receipts and refusals. Goal-only planner/input flags are described below.
 
-- `--identity <id>` (required): browser identity profile (`^[a-z0-9][a-z0-9-]{1,39}$`)
-- `--site <domain>` (required): site directory under `$MV_MW_HOME/sites/<site>`
-- `--workflow <name>` (required): workflow name under `workflows/<workflow>.json`
-- `--slot <0..3>` (required): RAM workspace slot index (`os-cu-<slot>`)
-- `--input key=value` (repeatable): workflow input parameters
-- `--memoryweb-home <path>` (or `MV_MW_HOME`): MemoryWeb store directory (must be separate from `--store-root`)
-- `--store-root <path>` (or `SRF_IDENTITY_STORE_ROOT`): OpenSuperficies identity store root
-- `--ram-Base <path>` (default `/dev/shm/vqa-ramws/opensuperficies`): RAM workspace base directory
-- `--bin-dir <path>` (or `MV_SRF_BIN_DIR`): directory holding `srf-identity-surface` and `srf-identity-admin`
-- `--state-dir <path>` (or `MV_SRF_STATE_DIR`): OpenSuperficies runtime state directory
-- `--display <:100..:199>` (default `:100`): container X11 display
-- `--attach-capsule <uuid>` + `--attach-socket <path>`: attach to an already-running MetaViewer browser capsule instead of starting a standalone container
-
-Always run `mw_run` inside a memory-capped scope on shared hosts:
+On shared hosts, wrap the same command in the memory scope:
 
 ```bash
 systemd-run --user --scope -q -p MemoryHigh=6G -p MemoryMax=8G -p MemorySwapMax=0 -- \
   env PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
-  --identity judge --site example.com --workflow smoke --slot 0
+  --identity judge --site example-site --workflow smoke
 ```
 
-### Programs (`--surface-kind program`)
+### E. Browser Goal Runs (No Stored Workflow)
 
-See `tools/mw_run_program.md`. It needs an already running Agent program capsule whose
-control you released, and it requests a bounded number of verified actions. The explicit
-`--planner muse` option sends visual marks of that program to the configured provider.
+The Terminal buttons keep their distinct purposes: **Automate** creates a
+reviewed workflow from a demonstration, **Use automation** selects a stored
+workflow, and **No automation** runs an observed goal without storing a workflow.
+For an account-free judge, choose `--planner rules` (the default). It invokes the
+locked Wender rules CLI without Muse. `--planner muse` needs Muse Code installed
+and authenticated with a Muse account; it sends marks to that provider. There is
+no automatic fallback from rules to Muse.
+
+Read `tools/mw_run_browser_goal.md`. Copy the selected capsule's **Copy ID for AI**
+identity and the running app's **Copy env path** (`METAVIEWER_ATTACH`). Source the
+copied absolute path in a subshell with
+`set -a; . "<copied-current.env-path>"; set +a`; it changes `XDG_RUNTIME_DIR`. It supplies
+`MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`, `MV_SRF_STATE_DIR`, `MV_SRF_BIN_DIR`,
+`SRF_IDENTITY_STORE_ROOT`, and configured dependency roots. Missing pinned roots
+must come from the operator. Release human control before running.
+
+From the checkout, replace the placeholders and choose one unique exact visible
+AX control name, one goal per run:
+
+```sh
+export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-goal.XXXXXX)"
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
+  --surface-kind browser --identity '<browser-profile>' --planner rules \
+  --goal 'Exact visible control name' --steps 1
+```
+
+The example bounds actions at one [TARGET]. For a text field add explicit
+`--text 'Synthetic value' --key Enter --steps 3` [TARGET], replacing the existing
+steps flag. Omit Enter and use `--steps 2` [TARGET] for focus and typing only.
+Exact native text readback gates Enter. Never combine goal mode with stored
+`--site`, `--workflow` or `--slot` flags. Vision cross-checking is not implemented.
+
+Until the compiled browser build lands, this branch returns
+`MW_COMPILED_BROWSER_UNAVAILABLE` for compiled Wender with either planner. Obtain
+a verified `deps.lock` checkout as `MV_WENDER_ROOT` and unset
+`MV_WENDER_EXECUTABLE` in the subshell, or wait for that build. Never bypass the
+refusal. Program compiled support does not establish browser support.
+
+### F. Programs and Host program (`--surface-kind program`)
+
+Read `tools/mw_run_program.md`. Start an Agent program capsule in the UI,
+including **Host program** for host-xpra, and copy its returned identity. Release
+human control and verify `control:'agent'`. Source the same app attachment and
+supply locked dependencies, including `VQA_VE_ROOT` for a checkout setup. Host
+program uses `MV_SRF_STATE_DIR`; legacy container programs also need their native
+identity configuration. This runner does not launch a program or attach an
+arbitrary Desktop window. Choose a unique currently observed element name:
+
+```sh
+export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-program.XXXXXX)"
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
+  --surface-kind program --identity '<program-profile>' --planner rules \
+  --goal 'Exact observed element name' --steps 1
+```
+
+This requests one click [TARGET]; programs do not accept text/key input. Both
+goal lanes require owned private RAM evidence under `/dev/shm`, without symlink
+ancestors. Keep the output report/receipt paths and inspect them before shutdown.
+
+| Result / rc [CITED: goal runner `run_entry` functions and `mw_run.py` (`main`)] | Next action |
+| --- | --- |
+| `BROWSER_BOUNDED_ACTIONS_VERIFIED` or `PROGRAM_BOUNDED_ACTIONS_VERIFIED` / `0` | Check receipts and fresh visible outcome; verified actions do not prove goal completion. |
+| argparse error / `2` | Fix syntax or action budget before running. |
+| `HUMAN_HANDOFF` / `4` (browser) | Person takes control, resolves login/CAPTCHA, releases control and observes the new state before a fresh goal. |
+| `INPUT_UNCERTAIN` / `5` | Stop; inspect dispatch/receipt/report evidence with the operator. Never automatically retry. |
+| refusal / `6` | Inspect the named verdict and earlier moves; repair the precondition before a fresh run. |
+
+`MW_PROGRAM_CONTROL` requires **Release control** and verified agent control.
+`MW_RUN_ATTACH`/`MW_RUN_CONFIG` requires the current app attachment.
+`MW_PROGRAM_RAM_REQUIRED`/`MW_PRIVATE_OUTPUT` requires the private RAM setup.
+`MW_PROGRAM_GOAL_UNGROUNDED` requires a unique observed target.
+`MW_COMPILED_BROWSER_UNAVAILABLE` requires the browser checkout route above.
+A traceback without JSON also requires stopping and operator inspection.
 
 ---
 
@@ -509,12 +560,41 @@ When explaining MetaViewer to a user or judge, state these boundaries clearly:
    The MetaViewer Electron shell runs with `--ozone-platform=x11` and needs an X11 or
    XWayland server (`JUDGE_DISPLAY`). Furthermore, the **`Desktop window`** capture
    mode only attaches X11 windows; native Wayland windows are not listed.
-3. **Program Automation Is Early**:
-   `mw_run --surface-kind program` drives a running Agent program capsule through
-   vision-engine marks, the wender-agent planner and input through the core
-   (`tools/mw_run_program.md`). It admits clicks only, and has been shown on one
-   gnome-mines move. Typing into programs is not supported yet. Desktop window capsules
-   are not driven by `mw_run` yet.
+3. **Goal Automation Is Bounded**:
+   Browser goal runs need no stored workflow, but require an exact visible control
+   name and grounded input; they support clicks, verified text and optional Enter.
+   Login walls and CAPTCHA require the person (rc `4` [CITED: tools/mw_run_browser_goal.md]).
+   Program and Host program runs admit clicks only; typing into programs and
+   automation of Desktop window capsules are unsupported. The program lane has
+   been demonstrated on a Mines move, not arbitrary applications. Explicit
+   `--planner muse` sends marks to a provider. A verified action is not a finished
+   goal. Browser role switches currently recreate the capsule and can lose the
+   open page; preserved profile login state does not prove page continuity.
 4. **Rootless Docker and Docker Desktop Are Refused for Tier 2**:
    OpenSuperficies capsule isolation requires the local rootful Linux Docker daemon
    (`JUDGE_DOCKER`, `JUDGE_DOCKER_DESKTOP`, `JUDGE_DOCKER_HOST`).
+
+### Legacy kit proxy setup
+
+The sudo-free fallback calls the kit's `srf-identity-surface net up` with
+`--proxy-bin` pointing to the kit's `srf-egress-proxy`. The launcher selects the
+proxy entrypoint, internal network and bridge attachment and verifies
+`EGRESS_PROXY_READY`; it refuses an existing incompatible proxy without replacing it.
+Private metadata lives under `$MV_JUDGE_HOME/network`: separate `policy/`,
+`registry/` and `audit/` directories (mode `0700`), with policy and registry files
+at `0600`. The x64 source runs the proxy with the CLI caller's UID/GID, so these
+files stay owned by the judge user. Profile directories still use Docker to
+provision the browser UID separately. Run passes this same registry to capsules.
+
+The initial `policy/policy.json` uses `browserid.proxy-policy/v1` with empty
+`approved`, `denied` and `connect_ports` collections. It grants no destinations.
+Existing policy files are retained. This upstream schema supports exact capsule
+IDs and normalized hosts only: public browsing requires explicit `approved`
+entries and HTTPS `connect_ports` entries for each capsule and host. Leave
+`private_targets` absent to retain LAN/host blocking. Arbitrary public browsing
+is not available through this policy schema; no wildcard policy is implied.
+
+The x64 kit supplies browser image `0.1.1`. If a binary advertises Open and the
+firewall witness is present, preflight requires `0.2.0` and refuses that image set.
+Retagging `0.1.1` would not establish Open support; the upstream source disables
+Open for its default image. Use `--no-firewall` with that kit.

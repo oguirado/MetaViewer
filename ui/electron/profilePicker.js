@@ -28,6 +28,20 @@
  * - The boot create keeps using buildFirstSurfaceCreateRequest (first profile).
  */
 
+// [TARGET, unit decision] One creation flight per host state map, shared by
+// boot, browser and role bridges before their first asynchronous admission read.
+/** @type {WeakSet<object>} */
+const creationFlights = new WeakSet();
+/** @param {object} states @returns {(() => void) | null} */
+export function acquireCapsuleCreation(states) {
+  if (creationFlights.has(states)) return null;
+  creationFlights.add(states);
+  let released = false;
+  return () => {
+    if (!released) { released = true; creationFlights.delete(states); }
+  };
+}
+
 /** Concurrent capsule ceiling matching the daemon-adapter MaxSurfaces limit [MEASURED]. */
 export const MAX_CAPSULES = 16;
 
@@ -117,7 +131,7 @@ export function formatMemoryRefusalReason(freeMemoryBytes, live = 0) {
     const gib = (freeMemoryBytes / (1024 ** 3)).toFixed(1);
     return `Not enough free host memory (${gib} GiB available; one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm; ${openCount} of ${MAX_CAPSULES} open). Close an open capsule or other applications and try again.`;
   }
-  return 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.';
+  return 'Host memory availability could not be read. No capsule was started. Check the host memory probe and restart MetaViewer before trying again (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm).';
 }
 
 /**
@@ -194,6 +208,8 @@ export function summarizeSurfaces(surfaces) {
   const states = surfaces instanceof Map ? surfaces.values() : surfaces;
   for (const state of states) {
     if (!plain(state)) continue;
+    // A lost browser still pins its profile until an explicit destroy proves release.
+    if (state.state === 'lost' && state.kind === 'browser' && validId(state.profile_id)) bound.add(state.profile_id);
     if (state.state === 'destroyed' || state.state === 'lost') continue;
     live += 1;
     if (validId(state.profile_id)) bound.add(state.profile_id);
@@ -388,11 +404,11 @@ export const CREATE_REFUSAL_REASONS = Object.freeze({
   RAM_ADMISSION_REFUSED: REFUSAL_COPY.RAM_ADMISSION_REFUSED.message,
   SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
   SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
-  SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+  SURFACE_CREATE_FAILED: 'The host could not start the capsule. If this is a core-only installation, install and configure the surface runtime with bash scripts/judge/metaviewer-judge.sh install --capsules, then restart MetaViewer. Otherwise check the host logs and choose Add capsule to try again.',
   SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
   SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
   DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
-  ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+  ADAPTER_ERROR: 'The surface runtime could not open the capsule. Check that it is installed and configured, then choose Add capsule to try again. A core-only installation cannot run capsules.',
 });
 
 /**
