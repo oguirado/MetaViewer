@@ -1070,3 +1070,14 @@ test(
     }
   },
 );
+
+test('orphan identity refusal uses the renderer notice; other boot failures keep their native notice',async()=>{
+  const shown=[];
+  const dialog={showMessageBox:async options=>shown.push(options)};
+  await showStartupFailure(dialog,{code:'IDENTITY_UNAVAILABLE'},'create');
+  assert.equal(shown.length,0);
+  await showStartupFailure(dialog,{code:'ADAPTER_FAILED'},'create');
+  assert.equal(shown.length,1);
+  await showStartupFailure(dialog,{code:'IDENTITY_UNAVAILABLE'},'boot');
+  assert.equal(shown.length,2);
+});

@@ -500,6 +500,118 @@ class Identities:
                 "lease": lease_state, "login_pending": pending,
                 "login_recorded": "yes" if type(stamp) is int and stamp > 0 else "no"}
 
+    # [TARGET, unit decision] Shared admission records are the cross-session
+    # ownership witness. No record, an unsafe record or an observable PID never
+    # proves death. Hold the admission flock through native release and removal.
+    def dead_session(self, identity, observer_pid=None):
+        directory = os.environ.get("MV_RAM_ADMISSION_DIR")
+        if not directory:
+            runtime = os.environ.get("XDG_RUNTIME_DIR")
+            if not runtime or not Path(runtime).is_absolute():
+                raise Refused("OWNER_UNPROVEN")
+            directory = str(Path(runtime) / "metaviewer" / "ram-admission")
+        root = absolute(directory)
+        if root != Path(directory):
+            raise Refused("OWNER_UNPROVEN")
+        private(root)
+        fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            # Only the modern explicit profile suffix identifies custody.
+            # Legacy hash-only records remain unproven and cannot authorize release.
+            pattern = re.compile(r"([1-9][0-9]*)-[0-9a-f]{32}-[0-9a-f]{64}--" +
+                                 re.escape(identity) + r"\Z")
+            records = []
+            for name in os.listdir(fd):
+                match = pattern.fullmatch(name)
+                if not match:
+                    # Unknown/legacy custody could refer to this same profile.
+                    if not re.fullmatch(r"[1-9][0-9]*-[0-9a-f]{32}-[0-9a-f]{64}--[a-z0-9][a-z0-9-]{0,63}", name):
+                        raise Refused("OWNER_UNPROVEN")
+                    continue
+                st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                if (not stat.S_ISREG(st.st_mode) or stat.S_IMODE(st.st_mode) != 0o600
+                        or st.st_uid != os.getuid() or st.st_nlink != 1 or st.st_size != 0):
+                    raise Refused("OWNER_UNPROVEN")
+                pid = int(match[1])
+                if pid == observer_pid:
+                    if pid in (os.getpid(), os.getppid()) or pid <= 1:
+                        raise Refused("OWNER_UNPROVEN")
+                    # The caller may exclude only its own adapter child, whose
+                    # pending refusal has no binding. Another session is never excluded.
+                    raw = Path("/proc/%d/stat" % pid).read_text().rsplit(")", 1)[1].split()
+                    if int(raw[1]) != os.getppid():
+                        raise Refused("OWNER_UNPROVEN")
+                    continue
+                # PID reuse is conservative: any current process keeps custody.
+                if starttime(os.getpid()) is None:
+                    raise Refused("OWNER_UNPROVEN")
+                try:
+                    Path("/proc/%d" % pid).stat()
+                except FileNotFoundError:
+                    records.append(name)
+                else:
+                    # A zombie has exited and cannot own an executing session;
+                    # its unreaped /proc entry is not evidence of a live owner.
+                    try:
+                        state = Path("/proc/%d/stat" % pid).read_text().rsplit(")", 1)[1].split()[0]
+                    except (OSError, IndexError):
+                        raise Refused("OWNER_UNPROVEN")
+                    if state != "Z":
+                        raise Refused("OWNER_ALIVE")
+                    records.append(name)
+            if not records:
+                raise Refused("OWNER_UNPROVEN")
+            return fd, records
+        except BaseException:
+            os.close(fd)
+            raise
+
+    def recovery(self, identity):
+        identity = operational_id(identity)
+        self.show(identity)
+        lease = self.lease(identity)
+        holder = lease.get("holder") if lease and lease["active"] else None
+        if holder is None:
+            return {"held": False}
+        if (not isinstance(holder, str) or not CAPSULE.fullmatch(holder)
+                or not holder.startswith("srf-id-") or foreign_identity(holder)):
+            raise Refused("PROTECTED_CONTAINER")
+        return {"held": True, "holder": holder}
+
+    def recover(self, identity, holder, observer_pid=None):
+        identity = operational_id(identity)
+        observed = self.recovery(identity)
+        if not observed["held"] or observed["holder"] != holder:
+            raise Refused("HOLDER_MISMATCH")
+        fd, records = self.dead_session(identity, observer_pid)
+        try:
+            context = subprocess.run(["docker", "context", "inspect", "--format", "{{json .Endpoints.docker.Host}}"],
+                                     check=True, capture_output=True, text=True, timeout=15)
+            endpoint = json.loads(context.stdout)
+            if not isinstance(endpoint, str) or not endpoint.startswith("unix:///"):
+                raise Refused("OWNER_UNPROVEN")
+            result = self.release(identity, holder)
+            # Release success alone is insufficient: stopped containers and
+            # surviving view registrations must also be absent before reuse.
+            out = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"],
+                                 check=True, capture_output=True, text=True, timeout=15)
+            names = out.stdout.splitlines()
+            if any(not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", name) for name in names):
+                raise Refused("RELEASE_UNVERIFIED")
+            if holder in names:
+                raise Refused("RELEASE_UNVERIFIED")
+            views = absolute(self.state_dir) / "views"
+            if any((views / (holder + suffix)).exists() or (views / (holder + suffix)).is_symlink()
+                   for suffix in (".pid", ".login-pending")):
+                raise Refused("RELEASE_UNVERIFIED")
+            for name in records:
+                os.unlink(name, dir_fd=fd)
+            os.fsync(fd)
+            return result
+        finally:
+            os.close(fd)
+
     def release(self, identity, holder):
         identity = operational_id(identity)
         self.show(identity)
@@ -662,12 +774,14 @@ def main(argv=None):
     parser.add_argument("--store-root", default=os.environ.get("SRF_IDENTITY_STORE_ROOT"))
     parser.add_argument("--memoryweb-home", default=os.environ.get("MV_MW_HOME"))
     subs = parser.add_subparsers(dest="verb", required=True)
-    for verb in ("create", "list", "show", "status", "delete", "login", "release"):
+    for verb in ("create", "list", "show", "status", "delete", "login", "release", "recovery", "recover"):
         sub = subs.add_parser(verb)
         if verb != "list":
             sub.add_argument("--id", required=True)
-        if verb == "release":
+        if verb in ("release", "recover"):
             sub.add_argument("--holder", required=True)
+        if verb == "recover":
+            sub.add_argument("--observer-pid", type=int)
         if verb == "create":
             sub.add_argument("--label", required=True)
             sub.add_argument("--domains", default=None)
@@ -684,15 +798,16 @@ def main(argv=None):
             if tool.profile_state(args.id) != "ok":
                 # stderr only: the JSON reply stays the closed public metadata shape.
                 print("NOTE: " + HINTS["PROFILE_NOT_PROVISIONED"], file=sys.stderr)
-        elif args.verb == "release":
-            result = tool.release(args.id, args.holder)
+        elif args.verb in ("release", "recover"):
+            result = (tool.recover(args.id, args.holder, args.observer_pid) if args.verb == "recover"
+                      else tool.release(args.id, args.holder))
         elif args.verb == "list":
             result = tool.list()
         else:
             result = getattr(tool, args.verb)(args.id)
         print(json.dumps({"schema": SCHEMA, "ok": True, "result": result}, separators=(",", ":")))
         return 0
-    except (Refused, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (Refused, OSError, ValueError, subprocess.SubprocessError) as exc:
         code = str(exc) if isinstance(exc, Refused) else "IDENTITY_UNAVAILABLE"
         if code in HINTS:
             print(code + ": " + HINTS[code], file=sys.stderr)

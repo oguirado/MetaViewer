@@ -24,7 +24,7 @@ const modes=ref(/** @type {any[]} */ ([]));
 const modeFor = (/** @type {string} */ id) => modes.value.find(row => row.profileId === id);
 let invocationGeneration=0;
 let failedDelete='';
-const busy=ref(false), login=ref(false), error=ref(''), pendingDelete=ref('');
+const busy=ref(false), login=ref(false), error=ref(''), pendingDelete=ref(''), pendingRelease=ref(/** @type {any} */ (null));
 const form=computed(()=>identityFormRequest(id.value,displayName.value,domains.value));
 const validForm=computed(()=>form.value!==null);
 const labelError=computed(()=>id.value && !validLabel(displayName.value.trim() || id.value) ? 'Display name contains unsupported characters or is too long.' : '');
@@ -132,6 +132,22 @@ async function stopIdentity(profileId) {
   } catch (reason) {error.value=identityErrorText(reason instanceof Error ? reason.message : '',profileId);}
   finally {busy.value=false;}
 }
+// [TARGET, unit decision] Confirmation is host-local; holder is snapshotted
+// and rechecked by the tool, never accepted as proof of dead-session custody.
+async function releaseIdentity() {
+  const choice=pendingRelease.value;
+  if (!choice || busy.value) return;
+  busy.value=true;error.value='';
+  try {
+    const reply=await roleApi.releaseIdentity({profileId:choice.profileId,holder:choice.holder});
+    if(reply?.ok!==true)throw Error('IDENTITY_RELEASE_REFUSED');
+    pendingRelease.value=null;
+    busy.value=false;
+    await invoke('list');
+    copyStatus.value='Identity released. Choose Open as human or Open as agent.';
+  } catch {error.value='Release could not be verified. A live session or missing ownership evidence still holds this identity.';}
+  finally {busy.value=false;}
+}
 function create(){if(form.value)void invoke('create',form.value);}
 // App owns the marker during normal use. Also cover isolated dialog mounts;
 // release only a marker this component installed, leaving other modals alone.
@@ -156,7 +172,9 @@ watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=
           <span v-if="row.browser === 'program' && !busy && !modeFor(row.id)?.available">Saved binary unavailable. Open through Add capsule first.</span>
           <span v-if="row.browser !== 'program'" class="identity-last-login">Last login: {{ modeFor(row.id)?.markerError || (modeFor(row.id)?.lastLogin ? new Date(modeFor(row.id).lastLogin).toLocaleString() : 'Not recorded') }}</span>
         </div>
+        <p v-if="modeFor(row.id)?.held" role="status">Still held by a previous session</p>
         <div class="identity-actions">
+        <UiButton v-if="modeFor(row.id)?.held" label="Release" :disabled="busy || isForeignIdentity(row.id)" @click="pendingRelease={profileId:row.id,holder:modeFor(row.id).holder}" />
         <UiButton v-if="!roleApi" label="Log in" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program'" @click="invoke('login',{id:row.id})" />
         <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy || modeFor(row.id)?.currentMode === 'lost'" @click="openIdentity(row.id,'human')" />
         <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy || modeFor(row.id)?.currentMode === 'lost'" @click="openIdentity(row.id,'agent')" />
@@ -186,6 +204,7 @@ watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=
     </section>
     <p v-if="error" role="alert">{{ error }}</p>
   </ConfirmDialog>
+  <ConfirmDialog id="identity-release-dialog" :open="open && !!pendingRelease" title="Release identity?" description="Remove the capsule left by the previous session? A live session will not be stopped. Saved browser data is retained." confirm-label="Release" :busy="busy" @confirm="releaseIdentity" @back="pendingRelease=null" />
   <ConfirmDialog id="identity-delete-dialog" :open="open && !!pendingDelete" title="Delete identity?" :description="`Delete ${pendingDelete} and its saved browser session? This cannot be undone.`" confirm-label="Delete identity" :busy="busy" @confirm="deleteIdentity" @back="pendingDelete=''" />
 </template>
 <style>
