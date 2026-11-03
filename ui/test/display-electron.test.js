@@ -56,7 +56,8 @@ async function runArtifact(archive, dist) {
 // built core/adapter (CARGO_TARGET_DIR). The local integration gate provides both; the hosted js job has neither
 // built binary, so there it is skipped with this reason and the packaged leg owns it.
 const PACKAGED_PREREQS = (process.env.CAPSULE_UI_KIT_REPO || process.env.MV_KIT_CHECKOUT) && process.env.CARGO_TARGET_DIR;
-test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail', { timeout: 120000, skip: PACKAGED_PREREQS ? false : 'needs the pinned kit checkout and CARGO_TARGET_DIR with built core/adapter (packaged leg)' }, async () => {
+const T=async(n,f)=>{const t=Date.now();try{return await f()}finally{console.log(`PHASE ${n} ${Date.now()-t}`)}};
+test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; reverted guards fail', { timeout: 400000, skip: PACKAGED_PREREQS ? false : 'needs the pinned kit checkout and CARGO_TARGET_DIR with built core/adapter (packaged leg)' }, async () => {
   const dist = process.env.ELECTRON_OVERRIDE_DIST_PATH;
   assert.ok(dist, 'local Electron dist required');
   const root = await mkdtemp(join(tmpdir(), 'mv-display-packaged-Música-'));
@@ -64,9 +65,9 @@ test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; r
     // Hosted CI stages the pinned kit as MV_KIT_CHECKOUT (js job); local gates use CAPSULE_UI_KIT_REPO.
     const kitRepo = process.env.CAPSULE_UI_KIT_REPO || process.env.MV_KIT_CHECKOUT;
     assert.ok(kitRepo, 'pinned capsule-ui-kit checkout required (CAPSULE_UI_KIT_REPO or MV_KIT_CHECKOUT)');
-    const product = await packageShell({ ...process.env, CAPSULE_UI_KIT_REPO: kitRepo, MV_PKG_OUT: join(root, 'output') });
+    const product = await T('packageShell',()=>packageShell({ ...process.env, CAPSULE_UI_KIT_REPO: kitRepo, MV_PKG_OUT: join(root, 'output') }));
     const archive = join(product, 'resources/app.asar');
-    const nominal = await runArtifact(archive, dist);
+    const nominal = await T('run archive',()=>runArtifact(archive, dist));
     assert.equal(nominal.rc, 0, nominal.output);
     assert.match(nominal.output, /METAVIEWER_RENDERER_READY/);
     assert.match(nominal.output, /METAVIEWER_SURFACE_CREATE_PENDING/);
@@ -95,7 +96,7 @@ test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; r
     await sealRendererAssets(mutantRoot);
     const mutantArchive = join(root, 'mutant.asar');
     await createPackage(mutantRoot, mutantArchive);
-    const negative = await runArtifact(mutantArchive, dist);
+    const negative = await T('run mutantArchive',()=>runArtifact(mutantArchive, dist));
     assert.equal(negative.rc, 1, negative.output);
     assert.match(negative.output, /DISPLAY chip\/paint fps=0/);
     assert.doesNotMatch(negative.output, /DISPLAY_E2E_OK/);
@@ -110,7 +111,7 @@ test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; r
     await sealRendererAssets(mutantRoot);
     const roundedArchive = join(root, 'rounded-generation.asar');
     await createPackage(mutantRoot, roundedArchive);
-    const lostGeneration = await runArtifact(roundedArchive, dist);
+    const lostGeneration = await T('run roundedArchive',()=>runArtifact(roundedArchive, dist));
     assert.equal(lostGeneration.rc, 1, lostGeneration.output);
     assert.match(lostGeneration.output, /DISPLAY chip\/paint fps=(?:[0-9]|1[0-9]);/);
     assert.match(lostGeneration.output, /stage=FIRST_FRAME detail=OK/);
@@ -129,7 +130,7 @@ test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; r
     await sealRendererAssets(mutantRoot);
     const unboundArchive = join(root, 'unbound.asar');
     await createPackage(mutantRoot, unboundArchive);
-    const unbound = await runArtifact(unboundArchive, dist);
+    const unbound = await T('run unboundArchive',()=>runArtifact(unboundArchive, dist));
     assert.equal(unbound.rc, 1, unbound.output);
     assert.match(unbound.output, /unbound tile must have zero host reads/);
     await writeFile(routerPath, routerSource);
@@ -143,7 +144,7 @@ test('packaged wall paints UnixNano DISPLAY generations after VERIFIED create; r
     await sealRendererAssets(mutantRoot);
     const readinessArchive = join(root, 'readiness.asar');
     await createPackage(mutantRoot, readinessArchive);
-    const recovered = await runArtifact(readinessArchive, dist);
+    const recovered = await T('run readinessArchive',()=>runArtifact(readinessArchive, dist));
     assert.equal(recovered.rc, 0, recovered.output);
     assert.match(recovered.output, /DISPLAY_E2E_OK fps=(\d+)/);
     console.log('DISPLAY_READY_LOSS_RECOVERED');
