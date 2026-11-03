@@ -88,6 +88,7 @@ from metaviewer_agents.mw_home import HomeError, canonical_home, check_home, res
 from metaviewer_agents.mw_owner import Corpus, OwnerRefused, ReplayOwner, bounded_read, need, focus_only_steps
 from metaviewer_agents.perception.deps_lock import DependencyLockError
 from metaviewer_agents.verify import build_proposal
+from metaviewer_agents.mw_owner import RebindHandoff
 
 
 def readback_runner(mw, owner):
@@ -298,11 +299,13 @@ def wall_kind(tree):
         return 'login_wall'
     if any(row.get('role') == 'heading' and
            any(normalized(row.get('name')) == phrase or
-               normalized(row.get('name')).startswith(tuple(phrase + suffix for suffix in (' to ', ' a ', ' en ')))
+               normalized(row.get('name')).startswith(tuple(phrase + suffix for suffix in (' to ', ' with ', ' a ', ' en ')))
                for phrase in SIGN_IN_PHRASES) for row in rows):
         return 'login_wall'
     password = any(row.get('role') == 'textbox' and
-                   normalized(row.get('name')) in PASSWORD_NAMES for row in rows)
+                   (normalized(row.get('name')) in PASSWORD_NAMES or
+                    re.fullmatch(r'enter (?:your )?password[: ]*', normalized(row.get('name'))))
+                   for row in rows)
     if password and any(row.get('role') in ('button', 'link', 'text', 'statictext') and
                         normalized(row.get('name')) in SIGN_IN_PHRASES for row in rows):
         return 'login_wall'
@@ -382,6 +385,7 @@ def connect(env, trace=None):
 
 class HostBackend:
     surface_kind = 'browser'
+    eager_slot_text = True
     # The stored workflow owner imports Wender state APIs in process; the compiled
     # runtime exports plan and model only. A lane on those entries may opt in.
     compiled_wender_ok = False
@@ -461,8 +465,9 @@ class HostBackend:
         inventory = command(['docker', 'ps', '--format', '{{.Names}}'])
         need(inventory.returncode == 0, 'MW_RUN_OWNERSHIP')
         active = set(inventory.stdout.decode().splitlines())
-        need(bool(leases & active), 'MW_RUN_NO_SURFACE')
-        need(len(leases) == 1 and leases <= active, 'MW_RUN_AMBIGUOUS')
+        leases &= active
+        need(bool(leases), 'MW_RUN_NO_SURFACE')
+        need(len(leases) == 1, 'MW_RUN_AMBIGUOUS')
         capsule = next(iter(leases))
         surface = surfaces[0]['surface_id']
         need(self.surface_id in (None, surface) and self.capsule in (None, capsule), 'MW_RUN_OWNERSHIP')
@@ -507,7 +512,7 @@ class HostBackend:
         tree = self.native(self.binary, ['ax', '--container', self.capsule, '--window', 'w1',
                                          '--state-dir', str(self.state)])
         for row in tree.get('elements', []) if isinstance(tree.get('elements'), list) else []:
-            if (isinstance(row, dict) and row.get('role') in ('textbox', 'combobox')
+            if (self.eager_slot_text and isinstance(row, dict) and row.get('role') in ('textbox', 'combobox')
                     and row.get('focused') is True and not isinstance(row.get('value'), str)):
                 row['value'] = self.slot_text(row)
         return tree
@@ -742,7 +747,10 @@ class HostBackend:
     def rebind(self, sensed, plan, remaining):
         observed = self.observe_for_rebind(remaining)
         fresh = self.perceive(observed)
-        need(not wall_kind(dict(elements=fresh['ax'])), 'MW_HANDOFF_REQUIRED')
+        wall = wall_kind(dict(elements=fresh['ax']))
+        if wall:
+            raise RebindHandoff(dict(fresh, observed=dict(observed,
+                observed_wall=dict(observed=True, kind=wall))))
         self.revalidate_action(sensed, fresh, plan['action'])
         # AX/geometry and pixels were re-perceived. A new generation requires
         # identical pixels or the strictly classified caret blink below.
@@ -800,7 +808,7 @@ class HostBackend:
             binding = proposal.get('based_on_frame')
             if binding is None:
                 binding = {k: fresh['frame'][k] for k in ('sha256', 'generation') if k in fresh['frame']}
-            row = dict(attempt=attempt + 1, based_on_frame=binding,
+            row = dict(attempt=attempt + 1, proposal_id=proposal['proposal_id'], based_on_frame=binding,
                        observed_generation=sensed['frame']['generation'], submit_mono_ns=time.monotonic_ns(),
                        status='intent_pending')
             self.frame_attempts.append(row)
@@ -815,6 +823,9 @@ class HostBackend:
             except tools.ToolRefusal as error:
                 self.last_core_refusal = error.reason_code
                 row['status'] = error.reason_code
+                on_refusal = getattr(self, 'proposal_refused', None)
+                if callable(on_refusal):
+                    on_refusal(row, error)
                 if error.reason_code != 'STALE_FRAME' or 'ax' not in sensed:
                     raise
         else:
@@ -963,10 +974,12 @@ def run_entry(args):
             backend = HostBackend(client, args.identity, evidence, os.environ)
             rc, code, receipt = execute(args, home, evidence, backend, trace=trace)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
-            ClientError, tools.ToolRefusal, tools.VerificationFailed) as error:
+            ClientError, tools.ToolRefusal, tools.VerificationFailed, subprocess.SubprocessError) as error:
         code = getattr(error, 'code', getattr(error, 'reason_code', 'MW_RUN_CONFIG'))
         message = str(error)
-        if isinstance(error, ClientError):
+        if isinstance(error, subprocess.TimeoutExpired):
+            code, message = 'MW_RUN_NATIVE', 'native discovery command timed out'
+        elif isinstance(error, ClientError):
             code, message = 'MW_RUN_CORE', (f'core connection failed ({error.code}: {error}); '
                                             'is this the running MetaViewer core?')
         elif isinstance(error, HomeError):
