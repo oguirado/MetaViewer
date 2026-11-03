@@ -25,8 +25,8 @@ bash scripts/judge/metaviewer-judge.sh run
 doctor; app-only installation cannot start live capsules. Do not dismiss a
 missing image, display or Docker requirement.
 
-**Architecture:** x64 — T2 install verified with the kit on WSL2 [CITED: operator];
-arm64 — live wall used for the verified flows below [CITED: operator].
+**Architecture:** x64 — T2 install verified with the kit on WSL2;
+arm64 — live wall used for the verified flows below.
 
 ## Browser capsule as Human and Agent
 
@@ -49,7 +49,7 @@ prove internet access. Use an already permitted page or ask the installer for
 an Open-ready kit; do not bypass policy.
 
 **Architecture:** x64 — Human and Agent tiles verified with the kit on WSL2;
-arm64 — Human and Agent browser flows verified [CITED: operator].
+arm64 — Human and Agent browser flows verified.
 
 ## Views and desktops
 
@@ -64,8 +64,7 @@ does not start a new capsule. **If refused:** inspect the activity message and
 confirm that the destination desktop exists and the capsule is still live.
 
 **Architecture:** x64 — available, unverified as a separate flow;
-arm64 — views verified; desktop operations available, separately unverified
-[CITED: operator; `ui/src/App.vue`, `ui/src/surfaces/RoleSurface.vue`].
+arm64 — views verified; desktop operations available, separately unverified.
 
 ## Take control and Release
 
@@ -81,7 +80,7 @@ reason. Never issue agent input while human control is active or reuse an old
 planned action after taking control.
 
 **Architecture:** x64 and arm64 — available; independent live handoff verification
-is AUSENTE — no inventar [CITED: `ui/src/App.vue`, `core/src`].
+is not documented here.
 
 ## Program capsule
 
@@ -96,8 +95,7 @@ Use a GUI binary installed on the host and the required program image. Do not
 substitute Host program without reviewing its different isolation boundary.
 
 **Architecture:** x64 — available, unverified live; arm64 — calculator automation
-verified, standalone Program launch is not separately attested [CITED: operator;
-`ui/src/catalog/CatalogLauncher.vue`, `daemon-adapter/internal/capsule`].
+verified, standalone Program launch is not separately attested.
 
 ## Host program and Desktop window
 
@@ -121,8 +119,7 @@ retrying. For Desktop window, select an existing X11 window; native Wayland
 windows are unsupported. Do not assume an empty list means permission to capture
 another display.
 
-**Architecture:** x64 — both available, unverified live; arm64 — both verified
-[CITED: operator; `ui/src/catalog/catalogModel.js`, `ui/src/catalog/CatalogLauncher.vue`].
+**Architecture:** x64 — both available, unverified live; arm64 — both verified.
 
 ## Terminal and the prompt buttons
 
@@ -144,8 +141,7 @@ running capsule. Never put credentials in prompts.
 the terminal is unavailable in this build. Use an external terminal with the
 same attachment. A copied prompt is not proof that an AI CLI is installed.
 
-**Architecture:** x64 and arm64 — available, no separate live result supplied
-[CITED: `ui/src/terminal/TerminalDeckView.vue`, `ui/src/terminal/workflowPrompts.js`].
+**Architecture:** x64 and arm64 — available, no separate live result supplied.
 
 ## Prepare commands for your AI
 
@@ -166,8 +162,7 @@ match `deps.lock`; use the roots supplied by the app/operator. **If refused:**
 recopy a current attachment; never guess missing paths. Inspect report/receipt
 files before shutdown. `--planner rules` needs no account; `--planner muse` needs
 Muse Code installed and authenticated and sends observations to that provider.
-Both need the verified runtime dependencies [CITED: `tools/mw_run_browser_goal.py`,
-`tools/mw_run_program.py`].
+Both need the verified runtime dependencies.
 
 ## Automate a browser goal
 
@@ -181,7 +176,7 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
   --goal 'Exact visible control name' --steps 1
 ```
 
-The action budget above is one click [CITED: `agents/metaviewer_agents/mw_run.py`].
+The action budget above is one click.
 Choose `--planner muse` in the same command to use Muse Code.
 **Success:** `BROWSER_BOUNDED_ACTIONS_VERIFIED` plus a fresh observed effect and
 receipts. A verified action does not certify the whole goal.
@@ -192,7 +187,7 @@ build. Rules does not remove that limitation. Never automatically retry
 `INPUT_UNCERTAIN`; delivery may already have happened.
 
 **Architecture:** x64 — verified on a local page with the rules planner; arm64 — browser goal with
-Muse verified [CITED: operator].
+Muse verified.
 
 ## Automate a program: calculator
 
@@ -208,8 +203,7 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
   --goal 'Exact observed calculator button name' --steps 1
 ```
 
-Repeat after a fresh observation for **7 → + → 8 → =**; expected display **15**
-[CITED: operator calculator evaluation]. Button names depend on the calculator;
+Repeat after a fresh observation for **7 → + → 8 → =**; expected display **15**. Button names depend on the calculator;
 do not pass the whole arithmetic expression as an invented control name.
 
 **Success:** each run reports `PROGRAM_BOUNDED_ACTIONS_VERIFIED` with receipts;
@@ -219,7 +213,7 @@ unique observed target, attachment and dependency pins. Without Muse Code use
 live verification. A visible effect is not proof of arithmetic correctness.
 
 **Architecture:** x64 — available, unverified live; arm64 — calculator 7+8 by Muse
-verified [CITED: operator; `tools/mw_run_program.py`].
+verified.
 
 ## Text in a program
 
@@ -241,7 +235,7 @@ observed field instead of `focused` if focus is not established. Known password
 fields refuse; do not use this flow for secrets. Program `--key` is unsupported.
 
 **Architecture:** x64 and arm64 — implemented, live text verification AUSENTE —
-no inventar [CITED: `agents/metaviewer_agents/mw_run.py`, `tools/mw_run_program.py`].
+no inventar.
 
 ## Wall stop: login or CAPTCHA
 
@@ -256,7 +250,7 @@ not evidence of a successful wall test. If delivery is uncertain, stop and
 inspect receipts rather than retrying.
 
 **Architecture:** x64 — verified on a local page; arm64 — wall
-stop verified on local pages only [CITED: operator; `tools/mw_run_browser_goal.py`].
+stop verified on local pages only.
 
 ## Screenshot and Record
 
@@ -266,7 +260,7 @@ in the same strip. Inspect the capture badge for the sealed state. Capture
 stays in RAM; it does not save a video to your downloads. The recording panel
 implementation also has screenshot/recording rows and an export control gated
 on a configured destination, but a normal wall click route to that panel is
-AUSENTE — no inventar in this checkout. Inspect frames before sharing them.
+not documented here in this checkout. Inspect frames before sharing them.
 
 **Success:** the screenshot control reads **Captured**, or the recording badge
 reads **Sealed**. Detailed rows and frame/drop information belong to the
@@ -278,7 +272,7 @@ Nested display capture is unavailable. Recording is evidence capture;
 it does not itself create a stored automation.
 
 **Architecture:** x64 and arm64 — available, separate live verification AUSENTE —
-no inventar [CITED: `ui/src/wall/TileCaptureChrome.vue`, `ui/src/recording/MvRecordingPanel.vue`].
+no inventar.
 
 ## Stop and clean up
 
@@ -297,8 +291,7 @@ bash scripts/judge/metaviewer-judge.sh stop
 review it with the operator; do not remove unrelated host resources.
 
 **Architecture:** x64 — stop verified with the kit on WSL2; arm64 — stop command
-available, separate cleanup verification AUSENTE — no inventar [CITED: operator;
-`scripts/judge/metaviewer-judge.sh`].
+available, separate cleanup verification not documented here.
 
 ## Architecture support at this snapshot
 

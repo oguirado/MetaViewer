@@ -99,7 +99,7 @@ class JudgeTourDocsTests(unittest.TestCase):
         errors, _ = validate_commands(self.markdown + '\n```bash\ninvented-tool run\n```\n')
         self.assertTrue(any('unchecked command' in error for error in errors), errors)
 
-    def test_links_and_current_pending_status(self):
+    def test_links_and_current_status(self):
         for name, link in (
             ('README.md', '(docs/JUDGE_TOUR.md)'),
             ('docs/README.md', '(JUDGE_TOUR.md)'),
@@ -107,7 +107,7 @@ class JudgeTourDocsTests(unittest.TestCase):
         ):
             with self.subTest(name=name):
                 self.assertIn(link, (ROOT / name).read_text(encoding='utf-8'))
-        self.assertIn('**x64 browser automation: PENDING verification.**', self.markdown)
+        self.assertIn('**x64 browser automation: verified on local pages', self.markdown)
         self.assertNotRegex(self.markdown, r'/home/|/Users/|/usr/local/go|~/\.cargo')
 
 
