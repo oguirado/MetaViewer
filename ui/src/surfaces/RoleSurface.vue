@@ -213,6 +213,7 @@ const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
 const hostXpra = ref(false);
 const reopenableHostWindow = ref(false);
 const hostWindow = ref(/** @type {any} */ (null));
+const lostAgentHostWindow = computed(() => hostWindow.value?.state === 'lost' && props.control === 'agent');
 let ended = false, notifiedEnd = false, resync = false;
 let transferring = false;
 let alive = true, mounted = false, busy = false, signature = '', shown = true;
@@ -325,6 +326,17 @@ function bindScrollListeners() {
     } catch { /* non-DOM test body */ }
   }
 }
+async function closeLostHostWindow() {
+  if (ended || progress.value) return;
+  menuOpen.value = false;
+  // [TARGET, unit decision] Lost agent bindings remain core tombstones. Close
+  // presentation through the existing mode event, without requesting destroy.
+  if (!lostAgentHostWindow.value) return;
+  ended = true;
+  await revoke();
+  notifiedEnd = true;
+  emit('mode', {surfaceId:props.surfaceId,mode:'closed'});
+}
 async function detachHostWindow() {
   if (ended || progress.value) return;
   menuOpen.value = false;
@@ -348,7 +360,8 @@ async function detachHostWindow() {
 /** @param {string} operation */
 async function lifecycle(operation) {
   if (operation === 'stop' && hostWindow.value) {
-    await detachHostWindow();
+    if (lostAgentHostWindow.value) await closeLostHostWindow();
+    else await detachHostWindow();
     return;
   }
   if (progress.value) return;
@@ -435,7 +448,8 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
         <span class="mv-role-mode-badge">{{ hostWindow ? (hostWindow.state === 'lost' ? 'Window closed' : control === 'human' ? 'You control this window' : 'Agent controls this window') : role }}</span>
         <span v-if="hostXpra" class="mv-host-window-badge" aria-label="Runs on your computer (not isolated)">Runs on your computer — not isolated</span>
         <span v-if="hostWindow" :id="`tile-host-indicator-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-indicator`" class="mv-host-window-badge" aria-label="Real desktop (not isolated)" :title="`${hostWindow.title} — ${hostWindow.program}. This tile is attached to a real window on your desktop, not an isolated container.`">Real desktop — not isolated</span>
-        <button v-if="hostWindow" type="button" :id="`tile-host-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-stop`" class="mv-host-window-stop" @click.stop="detachHostWindow">Stop</button>
+        <button v-if="lostAgentHostWindow" type="button" :id="`tile-host-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-stop`" class="mv-host-window-stop" :disabled="!!progress" @click.stop="closeLostHostWindow">Close tile</button>
+        <button v-else-if="hostWindow" type="button" :id="`tile-host-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-stop`" class="mv-host-window-stop" :disabled="!!progress" @click.stop="detachHostWindow">Stop</button>
         <span v-if="recordingPaused" class="mv-role-recording-paused" role="status">Recording paused (size limit)</span>
         <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
         <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
@@ -458,7 +472,7 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
             </div>
             <div class="mv-desktop-menu-row"><span>New desktop</span><button role="menuitem" type="button" :id="`tile-move-new-${surfaceId}`" @click="moveTile('new')">Move</button><button role="menuitem" type="button" :id="`tile-move-go-new-${surfaceId}`" @click="moveTile('new',true)">Move and go</button></div>
           </template>
-          <button :id="`tile-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/stop`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('stop'))">Stop capsule</button>
+          <button :id="`tile-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/stop`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('stop'))">{{ lostAgentHostWindow ? 'Close tile' : 'Stop capsule' }}</button>
           <template v-if="role === 'agent'"><hr role="separator"><button :aria-label="`Take control of ${label || surfaceId} (emergency)`" :id="`tile-take-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/control/emergency`" role="menuitem" type="button" :disabled="!canTakeControl" @click="runMenu(() => emit('take-control'))">Take control (emergency)</button></template>
         </div>
       </div>
@@ -468,11 +482,11 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
       <!-- [TARGET, unit decision] Terminal canvas leaves layout: visibility:hidden still consumes the clipped viewport. -->
       <div v-if="role === 'agent' && hostWindow?.state !== 'lost'" :style="{visibility: (watching || hostWindow?.minimized || hostWindow?.state === 'lost') ? 'hidden' : undefined}" :inert="watching || Boolean(hostWindow?.minimized) || hostWindow?.state === 'lost'" class="mv-role-agent-canvas"><slot /></div>
       <button v-if="resourceReleased" :id="`tile-reconnect-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/reconnect`" type="button" @click="reconnectReleased">Disconnected to save resources, click to reconnect</button>
-      <button v-if="error && hostWindow?.state === 'lost' && reopenableHostWindow" type="button" :disabled="!!progress" @click="reopenLostHostWindow">Reopen</button>
+      <button v-if="error && hostWindow?.state === 'lost' && !lostAgentHostWindow && reopenableHostWindow" type="button" :disabled="!!progress" @click="reopenLostHostWindow">Reopen</button>
       <button v-if="error && !hostWindow" type="button" @click="error = ''; sync()">Reopen</button>
       <p v-if="hostWindow?.minimized && !error && hostWindow?.state !== 'lost'" :id="`tile-host-minimized-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-minimized`" class="mv-role-status" role="status">Window minimized — waiting for window to be restored</p>
       <p v-else-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' && hasConnected ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
-      <p v-else-if="error" :id="hostWindow ? `tile-host-lost-${surfaceId}` : undefined" role="alert">{{ error }}</p>
+      <p v-else-if="error" :id="hostWindow ? `tile-host-lost-${surfaceId}` : undefined" role="alert">{{ error }}{{ lostAgentHostWindow ? ' Close tile to remove it from this workspace.' : '' }}</p>
     </div>
   </div>
 </template>

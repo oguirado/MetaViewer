@@ -1994,3 +1994,42 @@ fn window_close_human_loss_stops_through_destroy_receipt() {
         close_server(server, task, daemon, agent, ui).await;
     });
 }
+
+// [TARGET, unit decision] SurfaceRequest's replay input contains no component.
+// Authenticate the UI-only lost-human destroy exception at the serve boundary.
+#[test]
+fn v027_lost_human_destroy_refuses_agent_but_allows_ui() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        let mut human = surface();
+        human["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":human}}))
+            .await;
+        ui.receive().await;
+        human["state"] = "lost".into();
+        daemon.send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":human}})).await;
+        ui.receive().await;
+        let budget = server.lock().unwrap().authority.state().remaining_budget;
+        let destroy = json!({"schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-demo"}});
+        agent.send(destroy.clone()).await;
+        agent.verdict("refused", Some("POLICY")).await;
+        assert_eq!(
+            server.lock().unwrap().authority.state().remaining_budget,
+            budget
+        );
+        daemon_barrier(&mut daemon).await;
+        // Negative control: the very same lost human binding remains stoppable
+        // by UI, proving the agent test actually exercises the exception.
+        ui.send(destroy.clone()).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            destroy
+        );
+        assert_eq!(
+            server.lock().unwrap().authority.state().remaining_budget,
+            budget - 1
+        );
+        close_server(server, task, daemon, agent, ui).await;
+    });
+}
