@@ -22,7 +22,7 @@ REFUSALS = {
     'MW_RUN_OPERATION': 'The requested runner operation is unsupported; select a supported workflow operation.',
     'MW_RUN_RECEIPT': 'The run receipt is missing or invalid; inspect the report and capsule state before considering another run.',
     'receipt path absent': 'The expected receipt was not written; inspect the report and capsule state before considering another run.',
-    'MW_PROGRAM_CONTROL': 'The capsule is under human control; press Release on its tile before running again.',
+    'MW_PROGRAM_CONTROL': 'The capsule is under human control; for a Human-role capsule use Switch to agent mode on its tile; for a temporarily taken-over Agent capsule, press Release on the tile, then run again.',
     'MW_COMPILED_BROWSER_UNAVAILABLE': 'The compiled runtime cannot automate browser capsules; configure a verified wender-agent checkout with MV_WENDER_ROOT or use supported program automation.',
     'MW_DEPENDENCY': 'A pinned dependency is unavailable or mismatched; restore the checkout selected by deps.lock before running again.',
     'MW_PRIVATE_OUTPUT': 'Private evidence could not be written safely; use an absolute writable XDG_STATE_HOME outside the repository without symlinked parents.',

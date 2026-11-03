@@ -463,7 +463,10 @@ class HostBackend:
             if capsule:
                 leases.add(capsule)
         inventory = command(['docker', 'ps', '--format', '{{.Names}}'])
-        need(inventory.returncode == 0, 'MW_RUN_OWNERSHIP')
+        if inventory.returncode != 0:
+            raise refuse('MW_RUN_OWNERSHIP',
+                'Docker inventory failed; restore access to the Docker daemon in this shell, '
+                'then run bash scripts/judge/metaviewer-judge.sh doctor --capsules before retrying')
         active = set(inventory.stdout.decode().splitlines())
         leases &= active
         need(bool(leases), 'MW_RUN_NO_SURFACE')
