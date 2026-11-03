@@ -1,5 +1,6 @@
 """Hosted identity store tests: no native capsule, network or real credential."""
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -724,6 +725,115 @@ class IdentityTests(unittest.TestCase):
         # In the mutant, retrying the same name fails with NATIVE_REFUSED because the empty directory was not reclaimed.
         with self.assertRaisesRegex(mutant_mod.Refused, "^NATIVE_REFUSED$"):
             mutant_tool.create("mutant-retry", "Mutant", "example.com")
+
+    def prepare_recovery(self, owner=None):
+        self.create()
+        self.surface("start")
+        admission = Path(self.tmp.name) / "admission"
+        admission.mkdir(mode=0o700)
+        self.admission = admission
+        environment = patch.dict(os.environ, MV_RAM_ADMISSION_DIR=str(admission))
+        environment.start()
+        self.addCleanup(environment.stop)
+        if owner is None:
+            child = subprocess.Popen([sys.executable, "-c", "pass"])
+            owner = child.pid
+            child.wait(timeout=10)
+        self.record(owner)
+        docker = self.bin / "docker"
+        docker.write_text("#!" + sys.executable + "\nimport sys\nif sys.argv[1]=='context': print('\"unix:///var/run/docker.sock\"')\n")
+        return self.holder()
+
+    def record(self, pid):
+        name = str(pid) + "-" + "a" * 32 + "-" + hashlib.sha256(b"account-a").hexdigest() + "--account-a"
+        path = self.admission / name
+        path.touch(mode=0o600)
+        return path
+
+    def test_orphan_recovery_requires_actual_owner_death(self):
+        holder = self.prepare_recovery()
+        self.assertTrue(self.tool.recovery("account-a")["held"])
+        self.assertTrue(self.tool.recover("account-a", holder)["capsule_removed"])
+        self.assertEqual(list(self.admission.iterdir()), [])
+        self.assertFalse(self.tool.lease("account-a")["active"])
+        self.surface("start")  # Same identity is reusable, without restarting the session.
+        self.assertTrue(self.tool.lease("account-a")["active"])
+
+    def test_live_second_owner_is_negative_control_for_death_proof(self):
+        holder = self.prepare_recovery()
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        self.addCleanup(lambda: (child.poll() is None and child.terminate(), child.wait(timeout=10)))
+        live = self.record(child.pid)
+        before = [a for a in self.calls() if a[0] != "show"]
+        with self.assertRaisesRegex(mv.Refused, "OWNER_ALIVE"):
+            self.tool.recover("account-a", holder)
+        self.assertEqual(before, [a for a in self.calls() if a[0] != "show"])
+        self.assertTrue(live.exists())
+        self.assertIsNone(child.poll())
+        child.terminate()
+        child.wait(timeout=10)
+
+    def test_legacy_or_malformed_custody_never_authorizes_recovery(self):
+        holder = self.prepare_recovery()
+        legacy = self.admission / ("999999-" + "b" * 32 + "-" + "c" * 64)
+        legacy.touch(mode=0o600)
+        before = [a for a in self.calls() if a[0] != "show"]
+        with self.assertRaisesRegex(mv.Refused, "OWNER_UNPROVEN"):
+            self.tool.recover("account-a", holder)
+        self.assertEqual(before, [a for a in self.calls() if a[0] != "show"])
+
+    def test_exited_zombie_owner_is_dead_but_running_owner_is_not(self):
+        holder = self.prepare_recovery()
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        self.addCleanup(lambda: child.wait(timeout=10))
+        self.record(child.pid)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            state = Path("/proc/%d/stat" % child.pid).read_text().rsplit(")", 1)[1].split()[0]
+            if state == "Z":
+                break
+            time.sleep(0.005)
+        self.assertEqual(state, "Z", "fixture must prove an exited, unreaped process")
+        self.assertTrue(self.tool.recover("account-a", holder)["capsule_removed"])
+
+    def test_unknown_owner_and_holder_change_never_stop(self):
+        holder = self.prepare_recovery()
+        for path in self.admission.iterdir():
+            path.unlink()
+        before = [a for a in self.calls() if a[0] != "show"]
+        with self.assertRaisesRegex(mv.Refused, "OWNER_UNPROVEN"):
+            self.tool.recover("account-a", holder)
+        with self.assertRaisesRegex(mv.Refused, "HOLDER_MISMATCH"):
+            self.tool.recover("account-a", "srf-id-different")
+        self.assertEqual(before, [a for a in self.calls() if a[0] != "show"])
+
+    def test_unknown_native_inventory_retains_reservation(self):
+        holder = self.prepare_recovery()
+        docker = self.bin / "docker"
+        docker.write_text("#!" + sys.executable + "\nimport sys\nif sys.argv[1]=='context': print('\"unix:///var/run/docker.sock\"')\nelse: sys.exit(1)\n")
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.tool.recover("account-a", holder)
+        self.assertTrue(list(self.admission.iterdir()))
+
+    def test_remote_context_and_unsafe_record_refuse_before_stop(self):
+        holder = self.prepare_recovery()
+        before = [a for a in self.calls() if a[0] != "show"]
+        docker = self.bin / "docker"
+        docker.write_text("#!" + sys.executable + "\nprint('\"tcp://foreign:2375\"')\n")
+        with self.assertRaisesRegex(mv.Refused, "OWNER_UNPROVEN"):
+            self.tool.recover("account-a", holder)
+        self.assertEqual(before, [a for a in self.calls() if a[0] != "show"])
+        next(self.admission.iterdir()).chmod(0o644)
+        with self.assertRaisesRegex(mv.Refused, "OWNER_UNPROVEN"):
+            self.tool.recover("account-a", holder)
+
+    def test_observer_exclusion_cannot_name_another_sessions_adapter(self):
+        holder = self.prepare_recovery()
+        self.record(os.getpid())
+        before = [a for a in self.calls() if a[0] != "show"]
+        with self.assertRaisesRegex(mv.Refused, "OWNER_UNPROVEN"):
+            self.tool.recover("account-a", holder, os.getpid())
+        self.assertEqual(before, [a for a in self.calls() if a[0] != "show"])
 
 
 if __name__ == "__main__":

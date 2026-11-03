@@ -287,7 +287,7 @@ export function listHostWindows({env = process.env, excludePid = process.pid, ru
 /** Renderer gets only role, profile ids, state, and opaque success. */
 /** @param {any} options */
 export function installRoleHost({electron, window, core, env, capsuleStates, admit,
-  listIdentities, provisionProgramIdentity, readFreeMemoryBytes, listWindows: customListWindows, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
+  listIdentities, unavailableIdentities = new Set(), recoveryAdapterPid = () => null, provisionProgramIdentity, readFreeMemoryBytes, listWindows: customListWindows, keyboardLayout, keyboardMap, stageMode = stageOpeningMode, mode = runHumanMode, bridgeFactory = openXpraHumanBridge, tileFactory = attachXpraHumanTile}) {
   const {ipcMain} = electron;
   const defaultReadFreeMemoryBytes = async () => {
     try {
@@ -582,6 +582,23 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     }
     finally { locks.delete(surfaceId); }
   }
+  /** Host-only control metadata; never a frozen operator/wire method.
+   * @param {string} method @param {any} request */
+  async function recoveryTool(method, request) {
+    const {defaultIdentityTool, identityEnvironment, identityRunner, resolveIdentityTool} = await import('./operatorBridge.js');
+    const tool = resolveIdentityTool({tool:defaultIdentityTool(),env});
+    return identityRunner({tool,env:identityEnvironment(env,tool)})(method,request);
+  }
+  /** @param {any} choice */
+  async function releaseIdentity(choice) {
+    if (!exact(choice,'holder,profileId') || !identityAllowed(choice.profileId) ||
+        typeof choice.holder !== 'string' || !/^srf-id-[a-z0-9-]{1,40}$/.test(choice.holder)) throw refuse('IDENTITY_PROTECTED');
+    if (creating || summarizeSurfaces(capsuleStates).bound.has(choice.profileId)) throw refuse('PROFILE_ALREADY_BOUND');
+    creating = true;
+    try { return await recoveryTool('recover',{id:choice.profileId,holder:choice.holder,observerPid:unavailableIdentities.has(choice.profileId) ? recoveryAdapterPid() : null}); }
+    catch (error) { console.info(`METAVIEWER_IDENTITY_RELEASE_FAILED code=${/^[A-Z][A-Z0-9_]{1,63}$/.test(/** @type {any} */(error)?.message) ? /** @type {any} */(error).message : 'UNAVAILABLE'}`); throw Object.assign(refuse('IDENTITY_RELEASE_REFUSED'), {reason:'Release could not be verified. A live session or missing ownership evidence still holds this identity.'}); }
+    finally { creating = false; }
+  }
   async function choices() {
     pruneProgramProfiles();
     const {bound} = summarizeSurfaces(capsuleStates);
@@ -599,7 +616,9 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
       let lastLogin = null, markerError = null;
       try { lastLogin = await markers.read(p.id); } catch { markerError = 'IDENTITY_MARKER_REFUSED'; }
-      return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
+      let recovery = null;
+      if (!entry) { try { recovery = await recoveryTool('recovery',{id:p.id}); } catch { /* unknown custody grants no release */ } }
+      return {held:recovery?.held === true,holder:recovery?.holder ?? null,profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
         currentMode:entry?.state === 'lost' ? 'lost' : entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
         lastLogin,markerError,busy:bound.has(p.id) && !entry?.surface_id};
     }));
@@ -894,8 +913,13 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       capsuleStates.set(key,{profile_id:profile.id,state:'creating'});
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profile.id, choice.role);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
+      unavailableIdentities.delete(profile.id);
       const reply = await core.request(profile.request);
-      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') throw refuse(surfaceCreateRefusal(reply));
+      if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {
+        const code=surfaceCreateRefusal(reply);
+        if (code === 'IDENTITY_UNAVAILABLE') unavailableIdentities.add(profile.id);
+        throw refuse(code);
+      }
       const surface = reply.data.surface;
       if (disposed || !id(surface?.surface_id) || surface.profile_id !== profile.id || surface.state !== 'active' || surface.control !== choice.role) {
         // The created acknowledgement is host authority even when its requested
@@ -982,7 +1006,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const handler = async (event, message) => {
     if (disposed || !admit(event) || !message || message.schema !== 'metaviewer.roles/v0.3') throw refuse('XPRA_SENDER_REFUSED');
     const {op} = message;
-    const keys = ['choices','programs','surfaces','list-windows'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window'].includes(op) ? 'choice,op,schema'
+    const keys = ['choices','programs','surfaces','list-windows'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window','release-identity'].includes(op) ? 'choice,op,schema'
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
       : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
@@ -991,6 +1015,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     try {
       if (needsCreation && !releaseCreation) throw refuse('SURFACE_CREATE_BUSY');
       if (op === 'choices') return await choices();
+      if (op === 'release-identity') return await releaseIdentity(message.choice);
       if (op === 'programs') return await programs();
       if (op === 'list-windows') {
         const rows = await listHostWindowChoices();
