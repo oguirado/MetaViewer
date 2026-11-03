@@ -3,6 +3,7 @@ package capsule
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -206,8 +207,11 @@ func TestV027XdotoolRecoveryNamesMissingPackage(t *testing.T) {
 }
 
 func TestV027HostProgramExitDuringWindowDiscovery(t *testing.T) {
-	for _, exited := range []bool{true, false} {
-		t.Run(map[bool]string{true: "exited", false: "slow-live"}[exited], func(t *testing.T) {
+	for _, scenario := range []string{"exited", "slow-live", "probe-error"} {
+		t.Run(scenario, func(t *testing.T) {
+			exited := scenario == "exited"
+			var children []*exec.Cmd
+			probes := 0
 			bin := t.TempDir()
 			if err := os.WriteFile(filepath.Join(bin, "srf-host-window"), []byte("#!/bin/sh\nprintf '{\"windows\":[]}'\n"), 0700); err != nil {
 				t.Fatal(err)
@@ -229,6 +233,8 @@ func TestV027HostProgramExitDuringWindowDiscovery(t *testing.T) {
 				if e := anchor.Start(); e != nil {
 					return nil, e
 				}
+				children = append(children, anchor)
+				t.Cleanup(func() { _ = anchor.Process.Kill(); _ = anchor.Wait() })
 				start, _, _, e := processWitness(anchor.Process.Pid)
 				if e != nil {
 					t.Fatal(e)
@@ -241,6 +247,8 @@ func TestV027HostProgramExitDuringWindowDiscovery(t *testing.T) {
 				if e = server.Start(); e != nil {
 					t.Fatal(e)
 				}
+				children = append(children, server)
+				t.Cleanup(func() { _ = server.Process.Kill(); _ = server.Wait() })
 				if exited {
 					for {
 						_, _, state, e := processWitness(server.Process.Pid)
@@ -250,7 +258,14 @@ func TestV027HostProgramExitDuringWindowDiscovery(t *testing.T) {
 						time.Sleep(time.Millisecond)
 					}
 				}
-				return &hostXpraProcess{anchor: anchor, server: server, start: start, root: t.TempDir(), view: t.TempDir()}, nil
+				process := &hostXpraProcess{anchor: anchor, server: server, start: start, root: t.TempDir(), view: t.TempDir()}
+				if scenario == "probe-error" {
+					process.probe = func(int) (string, int, string, error) {
+						probes++
+						return "", 0, "", os.ErrPermission
+					}
+				}
+				return process, nil
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -265,6 +280,17 @@ func TestV027HostProgramExitDuringWindowDiscovery(t *testing.T) {
 			}
 			if !exited && ctx.Err() == nil {
 				t.Fatalf("live program refused before discovery deadline: %v", err)
+			}
+			if scenario == "probe-error" && probes < 2 {
+				t.Fatalf("unknown probe result ended discovery: %d probes", probes)
+			}
+			for _, child := range children {
+				if child.ProcessState == nil {
+					t.Fatalf("discovery returned without waiting for child %d", child.Process.Pid)
+				}
+				if _, e := os.Stat(fmt.Sprintf("/proc/%d", child.Process.Pid)); !os.IsNotExist(e) {
+					t.Fatalf("child %d still present after cleanup: %v", child.Process.Pid, e)
+				}
 			}
 		})
 	}

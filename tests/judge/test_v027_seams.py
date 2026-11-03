@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from judge_sandbox import SRF_FAKE, Sandbox, make_tar
@@ -88,6 +89,47 @@ class LauncherFlowRegressions(unittest.TestCase):
         self.sb.put('app_hold', '')
         (self.sb.fake / 'app_hold').unlink()
         self.assertEqual(self.sb.judge('run').rc, 0)
+
+    def test_preflight_lock_remedy_names_launcher_interruption(self):
+        self.install()
+        self.pause_tool('xdpyinfo', 'if [ ! -f "$MV_FAKE_DIR/barrier" ]; then')
+        first = self.start('run')
+        self.wait_for(self.sb.fake / 'barrier', first)
+        try:
+            loser = self.sb.judge('run')
+            self.assertEqual(loser.rc, 2, loser.text)
+            self.assertIn('interrupt the active launcher', loser.err)
+            self.assertNotIn('run: bash', loser.err)
+            self.assertFalse((self.sb.jh / 'run/metaviewer.pid').exists())
+        finally:
+            self.sb.put('barrier-release', '1')
+            first.communicate(timeout=20)
+
+    def test_install_children_cannot_keep_launcher_lock(self):
+        self.sb.full_kit()
+        self.pause_tool('xdpyinfo', 'if [ ! -f "$MV_FAKE_DIR/barrier" ]; then')
+        first = self.start('install')
+        self.wait_for(self.sb.fake / 'barrier', first)
+        first.kill()
+        first.wait(timeout=5)
+        try:
+            # Keep the preflight child alive: only the launcher may own flock.
+            retry = self.sb.judge('run')
+            self.assertIn('JUDGE_NOT_INSTALLED', retry.codes, retry.text)
+            self.assertNotIn('JUDGE_RUNNING', retry.codes)
+        finally:
+            self.sb.put('barrier-release', '1')
+            first.communicate(timeout=20)
+
+    def test_stop_preserves_unpublished_pidfile(self):
+        run = self.sb.jh / 'run'
+        run.mkdir(parents=True)
+        pidfile = run / 'metaviewer.pid'
+        pidfile.touch()
+        result = self.sb.judge('stop')
+        self.assertEqual(result.rc, 0, result.text)
+        self.assertTrue(pidfile.exists(), 'stop removed an unpublished owner')
+        self.assertEqual(pidfile.read_bytes(), b'')
 
     def test_install_race_at_final_move(self):
         self.install()
@@ -207,8 +249,30 @@ class LauncherFlowRegressions(unittest.TestCase):
             self.assertIn(f'`{label}`', quickstart)
             self.assertIn(f'label="{label}"', app)
         self.assertIn('**`Switch to agent mode`** separately', quickstart)
+        self.assertIn('label="Use MetaViewer" @click="copyEntry"', app)
+        role = (REPO / 'ui/src/surfaces/RoleSurface.vue').read_text()
+        self.assertIn("Switch to {{ role === 'human' ? 'agent' : 'human' }} mode", role)
+        self.assertIn("@click=\"runMenu(() => lifecycle('switchMode'))\"", role)
         self.assertNotIn('More \u25be -> Use MetaViewer', quickstart)
         self.assertNotIn('More \u25be -> Automate from a demo', quickstart)
+
+    def test_quickstart_rejects_missing_shipped_controls(self):
+        from judge_sandbox import REPO
+        read = Path.read_text
+        for relative, old in (
+            ('ui/src/App.vue', 'label="Use MetaViewer"'),
+            ('ui/src/surfaces/RoleSurface.vue', "Switch to {{ role === 'human' ? 'agent' : 'human' }} mode"),
+        ):
+            target = REPO / relative
+            def missing(path, *args, **kwargs):
+                text = read(path, *args, **kwargs)
+                if path == target:
+                    self.assertIn(old, text)
+                    return text.replace(old, 'removed-control')
+                return text
+            with self.subTest(control=relative), patch.object(Path, 'read_text', missing):
+                with self.assertRaises(AssertionError):
+                    self.test_quickstart_names_shipped_controls_and_separate_role_switch()
 
 
 class OrderedKitSeams(unittest.TestCase):
