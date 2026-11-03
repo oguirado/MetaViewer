@@ -1,5 +1,7 @@
 # MetaViewer
 
+After installation, follow the [Judge tour](docs/JUDGE_TOUR.md) with your AI.
+
 Start with the [documentation index](docs/README.md), the
 [pre-existing work declaration](docs/PREEXISTING.md), and the
 [evaluation permission](NOTICE-EVALUATION.md). The permission covers MetaViewer

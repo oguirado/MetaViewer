@@ -1,5 +1,7 @@
 # Documentation index
 
+- [Judge tour](JUDGE_TOUR.md): guided product flows and architecture verification status after installation.
+
 ## Judge reading order
 
 - [Project status and limits](../README.md): what exists and what remains unmeasured.
