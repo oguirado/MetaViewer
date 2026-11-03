@@ -61,11 +61,15 @@ MAX_NOTICE_S = 300
 CAPTCHA_CUES = {
     'checkbox': {"i'm not a robot", 'no soy un robot', 'verify you are human',
                  'verifica que eres un ser humano'},
-    'iframe': {'cloudflare security challenge', 'widget containing a cloudflare security challenge'},
+    'iframe': {'cloudflare security challenge', 'widget containing a cloudflare security challenge',
+               'recaptcha', 'recaptcha challenge', 'hcaptcha', 'hcaptcha challenge'},
     'dialog': {'recaptcha'},
 }
 SIGN_IN_PHRASES = ('sign in', 'log in', 'login', 'sign up', 'create an account', 'iniciar sesión',
                    'inicia sesión', 'regístrate', 'crea una cuenta')
+HUMAN_CHECK_PHRASES = ('verify you are human', 'verify that you are human',
+                       'verifica que eres un ser humano')
+PASSWORD_NAMES = {'password', 'contraseña'}
 
 
 def module(name, path):
@@ -265,12 +269,42 @@ def normalized(text):
 
 
 def wall_kind(tree):
-    """Classify a CAPTCHA cue or a sign-in dialog in native AX rows; never act on it."""
-    rows = [row for row in tree.get('elements', []) if isinstance(row, dict)]
+    """Classify exposed native AX wall cues; never act on or answer a wall.
+
+    [TARGET, unit decision] Page headings or password-plus-sign-in wording
+    supply the page-level login seam. Native AX rows are exposed unless marked
+    hidden/ignored/invisible or given an empty box; no DOM/extra read is needed.
+    Frame names and human-check text are stop-only cues, not vendor proof.
+    """
+    rows = []
+    for row in tree.get('elements', []):
+        if not isinstance(row, dict):
+            continue
+        states = row.get('states') or {}
+        if any(source.get('hidden') is True or source.get('ignored') is True or
+               source.get('visible') is False for source in (row, states)):
+            continue
+        box = row.get('box')
+        if isinstance(box, (list, tuple)) and len(box) == 4 and (box[2] <= 0 or box[3] <= 0):
+            continue
+        rows.append(row)
     if any(normalized(row.get('name')) in CAPTCHA_CUES.get(row.get('role'), ()) for row in rows):
+        return 'captcha_wall'
+    if any(row.get('role') in ('text', 'statictext', 'paragraph', 'heading', 'dialog', 'alertdialog') and
+           any(phrase in normalized(row.get('name')) for phrase in HUMAN_CHECK_PHRASES) for row in rows):
         return 'captcha_wall'
     if any(row.get('role') in ('dialog', 'alertdialog') and
            any(phrase in normalized(row.get('name')) for phrase in SIGN_IN_PHRASES) for row in rows):
+        return 'login_wall'
+    if any(row.get('role') == 'heading' and
+           any(normalized(row.get('name')) == phrase or
+               normalized(row.get('name')).startswith(tuple(phrase + suffix for suffix in (' to ', ' a ', ' en ')))
+               for phrase in SIGN_IN_PHRASES) for row in rows):
+        return 'login_wall'
+    password = any(row.get('role') == 'textbox' and
+                   normalized(row.get('name')) in PASSWORD_NAMES for row in rows)
+    if password and any(row.get('role') in ('button', 'link', 'text', 'statictext') and
+                        normalized(row.get('name')) in SIGN_IN_PHRASES for row in rows):
         return 'login_wall'
     return None
 
