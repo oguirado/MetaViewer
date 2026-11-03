@@ -61,10 +61,10 @@ python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --caps
 python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
 ```
 
-Published releases carry their assets: the source URL is
+Set these variables from the release: published releases carry their assets, the source URL is
 `https://github.com/oguirado/MetaViewer/releases/download/v<VERSION>` and each release's
-notes give the manifest digest. Do not assume that a GitHub Actions artifact is a published
-release. The command refuses incomplete or corrupt sets. Checksums protect integrity, not
+notes from the maintainer give the manifest digest. Do not assume that a GitHub Actions artifact
+is a published release. The command refuses incomplete or corrupt sets. Checksums protect integrity, not
 publisher authenticity.
 The explicit fetch command authorizes the transfer; install still asks before downloading
 missing assets. No install begins until the fetch command has verified the selected set.
