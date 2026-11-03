@@ -17,6 +17,7 @@ import {
   CREATE_REFUSAL_REASONS,
   MAX_CAPSULES,
   configuredProfiles,
+  configuredVMProfiles,
   createRefusalReason,
   formatCapsuleLimitReason,
   formatCapsuleSlotReason,
@@ -401,7 +402,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   };
   const allProfiles = () => {
     pruneProgramProfiles();
-    return [...profiles, ...dynamicProfiles.values(), ...programProfiles.values(), ...windowProfiles.values()];
+    return [...profiles, ...configuredVMProfiles(env, process.arch), ...dynamicProfiles.values(), ...programProfiles.values(), ...windowProfiles.values()];
   };
   const roleFor = (/** @type {any} */ surface) => openingRoles.get(surface.surface_id) ?? roleOf(surface.profile_id);
   const savedPrograms = programBinaries(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'program-binaries'));
@@ -420,7 +421,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (!id(surfaceId)) throw refuse('SURFACE_UNKNOWN');
     const s = core.getHumanSurface?.(surfaceId) ?? (allowLost ? capsuleStates.get(surfaceId) : undefined);
     if (s && isForeignIdentity(s.profile_id)) throw refuse('IDENTITY_PROTECTED');
-    if (!s || (s.state !== 'active' && !(allowLost && s.state === 'lost')) || !allProfiles().some(p => p.id === s.profile_id)) throw refuse('SURFACE_UNKNOWN');
+    const profile = s && allProfiles().find(p => p.id === s.profile_id);
+    if (!s || (s.state !== 'active' && !(allowLost && s.state === 'lost')) || !profile) throw refuse('SURFACE_UNKNOWN');
+    if ((s.kind === 'vm' || profile.request?.params?.kind === 'vm') &&
+        (s.kind !== 'vm' || profile.request?.params?.kind !== 'vm' || roleFor(s) !== 'agent' || !['agent','human'].includes(s.control) || s.surface_id !== surfaceId)) throw refuse('SURFACE_UNKNOWN');
     return s;
   };
   /** @param {string} surfaceId */
@@ -928,6 +932,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if ([...windowProfiles.values()].some(w => w.surfaceId === surfaceId)) throw refuse('CAPSULE_ROLE_INVALID');
     if (creating) throw refuse('SURFACE_CREATE_BUSY');
     const surface = authoritative(surfaceId), profileId = surface.profile_id;
+    if (surface.kind === 'vm') throw refuse('CAPSULE_ROLE_INVALID');
     const role = roleFor(surface) === 'human' ? 'agent' : 'human';
     const program = programProfiles.get(profileId);
     creating = true;

@@ -1,5 +1,7 @@
 # MetaViewer
 
+For current VM/MicroVM limits and the proposed launch flow, see the [VM and MicroVM roadmap](VM_MICROVM_ROADMAP.md).
+
 For refusal codes and source-backed next steps, see [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
 
 After installation, follow the [Judge tour](docs/JUDGE_TOUR.md) with your AI.
