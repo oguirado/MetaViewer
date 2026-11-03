@@ -1,0 +1,1 @@
+- Accept the network mode reported by a native browser start, so Open network capsules can start. Measured on x64: public site 200, local network and docker bridge blocked.

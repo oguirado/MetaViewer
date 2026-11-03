@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -488,5 +489,32 @@ func TestNetworkOpenPrerequisiteContract(t *testing.T) {
 				t.Fatalf("open downgraded: %s", calls)
 			}
 		})
+	}
+}
+
+// Measured on x64 with a real open start: the reply carries net_mode, and the closed parser refused it.
+func TestIdentityStartReportsNetMode(t *testing.T) {
+	const reply = `{"net_mode":"%s","container":"srf-id-4a75af5e788b","run_id":"srf-id-4a75af5e788b","windows":[{"id":"w1","x":0,"y":0,"w":1280,"h":900,"title":"","url":""}]}` + "\n"
+	for _, tc := range []struct {
+		mode  string
+		modes []string
+		ok    bool
+	}{
+		{"open", []string{"legacy", "open", "proxied"}, true},
+		{"proxied", []string{"proxied"}, true},
+		{"legacy", nil, true},
+		{"open", []string{"proxied"}, false},
+		{"bogus", []string{"legacy", "open"}, false},
+	} {
+		c, err := parseIdentityStart([]byte(fmt.Sprintf(reply, tc.mode)), 8192, tc.modes)
+		if (err == nil) != tc.ok || (tc.ok && c.Container != "srf-id-4a75af5e788b") {
+			t.Fatalf("%s %v: %+v %v", tc.mode, tc.modes, c, err)
+		}
+	}
+	if c, err := parseIdentityStart([]byte(`{"container":"c","run_id":"r","windows":[]}`), 8192, nil); err != nil || c.NetMode != "" {
+		t.Fatalf("legacy reply: %+v %v", c, err)
+	}
+	if _, err := parseIdentityStart([]byte(`{"net_mode":"open","extra":1,"container":"c","run_id":"r","windows":[]}`), 8192, []string{"open"}); err == nil {
+		t.Fatal("unknown field admitted")
 	}
 }

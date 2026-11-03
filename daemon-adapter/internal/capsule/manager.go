@@ -989,13 +989,8 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 		b.RunID = c.RunID
 		b.FramesRoot = c.FramesDir
 	} else {
-		var c struct {
-			Kind      string   `json:"kind,omitempty"`
-			Container string   `json:"container"`
-			RunID     string   `json:"run_id"`
-			Windows   []Window `json:"windows"`
-		}
-		if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &c); e != nil {
+		c, e := parseIdentityStart(out, m.cfg.MaxOutputBytes, m.cfg.NetModes)
+		if e != nil {
 			return nil, e
 		}
 		if !identityContainer.MatchString(c.Container) || !runID.MatchString(c.RunID) || len(c.Windows) != 1 || c.Windows[0].ID != "w1" || c.Windows[0].W < 1 || c.Windows[0].H < 1 || c.Windows[0].W > p.Width || c.Windows[0].H > p.Height || c.Windows[0].X < 0 || c.Windows[0].Y < 0 || (c.Kind != p.NativeKind && !(p.NativeKind == "browser" && c.Kind == "")) {
@@ -1689,4 +1684,30 @@ func (m *Manager) SubscriptionBinding(id string) (Binding, error) {
 		return Binding{}, fault("surface", "subscription requires an active surface")
 	}
 	return b, nil
+}
+
+type identityStart struct {
+	Kind      string   `json:"kind,omitempty"`
+	NetMode   string   `json:"net_mode,omitempty"`
+	Container string   `json:"container"`
+	RunID     string   `json:"run_id"`
+	Windows   []Window `json:"windows"`
+}
+
+// parseIdentityStart reads the native start reply. A reported network mode must be one this
+// host declared; absence is the legacy reply.
+func parseIdentityStart(out []byte, maxBytes int, netModes []string) (identityStart, error) {
+	var c identityStart
+	if err := cli.ParseLine(out, maxBytes, &c); err != nil {
+		return c, err
+	}
+	if c.NetMode == "" || c.NetMode == "legacy" {
+		return c, nil
+	}
+	for _, mode := range netModes {
+		if c.NetMode == mode {
+			return c, nil
+		}
+	}
+	return c, fault("malformed_cli", "undeclared network mode in identity start")
 }
