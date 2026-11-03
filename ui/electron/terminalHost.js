@@ -298,6 +298,16 @@ export function createTerminalHost({
     }
   };
 
+  // [TARGET, unit decision] Exit delivery releases host bookkeeping even when
+  // an injected facade never sends broker.close. Preserve pre-attach output
+  // until it can be delivered, bounded by the existing attach deadline.
+  const releaseDeliveredExit = (/** @type {string} */ id, /** @type {any} */ s) => {
+    if (!s.exited || !s.port) return;
+    clearAttachTimer(s);
+    sessions.delete(id);
+    s.port.close?.();
+  };
+
   /** @param {string} sessionId */
   const closeSessionInternal = async (sessionId) => {
     const s = sessions.get(sessionId);
@@ -425,12 +435,12 @@ export function createTerminalHost({
           ? { session: id, seq: message.seq, bytes: new Uint8Array(Buffer.from(String(message.b64), 'base64')) }
           : { session: id, ...(message.ev === 'exit' ? { exitCode: message.code } : { error: 'TERMINAL_IO_REFUSED' }) };
         if (message.ev === 'exit') {
-          clearAttachTimer(s);
           s.exited = true;
           s.resolveExit();
         }
         if (s.port) s.port.postMessage(frame);
         else enqueuePreAttachFrame(s, id, frame);
+        releaseDeliveredExit(id, s);
       },
     },
   });
@@ -513,7 +523,7 @@ export function createTerminalHost({
         if (Number.isFinite(limitsConfig.attachDeadlineMs) && limitsConfig.attachDeadlineMs > 0) {
           attachTimer = setTimeout(() => {
             const current = sessions.get(session);
-            if (current && !current.port && !current.exited) {
+            if (current && !current.port) {
               void closeSessionInternal(session).catch(() => {});
             }
           }, limitsConfig.attachDeadlineMs);
@@ -648,6 +658,7 @@ export function createTerminalHost({
       }
       s.queue = [];
       s.queuedBytes = 0;
+      releaseDeliveredExit(value.session, s);
       return { port: port2 };
     },
     resize: async (/** @type {any} */ rawValue, /** @type {unknown} */ explicitSender) => {

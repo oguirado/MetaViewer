@@ -404,3 +404,36 @@ func TestMarkLostRefusesUnconfirmedLostBinding(t *testing.T) {
 		t.Fatal("MarkLost must not flip ConfirmedAbsent=true on a lost binding without active disappearance proof")
 	}
 }
+
+// Stop may race native exit before the ordinary active-surface probes run.
+func TestV027StopThenAbsenceReleasesReservation(t *testing.T) {
+	for _, absent := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unknown", true: "absent"}[absent], func(t *testing.T) {
+			m := testManager(t, &scriptRunner{output: []byte(startOK)})
+			id := createID(t, m)
+			m.runner = a2Runner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+				if args[1] == "stop" || absent {
+					return nil, cli.ExitFault("srf-identity-surface", 4, "")
+				}
+				return nil, &cli.Fault{Code: "uncertain", Detail: "timeout"}
+			})
+			if _, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`)); err == nil {
+				t.Fatal("unproven stop accepted")
+			}
+			ticks := make(chan time.Time, 2)
+			ticks <- time.Time{}
+			ticks <- time.Time{}
+			close(ticks)
+			if err := m.monitorLiveness(context.Background(), ticks, func(context.Context, json.RawMessage) error { return nil }); err != nil {
+				t.Fatal(err)
+			}
+			_, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`))
+			if absent && err != nil {
+				t.Fatalf("proven absent native stayed pinned: %v", err)
+			}
+			if !absent && err == nil {
+				t.Fatal("unknown native released")
+			}
+		})
+	}
+}

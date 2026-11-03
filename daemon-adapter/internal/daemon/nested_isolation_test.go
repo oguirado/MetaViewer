@@ -109,8 +109,17 @@ func TestTwoInstancesIsolated(t *testing.T) {
 		t.Fatalf("outer destroy: %s", out)
 	}
 	out := call(b, "list", map[string]any{})
-	if len(out) != 1 || !strings.Contains(string(out[0]), idB) || !strings.Contains(string(out[0]), `"state":"active"`) {
+	if len(out) != 2 || !strings.Contains(string(out[0]), idB) || !strings.Contains(string(out[0]), `"state":"active"`) {
 		t.Fatalf("outer destroy damaged inner: %s", out)
+	}
+	var refresh struct {
+		Event string
+		Data  struct {
+			Ref frames.Ref `json:"frame_ref"`
+		}
+	}
+	if json.Unmarshal(out[1], &refresh) != nil || refresh.Event != "frame_ready" || refresh.Data.Ref.SurfaceID != idB || !strings.HasPrefix(refresh.Data.Ref.RAMWSPath, b.root+"/") {
+		t.Fatalf("inner list refresh escaped allocation: %s", out)
 	}
 	if out := call(b, "destroy", map[string]string{"surface_id": idB}); len(out) != 1 || !strings.Contains(string(out[0]), `"state":"destroyed"`) {
 		t.Fatalf("inner destroy: %s", out)

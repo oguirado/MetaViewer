@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +53,22 @@ func (f *hostWindowFakeRunner) Run(_ context.Context, argv []string, _ []byte) (
 		case "capture":
 			return f.captureOut, f.captureErr
 		case "input":
+			if f.inputOut == nil && f.inputErr == nil {
+				fields := map[string]string{}
+				for i := 2; i+1 < len(argv); i++ {
+					fields[argv[i]] = argv[i+1]
+				}
+				kind := "click"
+				if fields["--key"] != "" {
+					kind = "key"
+				}
+				if fields["--type"] != "" {
+					kind = "type"
+				}
+				xid, _ := strconv.ParseUint(fields["--xid"], 10, 32)
+				out, _ := json.Marshal(map[string]any{"ok": true, "xid": xid, "witness": fields["--witness"], "kind": kind, "focus_verified": true})
+				return out, nil
+			}
 			return f.inputOut, f.inputErr
 		}
 	}
@@ -201,6 +219,23 @@ func TestHostWindowAttachDetachInputCaptureAndNoDisplaySlot(t *testing.T) {
 	if got := runner.calls[len(runner.calls)-1]; !reflect.DeepEqual(got, wantType) {
 		t.Fatalf("type call = %v, want %v", got, wantType)
 	}
+
+	// Real native acknowledgement: a successful dispatch must still reject
+	// missing, foreign, unfocused or extended receipts.
+	for i, ack := range []string{
+		`{}`, `{"ok":true,"xid":77594628,"witness":"0x04a00003:1730541000","kind":"click","focus_verified":true}`,
+		`{"ok":true,"xid":77594627,"witness":"stale","kind":"click","focus_verified":true}`,
+		`{"ok":true,"xid":77594627,"witness":"0x04a00003:1730541000","kind":"click","focus_verified":false}`,
+		`{"ok":true,"xid":77594627,"witness":"0x04a00003:1730541000","kind":"key","focus_verified":true}`,
+		`{"ok":true,"xid":77594627,"witness":"0x04a00003:1730541000","kind":"click","focus_verified":true,"extra":1}`,
+	} {
+		runner.inputOut = []byte(ack)
+		params, _ := jsonParams(sid1, fmt.Sprintf("bad-ack-%d", i), "agent", map[string]any{"type": "click", "x": 1, "y": 1, "button": "left"})
+		if _, err := m.Handle(context.Background(), req("input", params)); err == nil {
+			t.Fatalf("accepted invalid native acknowledgement %s", ack)
+		}
+	}
+	runner.inputOut = nil
 
 	// 4. Capture via srf-host-window capture decodes XWD and updates geometry on resize.
 	runner.captureOut = makeTestXWD(4, 2, 42)

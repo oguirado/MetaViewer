@@ -425,7 +425,9 @@ impl CoreState {
             Input::Connect => {
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {
-                    p.unknown = true;
+                    // Only a durable Dispatch can have reached the executor.
+                    // Undispatched admissions remain cancellable without a receipt.
+                    p.unknown |= p.dispatched;
                 }
                 for s in self.surfaces.values_mut() {
                     s.refresh_after = Some(next);

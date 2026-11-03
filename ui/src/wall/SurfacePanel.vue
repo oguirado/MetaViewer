@@ -656,3 +656,38 @@ function onActivateSurface() {
   </CapsulePanel>
   </div>
 </template>
+<style>
+/* [TARGET, unit decision] Compact chrome follows the tile, including floating
+ * tiles, rather than the viewport. The kit's wide layout stays authoritative. */
+.mv-tile { container: tile-chrome / inline-size; }
+@container tile-chrome (max-width: 499px) {
+  .mv-shell .mv-tile .cuk-capsule-panel__header {
+    position: relative;
+  }
+  .mv-shell .mv-tile .ui-capsule-toolbar { flex-wrap: nowrap; gap: 4px; }
+  .mv-shell .mv-tile .ui-capsule-toolbar .p-toolbar-start { flex: 1 1 0; }
+  .mv-shell .mv-tile .ui-capsule-toolbar .p-toolbar-end { flex: 0 0 auto; }
+  .mv-shell .mv-tile .cuk-capsule-panel__title-cluster { gap: 4px; }
+  .mv-shell .mv-tile .cuk-capsule-panel__tab-identity { flex: 1 1 0; }
+  .mv-shell .mv-tile .cuk-capsule-panel__actions { flex-wrap: nowrap; gap: 2px; }
+  .mv-shell .mv-tile .mv-tile-rail { flex-wrap: nowrap; }
+  .mv-shell .mv-tile .mv-tile-chrome { gap: 4px; padding: 4px; }
+  .mv-shell .mv-tile .mv-tile-chrome__shot-label { display: none; }
+  .mv-shell .mv-tile .mv-tile-capid { flex: 0 1 auto; min-width: 0; }
+  .mv-shell .mv-tile .mv-tile-capid__id { display: none; }
+  .mv-shell .mv-tile .mv-tile-capid__copy { font-size: 0; }
+  .mv-shell .mv-tile .mv-tile-capid__copy::after { content: "Copy ID"; font-size: 11px; }
+  .mv-shell .mv-tile .mv-tile-chrome__badge {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+  }
+  .mv-shell .mv-tile .mv-input-indicator__text {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+  }
+}
+</style>

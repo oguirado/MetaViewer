@@ -2600,6 +2600,17 @@ jobs:
           command -v xvfb-run
           command -v strace
           command -v zip
+      # The regression's 120 s budget is for the wall, not for a cold compile: measured 76 s of 118 s on x64.
+      - name: Prime packaged DISPLAY build
+        env:
+          CAPSULE_UI_KIT_REPO: ${{ github.workspace }}/kit-checkout
+          ELECTRON_OVERRIDE_DIST_PATH: ${{ github.workspace }}/ui/node_modules/electron/dist
+          CARGO_TARGET_DIR: ${{ runner.temp }}/package-cargo-target
+          MV_PKG_OUT: ${{ runner.temp }}/metaviewer-display-prime/output
+        run: |
+          set -euo pipefail
+          bash .github/workflows/offline.sh node --input-type=module -e "const {packageShell} = await import('./ui/tools/package.js'); await packageShell(process.env);"
+          rm -rf "${RUNNER_TEMP}/metaviewer-display-prime"
       - name: Run packaged DISPLAY regression
         env:
           JOB_ID: package
