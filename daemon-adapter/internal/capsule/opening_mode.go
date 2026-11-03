@@ -196,8 +196,8 @@ func ResolveHostBinary(raw string, pathEnv string) (string, error) {
 	if trimmed == "" || len(trimmed) > 256 {
 		return "", fault("host_program_unavailable", "host_program_unavailable: binary name is required")
 	}
-	for _, c := range trimmed {
-		if c <= 0x20 || c >= 0x7f || strings.ContainsRune(";|&$`<>(){}[]!#*?~\"'\\", c) {
+	for _, c := range raw {
+		if c < 0x20 || c == 0x7f || strings.ContainsRune(";|&$`<>(){}[]!#*?~\"'\\", c) {
 			return "", fault("host_program_unavailable", "host_program_unavailable: "+trimmed+": invalid binary name")
 		}
 	}
@@ -210,6 +210,11 @@ func ResolveHostBinary(raw string, pathEnv string) (string, error) {
 			return "", fault("host_program_unavailable", "host_program_unavailable: "+trimmed+": not found or not executable")
 		}
 		return trimmed, nil
+	}
+	for _, c := range trimmed {
+		if c <= 0x20 || c >= 0x7f {
+			return "", fault("host_program_unavailable", "host_program_unavailable: "+trimmed+": invalid binary name")
+		}
 	}
 	if strings.Contains(trimmed, "/") || trimmed == "." || trimmed == ".." {
 		return "", fault("host_program_unavailable", "host_program_unavailable: "+trimmed+": relative path refused")

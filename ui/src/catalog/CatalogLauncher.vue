@@ -366,7 +366,7 @@ function onClose() {
       id="shell/new-capsule/window-empty"
       data-semantic-anchor="dialog/new-capsule/window-empty"
       class="mv-window-empty"
-    >No open desktop windows match this filter.</p>
+    >{{ windowSearch.trim() ? 'No open desktop windows match this filter.' : 'No attachable X11 windows are open. Native Wayland windows are not listed.' }}</p>
     <p
       v-if="windowError"
       id="shell/new-capsule/window-error"
