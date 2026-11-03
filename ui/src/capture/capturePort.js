@@ -1,4 +1,8 @@
 /**
+ * [TARGET, unit decision] Stop receipts omit a creation timestamp. Sealed
+ * recording list rows retain a known timestamp or measure local receipt time;
+ * this fallback never claims to be the native recording start time.
+ *
  * MetaViewer capture port (MVUI9 lane C): renderer-side adapter over the
  * host capture facade `window.metaviewer.capture`.
  *
@@ -123,6 +127,7 @@ export const CAPTURE_UNAVAILABLE = 'CAPTURE_UNAVAILABLE';
  * @property {number} frames Last known frame count.
  * @property {number} elapsedMs Last known elapsed time in ms.
  * @property {CaptureShot|null} lastShot Last screenshot, else null.
+ * @property {boolean} [screenshotPending] Screenshot request in flight.
  * @property {string} lastCode Last refusal code, or '' when healthy.
  */
 
@@ -647,6 +652,11 @@ export function createCaptureState(port) {
       const stopped = await typed.recordStop(entry.recordingId);
       if (disposed) return unavailable();
       if (stopped.ok) {
+        const recording = stopped.recording;
+        const created = rows.find(row => row.id === recording.id)?.created_ms ?? Date.now();
+        storeRows([{id:recording.id,kind:'recording',surface_id:recording.surface_id,
+          phase:'sealed',frames:recording.frames,duration_ms:recording.duration_ms,
+          sealed:true,created_ms:created}, ...rows], undefined);
         entry.phase = 'idle';
         entry.recordingId = null;
         entry.frames = 0;
@@ -698,17 +708,27 @@ export function createCaptureState(port) {
   async function screenshot(surfaceId) {
     if (!isId(surfaceId) || disposed) return unavailable();
     const entry = ensureEntry(surfaceId);
-    const result = await typed.screenshot(surfaceId);
-    if (disposed) return unavailable();
-    if (result.ok) {
-      entry.lastShot = result.shot;
-      entry.lastCode = '';
-      // MVUI16B lane R (L2-2): a screenshot sealed a host row; relist.
-      queueAutoRefresh(surfaceId);
-    } else {
-      entry.lastCode = result.code;
+    if (entry.screenshotPending) return unavailable();
+    entry.screenshotPending = true;
+    try {
+      const result = await typed.screenshot(surfaceId);
+      if (disposed) return unavailable();
+      if (result.ok) {
+        entry.lastShot = result.shot;
+        entry.lastCode = '';
+        // The successful receipt already proves this shot sealed; keep its
+        // export row even if the following authoritative list is unavailable.
+        storeRows([{id:result.shot.id,kind:'shot',surface_id:surfaceId,phase:'sealed',
+          frames:1,duration_ms:0,sealed:true,created_ms:result.shot.created_ms}, ...rows], undefined);
+        // MVUI16B lane R (L2-2): a screenshot sealed a host row; relist.
+        queueAutoRefresh(surfaceId);
+      } else {
+        entry.lastCode = result.code;
+      }
+      return result;
+    } finally {
+      if (!disposed) delete entry.screenshotPending;
     }
-    return result;
   }
 
   /**
@@ -915,6 +935,7 @@ export function createCaptureState(port) {
   function dispose() {
     if (disposed) return;
     disposed = true;
+    for (const entry of Object.values(bySurface)) delete entry.screenshotPending;
     pendingStarts.clear();
     exporting.clear();
     // MVUI16B lane R: queued refresh waiters resolve promptly instead of

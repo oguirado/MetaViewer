@@ -1,0 +1,2 @@
+- Scale post-input pixel settlement from the measured native capture duration, with a bounded bootstrap capture and an unchanged fast-capture window. Preserve caller cancellation and require a real post-input capture before publishing native evidence.
+- Exercise slow and variable capture latency through native input, pending-input refusal, drain, settlement, publication and receipt evidence for click, text and key actions.

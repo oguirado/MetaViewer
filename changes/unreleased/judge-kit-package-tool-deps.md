@@ -1,0 +1,1 @@
+- The judge kit now installs the package tool's locked dependencies before verifying the app, so a kit unpacked from source no longer stops at `JUDGE_SMOKE` for a missing `@electron/asar`.

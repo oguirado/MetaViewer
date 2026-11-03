@@ -1,0 +1,2 @@
+- License MetaViewer source under AGPL-3.0-only, declare it in Rust, npm and Python metadata, and retain the supplied external component notice in release assets.
+- Clarify source redistribution and limited judge evaluation rights for separate compiled components; show the license and a source link in Settings through an exact-URL external opener.

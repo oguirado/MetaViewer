@@ -1,0 +1,4 @@
+- Add deterministic regression coverage for a DISPLAY pull before the delayed initial ring read offers its port.
+- Add deterministic regression coverage for unchanged static-frame delivery after port replacement, preserving capture staleness and ordinary poll deduplication.
+- Offer the initial DISPLAY port after guarded ring open, before asynchronous tmpfs validation and frame reads, so a slow first read cannot delay the renderer handoff. Absent rings allocate no channel; pixels still require all existing guards and seqlock validation.
+- [TARGET, unit decision] A replacement requests one validated repaint through the existing rate-limited reader. The repaint retains the ring sequence and capture timestamp, does not advance capture liveness, and republishes stale state after delivery when needed. Ordinary unchanged polls remain deduplicated; no retained frame cache or new IPC is introduced.

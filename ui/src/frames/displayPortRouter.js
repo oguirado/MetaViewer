@@ -267,6 +267,7 @@ export function installDisplayPortRouter(options = {}) {
    * @type {Map<string, {
    *   port: any,
    *   onMessage: (ev: any) => void,
+   *   onClose: () => void,
    *   state: 'active' | 'stale' | 'absent',
    *   generation: string,
    *   lastFrame: any | null,
@@ -461,8 +462,10 @@ export function installDisplayPortRouter(options = {}) {
     try {
       if (typeof stream.port.removeEventListener === 'function') {
         stream.port.removeEventListener('message', stream.onMessage);
+        stream.port.removeEventListener('close', stream.onClose);
       } else if (typeof stream.port.off === 'function') {
         stream.port.off('message', stream.onMessage);
+        stream.port.off('close', stream.onClose);
       }
     } catch {
       /* ignore */
@@ -483,6 +486,14 @@ export function installDisplayPortRouter(options = {}) {
     closeStream(surfaceId);
     const stream = {
       port,
+      onClose() {
+        if (disposed || streams.get(surfaceId) !== stream) return;
+        stopPull(surfaceId);
+        closeStream(surfaceId);
+        // A visible lifetime can request a replacement. An unbound parked
+        // lifetime releases ownership completely when its peer closes.
+        if (activeBinding(surfaceId)?.visible) requestDisplay(surfaceId);
+      },
       /** @param {any} ev */
       onMessage(ev) {
         if (disposed || streams.get(surfaceId) !== stream) return;
@@ -535,7 +546,7 @@ export function installDisplayPortRouter(options = {}) {
             postAck(port, surfaceId, payload.seq, 'PRESENTED');
           } else {
             diagnostic(surfaceId, 'REFUSED', 'PAINT_FAILED');
-            postAck(port, surfaceId, payload.seq, 'HIDDEN');
+            postAck(port, surfaceId, payload.seq, 'REFUSED');
           }
           return;
         }
@@ -583,8 +594,10 @@ export function installDisplayPortRouter(options = {}) {
     diagnostic(surfaceId, 'VISIBILITY', binding?.visible ? 'VISIBLE' : 'HIDDEN');
     if (typeof port.addEventListener === 'function') {
       port.addEventListener('message', stream.onMessage);
+      port.addEventListener('close', stream.onClose);
     } else if (typeof port.on === 'function') {
       port.on('message', stream.onMessage);
+      port.on('close', stream.onClose);
     } else {
       port.onmessage = stream.onMessage;
     }

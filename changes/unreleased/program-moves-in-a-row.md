@@ -1,0 +1,5 @@
+- Admit a fresh program frame after off-target animation only when the selected box has identical RGB pixels and a unique matching role, name and box in the original perception; every proposal binds that fresh frame.
+- Retry invalid Muse action replies and unproved mark mappings within the existing attempt bound and absolute deadline, recording each refusal without input.
+- Preserve model refusal codes and verified partial moves without misclassifying known unsubmitted decisions as uncertain input.
+- Explain MW_PROGRAM_CONTROL recovery: press Release on the tile, then run again.
+- Drain queued authenticated publications before binding; retry explicit STALE_FRAME with RGB checks only, without another perception or model call, within the existing bound and deadline. Record acquisition and RGB-check timings.
