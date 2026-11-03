@@ -373,10 +373,11 @@ impl Server {
                 .terminal
                 .lock()
                 .map_err(|_| invalid("poisoned terminal slot"))?;
-            if slot.is_none() {
-                *slot = Some(terminal);
-                return Err(CaptureTerminalFailure(error).into());
-            }
+            // [TARGET, unit decision] The current request's correlated storage
+            // refusal supersedes a pending terminal in the bounded single slot.
+            // Always mark it flushable, including when the slot was occupied.
+            *slot = Some(terminal);
+            return Err(CaptureTerminalFailure(error).into());
         }
         Err(error)
     }
@@ -514,6 +515,51 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn v027_apply_failure_does_not_replay_retained_capture_witness() {
+        let temp = Temp::new();
+        let reg = |component: &str| -> Registration {
+            serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-orphan")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+        };
+        let config = Config {
+            session_id: "orphan-capture".into(),
+            core: reg("core"),
+            peers: vec![reg("agent"), reg("daemon"), reg("ui")],
+        };
+        let mut server = Server::open(config.clone(), &temp.0, effective_uid().unwrap()).unwrap();
+        let before = server.authority.state().snapshot().unwrap();
+        let data = json!({"method":"recordStart", "reply":{"ok":true,"recording_id":"orphan"}});
+        let artifact = server
+            .root
+            .join("artifacts")
+            .join(sha256_hex(&serde_json::to_vec(&data).unwrap()));
+        // Retain succeeds; apply then rejects a missing boundary witness before
+        // it can append a record. Recovery must discard the durable orphan.
+        let error = server
+            .capture_journal(
+                vec![Witness {
+                    sha256: sha256_hex(b"missing-boundary"),
+                    byte_len: 16,
+                }],
+                &data,
+            )
+            .unwrap_err();
+        assert!(error.downcast_ref::<CaptureStorageFailure>().is_some());
+        assert!(
+            artifact.is_file(),
+            "capture witness must already be durable"
+        );
+        assert_eq!(server.authority.state().snapshot().unwrap(), before);
+        drop(server);
+        let recovered = Server::open(config, &temp.0, effective_uid().unwrap()).unwrap();
+        assert_eq!(recovered.authority.state().snapshot().unwrap(), before);
+        assert!(
+            !artifact.exists(),
+            "unreferenced witness must not be replayed"
+        );
+        assert_eq!(recovered.capture, Default::default());
     }
 
     #[test]

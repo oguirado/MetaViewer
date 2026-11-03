@@ -198,10 +198,12 @@ lock_launcher() {
         fail JUDGE_PIDFILE "cannot create launcher lock directory" "make $JUDGE_HOME writable"
     exec 9>"$JUDGE_HOME/run/launcher.lock" || fail JUDGE_PIDFILE "cannot open launcher lock" "make $JUDGE_HOME/run writable"
     python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null ||
-        fail JUDGE_RUNNING "another launcher owns run or install" "wait for install to finish, or run: bash $0 stop"
+        fail JUDGE_RUNNING "another launcher owns run or install" "wait for the launcher to finish, or interrupt the active launcher in its terminal, then retry"
 }
 
 remove_owned_pid() {
+    # Empty/unpublished state is not an ownership witness.
+    case $1 in '' | *[!0-9]*) return 0 ;; esac
     [ "$(head -n 1 "$PIDFILE" 2>/dev/null)" != "$1" ] || rm -f -- "$PIDFILE"
 }
 
@@ -556,8 +558,14 @@ write_receipt() {
 }
 
 cmd_install() {
-    local assets_used
     lock_launcher
+    # The parent keeps flock while every installation child has fd 9 closed.
+    # If this launcher dies, an orphaned installer cannot keep the lock alive.
+    (cmd_install_locked) 9>&-
+}
+
+cmd_install_locked() {
+    local assets_used
     [ -z "$(running_pid)" ] || fail JUDGE_RUNNING "MetaViewer is running" "bash $0 stop"
     mkdir -p "$JUDGE_HOME" && chmod 0700 "$JUDGE_HOME" || fail JUDGE_ASSET "cannot create $JUDGE_HOME" "set MV_JUDGE_HOME to a writable directory"
     pf_or_exit --tier "$TIER" --phase static

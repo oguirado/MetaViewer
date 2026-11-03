@@ -2664,43 +2664,71 @@ mod nv_regressions {
 
     #[test]
     fn v027_capture_storage_failure_has_correlated_terminal_without_commit() {
-        let mut f = Fixture::new();
-        f.seed();
-        let _ui = f.attach(Component::Ui, 16);
-        let env = f.envelope(Component::Ui, 2, json!({"schema":"record_request/v0.2", "request_id":"storage-stop", "op":"ram_start", "params":{"surface_id":"surface-demo", "recording_id":"recording-storage", "ring_bytes":8388608, "max_fps":3}}));
-        let boundary = f
-            .server
-            .authority
-            .retain_witness(b"capture-boundary")
-            .unwrap();
-        f.server.capture.exports_recovered = true;
-        let mut frame: Value = serde_json::from_str(include_str!(
-            "../../../contracts/examples/v0.2/frame_ref.valid.json"
-        ))
-        .unwrap();
-        frame["width"] = 1.into();
-        frame["height"] = 1.into();
-        frame["sha256"] = sha256_hex(&[1, 2, 3]).into();
-        f.server
-            .capture
-            .frame(&serde_json::from_value(frame).unwrap(), vec![1, 2, 3], 0)
-            .unwrap();
-        let before = f.server.capture.clone();
-        crate::journal::fail_next_append_with_torn_event_sidecar(&f.server.root);
-        let Command::RecordRequest(request) = &env.body else {
-            panic!("record request");
-        };
-        assert!(f.server.capture_wire(0, &env, request, boundary).is_err());
-        assert_eq!(f.server.capture, before);
-        let terminal = f.server.connections[&env.from].terminal.lock().unwrap();
-        let value =
-            serde_json::to_value(&terminal.as_ref().expect("missing terminal diagnostic").body)
+        for occupied in [false, true] {
+            let mut f = Fixture::new();
+            f.seed();
+            let _ui = f.attach(Component::Ui, 16);
+            let env = f.envelope(Component::Ui, 2, json!({"schema":"record_request/v0.2", "request_id":"storage-stop", "op":"ram_start", "params":{"surface_id":"surface-demo", "recording_id":"recording-storage", "ring_bytes":8388608, "max_fps":3}}));
+            let boundary = f
+                .server
+                .authority
+                .retain_witness(b"capture-boundary")
                 .unwrap();
-        assert_eq!(value["data"]["code"], "CAPTURE_REPLY");
-        let reply: Value = serde_json::from_str(value["data"]["detail"].as_str().unwrap()).unwrap();
-        assert_eq!(reply["request_id"], "storage-stop");
-        assert_eq!(reply["method"], "recordStart");
-        assert_eq!(reply["reply"]["code"], "CAPTURE_UNAVAILABLE");
+            f.server.capture.exports_recovered = true;
+            let mut frame: Value = serde_json::from_str(include_str!(
+                "../../../contracts/examples/v0.2/frame_ref.valid.json"
+            ))
+            .unwrap();
+            frame["width"] = 1.into();
+            frame["height"] = 1.into();
+            frame["sha256"] = sha256_hex(&[1, 2, 3]).into();
+            f.server
+                .capture
+                .frame(&serde_json::from_value(frame).unwrap(), vec![1, 2, 3], 0)
+                .unwrap();
+            if occupied {
+                let body = Command::Hello(Box::new(f.server.config.core.hello.clone()));
+                for _ in 0..16 {
+                    f.server.send_at(0, &env.from, body.clone()).unwrap();
+                }
+                let error = f.server.send_at(0, &env.from, body).unwrap_err();
+                assert!(matches!(
+                    error.downcast_ref::<SendFailure>(),
+                    Some(SendFailure::QueueOverflow(_))
+                ));
+                assert!(f.server.connections[&env.from]
+                    .terminal
+                    .lock()
+                    .unwrap()
+                    .is_some());
+            }
+            let before = f.server.capture.clone();
+            crate::journal::fail_next_append_with_torn_event_sidecar(&f.server.root);
+            let Command::RecordRequest(request) = &env.body else {
+                panic!("record request");
+            };
+            let error = f
+                .server
+                .capture_wire(0, &env, request, boundary)
+                .unwrap_err();
+            assert!(
+                error
+                    .downcast_ref::<capture::CaptureTerminalFailure>()
+                    .is_some(),
+                "the reserved correlated terminal must remain flushable"
+            );
+            assert_eq!(f.server.capture, before);
+            let terminal = f.server.connections[&env.from].terminal.lock().unwrap();
+            let value =
+                serde_json::to_value(&terminal.as_ref().expect("missing terminal diagnostic").body)
+                    .unwrap();
+            assert_eq!(value["data"]["code"], "CAPTURE_REPLY");
+            let reply: Value =
+                serde_json::from_str(value["data"]["detail"].as_str().unwrap()).unwrap();
+            assert_eq!(reply["request_id"], "storage-stop");
+            assert_eq!(reply["method"], "recordStart");
+            assert_eq!(reply["reply"]["code"], "CAPTURE_UNAVAILABLE");
+        }
     }
 
     use super::*;

@@ -45,6 +45,8 @@ func (l *hostXpraLog) Write(data []byte) (int, error) {
 func (l *hostXpraLog) String() string { l.mu.Lock(); defer l.mu.Unlock(); return string(l.tail) }
 
 type hostXpraProcess struct {
+	// Optional probe seam; cleanup always verifies the real process witness.
+	probe                                 func(int) (string, int, string, error)
 	log                                   *hostXpraLog
 	anchor, server                        *exec.Cmd
 	start, root, view, display, authority string
@@ -293,6 +295,10 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 			}
 		}
 	}()
+	probe := process.probe
+	if probe == nil {
+		probe = processWitness
+	}
 	var spec *HostWindowSpec
 	var candidate *HostWindowSpec
 	deadline := time.Now().Add(15 * time.Second)
@@ -300,8 +306,9 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 		// The xpra child exits with its program. Keep its PID unreaped for
 		// cleanup, but stop discovery as soon as that witnessed child exits.
 		if process.server != nil && process.server.Process != nil {
-			_, _, state, probeErr := processWitness(process.server.Process.Pid)
-			if probeErr != nil || state == "Z" || state == "X" {
+			_, _, state, probeErr := probe(process.server.Process.Pid)
+			// A failed probe is unknown; only a successful exit witness ends discovery.
+			if probeErr == nil && (state == "Z" || state == "X") {
 				return nil, fault("host_program_unavailable", "host_program_unavailable: program exited before publishing an X11 window")
 			}
 		}
