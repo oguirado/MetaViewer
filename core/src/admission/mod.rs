@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+//! Admission control for every proposal, host event and capsule slot operation.
 //! [TARGET, unit decision] Capsule slots fence source/copy-destination profiles
 //! independently of surface states. UI confirmation is mandatory; native custody
 //! remains adapter-owned. Retain at most 256 operation outcomes per session;

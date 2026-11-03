@@ -78,7 +78,7 @@ test('slots request channel agrees with main and rejects unknown request fields'
     async invoke(channel, request) {
       calls.push([channel, request]);
       const { credential_copy_confirmed, ...fields } = request;
-      return { ...fields, schema: 'capsule_state_event/v0.2', event: 'completed' };
+      return { ...fields, schema: 'capsule_state_event/v0.2', event: 'completed', slots: [] };
     },
   } });
   const request = { schema: 'capsule_state_request/v0.2', operation_id: 'security-slot',

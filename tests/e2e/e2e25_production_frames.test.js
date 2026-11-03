@@ -1101,7 +1101,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
           invocations.push([channel, args]);
           if (channel === 'metaviewer:capsule-state.request') {
             const { credential_copy_confirmed, ...request } = args[0];
-            return { ...request, schema: 'capsule_state_event/v0.2', event: 'completed' };
+            return { ...request, schema: 'capsule_state_event/v0.2', event: 'completed', slots: [] };
           }
           return true;
         },
