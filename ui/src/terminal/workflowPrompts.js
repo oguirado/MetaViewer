@@ -14,7 +14,7 @@ const attachment = [
   'Goal runs: --planner rules needs no Muse account; --planner muse needs authenticated Muse Code.',
   'Choose one unique exact visible/observed name as the goal, one goal per run.',
   'MW_PROGRAM_CONTROL: press Release control, verify agent control, then observe again.',
-  'MW_COMPILED_BROWSER_UNAVAILABLE: use the verified pinned checkout or wait for the compiled browser build.',
+  'Compiled browser goals are supported; MW_COMPILED_BROWSER_UNAVAILABLE applies to stored-workflow mode: use the verified pinned checkout for that mode.',
 ];
 const tasks = {
   automate: [

@@ -123,7 +123,7 @@ export const CATALOG_KINDS = Object.freeze([
     kind: 'desktop-window',
     label: 'Desktop window',
     category: 'Windows',
-    description: 'Attach an open desktop window into a capsule tile.',
+    description: 'Attach an open X11 desktop window into a capsule tile. Native Wayland windows are not listed.',
     opensAs: 'tab',
     footprint: '',
     keywords: Object.freeze(['window', 'desktop', 'host', 'attach']),

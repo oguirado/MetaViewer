@@ -71,7 +71,7 @@ const exact = (v, keys) => v && typeof v === 'object' && !Array.isArray(v) &&
   Reflect.ownKeys(v).sort().join(',') === keys && Object.values(Object.getOwnPropertyDescriptors(v)).every(d => 'value' in d);
 
 /** The app starts with PATH=/usr/bin:/bin; programs also install here (games in /usr/games). */
-export const HOST_BINARY_STANDARD_DIRS = Object.freeze(['/usr/local/bin', '/usr/games', '/usr/local/games', '/usr/sbin', '/sbin']);
+export const HOST_BINARY_STANDARD_DIRS = Object.freeze(['/usr/local/bin', '/usr/games', '/usr/local/games', '/usr/sbin', '/sbin', '/snap/bin']);
 /** Resolve a bare binary name via PATH or validate an absolute path on the host without any shell. */
 /** @param {unknown} binary @param {NodeJS.ProcessEnv} [env] @returns {{path:string, name:string}} */
 export function resolveHostBinary(binary, env = process.env, standardDirs = HOST_BINARY_STANDARD_DIRS) {
@@ -81,7 +81,8 @@ export function resolveHostBinary(binary, env = process.env, standardDirs = HOST
     return Object.assign(new Error(reason), {code:'HOST_PROGRAM_UNAVAILABLE', reason});
   };
   if (!trimmed || trimmed.length > 256) throw fail('binary name is required');
-  if (/[;\s|&$`<>(){}[\]!#*?~"'\\\x00-\x1f\x7f]/.test(trimmed)) throw fail(`${trimmed}: invalid binary name`);
+  if (/[;|&$`<>(){}[\]!#*?~"'\\\x00-\x1f\x7f]/.test(String(binary)) ||
+      (!trimmed.startsWith('/') && /\s/.test(trimmed))) throw fail(`${trimmed}: invalid binary name`);
   const isExec = (/** @type {string} */ candidate) => {
     try { const st = statSync(candidate); return st.isFile() && (st.mode & 0o111) !== 0; }
     catch { return false; }
