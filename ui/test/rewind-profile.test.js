@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm,realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
-import {guestCommandProfileOwnerSync,arm64CapsuleStatusSync} from '../electron/guestCommandProfile.js';
+import {guestCommandProfileOwnerSync,arm64CapsuleStatusSync,requireGuestCommandMode} from '../electron/guestCommandProfile.js';
 import {headlessAgentInstance,arm64CapsuleSessionPlan,OPERATOR_RESOURCES} from '../tools/package.js';
 import {scrubAdapterEnv} from '../electron/coreLauncher.js';
 
@@ -14,6 +14,10 @@ test('protected rewind bootstrap uses dedicated agent binding, refuses mixed mod
   await writeFile(file,JSON.stringify(profile),{mode:0o600});
   const env={MV_REWIND_ENABLED:'1',MV_REWIND_ONLY:'1',MV_REWIND_PROFILE:file,MV_REWIND_AGENT_INSTANCE:instance,MV_GUEST_COMMAND_AGENT_INSTANCE:'wrong-legacy-binding'};
   assert.equal(guestCommandProfileOwnerSync(env,'arm64'),owner);assert.equal(await headlessAgentInstance(env),instance);
+  assert.equal(requireGuestCommandMode(env,'arm64'),true);
+  for(const broken of [{...env,MV_REWIND_ENABLED:undefined},{...env,MV_REWIND_ONLY:'0'},{...env,MV_HEADLESS_ONLY:'1'},{...env,MV_REWIND_PROFILE:'/absent'}])assert.throws(()=>requireGuestCommandMode(broken,'arm64'));
+  assert.throws(()=>requireGuestCommandMode(env,'x64'));
+  assert.equal(requireGuestCommandMode({...env,MV_REWIND_ONLY:undefined,MV_ARM64_CAPSULES:'1'},'arm64'),false);
   assert.equal(guestCommandProfileOwnerSync(env,'x64'),null);assert.equal(arm64CapsuleStatusSync(env,'x64').supported_host,false);
   assert.equal(arm64CapsuleStatusSync(env,'arm64').microvm.available,true);
   for(const key of ['MV_GUEST_COMMAND_ONLY','MV_HEADLESS_ONLY'])assert.equal(guestCommandProfileOwnerSync({...env,[key]:'1'},'arm64'),null);

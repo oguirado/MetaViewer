@@ -33,6 +33,10 @@ export function guestCommandProfileOwnerSync(env,arch=process.arch) {
 
 /** @param {NodeJS.ProcessEnv} env @param {string} [arch] */
 export function requireGuestCommandMode(env,arch=process.arch){
+ if(env.MV_REWIND_ONLY!==undefined&&env.MV_REWIND_ONLY!==''){
+  if(env.MV_REWIND_ONLY!=='1'||env.MV_REWIND_ENABLED!=='1'||guestCommandProfileOwnerSync(env,arch)===null)throw Error('REWIND_PROFILE_INVALID');
+  return true;
+ }
  if(env.MV_GUEST_COMMAND_ONLY!=='1')return false;
  if(guestCommandProfileOwnerSync(env,arch)===null)throw Error('GUEST_COMMAND_PROFILE_INVALID');
  return true;
