@@ -9,7 +9,7 @@ import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityP
 const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
-const selectedSlots=ref('');
+const selectedSlots=ref(''), copyStatus=ref('');
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
 const typedName=ref(''), labelEdited=ref(false), nameInput=ref(/** @type {{ $el?: HTMLInputElement }|null} */(null));
 const displayName=computed({get:()=>labelEdited.value ? label.value : typedName.value,
@@ -95,9 +95,10 @@ async function openIdentity(profileId,role){
     try {
       const choice={binary:mode.binary,role};
       if (mode.hostXpra) Object.assign(choice,{hostXpra:true});
-      const reply=await (props.openProgram ? props.openProgram(choice) : roleApi.createProgram(choice));
+      const reply=await (mode.identityBound && roleApi.open ? roleApi.open({profileId,role}) : props.openProgram ? props.openProgram(choice) : roleApi.createProgram(choice));
       if(generation!==invocationGeneration)return;
       if(reply?.ok!==true)throw Object.assign(Error(reply?.code || 'PROGRAM_OPEN_FAILED'),{reason:reply?.reason});
+      if (mode.identityBound && roleApi.open) emit('open-identity',{profileId,surfaceId:reply.surfaceId,role});
       emit('close');
     } catch(reason) {
       if(generation!==invocationGeneration)return;
@@ -112,9 +113,9 @@ async function openIdentity(profileId,role){
 }
 /** @param {string} profileId */
 async function copiedIdentity(profileId) {
+  copyStatus.value=`Copied stored data to ${profileId}.`;
   await invoke('list');
   selectedSlots.value=profileId;
-  await openIdentity(profileId,'human');
 }
 /** @param {string} profileId */
 async function stopIdentity(profileId) {
@@ -166,6 +167,7 @@ watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=
       </li>
     </ul>
     <section class="identity-saved-data" aria-label="Saved data">
+      <p v-if="copyStatus" role="status" aria-live="polite">{{ copyStatus }}</p>
       <StoredDataSlots v-if="selectedSlots && rows.some(row=>row.id===selectedSlots)" :key="selectedSlots" :profile-id="selectedSlots" :blocked="isOpen(selectedSlots)" @copied="copiedIdentity" />
       <p v-if="!selectedSlots && rows.length">Select Stored data on an identity to manage its saved slots.</p>
     </section>

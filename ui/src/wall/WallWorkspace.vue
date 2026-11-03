@@ -23,6 +23,22 @@ export function floatDragBounds(start, origin, pointer, width, height, grid) {
   return {x,y,width:Math.floor((col+1)*width/grid.cols)-x,height:Math.floor((row+1)*height/grid.rows)-y};
 }
 
+/** [TARGET, unit decision] Row-major placement shares the snap arithmetic.
+ * Occupied rectangles reserve every cell they intersect; saved cells are hints.
+ * @param {number} width @param {number} height @param {{cols:number,rows:number}} grid
+ * @param {any[]} occupied @param {{col:number,row:number}|null} [preferred] */
+export function nextFloatingCell(width,height,grid,occupied,preferred = null) {
+  floatDragBounds({}, {}, {x:0,y:0,ctrlKey:true},width,height,grid);
+  const cells = Array.from({length:grid.cols*grid.rows},(_,index)=>({col:index%grid.cols,row:Math.floor(index/grid.cols)}));
+  if (preferred && cells.some(c=>c.col === preferred.col && c.row === preferred.row)) cells.unshift(preferred);
+  for (const cell of cells) {
+    const rect = floatDragBounds({}, {}, {x:(cell.col+.5)*width/grid.cols,y:(cell.row+.5)*height/grid.rows,ctrlKey:true},width,height,grid);
+    if (!occupied.some(o=>o.x < rect.x+rect.width && o.x+o.width > rect.x && o.y < rect.y+rect.height && o.y+o.height > rect.y)) return rect;
+  }
+  const w = Math.floor(width*.9), h = height;
+  return {x:Math.min(24*occupied.length,width-w),y:Math.min(24*occupied.length,height-h),width:w,height:h};
+}
+
 let floatingDragSerial = 0;
 /** Capture floating title drags before Dockview can start native docking.
  * Live movement uses a temporary transform; release commits through the public
@@ -33,7 +49,7 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
   const doc = root.ownerDocument;
   let cancel = () => {};
   const down = (/** @type {any} */ event) => {
-    if (event.button !== 0 || event.target.closest('button,input,select,a,[role="button"]')) return;
+    if (event.button !== 0 || event.target.closest('button,input,select,textarea,a,[role="button"],dialog,[aria-modal="true"],.xterm,[contenteditable="true"]')) return;
     const header = event.target.closest('.dv-floating-titlebar,.dv-tabs-and-actions-container,.cuk-capsule-panel__header');
     // Dockview renders panel content in a sibling overlay, outside the group's
     // resize container. Resolve that header through the public panel model.
@@ -71,8 +87,11 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
       sheet.textContent = `[data-wall-snap="${token}"]{left:${rect.x}px;top:${rect.y}px;width:${rect.width}px;height:${rect.height}px}
 [data-wall-drag="${token}"]{transform:translate(${e.clientX-event.clientX}px,${e.clientY-event.clientY}px)}`;
     };
+    const preventSelection = (/** @type {any} */ e) => e.preventDefault();
+    doc.addEventListener('selectstart',preventSelection,true);
     const move = (/** @type {any} */ e) => {
       if (e.pointerId !== event.pointerId) return;
+      e.preventDefault();
       if (!moved && Math.abs(e.clientX-event.clientX)+Math.abs(e.clientY-event.clientY) > 3) {moved = true; custom();}
       if (moved) paint(e);
     };
@@ -84,6 +103,7 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
     let point = {x:event.clientX,y:event.clientY};
     const track = (/** @type {any} */ e) => {if(e.pointerId === event.pointerId) {control=e.ctrlKey; point={x:e.clientX,y:e.clientY}; move(e);}};
     const cleanup = () => {
+      doc.removeEventListener('selectstart',preventSelection,true);
       overlay.removeAttribute('data-wall-drag'); content?.removeAttribute('data-wall-drag'); preview.remove(); sheet.remove();
       for (const [name,fn] of /** @type {Array<[string,EventListener]>} */ ([['pointermove',track],['pointerup',up],['pointercancel',abort],['keydown',key],['keyup',key],['visibilitychange',abort]])) doc.removeEventListener(name,fn,true);
       doc.defaultView?.removeEventListener('blur',abort);
@@ -333,6 +353,8 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 
 /**
  * @typedef {Object} WallWorkspaceControllerOptions
+ * @property {()=>{cols:number,rows:number}} [floatingGrid]
+ * @property {()=>Record<string,{col:number,row:number}>} [savedCells]
  * @property {boolean} [allowLostSurface] - Diagnostic fixture presentation only.
  * @property {(error:WallAdmissionError)=>void} [onLayoutError]
  * @property {WallProjectionView | null} [projectionView]
@@ -355,6 +377,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {() => void} dispose
  * @property {(action:string) => WallAdmissionResult<unknown>} resizeFocused
  * @property {(id:string,action:string) => WallAdmissionResult<unknown>} resizeTile
+ * @property {()=>string|null} beginFloatingDrag
  * @property {(preset:string|null) => WallAdmissionResult<unknown>} setPreset
  * @property {() => void} refreshPreset
  * @property {(capsuleId:string,body:any) => WallAdmissionResult<unknown>} applyLayoutEcho
@@ -551,6 +574,7 @@ export function describeDockTab(tabProps) {
  */
 export function createWallWorkspaceController(options = {}) {
   const projectionView = options.projectionView ?? null;
+  const floatingGrid = options.floatingGrid, savedCells = options.savedCells;
   /** @type {WallDockviewApi | null} */
   let api = null;
   /** @type {WallWindowPresentation | null} */
@@ -697,6 +721,35 @@ export function createWallWorkspaceController(options = {}) {
     const signature = JSON.stringify([preset,api.width,api.height,tiles.map(({id,hidden})=>({id,hidden}))]);
     if (signature === layoutSignature || tiles.some(tile => tile.maximized)) return;
     if (focusTile && (preset === 'single' || preset === 'focus-strip')) tiles.sort((a,b)=>Number(b.id === focusTile)-Number(a.id === focusTile));
+    if (preset === 'floating' && floatingGrid) {
+      // Modal scrollbars can temporarily shrink the overlay host. Place only
+      // after the creator closes, so snap and insertion use the same desktop.
+      const doc = /** @type {any} */ (api.panels?.[0])?.group?.element?.ownerDocument;
+      if ([...(doc?.querySelectorAll('[aria-modal="true"]') ?? [])].some(e=>e.getBoundingClientRect().width > 0)) return;
+      const occupied = [], inserted = [];
+      for (const tile of tiles) {
+        const panel = /** @type {any} */ (api.getPanel(tile.id));
+        if (windows?.state(tile.id).floating) {
+          const position = /** @type {any} */ (api).toJSON().floatingGroups?.find((/** @type {any} */ g)=>g.data?.views?.includes(tile.id))?.position;
+          if (position) occupied.push({x:position.left,y:position.top,width:position.width,height:position.height});
+          continue;
+        }
+        const profile = panelIdentities.get(tile.id);
+        const rect = nextFloatingCell(api.width,api.height,floatingGrid(),occupied,profile ? savedCells?.()[profile] : null);
+        /** @type {any} */ (api).addFloatingGroup(panel,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+        occupied.push(rect); inserted.push({id:tile.id,rect});
+      }
+      if (!(api.groups || []).some((/** @type {any} */ g)=>g.api.location.type === 'grid')) /** @type {any} */ (api).addGroup({direction:'right',skipSetActive:true});
+      // Removing the last grid panel can transiently expose a scrollbar and
+      // clamp a right-edge float. Reapply only insertions after the empty grid
+      // home exists; existing/manual windows never participate in this pass.
+      for (const {id,rect} of inserted) {
+        const group = /** @type {any} */ (api.getPanel(id))?.group;
+        if (group) /** @type {any} */ (api).addFloatingGroup(group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+      }
+      layoutSignature = signature;
+      void host?.completeUserGesture?.(); return;
+    }
     const rectangles = presetRectangles(preset,tiles,api.width,api.height);
     if (!rectangles.length) return;
     if (rectangles.some(rect=>typeof api?.getPanel(rect.id)?.api?.moveTo !== 'function')) throw Error('LAYOUT_PRESET_FAILED');
@@ -763,6 +816,12 @@ export function createWallWorkspaceController(options = {}) {
       void host?.completeUserGesture?.();
       return succeed({preset});
     } catch { return fail('LAYOUT_PRESET_FAILED','Tile layout is unavailable.'); }
+  }
+
+  function beginFloatingDrag() {
+    if (preset !== 'floating') preset = null;
+    layoutSignature = '';
+    return preset;
   }
 
   function resizeFocused(/** @type {string} */ action) {
@@ -1100,7 +1159,7 @@ export function createWallWorkspaceController(options = {}) {
     });
   }
 
-  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
+  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, beginFloatingDrag, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
 }
 
 /**
@@ -1136,6 +1195,7 @@ import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
 import SurfacePanel from './SurfacePanel.vue';
 
 const props = defineProps({
+  identityCells: {type:Object,default:()=>({})},
   snapGrid: {type: /** @type {import('vue').PropType<{cols:number,rows:number}>} */ (Object), default:()=>({cols:2,rows:2})},
   workspaceComponent: { type: Object, default: () => DockWorkspace },
   scope: {
@@ -1194,7 +1254,7 @@ const emit = defineEmits([
   'layout-error',
 ]);
 
-const controller = createWallWorkspaceController({ projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
+const controller = createWallWorkspaceController({ floatingGrid:()=>props.snapGrid, savedCells:()=>props.identityCells, projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
 const callbacks = controller.createPanelCallbacks(emit);
 
 const wallRoot = ref(null);
@@ -1216,7 +1276,7 @@ function onReady(payload) {
   const accepted = controller.handleReady(payload);
   releaseDrag();
   if (accepted.ok && /** @type {any} */ (wallRoot.value)?.ownerDocument && /** @type {any} */ (payload)?.api) releaseDrag = installFloatingDrag(wallRoot.value,/** @type {any} */ (payload).api,
-    ()=>props.snapGrid,()=>{controller.setPreset(null); emit('custom-layout');},()=>{void /** @type {any} */ (payload).host?.completeUserGesture?.();});
+    ()=>props.snapGrid,()=>{emit('custom-layout',controller.beginFloatingDrag());},()=>{void /** @type {any} */ (payload).host?.completeUserGesture?.();});
   emit('ready', payload);
 }
 
@@ -1367,6 +1427,9 @@ onBeforeUnmount(() => {
 <style>
 .wall-grid-controls { display:flex; gap:12px; align-items:center; padding:4px 8px; font-size:12px; }
 .wall-grid-controls select { color:inherit; background:var(--mv-panel-bg,Canvas); }
+.wall-workspace .dv-floating-titlebar, .wall-workspace .dv-tabs-and-actions-container,
+.wall-workspace .cuk-capsule-panel__header, .wall-workspace .mv-tile-rail,
+.wall-workspace .mv-role-actions { user-select:none; }
 .wall-snap-preview { position:absolute; pointer-events:none; z-index:9999; box-sizing:border-box; border:2px solid Highlight; background:color-mix(in srgb,Highlight 20%,transparent); }
 .wall-workspace > .mv-dock-workspace { flex:1; height:0; min-height:0; }
 .wall-workspace { display:flex; flex-direction:column;
