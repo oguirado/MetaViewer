@@ -241,12 +241,14 @@ v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
 v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
+v027rel-acff733643dd	changes/unreleased/v027-release-notices.md
 v027-repo.md	changes/unreleased/v027-repo.md
 v027-review-fix-2.md	changes/unreleased/v027-review-fix-2.md
 v027-seams.md	changes/unreleased/v027-seams.md
 v027-verify-2.md	changes/unreleased/v027-verify-2.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
+v027-window-resize.md	changes/unreleased/v027-window-resize.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
 vm-open-path-held.md	changes/unreleased/vm-open-path-held.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
@@ -993,6 +995,7 @@ srf-identity-surface	daemon-adapter/internal/capsule/testdata/srf-identity-surfa
 text_input_test.go	daemon-adapter/internal/capsule/text_input_test.go
 textcap_test.go	daemon-adapter/internal/capsule/textcap_test.go
 v027_triage_test.go	daemon-adapter/internal/capsule/v027_triage_test.go
+window_resize_test.go	daemon-adapter/internal/capsule/window_resize_test.go
 runner.go	daemon-adapter/internal/cli/runner.go
 runner_test.go	daemon-adapter/internal/cli/runner_test.go
 b1stale-813879d52247	daemon-adapter/internal/daemon/b1_stale_verdict_test.go
@@ -1078,6 +1081,7 @@ subscri-84a98cfe9a77	daemon-adapter/internal/frames/subscriptions_robust_test.go
 subscri-c23a6160df7a	daemon-adapter/internal/frames/subscriptions_test.go
 v027tri-ab1ca1942408	daemon-adapter/internal/frames/v027_triage_test.go
 vm_pair_test.go	daemon-adapter/internal/frames/vm_pair_test.go
+windowr-55ca1914206b	daemon-adapter/internal/frames/window_resize_test.go
 ipc-bounds_test.go	daemon-adapter/internal/ipc/bounds_test.go
 client.go	daemon-adapter/internal/ipc/client.go
 client_test.go	daemon-adapter/internal/ipc/client_test.go
@@ -1532,6 +1536,7 @@ test_p18e_identity.py	tests/test_p18e_identity.py
 test_p18g_identity.py	tests/test_p18g_identity.py
 testpac-f8254faf9cfe	tests/test_package_receipt_binding.py
 testpyt-2879eeaf233d	tests/test_python_contract_mirror.py
+testrel-8763567d3ddc	tests/test_release_notices.py
 test_route_map.py	tests/test_route_map.py
 test_router_docs.py	tests/test_router_docs.py
 test_router_index.py	tests/test_router_index.py
@@ -2080,6 +2085,7 @@ recstat-4421aee2626c	ui/test/recstate-clock.test.js
 recstat-0d25c7c5145b	ui/test/recstate-elapsed.test.js
 recstate-helpers.mjs	ui/test/recstate-helpers.mjs
 recstat-62bb4709a239	ui/test/recstate-panel.test.js
+release-2ece4df7d52d	ui/test/release-notices.test.js
 renderer-asar.test.js	ui/test/renderer-asar.test.js
 rendere-0907683c0d40	ui/test/renderer-ready.test.js
 reopena-3e5702fcbea8	ui/test/reopen-app-create.test.js
@@ -2148,10 +2154,12 @@ v027-fix-j3.test.js	ui/test/v027-fix-j3.test.js
 v027hos-06c56f4d7d15	ui/test/v027-host-wall-triage.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 v027sea-46470f0a4e51	ui/test/v027-seams-role-transport.test.js
+v027sta-281915c754c2	ui/test/v027-stale-handoff.test.js
 v027-tile-chrome.html	ui/test/v027-tile-chrome.html
 v027-tile-chrome.js	ui/test/v027-tile-chrome.js
 v027til-aec2d0c0bc3c	ui/test/v027-tile-chrome.test.js
 v027-u3c.test.js	ui/test/v027-u3c.test.js
+v027win-4508650304ef	ui/test/v027-window-resize.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
