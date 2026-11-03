@@ -5,6 +5,7 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
   const invoke = (op, body = {}) => ipcRenderer.invoke(channel, {schema:'metaviewer.roles/v0.3', op, ...body});
   contextBridge.exposeInMainWorld('metaviewerRoles', Object.freeze({
     choices: () => invoke('choices'),
+    releaseIdentity: choice => invoke('release-identity', {choice}),
     programs: () => invoke('programs'),
     listWindows: () => invoke('list-windows'),
     surfaces: () => invoke('surfaces'),
@@ -20,6 +21,8 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
     mount: (surfaceId, bounds) => invoke('mount', {surfaceId,bounds}),
     resize: (surfaceId, bounds) => invoke('resize', {surfaceId,bounds}),
     visibility: (surfaceId, visible) => invoke('visibility', {surfaceId,visible}),
+    preview: surfaceId => invoke('preview', {surfaceId}),
+    theme: (surfaceId, theme) => invoke('theme', {surfaceId,theme}),
     raise: surfaceId => invoke('raise', {surfaceId}),
     onFocus: callback => {
       const listener = (_event,id) => {if(typeof id === 'string')callback(id);};

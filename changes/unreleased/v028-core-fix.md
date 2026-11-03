@@ -1,0 +1,1 @@
+- Keep ordinary capsule creates independent of pending-create slot fences and journal lifecycle/profile binding atomically so existing frame snapshots remain stable.

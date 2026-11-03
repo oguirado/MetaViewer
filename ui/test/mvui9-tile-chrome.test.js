@@ -286,7 +286,7 @@ describe('lane T CSP surface', () => {
   test('chrome CSS builds on kit tokens with compact, overflow-free rules', () => {
     const css = readFileSync(CSS_URL, 'utf8');
     assertTokenOnlyCss(css, 'wall.css');
-    const chrome = css.slice(css.indexOf('MVUI9 tile capture chrome'));
+    const chrome = css.slice(css.indexOf('MVUI9 tile capture chrome'), css.indexOf('/* Compact capsule chrome:'));
     assert.ok(chrome.length > 0, 'chrome section is present');
     for (const selector of ['.mv-tile-chrome', '.mv-tile-chrome__record',
       '.mv-tile-chrome__shot', '.mv-tile-chrome__badge']) {

@@ -10,21 +10,23 @@ const elements = node => [node, ...(node.children ?? []).flatMap(elements)];
 const prop = (node, name) => node.props?.find(p => p.type === 6 && p.name === name)?.value?.content;
 const tree = elements(descriptor.template.ast);
 const shell = tree.find(n => prop(n, 'class') === 'metaviewer mv-shell');
+const navigation = tree.find(n => prop(n, 'class') === 'mv-navigation');
 const notice = tree.find(n => prop(n, 'class') === 'mv-layout-notice');
 const body = tree.find(n => prop(n, 'class') === 'mv-shell-body');
 const wall = tree.find(n => prop(n, 'id') === 'shell-wall');
 const alert = tree.find(n => prop(n, 'id') === 'mv-layout-unavailable');
 const rule = selector => declarationsFor(descriptor.styles.map(s => s.content).join('\n'), selector);
 
-test('notice occupies a separate flow row outside the wall and all dock tabs at every viewport, including 1280x720 and 1920x1080', () => {
+test('notice occupies navigation outside the wall and all dock tabs at every viewport, including 1280x720 and 1920x1080', () => {
   assert.ok(notice && body && wall && alert);
-  assert.ok(shell.children.includes(notice));
+  assert.ok(shell.children.includes(navigation));
+  assert.ok(elements(navigation).includes(notice));
   assert.ok(shell.children.includes(body));
-  assert.ok(shell.children.indexOf(notice) < shell.children.indexOf(body));
+  assert.ok(shell.children.indexOf(navigation) < shell.children.indexOf(body));
   assert.ok(elements(notice).includes(alert));
   assert.ok(elements(body).includes(wall));
   assert.ok(!elements(wall).includes(alert), 'negative contrast: the original wall overlay is rejected');
-  assert.match(rule('.mv-shell'), /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) auto minmax\(0,1fr\)/);
+  assert.match(rule('.mv-shell'), /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) minmax\(0,1fr\)/);
   assert.match(rule('.mv-layout-notice'), /display:grid/);
   assert.match(rule('.mv-layout-unavailable'), /grid-area:1 \/ 1/);
   assert.doesNotMatch(rule('.mv-layout-unavailable'), /position:|z-index:|transform:/);
@@ -45,8 +47,8 @@ test('longest outcome reserves space before any failure and while panels open', 
 
 
 test('normal and nested bodies explicitly occupy their flexible track', () => {
-  assert.match(rule('.mv-shell-body'), /grid-row:3(?:;|$)/);
-  assert.match(rule('.mv-layout-notice'), /grid-row:2(?:;|$)/);
+  assert.match(rule('.mv-shell-body'), /grid-row:2(?:;|$)/);
+  assert.match(rule('.mv-layout-notice'), /grid-row:auto(?:;|$)/);
   assert.match(rule('.mv-shell--nested'), /grid-template-rows:minmax\(0,1fr\)/);
   assert.match(rule('.mv-shell--nested > .mv-shell-body'), /grid-row:1(?:;|$)/);
 });

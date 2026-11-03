@@ -339,9 +339,9 @@ test('P18B mounted App stays quiescent across menu toggles and idle ticks', asyn
   const { root, activity, listenerCount } = await mountFixture(t);
   const initialListeners = listenerCount();
   t.after(() => assert.equal(listenerCount(), 0, 'document listeners are released on unmount'));
-  const more = findAll(root, n => n.props?.id === 'shell-more')[0];
-  assert.ok(!!more, 'More is reachable');
-  for (let i = 0; i < 20; i++) { more.props.onClick(); await tick(); }
+  const more = findAll(root, n => n.props?.id === 'shell-terminal')[0];
+  assert.ok(!!more, 'Terminal dock is reachable');
+  for (let i = 0; i < 20; i++) { await more.props.onClick(); await tick(); }
   await new Promise(resolve => setTimeout(resolve, 250));
   const settledCalls = activity.calls;
   const settledNodes = findAll(root, () => true).length;

@@ -37,7 +37,7 @@ const Wall = await compileSfc('wall/WallWorkspace.vue', {
 
 // v-show in the real CapsulePanel needs an element style object. Keep this
 // renderer local instead of changing the shared terminal test harness.
-function mountComponent(component, props) {
+function mountComponent(component, props, provides = {}) {
   const root = { children: [] };
   const renderer = vue.createRenderer({
     createElement: tag => ({ tag, children: [], props: {}, style: {} }),
@@ -54,6 +54,7 @@ function mountComponent(component, props) {
     parentNode: node => node.parent, nextSibling: () => null, setScopeId() {},
   });
   const app = renderer.createApp(component, props);
+  for (const [key,value] of Object.entries(provides)) app.provide(key,value);
   app.mount(root);
   return { root, app };
 }
@@ -153,4 +154,21 @@ test('missing rows and terminal surfaces disable the kit control button', async 
       assert.equal(h.sent.length, 0);
     }
   } finally { h.close(); }
+});
+
+
+test('paired terminal capability survives Dockview isolated router roots',async()=>{
+  const capability={available:()=>true,isOpen:()=>false,toggle(){}};
+  let Router, observed;
+  const CaptureWorkspace=vue.defineComponent({props:['panelComponents'],setup:p=>{Router=p.panelComponents.CapsulePanel;return ()=>vue.h('div');}});
+  const CapturePanel=vue.defineComponent({setup(){observed=vue.inject('capsuleTerminal',null);return ()=>vue.h('div');}});
+  const View=await compileSfc('wall/WallWorkspace.vue',{'capsule-ui-kit/DockWorkspace':CaptureWorkspace,'./SurfacePanel.vue':CapturePanel});
+  const runtime=createAuthorityRuntime({subscribeFrames(){return ()=>{};}});
+  const wall=mountComponent(View,{workspaceComponent:CaptureWorkspace,scope:{},storage:{},ownerWindowId:'paired-wall',...runtime,tileScheduler:{}},{capsuleTerminal:capability});
+  let isolated;
+  try {
+    await flush();assert.ok(Router);
+    isolated=mountComponent(Router,{params:{api:{id:'capsule:surface-a',title:'A'},params:{capsuleId:'surface-a'}}});
+    assert.equal(observed,capability,'independent router root must receive exact scoped authority');
+  } finally {isolated?.app.unmount();wall.app.unmount();runtime.dispose();}
 });
