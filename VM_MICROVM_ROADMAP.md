@@ -6,7 +6,9 @@ This document records the agreed direction and the current limits of VM capsules
 
 The current VM creation path uses the existing `createSurface({kind: 'vm'})` selector. The host chooses an eligible configured profile and owns its image, program and path configuration. The renderer cannot supply those values. The ordinary browser call remains `createSurface()` with no selector. This preserves the existing authority facade and wire protocol; it does not add a VM-specific public method or channel. See [authority admission](ui/electron/authorityWire.js), [preload validation](ui/electron/preload.js), [profile selection](ui/electron/profilePicker.js), and [creation regressions](ui/test/vm-capsule-open.test.js).
 
-The admitted source template is an ARM64 graphical Linux VM using `notepad-vm`. Owned guest boot, a verified core frame, and owned stop have been demonstrated. With this revision, the guest editor has also been observed on the actual UI canvas; final closure and independent review of that new run remain pending. A canvas observation does not establish general image compatibility, automated guest editing or every launch route. In particular, automatic boot is not evidence that the user clicked the VM creation control.
+The admitted source template is an ARM64 graphical Linux VM using `notepad-vm`. The scoped graphical episode is complete: direct visual inspection observed the guest editor on the actual RoleSurface canvas, and the verified core-frame and owned teardown evidence received independent review. Core destruction and the absence of the owned application/native processes and control groups were corroborated. The visual observation was not an automated optical acceptance predicate.
+
+The proposed typing action became stale as verified frames advanced and was refused before dispatch; no guest input was attempted and no retry ran. Guest input, semantic editing and VM AI planning therefore remain unproved. The graphical episode does not establish general image compatibility or every launch route. In particular, automatic boot is not evidence that the user clicked the VM creation control.
 
 VM role status now resolves the configured VM profile while retaining the actual core identity, role and ownership checks. Unknown, malformed or foreign surfaces are refused. See [role authority](ui/electron/roleHost.js) and [role regressions](ui/test/vm-role-status.test.js). [RoleSurface](ui/src/surfaces/RoleSurface.vue) mounts the normal [SurfaceCanvas](ui/src/surfaces/SurfaceCanvas.vue) path after admitted status. Frames still pass through the verified [frame delivery path](ui/src/frames/framePortRouter.js).
 
@@ -30,7 +32,7 @@ Each row requires its own image version, host prerequisites and evidence. ARM64 
 
 | Architecture | Backend | Mode | Current boundary | Next acceptance gate |
 | --- | --- | --- | --- | --- |
-| ARM64 | Ordinary VM | Desktop | Configured template; owned boot/core frame/stop demonstrated; new UI canvas observation awaiting final closure/review | Complete independent run review, creation-route evidence and owned teardown |
+| ARM64 | Ordinary VM | Desktop | Configured template; scoped graphical episode closed and independently reviewed, with visually observed guest editor and verified frame/teardown evidence | Prove manual creation separately; then admit a fresh core-controlled action and verify its semantic result |
 | ARM64 | Ordinary VM | Terminal | Proposed; no general terminal/headless adapter proof | Define adapter contract, then prove session, output, cancellation and teardown |
 | x64 | Ordinary VM | Desktop | Runtime unproved; inspected hosts currently return `ENODEV` from the KVM API | Establish usable host virtualization, then validate a native image and the full capsule lifecycle |
 | x64 | Ordinary VM | Terminal | Runtime and adapter unproved; same host blocker | Resolve host prerequisite and validate terminal lifecycle independently |
@@ -49,7 +51,7 @@ A compatible guest agent and adapter must connect capture and lifecycle to the e
 
 ## Bounded work and validation gates
 
-- Close and independently review the current ARM64 graphical run. Require actual visible guest pixels, a known creation route and owned teardown; a mounted component or stale frame is insufficient.
+- Extend the closed ARM64 graphical episode with separate manual creation evidence and, only after a fresh frame/identity gate, a bounded core-controlled guest action with semantic readback and owned teardown. Reject stale proposals before dispatch; a mounted component, automatic boot or action receipt alone is insufficient.
 - Define the versioned image-pack/catalog contract and import validation. Require valid licensed, hash-verified compatible packs; reject malformed metadata, wrong architecture and incompatible modes.
 - Admit each backend on each host separately. Require a working virtualization API and resource admission; device-node presence alone is insufficient.
 - Implement one compatible image and mode at a time. Require verified frames or terminal output, core-controlled actions where supported, cancellation and owned cleanup; reject foreign identities and uncertain sessions.
