@@ -86,9 +86,17 @@ export function buildCapsuleReadyLine(input) {
   return `MetaViewer capsule ${surfaceId} (identity ${profileId}). Manage only this capsule, with the operator present. `
     + 'In a subshell source "$XDG_RUNTIME_DIR/metaviewer/attach/current.env" '
     + '(published while MetaViewer is running; ignore it if its pid is not running), '
-    + 'then from "$MV_OPERATOR_REPO/agents" run: '
+    + 'then choose goal mode or stored-workflow mode with the operator. '
+    + 'Choose guidance for the capsule kind reported by the host; never guess it. Desktop-window automation is unsupported. '
+    + 'For program goal mode, read tools/mw_run_program.md; from the agents directory run: '
+    + `python3 -m metaviewer_agents.mw_run --surface-kind program --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1. `
+    + 'Use the following browser commands only for browser capsules. '
+    + 'For browser goal mode (supported by the compiled kit), read tools/mw_run_browser_goal.md; '
+    + 'from "$MV_OPERATOR_REPO/agents" run: '
+    + `\`python3 -m metaviewer_agents.mw_run --surface-kind browser --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1\`. `
+    + 'For stored-workflow mode, which requires a compatible pinned checkout, run from the same directory: '
     + `python3 -m metaviewer_agents.mw_run --identity ${profileId} --site <site> --workflow <workflow> [--slot name=value]. `
-    + 'Choose the site and workflow from MemoryWeb data. Read the single JSON result line and accept success only on rc 0 '
+    + 'Choose the site and workflow from MemoryWeb data only for stored-workflow mode. Read the single JSON result line and accept success only on rc 0 '
     + 'with the verified run summary. Stop on any refusal or HUMAN_HANDOFF. '
     + 'Never solve a CAPTCHA, type credentials, retry a send or change the network mode.';
 }

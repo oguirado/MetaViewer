@@ -12,6 +12,33 @@ use super::*;
 use crate::wire::payload::RecordRequest;
 use serde_json::{json, Value};
 
+#[derive(Debug)]
+struct CaptureStorageFailure(Error);
+impl std::fmt::Display for CaptureStorageFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "capture journal unavailable")
+    }
+}
+impl std::error::Error for CaptureStorageFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+// Only this terminal-bearing error permits a bounded writer flush on retirement.
+#[derive(Debug)]
+pub(super) struct CaptureTerminalFailure(pub(super) Error);
+impl std::fmt::Display for CaptureTerminalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "capture storage unavailable; restart session")
+    }
+}
+impl std::error::Error for CaptureTerminalFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
 impl Server {
     fn capture_recover_exports(&mut self) -> Result<()> {
         if self.capture.exports_recovered {
@@ -123,7 +150,10 @@ impl Server {
         Ok(())
     }
     fn capture_journal(&mut self, boundary: Vec<Witness>, data: &Value) -> Result<()> {
-        let witness = self.authority.retain_witness(&serde_json::to_vec(data)?)?;
+        let witness = self
+            .authority
+            .retain_witness(&serde_json::to_vec(data)?)
+            .map_err(|error| CaptureStorageFailure(error.into()))?;
         let mut witnesses = boundary;
         witnesses.push(witness);
         let input = if data["reply"]["ok"] == false {
@@ -136,7 +166,9 @@ impl Server {
         } else {
             Input::SurfaceNotice
         };
-        self.authority.apply_with_witnesses(input, witnesses)?;
+        self.authority
+            .apply_with_witnesses(input, witnesses)
+            .map_err(|error| CaptureStorageFailure(error.into()))?;
         Ok(())
     }
     #[cfg(test)]
@@ -308,6 +340,54 @@ impl Server {
         request: &RecordRequest,
         boundary: Witness,
     ) -> Result<()> {
+        let Err(error) = self.capture_wire_inner(now_ns, env, request, boundary) else {
+            return Ok(());
+        };
+        if error.downcast_ref::<CaptureStorageFailure>().is_none() {
+            return Err(error);
+        }
+        // [TARGET, unit decision] A storage fault still ends this connection.
+        // Reserve a correlated refusal outside the failed journal, then let the
+        // writer flush it before closure. Prepared capture state stays uncommitted.
+        let raw = serde_json::to_value(request)?;
+        let method = match raw["op"].as_str() {
+            Some("ram_start") => "recordStart",
+            Some("ram_stop") => "recordStop",
+            Some("screenshot") => "screenshot",
+            Some("disk_start") => "export",
+            _ => return Err(error),
+        };
+        let request_id = &raw["request_id"];
+        let detail = serde_json::to_string(&json!({"request_id":request_id,"method":method,
+            "reply":{"ok":false,"code":"CAPTURE_UNAVAILABLE","request_id":request_id}}))?;
+        let body = serde_json::from_value(json!({"schema":"surface_event/v0.2","event":"error",
+            "data":{"surface_id":"capture","code":"CAPTURE_REPLY","detail":detail}}))?;
+        let terminal = self.outbound_at(
+            now_ns,
+            &env.from,
+            Command::SurfaceEvent(Box::new(body)),
+            "capture-unavailable",
+        )?;
+        if let Some(connection) = self.connections.get(&env.from) {
+            let mut slot = connection
+                .terminal
+                .lock()
+                .map_err(|_| invalid("poisoned terminal slot"))?;
+            // [TARGET, unit decision] The current request's correlated storage
+            // refusal supersedes a pending terminal in the bounded single slot.
+            // Always mark it flushable, including when the slot was occupied.
+            *slot = Some(terminal);
+            return Err(CaptureTerminalFailure(error).into());
+        }
+        Err(error)
+    }
+    fn capture_wire_inner(
+        &mut self,
+        now_ns: u64,
+        env: &Envelope,
+        request: &RecordRequest,
+        boundary: Witness,
+    ) -> Result<()> {
         self.capture_recover_exports()?;
         let raw = serde_json::to_value(request)?;
         // [TARGET, unit decision] Existing disk_start carrier exports an already
@@ -435,6 +515,51 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    #[test]
+    fn v027_apply_failure_does_not_replay_retained_capture_witness() {
+        let temp = Temp::new();
+        let reg = |component: &str| -> Registration {
+            serde_json::from_value(json!({"endpoint":{"component":component,"instance":format!("{component}-orphan")},"hello":{"schema":"hello/v0.2","contract_version":"v0.2","component":component,"component_version":"0.2.0","component_commit":"0123456789abcdef0123456789abcdef01234567","dependencies":[]}})).unwrap()
+        };
+        let config = Config {
+            session_id: "orphan-capture".into(),
+            core: reg("core"),
+            peers: vec![reg("agent"), reg("daemon"), reg("ui")],
+        };
+        let mut server = Server::open(config.clone(), &temp.0, effective_uid().unwrap()).unwrap();
+        let before = server.authority.state().snapshot().unwrap();
+        let data = json!({"method":"recordStart", "reply":{"ok":true,"recording_id":"orphan"}});
+        let artifact = server
+            .root
+            .join("artifacts")
+            .join(sha256_hex(&serde_json::to_vec(&data).unwrap()));
+        // Retain succeeds; apply then rejects a missing boundary witness before
+        // it can append a record. Recovery must discard the durable orphan.
+        let error = server
+            .capture_journal(
+                vec![Witness {
+                    sha256: sha256_hex(b"missing-boundary"),
+                    byte_len: 16,
+                }],
+                &data,
+            )
+            .unwrap_err();
+        assert!(error.downcast_ref::<CaptureStorageFailure>().is_some());
+        assert!(
+            artifact.is_file(),
+            "capture witness must already be durable"
+        );
+        assert_eq!(server.authority.state().snapshot().unwrap(), before);
+        drop(server);
+        let recovered = Server::open(config, &temp.0, effective_uid().unwrap()).unwrap();
+        assert_eq!(recovered.authority.state().snapshot().unwrap(), before);
+        assert!(
+            !artifact.exists(),
+            "unreferenced witness must not be replayed"
+        );
+        assert_eq!(recovered.capture, Default::default());
     }
 
     #[test]

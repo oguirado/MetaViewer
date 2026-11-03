@@ -1983,3 +1983,48 @@ test('P18 host stop waits for the matching destroyed lifetime and refuses unknow
  const destroyed={schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,state:'destroyed'}}};
  f.send(destroyed);assert.deepEqual(await pending,destroyed);assert.equal(bindings.core.getHumanSurface('s1'),null);
 });
+
+
+test('V027 lost program remains stoppable and cannot accept input', async t => {
+ const f=await fixture(t); const bindings=await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
+ f.send({schema:'surface_event/v0.2',event:'created',data:{surface:{...surface,kind:'desktop_capsule'}}});
+ await waitForCondition(()=>bindings.core.getHumanSurface('s1'));
+ f.send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,kind:'desktop_capsule',state:'lost'}}});
+ await waitForCondition(()=>bindings.core.getHumanSurface('s1')?.state !== 'active');
+ assert.equal(bindings.core.getHumanSurface('s1')?.state,'lost');
+ const beforeInput=f.requests.length;
+ assert.deepEqual(await bindings.core.request({op:'input',batch:{schema:'surface_input/v1',surface_id:'s1',stream_id:1,seq:1,events:[{kind:'key',keys:['a']}]}}),{ok:false,code:'SURFACE_UNKNOWN'});
+ assert.equal(f.requests.length,beforeInput);
+ const pending=bindings.core.stopSurface('s1');
+ await waitForCondition(()=>f.requests.some(r=>r.body.op==='destroy'));
+ f.send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,state:'destroyed'}}});
+ assert.equal((await pending).data.surface.state,'destroyed');
+ await assert.rejects(bindings.core.stopSurface('s1'),/CAPSULE_STOP_REFUSED/);
+});
+
+test('V027 control refusal preserves only frozen reason codes', async t => {
+ const f=await fixture(t); const bindings=await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
+ for (const [reason,expected] of [['POLICY','POLICY'],['STALE_FRAME','STALE_FRAME'],['foreign detail','INTENT_REFUSED']]) {
+  const request_id='control-'+f.requests.length;
+  const pending=bindings.core.request({op:'intent',json:JSON.stringify({schema:'ui_intent/v0.2',request_id,op:'take_control',params:{surface_id:'s1'}})});
+  const checked=assert.rejects(pending, error=>error.message==='INTENT_REFUSED' && error.reason_code===expected);
+  // Send before the fixture's automatic state reply: correlation must settle once.
+  f.send({schema:'action_verdict/v0.2',proposal_id:request_id,decision:'refused',reason_code:reason,core_seq:1});
+  await checked;
+ }
+});
+
+
+test('V027 socket outage publishes lost state before clearing the session', async t => {
+ const f=await fixture(t); const bindings=await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
+ const entries=[]; bindings.wire.frames.subscribe(entry=>entries.push(entry));
+ f.send({schema:'surface_event/v0.2',event:'created',data:{surface:{...surface,control:'human'}}});
+ f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:f.frame}});
+ await waitForCondition(()=>entries.length);
+ f.disconnect();
+ await waitForCondition(()=>bindings.core.getStatus().availability==='unavailable');
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(entries.at(-1).state.state,'lost');
+ assert.equal(bindings.core.getHumanSurface('s1'),null);
+ await assert.rejects(bindings.core.stopSurface('s1'),/CAPSULE_STOP_REFUSED/);
+});
