@@ -1,0 +1,2 @@
+- Read typed program text from clean changed-area pixels with OCR margin using the existing vision TSV reader, independently of selected marks and their text truncation.
+- Preserve exact comparison, wrong-text mismatch, unavailable OCR fallback, frozen contracts and existing budgets; cover rendered text, long text, blank pixels and unrelated labels.

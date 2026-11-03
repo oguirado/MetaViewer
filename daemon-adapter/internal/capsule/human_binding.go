@@ -24,7 +24,7 @@ func (m *Manager) publishHumanBinding(b Binding) error {
 var humanSurfaceID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
 
 func (r *ProcessRunner) PublishHumanBinding(b Binding, ready bool, epoch uint64) error {
-	if b.NativeKind != "" && b.NativeKind != "browser" && (b.NativeKind != "program" || b.Program != "host-exec") {
+	if b.NativeKind != "host-xpra" && b.NativeKind != "" && b.NativeKind != "browser" && (b.NativeKind != "program" || b.Program != "host-exec") {
 		return nil
 	}
 	if !humanSurfaceID.MatchString(b.Surface.SurfaceID) || !identityContainer.MatchString(b.Container) {
@@ -42,6 +42,7 @@ func (r *ProcessRunner) PublishHumanBinding(b Binding, ready bool, epoch uint64)
 		return fault("binding", "private human binding directory required")
 	}
 	raw, err := json.Marshal(struct {
+		HostXpra  bool   `json:"host_xpra,omitempty"`
 		Schema    string `json:"schema"`
 		SurfaceID string `json:"surface_id"`
 		Container string `json:"container"`
@@ -52,7 +53,7 @@ func (r *ProcessRunner) PublishHumanBinding(b Binding, ready bool, epoch uint64)
 		Height    int    `json:"height"`
 		Role      string `json:"role"`
 		ProfileID string `json:"profile_id"`
-	}{"metaviewer.human_binding/v0.3", b.Surface.SurfaceID, b.Container, b.RunID, ready, epoch, b.Surface.Geometry.W, b.Surface.Geometry.H, b.Role, b.Surface.ProfileID})
+	}{b.NativeKind == "host-xpra", "metaviewer.human_binding/v0.3", b.Surface.SurfaceID, b.Container, b.RunID, ready, epoch, b.Surface.Geometry.W, b.Surface.Geometry.H, b.Role, b.Surface.ProfileID})
 	if err != nil {
 		return err
 	}
