@@ -101,6 +101,46 @@ class TriageTests(unittest.TestCase):
         with self.assertRaisesRegex(host.OwnerRefused, 'MW_HANDOFF_REQUIRED'):
             f.owner.run()
 
+    def test_owner_failed_handoff_write_never_advertises_artifact(self):
+        for rebind in (False, True):
+            with self.subTest(rebind=rebind):
+                f = self.fixture('agents/tests/test_mw_owner.py', 'OwnerTests',
+                                 'test_real_gate_accepts_canonical_fixture_before_backend')
+                f.install_backend()
+                original = f.owner.backend.call
+                def call(stage, **kwargs):
+                    if rebind and stage == 'propose':
+                        sensed = kwargs['sensed']
+                        fresh = dict(sensed, ax=[dict(role='heading', name='Sign in to your account')])
+                        b = object.__new__(host.HostBackend)
+                        b.observe_for_rebind = Mock(return_value={})
+                        b.perceive = Mock(return_value=fresh)
+                        return b.rebind(sensed, kwargs['plan'], kwargs['max_ms'])
+                    value = original(stage, **kwargs)
+                    if not rebind and stage == 'observe':
+                        value['observed_wall'] = dict(observed=True, kind='login_wall')
+                    return value
+                f.owner.backend.call = call
+                write = f.owner.write
+                def fail_handoff(path, raw):
+                    if path == f.owner.handoff.path:
+                        raise OSError('disk full')
+                    return write(path, raw)
+                with patch.object(f.owner, 'write', side_effect=fail_handoff):
+                    result = f.owner.run()
+                self.assertTrue(f.owner.handoff.latched)
+                self.assertIs(f.owner.handoff.persisted, False)
+                self.assertFalse(f.owner.handoff.path.exists())
+                self.assertIsNone(result.handoff_path)
+                if not rebind:
+                    self.assertIsNotNone(result.summary)
+                    self.assertNotIn(f.owner.handoff.path.name, result.summary['evidence_refs'])
+                self.assertEqual(f.proposals, [])
+                if rebind:
+                    self.assertEqual((result.rc, result.verdict_code), (4, 'HUMAN_HANDOFF'))
+                with self.assertRaisesRegex(host.OwnerRefused, 'MW_HANDOFF_REQUIRED'):
+                    f.owner.run()
+
     def browser_fixture(self):
         return self.fixture('tests/test_mw_browser_goal.py', 'BrowserGoalTests',
                             'test_real_planner_click_and_journals')
@@ -175,6 +215,19 @@ class TriageTests(unittest.TestCase):
         planner = SimpleNamespace(battery_state_sha256='b' * 64, plan_step=Mock(return_value=(
             dict(type='click', x=20, y=20, button='left'), {}, {}, target)))
         return backend, planner, sensed, target
+
+    def test_program_early_failures_preserve_original_exception(self):
+        for stage in ('observe', 'perceive', 'plan_step'):
+            with self.subTest(stage=stage):
+                backend, planner, sensed, target = self.program_fixture()
+                failure = host.OwnerRefused('MW_PROGRAM_EARLY_REFUSAL')
+                source = planner if stage == 'plan_step' else backend
+                getattr(source, stage).side_effect = failure
+                with self.assertRaises(host.OwnerRefused) as caught:
+                    program.run_moves(backend, planner, 'Editor', 1, 1000)
+                self.assertIs(caught.exception, failure)
+                self.assertEqual(backend.program_attempts, [])
+                backend.propose.assert_not_called()
 
     def test_mp03_verified_click_survives_subsequent_type_failure(self):
         backend, planner, sensed, target = self.program_fixture()
@@ -307,7 +360,13 @@ class TriageTests(unittest.TestCase):
     def test_mp05_submitted_action_without_settlement_remains_uncertain(self):
         backend, planner, sensed, target = self.program_fixture()
         backend.wender = backend.evidence
-        backend.propose.side_effect = host.tools.VerificationFailed(dict(detail='missing settlement'))
+        def submitted(*args):
+            backend.active_attempt['proposal_id'] = 'click'
+            backend.frame_attempts = [dict(status='admitted', proposal_id='click')]
+            return dict(proposal_id='click')
+        backend.propose.side_effect = submitted
+        backend.wait_verify.side_effect = host.tools.VerificationFailed(
+            dict(proposal_id='click', detail='missing settlement'))
         args = SimpleNamespace(goal='Editor', steps=1, timeout_ms=1000, identity='fixture',
                                planner='rules', model_timeout_ms=1000)
         with patch.object(program, 'private_evidence_base', return_value=backend.evidence), \
@@ -321,6 +380,13 @@ class TriageTests(unittest.TestCase):
             rc = program.run_entry(args)
         self.assertEqual((rc, json.loads(output.getvalue())['verdict_code']), (5, 'INPUT_UNCERTAIN'))
         self.assertEqual(backend.program_attempts[0]['status'], 'input_uncertain')
+        backend.propose.assert_called_once()
+        backend.wait_verify.assert_called_once_with(dict(proposal_id='click'), unittest.mock.ANY)
+        self.assertEqual(backend.frame_attempts, [dict(status='admitted', proposal_id='click')])
+        self.assertEqual(backend.program_moves, [])
+        attempt = backend.program_attempts[0]
+        self.assertEqual(attempt['verification_failure']['correlation'], 'proposal_id_match')
+        self.assertTrue(Path(attempt['verification_failure_artifact']).is_file())
 
     def test_br03_total_evidence_write_failure_keeps_handoff_verdict(self):
         f = self.browser_fixture()
