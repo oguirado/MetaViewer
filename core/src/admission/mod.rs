@@ -3,6 +3,8 @@
 //! independently of surface states. UI confirmation is mandatory; native custody
 //! remains adapter-owned. Retain at most 256 operation outcomes per session;
 //! unknown create/effect outcomes stay fenced until authoritative reconciliation.
+//! [TARGET, unit decision] Pending creates only fence slot work; count concurrent
+//! creates per profile and bind lifecycle/profile evidence in a single journal event.
 //! [TARGET, unit decision] Trusted host events form a private replay ABI, not
 //! component messages. Callers serialize Authority access and authenticate host
 //! events; proposals enter only through closed decoding and peer binding.
@@ -132,6 +134,12 @@ pub enum Input {
     ProfileCreate {
         profile_id: String,
     },
+    /// Atomically journal lifecycle and its authoritative profile evidence.
+    ProfileLifecycle {
+        surface_id: String,
+        profile_id: String,
+        update: LifecycleUpdate,
+    },
     ProfileBind {
         surface_id: String,
         profile_id: String,
@@ -226,6 +234,9 @@ pub struct CoreState {
     pub profile_surfaces: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub profile_creates: BTreeSet<String>,
+    /// Additional in-flight creates beyond the first; preserve old snapshots.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profile_create_extras: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     destroyed: BTreeSet<String>,
     /// Immutable role inferred only from an authoritative human-owned creation.
@@ -262,6 +273,7 @@ impl CoreState {
             slot_history: BTreeMap::new(),
             profile_surfaces: BTreeMap::new(),
             profile_creates: BTreeSet::new(),
+            profile_create_extras: BTreeMap::new(),
             destroyed: BTreeSet::new(),
             human_roles: BTreeSet::new(),
             seen: BTreeSet::new(),
@@ -295,6 +307,10 @@ impl CoreState {
                 "profile_creates",
                 serde_json::to_value(&self.profile_creates),
             ),
+            (
+                "profile_create_extras",
+                serde_json::to_value(&self.profile_create_extras),
+            ),
         ] {
             let field = field.map_err(|_| AdmissionError::InvalidInput)?;
             if field.as_object().is_some_and(|v| !v.is_empty())
@@ -304,6 +320,16 @@ impl CoreState {
             }
         }
         crate::journal::canonical_bytes(&value).map_err(|_| AdmissionError::InvalidInput)
+    }
+    fn settle_profile_create(&mut self, profile: &str) {
+        if let Some(count) = self.profile_create_extras.get_mut(profile) {
+            *count -= 1;
+            if *count == 0 {
+                self.profile_create_extras.remove(profile);
+            }
+        } else {
+            self.profile_creates.remove(profile);
+        }
     }
     fn profile_busy(&self, profile: &str) -> bool {
         self.profile_creates.contains(profile)
@@ -462,12 +488,14 @@ impl CoreState {
                 self.reduce_slot_event(*epoch, event, &mut out);
             }
             Input::ProfileCreate { profile_id } => {
-                if self.slot_ops.contains_key(profile_id)
-                    || self.profile_creates.contains(profile_id)
-                {
+                if self.slot_ops.contains_key(profile_id) {
                     out.reason = Some(Refusal::Policy);
-                } else {
-                    self.profile_creates.insert(profile_id.clone());
+                } else if !self.profile_creates.insert(profile_id.clone()) {
+                    let count = self
+                        .profile_create_extras
+                        .entry(profile_id.clone())
+                        .or_default();
+                    *count = count.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 }
             }
             Input::ProfileBind {
@@ -482,10 +510,12 @@ impl CoreState {
                     || self.slot_ops.contains_key(profile_id)
                 {
                     out.reason = Some(Refusal::Policy);
-                } else {
-                    self.profile_surfaces
-                        .insert(surface_id.clone(), profile_id.clone());
-                    self.profile_creates.remove(profile_id);
+                } else if self
+                    .profile_surfaces
+                    .insert(surface_id.clone(), profile_id.clone())
+                    .is_none()
+                {
+                    self.settle_profile_create(profile_id);
                 }
             }
             Input::SurfaceRequest { request } => {
@@ -497,10 +527,7 @@ impl CoreState {
                 ) || (value["op"] == "create"
                     && value["params"]["profile_id"]
                         .as_str()
-                        .is_some_and(|profile| {
-                            self.slot_ops.contains_key(profile)
-                                || self.profile_creates.contains(profile)
-                        }))
+                        .is_some_and(|profile| self.slot_ops.contains_key(profile)))
                     || value["params"]["surface_id"].as_str().is_some_and(|id| {
                         // [TARGET, unit decision] Explicit Stop may retire a lost human
                         // binding; this grants no input, frames or renewed liveness.
@@ -599,6 +626,7 @@ impl CoreState {
             Input::SurfaceNotice => {}
             Input::Refuse { reason } => out.reason = Some(*reason),
             Input::Lifecycle { surface_id, .. }
+            | Input::ProfileLifecycle { surface_id, .. }
             | Input::Frame { surface_id, .. }
             | Input::TakeControl { surface_id }
             | Input::ReleaseControl { surface_id }
@@ -606,62 +634,92 @@ impl CoreState {
             {
                 out.reason = Some(Refusal::Policy);
             }
-            Input::Lifecycle { surface_id, update } => match update {
-                LifecycleUpdate::Created(surface) => {
-                    if surface_id.is_empty()
-                        || surface.display.is_empty()
-                        || surface.frame.is_some()
-                        || self.surfaces.contains_key(surface_id)
-                    {
-                        out.reason = Some(Refusal::Policy);
-                    } else {
-                        if !surface.agent_controlled {
-                            self.human_roles.insert(surface_id.clone());
-                        }
-                        self.surfaces.insert(surface_id.clone(), surface.clone());
-                    }
+            Input::Lifecycle { surface_id, update }
+            | Input::ProfileLifecycle {
+                surface_id, update, ..
+            } => {
+                let profile = match input {
+                    Input::ProfileLifecycle { profile_id, .. } => Some(profile_id),
+                    _ => None,
+                };
+                if profile.is_some_and(|profile| {
+                    self.slot_ops.contains_key(profile)
+                        || self
+                            .profile_surfaces
+                            .get(surface_id)
+                            .is_some_and(|old| old != profile)
+                }) {
+                    out.reason = Some(Refusal::Policy);
+                    self.core_seq = next;
+                    return Ok(out);
                 }
-                _ => {
-                    if let Some(old) = self.surfaces.get_mut(surface_id) {
-                        match update {
-                            LifecycleUpdate::Updated(surface) => {
-                                if surface.display.is_empty() || surface.frame.is_some() {
-                                    return Err(AdmissionError::InvalidInput);
-                                }
-                                if !old.live {
-                                    out.reason = Some(Refusal::Policy);
-                                } else {
-                                    old.display = surface.display.clone();
-                                    old.live |= surface.live;
-                                    old.agent_controlled &= surface.agent_controlled;
-                                    // Wire metadata carries no capability grant.
-                                }
+                match update {
+                    LifecycleUpdate::Created(surface) => {
+                        if surface_id.is_empty()
+                            || surface.display.is_empty()
+                            || surface.frame.is_some()
+                            || self.surfaces.contains_key(surface_id)
+                        {
+                            out.reason = Some(Refusal::Policy);
+                        } else {
+                            if !surface.agent_controlled {
+                                self.human_roles.insert(surface_id.clone());
                             }
-                            LifecycleUpdate::Lost => {
-                                if !old.live {
-                                    out.reason = Some(Refusal::Policy);
-                                } else {
+                            self.surfaces.insert(surface_id.clone(), surface.clone());
+                        }
+                    }
+                    _ => {
+                        if let Some(old) = self.surfaces.get_mut(surface_id) {
+                            match update {
+                                LifecycleUpdate::Updated(surface) => {
+                                    if surface.display.is_empty() || surface.frame.is_some() {
+                                        return Err(AdmissionError::InvalidInput);
+                                    }
+                                    if !old.live {
+                                        out.reason = Some(Refusal::Policy);
+                                    } else {
+                                        old.display = surface.display.clone();
+                                        old.live |= surface.live;
+                                        old.agent_controlled &= surface.agent_controlled;
+                                        // Wire metadata carries no capability grant.
+                                    }
+                                }
+                                LifecycleUpdate::Lost => {
+                                    if !old.live {
+                                        out.reason = Some(Refusal::Policy);
+                                    } else {
+                                        old.live = false;
+                                    }
+                                }
+                                LifecycleUpdate::Destroyed => {
                                     old.live = false;
+                                    self.destroyed.insert(surface_id.clone());
+                                }
+                                LifecycleUpdate::Created(_) => unreachable!(),
+                            }
+                            if out.reason.is_none() {
+                                old.refresh_after = Some(next);
+                                if !old.live || !old.agent_controlled {
+                                    out.cancelled = self.cancel_surface(surface_id);
+                                    out.cancellation_reason =
+                                        Some(Refusal::SurfaceNotAgentControlled);
                                 }
                             }
-                            LifecycleUpdate::Destroyed => {
-                                old.live = false;
-                                self.destroyed.insert(surface_id.clone());
-                            }
-                            LifecycleUpdate::Created(_) => unreachable!(),
+                        } else {
+                            out.reason = Some(Refusal::Policy);
                         }
-                        if out.reason.is_none() {
-                            old.refresh_after = Some(next);
-                            if !old.live || !old.agent_controlled {
-                                out.cancelled = self.cancel_surface(surface_id);
-                                out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
-                            }
-                        }
-                    } else {
-                        out.reason = Some(Refusal::Policy);
                     }
                 }
-            },
+                if out.reason.is_none() {
+                    if let Some(profile) = profile {
+                        if !self.profile_surfaces.contains_key(surface_id) {
+                            self.profile_surfaces
+                                .insert(surface_id.clone(), profile.clone());
+                            self.settle_profile_create(profile);
+                        }
+                    }
+                }
+            }
             Input::Connect => {
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {

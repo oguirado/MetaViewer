@@ -505,3 +505,142 @@ fn nonempty_slot_listing_survives_closed_core_and_replay() {
     value["slots"][0]["path"] = "/private".into();
     assert!(decode_envelope(&envelope(value).to_string()).is_err());
 }
+
+#[test]
+fn repeated_creates_only_fence_slots_and_settle_one_binding_at_a_time() {
+    let mut state = CoreState::new("session-1", 20).unwrap();
+    for _ in 0..2 {
+        let request = serde_json::from_value(json!({"schema":"surface_request/v0.2",
+            "op":"create", "params":{"kind":"desktop_capsule", "profile_id":"profile-demo",
+                "geometry":{"w":1280,"h":720}}}))
+        .unwrap();
+        assert_eq!(
+            state
+                .apply(&Input::SurfaceRequest { request })
+                .unwrap()
+                .reason,
+            None
+        );
+        assert_eq!(
+            state
+                .apply(&Input::ProfileCreate {
+                    profile_id: "profile-demo".into(),
+                })
+                .unwrap()
+                .reason,
+            None
+        );
+    }
+    for id in ["first", "second"] {
+        let mut blocked = request();
+        blocked["operation_id"] = format!("blocked-{id}").into();
+        assert_eq!(
+            state.apply(&admit(blocked, Component::Ui)).unwrap().reason,
+            Some(Refusal::Policy)
+        );
+        let out = state
+            .apply(&Input::ProfileLifecycle {
+                surface_id: id.into(),
+                profile_id: "profile-demo".into(),
+                update: LifecycleUpdate::Created(Surface {
+                    display: ":101".into(),
+                    owner: sender(Component::Agent),
+                    agent_controlled: true,
+                    live: true,
+                    frame: None,
+                    refresh_after: None,
+                    allowed_verbs: vec![],
+                }),
+            })
+            .unwrap();
+        assert_eq!(out.reason, None);
+        let pending = state.profile_create_extras.clone();
+        state
+            .apply(&Input::ProfileBind {
+                surface_id: id.into(),
+                profile_id: "profile-demo".into(),
+            })
+            .unwrap();
+        assert_eq!(
+            state.profile_create_extras, pending,
+            "duplicate evidence must not settle another create"
+        );
+        state
+            .apply(&Input::Lifecycle {
+                surface_id: id.into(),
+                update: LifecycleUpdate::Destroyed,
+            })
+            .unwrap();
+    }
+    assert!(state.profile_creates.is_empty());
+    let mut settled = request();
+    settled["operation_id"] = "settled-op".into();
+    assert!(
+        state
+            .apply(&admit(settled, Component::Ui))
+            .unwrap()
+            .dispatch
+    );
+    // An active slot operation still vetoes creates on its own profile.
+    assert_eq!(
+        state
+            .apply(&Input::ProfileCreate {
+                profile_id: "profile-demo".into(),
+            })
+            .unwrap()
+            .reason,
+        Some(Refusal::Policy)
+    );
+    assert_eq!(
+        state
+            .apply(&Input::ProfileCreate {
+                profile_id: "unrelated-profile".into(),
+            })
+            .unwrap()
+            .reason,
+        None
+    );
+}
+
+#[test]
+fn profiled_lifecycle_is_atomic_and_replayable() {
+    let temp = support::Temp::new();
+    let dir = temp.0.join("state");
+    let mut authority = Authority::create(&dir, CoreState::session("session-1").unwrap()).unwrap();
+    authority
+        .apply(Input::ProfileCreate {
+            profile_id: "requested-profile".into(),
+        })
+        .unwrap();
+    let before = authority.state().core_seq;
+    authority
+        .apply(Input::ProfileLifecycle {
+            surface_id: "surface-reply".into(),
+            profile_id: "different-profile".into(),
+            update: LifecycleUpdate::Created(Surface {
+                display: ":101".into(),
+                owner: sender(Component::Agent),
+                agent_controlled: true,
+                live: true,
+                frame: None,
+                refresh_after: None,
+                allowed_verbs: vec![],
+            }),
+        })
+        .unwrap();
+    assert_eq!(authority.state().core_seq, before + 1);
+    assert_eq!(
+        authority.state().profile_surfaces["surface-reply"],
+        "different-profile"
+    );
+    // Uncorrelated evidence cannot clear the requested profile's slot fence.
+    assert!(authority
+        .state()
+        .profile_creates
+        .contains("requested-profile"));
+    let snapshot = authority.state().snapshot().unwrap();
+    drop(authority);
+    let root = dir.join("sessions/session-1");
+    let recovered = Authority::recover(&root.join("journal.jsonl"), &root).unwrap();
+    assert_eq!(recovered.state().snapshot().unwrap(), snapshot);
+}

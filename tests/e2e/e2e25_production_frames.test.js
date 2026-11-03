@@ -1099,6 +1099,10 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       ipcRenderer: {
         invoke: async (channel, ...args) => {
           invocations.push([channel, args]);
+          if (channel === 'metaviewer:capsule-state.request') {
+            const { credential_copy_confirmed, ...request } = args[0];
+            return { ...request, schema: 'capsule_state_event/v0.2', event: 'completed' };
+          }
           return true;
         },
         on() {},
@@ -1120,6 +1124,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'saveSettings',
       'selfCapsuleId',
       'sideTerminal',
+      'slots',
     ]);
     const facadeKeys = Object.keys(api).sort();
     assert.throws(() => assert.deepEqual(Object.keys({ ...api, unexpected() {} }).sort(), facadeKeys),
@@ -1146,8 +1151,18 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'subscribeFrames',
       'vmAvailable',
     ]);
+    assert.deepEqual(Object.keys(api.slots), ['request']);
+    assert.ok(Object.isFrozen(api.slots));
     assert.deepEqual(Object.keys(api.frames), ['reportDiag']);
     assert.equal(invocations.length, 0);
+    const slotRequest = { schema: 'capsule_state_request/v0.2', operation_id: 'facade-slot',
+      op: 'list', profile_id: 'profile-demo', slot_id: 'slot-demo', credential_copy_confirmed: true };
+    await api.slots.request(slotRequest);
+    const { WIRE_CHANNELS } = await import('../../ui/electron/authorityWire.js');
+    assert.equal(WIRE_CHANNELS.slotRequest, 'metaviewer:capsule-state.request');
+    assert.deepEqual(invocations, [[WIRE_CHANNELS.slotRequest, [slotRequest]]]);
+    await assert.rejects(api.slots.request({ ...slotRequest, channel: 'unexpected' }));
+    assert.equal(invocations.length, 1, 'invalid slot request must not cross IPC');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

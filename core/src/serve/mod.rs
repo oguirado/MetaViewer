@@ -2115,28 +2115,25 @@ impl Server {
                 _ => LifecycleUpdate::Updated(surface),
             }
         };
-        let out = self.authority.apply_with_witnesses(
+        let input = if !self
+            .authority
+            .state()
+            .profile_surfaces
+            .contains_key(&s.surface_id)
+            && (created || self.authority.state().surfaces.contains_key(&s.surface_id))
+        {
+            Input::ProfileLifecycle {
+                surface_id: s.surface_id.clone(),
+                profile_id: s.profile_id.clone(),
+                update,
+            }
+        } else {
             Input::Lifecycle {
                 surface_id: s.surface_id.clone(),
                 update,
-            },
-            vec![boundary],
-        )?;
-        if out.reason.is_none()
-            && !self
-                .authority
-                .state()
-                .profile_surfaces
-                .contains_key(&s.surface_id)
-        {
-            let bound = self.authority.apply(Input::ProfileBind {
-                surface_id: s.surface_id.clone(),
-                profile_id: s.profile_id.clone(),
-            })?;
-            if bound.reason.is_some() {
-                return Ok(bound);
             }
-        }
+        };
+        let out = self.authority.apply_with_witnesses(input, vec![boundary])?;
         Ok(out)
     }
     fn layout_intent(
