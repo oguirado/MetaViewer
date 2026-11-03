@@ -21,6 +21,7 @@ import {
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
+  vmHost: { type: Object, default: null },
   kinds: { type: Array, default: () => [...CATALOG_KIND_IDS] },
   title: { type: String, default: 'Add capsule' },
   subtitle: { type: String, default: 'Choose a capsule kind to open in your wall' },
@@ -29,6 +30,22 @@ const props = defineProps({
 const emit = defineEmits(['update:visible', 'create', 'close']);
 
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
+const choosingVM = ref(false), vmBusy = ref(false), vmError = ref(''), vmChoice = ref('');
+const vmChoices = ref(/** @type {Array<{choiceId:string,label:string}>} */ ([]));
+async function confirmVM() {
+  if (vmBusy.value || !vmChoices.value.some(c => c.choiceId === vmChoice.value)) return;
+  vmBusy.value = true; vmError.value = '';
+  let handled = false;
+  /** @type {any} */ let outcome;
+  try {
+    emit('create', {kind:'vm',choiceId:vmChoice.value}, (/** @type {any} */ reply) => {handled=true;outcome=reply;});
+    const result = handled ? await outcome : null;
+    if (!result?.ok) {vmError.value = result?.code || 'VM_UNAVAILABLE';return;}
+    choosingVM.value = false; emit('update:visible',false);
+  } catch {vmError.value = 'VM_UNAVAILABLE';}
+  finally {vmBusy.value = false;}
+}
+
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
 const choosingProgram = ref(false), programBinary = ref(''), programRole = ref('human'), programError = ref(''), programBusy = ref(false);
 const choosingWindow = ref(false), windowSearch = ref(''), windowChoices = ref(/** @type {Array<{xid:number,witness:string,title:string,program:string,width:number,height:number}>} */ ([]));
@@ -36,7 +53,7 @@ const windowChoiceXid = ref(0), windowError = ref(''), windowBusy = ref(false);
 const filteredWindows = computed(() => filterWindowCandidates(windowChoices.value, windowSearch.value));
 const selectedWindow = computed(() => windowChoices.value.find(w => w.xid === windowChoiceXid.value) || null);
 let choiceGeneration = 0;
-watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
+watch(() => props.visible,visible=>{if(!visible){choosingVM.value=false;vmChoices.value=[];vmChoice.value='';choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
@@ -175,13 +192,26 @@ watch(() => props.visible, (open, previous) => {
 /** @param {boolean} value */
 function forwardVisible(value) {
   // The kit dialog closes itself right after `create`: that close must not end the role, program or window step.
-  if (!value && (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value) || (typeof choosingWindow !== 'undefined' && choosingWindow.value))) return;
+  if (!value && (choosingVM.value || choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value) || (typeof choosingWindow !== 'undefined' && choosingWindow.value))) return;
   if(!value){choiceGeneration++;choosingRole.value=false;if(typeof choosingProgram!=='undefined')choosingProgram.value=false;if(typeof choosingWindow!=='undefined')choosingWindow.value=false;}
   emit('update:visible', value);
 }
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
+  if (payload?.type?.id === 'vm') {
+    const generation = ++choiceGeneration;
+    choosingVM.value = true; vmChoices.value = []; vmChoice.value = ''; vmError.value = ''; vmBusy.value = true;
+    try {
+      const reply = await props.vmHost?.listVMCapsules?.();
+      if (!props.visible || generation !== choiceGeneration) return;
+      if (!reply?.ok || !Array.isArray(reply.choices) || !reply.choices.length) {vmError.value = reply?.code || 'VM_UNAVAILABLE';return;}
+      vmChoices.value = reply.choices; vmChoice.value = reply.choices[0].choiceId;
+    } catch {if (generation === choiceGeneration) vmError.value = 'VM_UNAVAILABLE';}
+    finally {if (generation === choiceGeneration) vmBusy.value=false;}
+    return;
+  }
+
   if (payload?.type?.id === 'program' || payload?.type?.id === 'host-program') {
     pendingIntent.value = { kind: payload.type.id, placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
@@ -244,13 +274,24 @@ async function onCreate(payload) {
 }
 
 function onClose() {
-  if (choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value) || (typeof choosingWindow !== 'undefined' && choosingWindow.value)) return;
+  if (choosingVM.value || choosingRole.value || (typeof choosingProgram !== 'undefined' && choosingProgram.value) || (typeof choosingWindow !== 'undefined' && choosingWindow.value)) return;
   choiceGeneration++;
   emit('close');
 }
 </script>
 <template>
-  <div v-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity">
+  <section v-if="visible && choosingVM" role="dialog" aria-modal="true" aria-label="ARM64 Linux VM" class="mv-role-dialog">
+    <h2>ARM64 Linux VM</h2>
+    <p>Configured graphical guests use verified frames. VM input and a separate live display are not enabled here.</p>
+    <label for="vm-capsule-choice">Configured guest</label>
+    <select id="vm-capsule-choice" data-semantic-anchor="dialog/new-capsule/vm-choice" v-model="vmChoice" :disabled="vmBusy || !vmChoices.length">
+      <option v-for="choice in vmChoices" :key="choice.choiceId" :value="choice.choiceId">{{ choice.label }}</option>
+    </select>
+    <p v-if="vmError" role="alert">{{ vmError === 'VM_UNAVAILABLE' ? 'No supported VM is available on this host.' : vmError }}</p>
+    <button type="button" :disabled="vmBusy || !vmChoice" @click="confirmVM">Open VM</button>
+    <button type="button" :disabled="vmBusy" @click="choosingVM=false; emit('update:visible',false)">Cancel</button>
+  </section>
+  <div v-else-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity">
     <h2>Capsule role and identity</h2>
     <label>Role <select v-model="roleChoice" autofocus><option value="agent">Agent</option><option value="human">Human</option></select></label>
     <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? (profile.currentMode && profile.currentMode !== 'closed' ? ' — ' + profile.currentMode : '') : ' — unavailable' }}</option></select></label>

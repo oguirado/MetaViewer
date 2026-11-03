@@ -1,0 +1,1 @@
+- Add a host-owned ARM64 graphical VM choice to the capsule launcher, with strict opaque selection, configured profile admission and verified-frame presentation. Keep unsupported hosts and stale choices closed.

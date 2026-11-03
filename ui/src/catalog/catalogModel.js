@@ -128,6 +128,9 @@ export const CATALOG_KINDS = Object.freeze([
     footprint: '',
     keywords: Object.freeze(['window', 'desktop', 'host', 'attach']),
   }),
+  Object.freeze({kind:'vm',label:'ARM64 Linux VM',category:'Virtual machines',
+    description:'Open a configured graphical VM with verified frames. Host support is required.',
+    opensAs:'tab',footprint:'',keywords:Object.freeze(['vm','linux','arm64','virtual machine'])}),
 ]);
 
 /**

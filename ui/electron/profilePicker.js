@@ -411,3 +411,32 @@ export function createRefusalReason(code, missingId = 'mv-live-2') {
     : 'This request is unavailable. Please try again.';
 }
 
+/** Configured VM requests only: no default profile, geometry, image or command.
+ * The native catalog owns the ARM64 notepad-vm image and final admission.
+ * @param {Record<string, any>} env @param {string} arch
+ * @returns {ReadonlyArray<ProfileEntry & {configuration:string}>}
+ */
+export function configuredVMProfiles(env, arch) {
+  if (arch !== 'arm64' || typeof env.MV_SRF_PROFILES !== 'string'
+      || env.MV_SRF_PROFILES.length > MAP_BYTES_MAX) return [];
+  let rows;
+  try { rows = JSON.parse(env.MV_SRF_PROFILES); } catch { return []; }
+  if (!plain(rows)) return [];
+  const result = [];
+  for (const [id, raw] of Object.entries(rows)) {
+    if (!validId(id) || !plain(raw)) continue;
+    const kind = raw.Kind ?? raw.kind, native = raw.NativeKind ?? raw.native_kind;
+    const program = raw.Program ?? raw.program;
+    const w = raw.Width ?? raw.width, h = raw.Height ?? raw.height;
+    const display = raw.Display ?? raw.display, ramRoot = raw.RAMRoot ?? raw.ram_root;
+    if (kind !== 'vm' || native !== 'vm' || program !== 'notepad-vm'
+        || typeof display !== 'string' || !/^:[0-9]+$/.test(display)
+        || typeof ramRoot !== 'string' || !ramRoot.startsWith('/') || ramRoot.includes('\0')
+        || typeof w !== 'number' || typeof h !== 'number' || !Number.isSafeInteger(w) || !Number.isSafeInteger(h)
+        || w < 1 || h < 1 || w > 16384 || h > 16384) continue;
+    result.push(Object.freeze({id, configuration:JSON.stringify(raw), request:Object.freeze({schema:'surface_request/v0.2',op:'create',
+      params:Object.freeze({kind:'vm',profile_id:id,geometry:Object.freeze({w,h})})})}));
+    if (result.length >= MAX_CAPSULES) break;
+  }
+  return Object.freeze(result);
+}
