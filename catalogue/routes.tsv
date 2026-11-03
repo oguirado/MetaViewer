@@ -240,6 +240,7 @@ v027-fix-u6.md	changes/unreleased/v027-fix-u6.md
 v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
+v027-lost-stop.md	changes/unreleased/v027-lost-stop.md
 v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-rebind-caret.md	changes/unreleased/v027-rebind-caret.md
 v027rel-acff733643dd	changes/unreleased/v027-release-notices.md
@@ -960,6 +961,7 @@ login_lock.go	daemon-adapter/internal/capsule/login_lock.go
 login_lock_test.go	daemon-adapter/internal/capsule/login_lock_test.go
 lostset-d04bd8c51b72	daemon-adapter/internal/capsule/lost_settle_v3v6_test.go
 lost_slot_test.go	daemon-adapter/internal/capsule/lost_slot_test.go
+lost_stop_test.go	daemon-adapter/internal/capsule/lost_stop_test.go
 manager.go	daemon-adapter/internal/capsule/manager.go
 manager_a2_test.go	daemon-adapter/internal/capsule/manager_a2_test.go
 manager-26328fbfd05f	daemon-adapter/internal/capsule/manager_handoff_test.go
@@ -2168,6 +2170,7 @@ v027fix-89dde92796eb	ui/test/v027-fix-k2-terminal.test.js
 v027-fix-k5.test.js	ui/test/v027-fix-k5.test.js
 v027hos-06c56f4d7d15	ui/test/v027-host-wall-triage.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
+v027los-97148691a987	ui/test/v027-lost-stop.test.js
 v027sea-46470f0a4e51	ui/test/v027-seams-role-transport.test.js
 v027sta-281915c754c2	ui/test/v027-stale-handoff.test.js
 v027-tile-chrome.html	ui/test/v027-tile-chrome.html
