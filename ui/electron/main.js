@@ -57,6 +57,7 @@ const bootedAdapters = new WeakSet();
  * @param {unknown} dialog Trusted Electron dialog handle.
  * @param {unknown} error Failure.
  * @param {'boot'|'create'} phase Startup phase.
+ * @returns {Promise<void>|undefined} Settles when the notice closes.
  */
 export function showStartupFailure(dialog, error, phase) {
   const rawCode = /** @type {{code?:unknown}|null} */ (error)?.code;
@@ -69,13 +70,10 @@ export function showStartupFailure(dialog, error, phase) {
       ? 'The surface runtime could not start. Check the adapter installation and MV_SRF_BIN_DIR configuration, then restart MetaViewer. For a core-only wall, unset MV_SRF_BIN_DIR; capsules require the surface runtime.'
       : 'Check the installation and the startup error in the host logs, then restart MetaViewer.';
   try {
-    const handle = /** @type {{showErrorBox?:(title:string,content:string)=>void,showMessageBox?:(options:object)=>Promise<unknown>}|null} */ (dialog);
-    // The app keeps running after a failed first capsule: a modal would freeze it until someone clicks.
-    if (phase === 'create') {
-      void handle?.showMessageBox?.({type:'warning', title, message:`${code}: ${title}.`, detail:next})?.catch?.(() => {});
-    } else {
-      handle?.showErrorBox?.(title, `${code}: ${title}.\n\n${next}`);
-    }
+    const handle = /** @type {{showMessageBox?:(options:object)=>Promise<unknown>}|null} */ (dialog);
+    // Never a modal: with nobody at the screen it would hang the app, the kit and its smoke test.
+    const shown = handle?.showMessageBox?.({type:'warning', title, message:`${code}: ${title}.`, detail:next});
+    return shown ? Promise.resolve(shown).catch(() => {}) : undefined;
   } catch {
     /* stderr diagnostics and fail-closed cleanup still run if a dialog fails */
   }
@@ -3046,7 +3044,14 @@ async function mainDirectEntry() {
       try {
         await /** @type {{whenReady?:()=>Promise<unknown>}|null} */ (app)?.whenReady?.();
       } catch { /* still attempt the diagnostic and preserve exit failure */ }
-      showStartupFailure(electron.dialog, error, 'boot');
+      // Leave the notice up for a person to read, then still exit: the failure must not hang.
+      const shown = showStartupFailure(electron.dialog, error, 'boot');
+      if (shown) {
+        await Promise.race([shown, new Promise(resolve => {
+          if (typeof setTimeout === 'function') setTimeout(resolve, 15000).unref?.();
+          else resolve(undefined);
+        })]);
+      }
     }
     try {
       if (app !== null && typeof app.exit === 'function') {

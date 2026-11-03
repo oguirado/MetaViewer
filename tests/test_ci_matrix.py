@@ -7,7 +7,6 @@ import subprocess
 import tempfile
 import textwrap
 import unittest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / '.github/workflows'
@@ -15,9 +14,9 @@ WORKFLOWS = ROOT / '.github/workflows'
 
 def script(name):
     source = (WORKFLOWS / name).read_text()
-    steps = yaml.safe_load(source)['jobs'].values()
-    return next(step['run'] for job in steps for step in job['steps']
-                if step.get('name') == 'Execute gate and publish receipt')
+    # Standard library only: the laws job runs these tests without PyYAML.
+    block = source.split('      - name: Execute gate and publish receipt\n', 1)[1].split('        run: |\n', 1)[1]
+    return textwrap.dedent(re.split(r'(?m)^ {0,8}\S', block, maxsplit=1)[0])
 
 
 class MatrixTests(unittest.TestCase):

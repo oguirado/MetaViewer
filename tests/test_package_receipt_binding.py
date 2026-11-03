@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-import yaml
+import textwrap
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,9 +14,9 @@ PACKAGE_YML = ROOT / '.github/workflows/package.yml'
 
 
 def extract_gate_script(workflow_text: str) -> str:
-    steps = yaml.safe_load(workflow_text)['jobs']['linux-package']['steps']
-    return next(step['run'] for step in steps
-                if step.get('name') == 'Execute gate and publish receipt')
+    # Standard library only: the laws job runs these tests without PyYAML.
+    block = workflow_text.split('      - name: Execute gate and publish receipt\n', 1)[1].split('        run: |\n', 1)[1]
+    return textwrap.dedent(re.split(r'(?m)^ {0,8}\S', block, maxsplit=1)[0])
 
 
 class PackageReceiptBindingTests(unittest.TestCase):

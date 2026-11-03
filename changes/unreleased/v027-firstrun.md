@@ -1,3 +1,4 @@
 - Show startup and first-capsule failures in a dialog with recovery steps, including when no wall window opens.
 - Explain core-only capsule failures and guide new users through identities and the Humans and Agents views.
 - A failed first capsule shows a notice that does not freeze the running app.
+- A failed start exits after its notice instead of waiting on a modal.

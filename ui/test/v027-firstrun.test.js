@@ -18,7 +18,7 @@ test('boot and first-create dialogs name the failure and recovery without raw ho
   assert.match(dialogs[0].content, /MV_SRF_BIN_DIR.*restart MetaViewer/);
   assert.match(dialogs[1].content, /SURFACE_CREATE_TIMEOUT.*first capsule/);
   assert.match(dialogs[1].content, /Identities.*Add capsule/);
-  assert.deepEqual(blocking, ['MetaViewer could not start'], 'a failed first capsule must not freeze the running app with a modal');
+  assert.deepEqual(blocking, [], 'a startup failure must not hang on a modal with nobody at the screen');
   for (const row of dialogs) assert.doesNotMatch(row.content, /private diagnostic/);
   assert.doesNotThrow(() => showStartupFailure({ showErrorBox() { throw Error('display unavailable'); } }, null, 'boot'));
   assert.doesNotThrow(() => showStartupFailure(null, null, 'create'));
@@ -35,7 +35,7 @@ test('direct entry waits for Linux dialog readiness and reports refusal before e
   const electron = {
     protocol: {},
     app: { whenReady: () => { events.push('wait-ready'); return ready; }, exit: code => events.push(`exit:${code}`) },
-    dialog: { showErrorBox: (_title, content) => { assert.match(content, /ADAPTER_UNAVAILABLE/); events.push('dialog'); } },
+    dialog: { showMessageBox: async options => { assert.match(options.message, /ADAPTER_UNAVAILABLE/); events.push('dialog'); } },
   };
   const boot = runInNewContext(direct.replaceAll('import.meta.url', 'entryURL') + '\nmainDirectEntry()', {
     entryURL: new URL('../electron/main.js', import.meta.url).href,
