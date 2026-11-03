@@ -268,7 +268,12 @@ impl CoreState {
                     value["op"].as_str(),
                     Some("create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe")
                 ) || value["params"]["surface_id"].as_str().is_some_and(|id| {
-                    self.is_destroyed(id) || self.surfaces.get(id).is_some_and(|s| !s.live)
+                    // [TARGET, unit decision] Explicit Stop may retire a lost human
+                    // binding; this grants no input, frames or renewed liveness.
+                    self.is_destroyed(id)
+                        || self.surfaces.get(id).is_some_and(|s| {
+                            !s.live && (value["op"] != "destroy" || s.agent_controlled)
+                        })
                 }) || !valid_surface_create_policy(request)
                 {
                     out.reason = Some(Refusal::Policy);
