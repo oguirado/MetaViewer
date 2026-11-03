@@ -11,7 +11,7 @@ import {createButtonService,OPERATOR_STOP_BUDGET_MS} from './buttonBridge.js';
 import * as fs from 'node:fs';
 import { dirname, basename, join, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { BUTTON_METHODS, OPERATOR_METHODS, assertOperatorCall, assertOperatorReply, operatorKeys, validEgress, validHandoff } from './preload.js';
 
@@ -32,11 +32,12 @@ export function privateDirectory(path,work) {
   } finally {fs.closeSync(fd);}
 }
 /** @param {string} root @param {string} name */
-function readPrivate(root,name) {
+function readPrivate(root,name,inspect=(/** @type {fs.Stats} */_st)=>{}) {
   const fd=fs.openSync(join(root,name),fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
   try {
     const st=fs.fstatSync(fd);
     if(!st.isFile() || st.uid!==process.getuid?.() || (st.mode&0o777)!==0o600 || st.size>65536) throw new Error('PRIVATE_FILE');
+    inspect(st);
     const buffer=Buffer.alloc(65537); const n=fs.readSync(fd,buffer,0,buffer.length,0);
     if(n>65536) throw new Error('PRIVATE_FILE');
     return JSON.parse(buffer.subarray(0,n).toString('utf8'));
@@ -168,12 +169,76 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
 }
 /** [TARGET, unit decision] Bounds of the run-dir handoff watcher. */
 export const HANDOFF_DISCOVERY=Object.freeze({maxScan:4096,maxRuns:32,maxAgeMs:6*3600*1000,maxLatched:64,fileName:'memoryweb-run.handoff.json'});
+// [TARGET, unit decision] File age is checked against this Electron process,
+// not watcher installation or run-directory mtime. Older records need both the
+// adapter's exact surface binding and a currently running identity container.
+const HANDOFF_SESSION_START=Date.now()-process.uptime()*1000;
+/** @param {NodeJS.ProcessEnv} env @returns {Map<string,number>} */
+function runningHandoffContainers(env) {
+  const options={env,encoding:/** @type {const} */('utf8'),timeout:1000,maxBuffer:65536,windowsHide:true};
+  const reply=spawnSync('docker',['ps','--format','{{.Names}}'],options);
+  if(reply.error || reply.status!==0)return new Map();
+  const names=reply.stdout.trim().split('\n').filter(name=>/^srf-(id|pg)-[a-z0-9][a-z0-9-]{0,63}$/.test(name));
+  if(!names.length || names.length>HANDOFF_DISCOVERY.maxLatched)return new Map();
+  const inspected=spawnSync('docker',['inspect','--format','{{.Name}} {{.State.Running}} {{.State.StartedAt}}',...names],options);
+  if(inspected.error || inspected.status!==0)return new Map();
+  /** @type {Map<string,number>} */const running=new Map();
+  for(const line of inspected.stdout.trim().split('\n')) {
+    const [name,active,started]=line.split(' '),at=Date.parse(started);
+    if(active==='true' && Number.isFinite(at) && at>0 && names.includes(name.replace(/^\//,'')))running.set(name.replace(/^\//,''),at);
+  }
+  return running;
+}
+/** @param {NodeJS.ProcessEnv} env @param {any} record @param {number} modified @param {()=>Map<string,number>} containers */
+function survivingHandoff(env,record,modified,containers) {
+  if(!env.MV_SRF_STATE_DIR)return false;
+  try {
+    return privateDirectory(join(env.MV_SRF_STATE_DIR,'human-bindings'),root=>{
+      const b=readPrivate(root,record.surface_id+'.json');
+      return b.schema==='metaviewer.human_binding/v0.3' && b.surface_id===record.surface_id
+        && b.control_ready===true && ['agent','human'].includes(b.role)
+        && typeof b.profile_id==='string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.profile_id)
+        && typeof b.run_id==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(b.run_id)
+        && (b.container==='srf-id-'+b.profile_id || b.container==='srf-pg-'+b.profile_id)
+        // A recreated container may reuse the name while the old surface file remains.
+        && (containers().get(b.container)??Infinity)<=modified;
+    });
+  }catch{return false;}
+}
 /** Newest recent private run directories of tools/mw_run_backend.py, as the fixed
  * handoff path inside each. Symlinked entries and foreign names are skipped; the
  * private-directory and private-file reads at latch time stay the trust gate.
  * @param {Record<string,string|undefined>} env @param {number} nowMs @returns {string[]} */
 export function discoverHandoffPaths(env,nowMs) {
   const state=typeof env.MV_OPERATOR_STATE_HOME==='string' && env.MV_OPERATOR_STATE_HOME!==''?env.MV_OPERATOR_STATE_HOME:typeof env.XDG_STATE_HOME==='string' && env.XDG_STATE_HOME!==''?env.XDG_STATE_HOME:typeof env.HOME==='string' && env.HOME!==''?join(env.HOME,'.local/state'):'';
+  // [TARGET, unit decision] Browser goals may export XDG_STATE_HOME in a shell
+  // after the app starts. Watch the documented goal/tour RAM namespaces too;
+  // every final record still passes the descriptor-based private-file gate.
+  const roots=new Set([state,env.XDG_STATE_HOME,join('/dev/shm/vqa-cu',`metaviewer-program-${process.getuid?.()}`)]);
+  try {
+    const dir=fs.opendirSync('/dev/shm');
+    try {
+      for(let i=0;i<HANDOFF_DISCOVERY.maxScan;i++) {
+        const entry=dir.readSync();if(!entry)break;
+        if(entry.isDirectory() && /^metaviewer-(goal|tour)\.[A-Za-z0-9]+$/.test(entry.name))roots.add(join('/dev/shm',entry.name));
+      }
+    } finally {dir.closeSync();}
+  }catch{/* RAM namespace unavailable: retain configured state discovery. */}
+  const candidates=[...roots].filter(x=>typeof x==='string')
+    .flatMap(root=>discoverRunHandoffs(/** @type {string} */(root),nowMs));
+  /** @type {Map<string,{mtime:number,paths:string[]}>} */const runs=new Map();
+  for(const path of candidates) {
+    const dir=dirname(path);
+    try {
+      if(!runs.has(dir))runs.set(dir,{mtime:fs.lstatSync(dir).mtimeMs,paths:[]});
+      runs.get(dir)?.paths.push(path);
+    }catch{/* Raced removal. */}
+  }
+  return [...runs.entries()].sort((a,b)=>b[1].mtime-a[1].mtime||(a[0]<b[0]?-1:1))
+    .slice(0,HANDOFF_DISCOVERY.maxRuns).flatMap(([,run])=>run.paths);
+}
+/** @param {string} state @param {number} nowMs @returns {string[]} */
+function discoverRunHandoffs(state,nowMs) {
   if(!isAbsolute(state) || resolve(state)!==state)return [];
   const runs=join(state,'metaviewer/runs');
   /** @type {{name:string,mtime:number}[]} */const found=[];
@@ -190,10 +255,12 @@ export function discoverHandoffPaths(env,nowMs) {
     }
   }catch{return [];}
   finally {try{dir?.closeSync();}catch{/* Already closed. */}}
-  return found.sort((a,b)=>b.mtime-a.mtime||(a.name<b.name?-1:1)).slice(0,HANDOFF_DISCOVERY.maxRuns).map(x=>join(runs,x.name,HANDOFF_DISCOVERY.fileName));
+  return found.sort((a,b)=>b.mtime-a.mtime||(a.name<b.name?-1:1)).slice(0,HANDOFF_DISCOVERY.maxRuns)
+    .flatMap(x=>[HANDOFF_DISCOVERY.fileName,'browser-goal.handoff.json'].map(name=>join(runs,x.name,name)))
+    .filter(path=>{try{return fs.lstatSync(path).isFile();}catch{return false;}});
 }
 /** @param {any} options */
-export function createOperatorService({env=process.env,runIdentity,buttons,notify=()=>{},now=Date.now}) {
+export function createOperatorService({env=process.env,runIdentity,buttons,notify=()=>{},now=Date.now,sessionStartedAt=HANDOFF_SESSION_START}) {
   /** @type {Map<string,{path:string,record:any,acked:boolean}>} */ const latched=new Map();
   /** @type {string[]} */ let paths=[];
   let configError=false;
@@ -205,11 +272,17 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
   const discover=env.MV_HANDOFF_PATHS===undefined;
   const rows=()=>[...latched.values()].filter(x=>!x.acked).map(x=>x.record);
   const state=()=>({ok:true,rows:rows()});
+  // refresh runs every second on the main thread: judge each old record once, or a stale
+  // binding would block the UI on docker until the record ages out.
+  /** @type {Map<string,number>} */const rejectedOld=new Map();
   function refresh() {
     let changed=false;
+    /** @type {Map<string,number>|undefined} */let running;
+    const containers=()=>running??=runningHandoffContainers(env);
     const candidates=discover?[...paths,...discoverHandoffPaths(env,now())]:paths;
     for(const path of candidates) {
       if(latched.has(path))continue;
+      try {if(rejectedOld.get(path)===fs.statSync(path).mtimeMs)continue;}catch{/* The read below reports it. */}
       if(latched.size>=HANDOFF_DISCOVERY.maxLatched) {
         const spent=[...latched.entries()].find(([,x])=>x.acked);
         if(!spent)break;
@@ -217,7 +290,9 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
       }
       try {
         privateDirectory(dirname(path),root=>{
-          const record=readPrivate(root,basename(path));if(!validHandoff(record))throw new Error('HANDOFF_RECORD');
+          let modified=0;
+          const record=readPrivate(root,basename(path),st=>{modified=st.mtimeMs;});if(!validHandoff(record))throw new Error('HANDOFF_RECORD');
+          if(modified<sessionStartedAt && !survivingHandoff(env,record,modified,containers)) {rejectedOld.set(path,modified);return;}
           let acked=false;
           try {const ack=readPrivate(root,basename(path)+'.ack.json');acked=operatorKeys(ack,['schema','surface_id','step_index']) && ack.schema==='metaviewer.handoff_ack/v1' && ack.surface_id===record.surface_id && ack.step_index===record.step_index;}catch{/* No proven ack: keep visible. */}
           latched.set(path,{path,record,acked});changed=true;

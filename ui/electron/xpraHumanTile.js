@@ -46,6 +46,17 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     preload: fileURLToPath(new URL('./xpraTracePreload.cjs', import.meta.url)),
     backgroundThrottling: false, webSecurity: true, allowRunningInsecureContent: false } });
   const wc = view.webContents;
+  const focusedBefore = electron.webContents?.getFocusedWebContents?.();
+  let focusMoved = false;
+  const markFocusMoved = () => { focusMoved = true; };
+  const focusEvents = ['before-input-event','before-mouse-event','blur'];
+  const focusOwner = /** @type {import('node:events').EventEmitter} */ (window.webContents);
+  for (const event of focusEvents) focusOwner?.on?.(event, markFocusMoved);
+  window.on?.('blur', markFocusMoved);
+  const stopFocusWatch = () => {
+    for (const event of focusEvents) focusOwner?.removeListener?.(event, markFocusMoved);
+    window.removeListener?.('blur', markFocusMoved);
+  };
   // This contents has its own input scope. Ignore Electron menu accelerators
   // without cancelling the DOM event: Ctrl+Q/W/T must reach the remote desktop.
   wc.setIgnoreMenuShortcuts(true);
@@ -140,6 +151,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   async function close() {
     if (detached) return;
     detached = true;
+    stopFocusWatch();
     recovery?.stop();
     trace.setActive(false);
     ipcMain.removeListener('metaviewer:human-trace.v0.3', onTrace);
@@ -160,7 +172,9 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     await waitForXpraClient(wc, {writable, rawKeyboard, isActive:live});
     if (!live()) throw Error('XPRA_HUMAN_LEASE_LOST');
     publish('ready');
-    if (writable) wc.focus();
+    if (writable && initiallyVisible && !focusMoved
+        && electron.webContents?.getFocusedWebContents?.() === focusedBefore) wc.focus();
+    stopFocusWatch();
     recovery = createXpraRecovery({isActive:live,
       probe:async () => {
         // Bound a stalled renderer evaluation as well as a false result.
@@ -186,4 +200,5 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
       /** @param {boolean} visible */
       setVisible(visible) { if (!detached) view.setVisible(visible); } });
   } catch (error) { await close(); throw failure || error; }
+  finally { stopFocusWatch(); }
 }

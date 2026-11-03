@@ -101,7 +101,7 @@ The window is a kit shell with a top bar, a navigation rail, the capsule wall, a
 
 ## 3. Opening a capsule surface and nested depth (`AC-17`)
 
-I launch a capsule from the `Add capsule` button in the top bar or workspace rail, which opens `CatalogLauncher.vue` with `4` `[MEASURED: grep -c "kind:" ui/src/catalog/catalogModel.js]` catalog kinds (`identity-browser`, `program`, `holdings-app`, `desktop` in `ui/src/catalog/catalogModel.js`), or through a `surface_request/v0.2` (`action: "create"`) request.
+I launch a capsule from the `Add capsule` button in the top bar or workspace rail, which opens `CatalogLauncher.vue` with the catalog kinds (`identity-browser`, `program`, `host-program`, `desktop-window` in `ui/src/catalog/catalogModel.js`), or through a `surface_request/v0.2` (`action: "create"`) request. Host program and Desktop window run on the computer and are not isolated.
 
 Each tile header displays the capsule's human label alongside its lifecycle state and control badge (`SurfacePanel.vue`).
 
@@ -320,7 +320,7 @@ the notice: it does not resume, retry or authorize agent CAPTCHA solving.
 
 ### Multiple capsules, RAM admission, and private site data
 
-Use **Add capsule** for additional configured profiles (up to `4` `[TARGET]` live capsules, with `MV_SRF_LIVE_PROFILE=mv-live-1`). Create one identity per extra profile in **Identities** (`mv-live-2`..`mv-live-4`), and configure `MV_SRF_PROFILES` with the four browser profiles sharing the canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` and distinct displays (`:100` to `:103`):
+Use **Add capsule** for additional configured profiles (up to `16` [CITED: `../ui/electron/profilePicker.js`, `../daemon-adapter/internal/daemon/environment.go`] live capsules, with `MV_SRF_LIVE_PROFILE=mv-live-1`). Create one identity per extra profile in **Identities** (`mv-live-2`..`mv-live-4`), and configure `MV_SRF_PROFILES`. The following example uses four browser profiles sharing the canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` and distinct displays (`:100` to `:103`):
 
 ```json
 {

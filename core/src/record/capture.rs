@@ -281,7 +281,16 @@ impl Host {
         } else {
             req["surface_id"].as_str().ok_or(Error::Event)?
         };
-        if !surfaces.contains(surface) {
+        if method == "recordStop" {
+            // [TARGET, unit decision] The retained active recording owns its
+            // termination identity even after the live surface has departed.
+            // Grant it only to this cloned stop transition, never to new work.
+            next.coordinator
+                .as_mut()
+                .ok_or(Error::Configuration)?
+                .surfaces
+                .insert(surface.to_owned());
+        } else if !surfaces.contains(surface) {
             return Ok(refusal("SURFACE_UNKNOWN"));
         }
         if method == "recordStart"
@@ -421,6 +430,36 @@ mod tests {
     }
     fn request(surface: &str) -> Value {
         json!({"schema":"capture_request/v1","request_id":"request","surface_id":surface,"mode":"ai"})
+    }
+    #[test]
+    fn v027_stop_retained_recording_after_surface_departure() {
+        let mut host = Host::default();
+        let surfaces = BTreeSet::from(["surface-demo".to_owned()]);
+        host.frame(&frame("surface-demo"), b"pixels".to_vec(), 0)
+            .unwrap();
+        let (host, reply, _) = host
+            .prepare("recordStart", &request("surface-demo"), surfaces, 10)
+            .unwrap();
+        let stop = json!({"request_id":"stop", "recording_id":reply["recording_id"]});
+        let (host, reply, events) = host
+            .prepare("recordStop", &stop, BTreeSet::new(), 20)
+            .unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["recording"]["sealed"], true);
+        assert_eq!(reply["recording"]["sha256"], sha256_hex(b"pixels"));
+        assert!(!events.is_empty());
+        assert_eq!(
+            host.prepare("recordStop", &stop, BTreeSet::new(), 21)
+                .unwrap()
+                .1["code"],
+            "NOT_RECORDING"
+        );
+        assert_eq!(
+            host.prepare("recordStart", &request("surface-demo"), BTreeSet::new(), 21)
+                .unwrap()
+                .1["code"],
+            "SURFACE_UNKNOWN"
+        );
     }
     #[test]
     fn captures_pixels_seals_and_refuses_duplicates() {

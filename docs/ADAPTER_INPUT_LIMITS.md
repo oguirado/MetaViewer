@@ -2,7 +2,7 @@
 
 The adapter delivers printable text with `--type-stdin`. The native call cap is
 2000 runes [CITED: OpenSuperficies `src/browserid/inject/inject.go:279–281`,
-`deps.lock` commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5`]. Native validation
+historical source commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5`, not the current `deps.lock` pin]. Native validation
 also rejects non-printable runes [CITED: the same source, lines 284–287]; the
 adapter refuses those at admission with `input`, including trailing newlines
 which the CLI would otherwise remove.

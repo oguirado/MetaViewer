@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Explicit operator reclaim; never called by the daemon.
 
-[TARGET, unit decision] New names append a validated profile after the hash.
-Require dead PID plus absence of that profile's browser/program/VM containers.
-Hash-only records require absence of MetaViewer mv-* browser/program/VM capsules.
-Random holdings names cannot be mapped back to a profile; keep conservatively
-while any holdings capsule exists. Inventory is read-only, including protected
-containers, which never prevent reclaim of unrelated profile reservations.
+[TARGET, unit decision] Reservation records do not identify a native kind.
+Random browser names and hash-only legacy profiles cannot be matched safely.
+Keep records while any browser/holdings container or host Xvfb/xpra process is
+present; legacy records also require all program/VM containers to be absent.
+Unknown process or Docker inventory is never proof of absence.
 """
 import argparse
 import fcntl
@@ -20,6 +19,7 @@ import subprocess
 import sys
 
 RECORD = re.compile(r"([1-9][0-9]*)-[0-9a-f]{32}-([0-9a-f]{64})(?:--([a-z0-9][a-z0-9-]{0,63}))?\Z")
+HOST_PROC = Path("/proc")
 NAME = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*\Z")
 # Profile container names created by internal/capsule/manager.go (start/rebind).
 PROFILE_PREFIXES = ("srf-id-", "srf-pg-", "srf-vm-")
@@ -59,15 +59,27 @@ class NativeInventory:
             names = raw.splitlines()
             if any(not NAME.fullmatch(name) for name in names):
                 return None
-            if profile is None:
-                return not any(name.startswith("srf-") for name in names)
-            if any(name.startswith("srf-ng-hcap-") for name in names):
-                return False  # random native IDs cannot prove profile absence
-            if profile:
-                return not any(name in tuple(prefix + profile for prefix in PROFILE_PREFIXES)
-                               for name in names)
-            return not any(name.startswith(tuple(prefix + "mv-" for prefix in PROFILE_PREFIXES))
-                           for name in names)
+            # Browser CLI names are random, so even a different name may be ours.
+            if any(name.startswith(("srf-id-", "srf-ng-hcap-")) for name in names):
+                return False
+            if not profile:
+                if any(name.startswith(PROFILE_PREFIXES) for name in names):
+                    return False
+            elif any(name in tuple(prefix + profile for prefix in PROFILE_PREFIXES)
+                     for name in names):
+                return False
+            # Host-xpra's unreaped Xvfb anchor and xpra server are outside Docker.
+            # Inspect comm rather than argv: unrelated arguments may mention xpra.
+            for entry in HOST_PROC.iterdir():
+                if not entry.name.isdecimal():
+                    continue
+                try:
+                    comm = (entry / "comm").read_text().strip()
+                except FileNotFoundError:
+                    continue  # process exited during the snapshot
+                if comm.lower().startswith("xpra") or comm == "Xvfb":
+                    return False
+            return True
         except (OSError, subprocess.SubprocessError, ValueError, TypeError):
             return None
 

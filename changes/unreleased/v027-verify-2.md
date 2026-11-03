@@ -1,0 +1,3 @@
+- Treat close OCR word spans as explicitly uncertified; retain exact and clearly wrong classifications and bounded actual readback text.
+- Preserve the honest union of title, editor and status pixel changes when no focused field boundary is grounded.
+- Persist terminal Enter verification failure as an unverified effect refusal, without claiming native delivery or retrying the key; keep timeouts uncertain.
