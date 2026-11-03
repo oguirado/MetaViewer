@@ -91,7 +91,7 @@ func (m *Manager) slotStopped(ctx context.Context, id string) error {
 	m.mu.Lock()
 	busy := m.quarantined[id]
 	for _, b := range m.bindings {
-		if b.Surface.ProfileID == id {
+		if b.Surface.ProfileID == id && b.Surface.State != "destroyed" {
 			busy = true
 		}
 	}
@@ -190,13 +190,10 @@ func (m *Manager) HandleState(ctx context.Context, r StateRequest) json.RawMessa
 		if e != nil {
 			return fail(e)
 		}
-		var meta struct {
-			Browser string `json:"browser"`
+		kind, e = nativeSlotKind(out, r.ProfileID)
+		if e != nil {
+			return fail(e)
 		}
-		if json.Unmarshal(out, &meta) != nil || (meta.Browser != "browser" && meta.Browser != "program") {
-			return fail(errors.New("FOREIGN_IDENTITY"))
-		}
-		kind = meta.Browser
 	}
 	var manifest slots.Manifest
 	var err error
@@ -253,7 +250,7 @@ func (m *Manager) HandleState(ctx context.Context, r StateRequest) json.RawMessa
 		}
 		// Native create refuses an existing identity; a failed load leaves a new,
 		// stopped identity for explicit operator recovery rather than deleting data.
-		_, err = runner.Run(ctx, []string{filepath.Join(runner.root, "srf-identity-admin"), "create", "--id", r.Destination, "--label", r.Destination, "--browser", kind, "--domains", ""}, nil)
+		_, err = runner.Run(ctx, slotCreateArgs(runner.root, r.Destination, kind), nil)
 		if err == nil {
 			err = m.slots.Provision(ctx, r.Destination)
 		}
@@ -273,4 +270,34 @@ func (m *Manager) HandleState(ctx context.Context, r StateRequest) json.RawMessa
 	}
 	b, _ := json.Marshal(result)
 	return b
+}
+
+// [TARGET, unit decision] Native admin calls browser metadata "chromium";
+// capsule state uses kind "browser". Browser create uses the native default,
+// matching mv_identity.py; only program creation passes --browser program.
+func nativeSlotKind(raw []byte, profile string) (string, error) {
+	var meta struct {
+		ProfileID string `json:"profile_id"`
+		Browser   string `json:"browser"`
+	}
+	if json.Unmarshal(raw, &meta) != nil || meta.ProfileID != profile {
+		return "", errors.New("FOREIGN_IDENTITY")
+	}
+	switch meta.Browser {
+	case "chromium", "browser":
+		return "browser", nil
+	case "program":
+		return "program", nil
+	default:
+		return "", errors.New("FOREIGN_IDENTITY")
+	}
+}
+func slotCreateArgs(root, profile, kind string) []string {
+	args := []string{filepath.Join(root, "srf-identity-admin"), "create", "--id", profile, "--label", profile}
+	if kind == "program" {
+		args = append(args, "--browser", "program", "--domains", "")
+	} else {
+		args = append(args, "--domains", "")
+	}
+	return args
 }

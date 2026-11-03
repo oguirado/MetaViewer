@@ -194,7 +194,9 @@ func (r *ProcessRunner) SearchPath() string {
 
 func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([]byte, error) {
 	adminShow := len(argv) == 4 && filepath.Base(argv[0]) == "srf-identity-admin" && argv[1] == "show" && argv[2] == "--id" && storedIdentityID.MatchString(argv[3]) && !protectedIdentity(argv[3]) && len(stdin) == 0
-	adminCreate := len(argv) == 10 && filepath.Base(argv[0]) == "srf-identity-admin" && argv[1] == "create" && argv[2] == "--id" && storedIdentityID.MatchString(argv[3]) && !protectedIdentity(argv[3]) && argv[4] == "--label" && argv[5] == argv[3] && argv[6] == "--browser" && (argv[7] == "browser" || argv[7] == "program") && argv[8] == "--domains" && argv[9] == "" && len(stdin) == 0
+	// Native browser creation uses the default chromium engine; program copy
+	// alone selects --browser program. Keep the create seam closed and path-free.
+	adminCreate := (len(argv) == 8 || len(argv) == 10) && filepath.Base(argv[0]) == "srf-identity-admin" && argv[1] == "create" && argv[2] == "--id" && storedIdentityID.MatchString(argv[3]) && !protectedIdentity(argv[3]) && argv[4] == "--label" && argv[5] == argv[3] && len(stdin) == 0 && ((len(argv) == 8 && argv[6] == "--domains" && argv[7] == "") || (len(argv) == 10 && argv[6] == "--browser" && argv[7] == "program" && argv[8] == "--domains" && argv[9] == ""))
 	hostWin := len(argv) >= 2 && filepath.Base(argv[0]) == "srf-host-window" && (argv[1] == "list" || argv[1] == "capture" || argv[1] == "input")
 	if len(argv) < 2 || filepath.Dir(argv[0]) != r.root || (!adminShow && !adminCreate && !hostWin && filepath.Base(argv[0]) != "srf-identity-surface" && filepath.Base(argv[0]) != "srf-holdings-capsule") {
 		return nil, fault("execution", "unadmitted executable")

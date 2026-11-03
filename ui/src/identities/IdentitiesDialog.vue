@@ -9,6 +9,7 @@ import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityP
 const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
+const selectedSlots=ref('');
 const rows=ref(/** @type {any[]} */([])), id=ref(''), label=ref(''), domains=ref('');
 const typedName=ref(''), labelEdited=ref(false), nameInput=ref(/** @type {{ $el?: HTMLInputElement }|null} */(null));
 const displayName=computed({get:()=>labelEdited.value ? label.value : typedName.value,
@@ -110,6 +111,12 @@ async function openIdentity(profileId,role){
   emit('open-identity',{profileId,role});emit('close');
 }
 /** @param {string} profileId */
+async function copiedIdentity(profileId) {
+  await invoke('list');
+  selectedSlots.value=profileId;
+  await openIdentity(profileId,'human');
+}
+/** @param {string} profileId */
 async function stopIdentity(profileId) {
   if (busy.value) return;
   if (isForeignIdentity(profileId)) { error.value=identityErrorText('IDENTITY_PROTECTED',profileId); return; }
@@ -155,9 +162,13 @@ watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=
         <UiButton v-if="roleApi && modeFor(row.id)?.currentMode === 'lost' && modeFor(row.id)?.surfaceId" label="Stop lost capsule" :disabled="busy || isForeignIdentity(row.id)" @click="stopIdentity(row.id)" />
         <UiButton label="Delete" :disabled="busy || isProtectedIdentity(row.id)" :title="isProtectedIdentity(row.id) ? 'Managed outside MetaViewer' : undefined" @click="askDelete(row.id)" />
         </div>
-        <StoredDataSlots :profile-id="row.id" :blocked="isOpen(row.id)" @changed="invoke('list')" />
+        <UiButton label="Stored data" :aria-pressed="selectedSlots===row.id" :disabled="busy" @click="selectedSlots=row.id" />
       </li>
     </ul>
+    <section class="identity-saved-data" aria-label="Saved data">
+      <StoredDataSlots v-if="selectedSlots && rows.some(row=>row.id===selectedSlots)" :key="selectedSlots" :profile-id="selectedSlots" :blocked="isOpen(selectedSlots)" @copied="copiedIdentity" />
+      <p v-if="!selectedSlots && rows.length">Select Stored data on an identity to manage its saved slots.</p>
+    </section>
     <section class="identity-add" aria-label="Add identity">
       <h4>Add identity</h4>
       <p><label>Name (required)<UiTextInput ref="nameInput" :model-value="id" @update:model-value="updateName" label="Name" placeholder="work-account" aria-describedby="identity-id-hint identity-name-error" :aria-invalid="!!nameError" :disabled="busy" /></label></p>
@@ -177,7 +188,7 @@ watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=
 </template>
 <style>
 #identities-dialog.s1-confirm-panel{max-width:min(70rem,calc(100vw - 3rem));max-height:calc(100vh - 3rem);overflow:auto;}
-.identity-list{list-style:none;padding:0;margin:0;max-height:35vh;overflow:auto;}
+.identity-list{list-style:none;padding:0;margin:0;max-height:24vh;overflow:auto;}
 .identity-row{flex-wrap:wrap;display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 0;border-bottom:1px solid var(--cuk-semantic-border-subtle);}
 .identity-summary{display:grid;grid-template-columns:minmax(8rem,auto) minmax(8rem,1fr) auto;gap:.4rem 1rem;align-items:baseline;}
 .identity-last-login{grid-column:1/-1;color:var(--cuk-semantic-text-muted);}

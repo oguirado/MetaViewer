@@ -12,13 +12,14 @@ const Button = vue.defineComponent({ props: ['label', 'disabled'], emits: ['clic
 const Input = vue.defineComponent({ props: ['label', 'modelValue'], emits: ['update:modelValue'], setup: (p, { emit }) => () => vue.h('input', { 'aria-label': p.label, value: p.modelValue, onInput: e => emit('update:modelValue', e.target.value) }) });
 const Dialog = vue.defineComponent({ props: ['open', 'title', 'confirmLabel', 'backLabel', 'busy', 'confirmDisabled', 'description'], emits: ['confirm', 'back'], setup: (p, { emit, slots }) => () => p.open ? vue.h('section', { 'aria-label': p.title }, [vue.h('p',p.description), ...(slots.default?.() ?? []), vue.h('button', { disabled: p.busy || p.confirmDisabled, onClick: () => emit('confirm') }, p.confirmLabel)]) : null });
 let serial = 0;
-async function component() {
-  const url = new URL('../src/identities/StoredDataSlots.vue', import.meta.url), { descriptor } = parse(readFileSync(url, 'utf8'));
+async function component(file='StoredDataSlots.vue', Slots=null) {
+  const url = new URL('../src/identities/'+file, import.meta.url), { descriptor } = parse(readFileSync(url, 'utf8'));
   const built = compileScript(descriptor, { id: 'identdlg', inlineTemplate: true });
-  globalThis.__slotDialog = { UiButton: Button, UiTextInput: Input, Dialog };
+  globalThis.__slotDialog = { UiButton: Button, UiTextInput: Input, Dialog, Slots };
   const require = createRequire(import.meta.url);
   const code = built.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, spec) => {
     if (spec === 'capsule-ui-kit/ui') return `const ${binding}=globalThis.__slotDialog;`;
+    if (spec.endsWith('StoredDataSlots.vue')) return `const ${binding}=globalThis.__slotDialog.Slots;`;
     if (spec.endsWith('.vue')) return `const ${binding}=globalThis.__slotDialog.Dialog;`;
     return `import ${binding} from ${JSON.stringify(spec === 'vue' ? pathToFileURL(require.resolve('vue')).href : new URL(spec, url).href)};`;
   });
@@ -81,4 +82,59 @@ test('preload slot capability validates both directions and nested displays cann
  assert.deepEqual(await make().slots.request(request),reply);
  await assert.rejects(make(false,true).slots.request(request));
  await assert.rejects(make(true).slots.request(request),/disabled/);assert.equal(called,2);
+});
+
+test('nonempty daemon listing metadata survives preload and closed validation',()=>{
+ const event={schema:'capsule_state_event/v0.2',operation_id:'list-op',op:'list',profile_id:'work-account',slot_id:'list',event:'completed',slots:[{slot_id:'slot-one',name:'slot-one',saved_at:'2026-11-03T20:14:34.373343959Z',generation:1,size_bytes:2140160}]};
+ assert.deepEqual(stateEvent(event),event);
+ for (const size_bytes of [-1,NaN,'1024',Number.MAX_SAFE_INTEGER+1]) assert.throws(()=>stateEvent({...event,slots:[{...event.slots[0],size_bytes}]}));
+ const {slots,...missing}=event;assert.throws(()=>stateEvent(missing));
+});
+
+test('slot save shows progress, success and size; empty and failed listings are distinct',async()=>{
+ let finish;let saved=false;
+ const api={request:request=>request.op==='save'?new Promise(resolve=>{finish=()=>{saved=true;resolve({event:'completed'});};}):Promise.resolve({event:'completed',slots:saved?[{slot_id:'slot-one',name:'slot-one',saved_at:'2026-11-03T20:14:34Z',generation:1,size_bytes:2048}]:[]})};
+ const mounted=mount(await component(),{profileId:'work-account',api});
+ try {
+  await tick();assert.match(text(mounted.root),/No saved slots for work-account/);
+  await edit(mounted.root,'Slot name','slot-one');button(mounted.root,'Save').props.onClick();await tick();
+  button(mounted.root,'Continue — signed-in sessions travel').props.onClick();await tick();
+  assert.match(text(mounted.root),/Saving slot-one/);finish();await tick();await tick();
+  assert.match(text(mounted.root),/Saved slot-one/);assert.ok(text(mounted.root).includes((2048).toLocaleString()+' bytes'));
+  assert.equal(field(mounted.root,'Slot name').props.value,'');
+  api.request=async()=>({event:'completed'});button(mounted.root,'Refresh slots').props.onClick();await tick();
+  assert.match(text(mounted.root),/SLOT_LIST_MISSING/);assert.doesNotMatch(text(mounted.root),/No saved slots/);
+ }finally{mounted.close();}
+});
+
+test('refusals and invalid names stay readable outside the closed confirmation',async()=>{
+ const api={request:async request=>request.op==='list'?{event:'completed',slots:[]}:{event:'refused',reason_code:'SLOT_QUOTA'}};
+ const mounted=mount(await component(),{profileId:'work-account',api});
+ try{
+  await tick();await edit(mounted.root,'Slot name','BAD/name');button(mounted.root,'Save').props.onClick();await tick();
+  assert.match(text(mounted.root),/Use 2–40 lowercase/);
+  await edit(mounted.root,'Slot name','slot-one');button(mounted.root,'Save').props.onClick();await tick();button(mounted.root,'Continue — signed-in sessions travel').props.onClick();await tick();
+  assert.match(text(mounted.root),/Slot storage is full/);assert.equal(button(mounted.root,'Continue — signed-in sessions travel'),undefined);
+ }finally{mounted.close();}
+ const protectedProfile=mount(await component(),{profileId:'mv-live-1',api});
+ try{await tick();assert.match(text(protectedProfile.root),/profile is protected/);}finally{protectedProfile.close();}
+ const openProfile=mount(await component(),{profileId:'work-account',blocked:true,api});
+ try{await tick();assert.match(text(openProfile.root),/Stop this capsule/);}finally{openProfile.close();}
+});
+
+test('Identities mounts one selected saved-data panel instead of racing every identity listing',async()=>{
+ const old=globalThis.metaviewer,calls=[];
+ globalThis.metaviewer={slots:{request:async request=>{calls.push(request);return {event:'completed',slots:[]};}}};
+ const Slots=await component();
+ const host={identity:{list:async()=>({ok:true,rows:[{id:'first-account',label:'First'},{id:'second-account',label:'Second'}]})}};
+ const mounted=mount(await component('IdentitiesDialog.vue',Slots),{open:true,host});
+ try{
+  await tick();assert.equal(calls.length,0);
+  const select=()=>nodes(mounted.root).filter(n=>n.tag==='button'&&n.text==='Stored data');
+  select()[0].props.onClick();await tick();assert.deepEqual(calls.map(c=>c.profile_id),['first-account']);
+  assert.match(text(mounted.root),/No saved slots for first-account/);
+  select()[1].props.onClick();await tick();assert.deepEqual(calls.map(c=>c.profile_id),['first-account','second-account']);
+  assert.doesNotMatch(text(mounted.root),/No saved slots for first-account/);
+  assert.match(text(mounted.root),/No saved slots for second-account/);
+ }finally{mounted.close();globalThis.metaviewer=old;}
 });

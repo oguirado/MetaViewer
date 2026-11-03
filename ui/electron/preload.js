@@ -1769,8 +1769,10 @@ export function stateEvent(value) {
   if (value.generation!==undefined && (!Number.isSafeInteger(value.generation)||value.generation<1)) throw new Error('CAPSULE_STATE_EVENT');
   if (value.sha256!==undefined && (typeof value.sha256!=='string'||!/^[a-f0-9]{64}$/.test(value.sha256))) throw new Error('CAPSULE_STATE_EVENT');
   if (value.slots!==undefined && (value.op!=='list'||!Array.isArray(value.slots)||value.slots.length>256
-      || !value.slots.every((/** @type {any} */row)=>stateKeys(row,['slot_id','name','saved_at','generation']) && slotIdentifier(row.slot_id)
+      || !value.slots.every((/** @type {any} */row)=>stateKeys(row,['slot_id','name','saved_at','generation'],['size_bytes']) && slotIdentifier(row.slot_id)
+        && (row.size_bytes===undefined || (Number.isSafeInteger(row.size_bytes) && row.size_bytes>=0))
         && row.name===row.slot_id && typeof row.saved_at==='string' && row.saved_at.length<=64 && Number.isFinite(Date.parse(row.saved_at))
         && Number.isSafeInteger(row.generation) && row.generation>=1))) throw new Error('CAPSULE_STATE_EVENT');
+  if (value.event==='completed' && value.op==='list' && !Array.isArray(value.slots)) throw new Error('CAPSULE_STATE_EVENT');
   return Object.freeze({...value,...(value.slots?{slots:Object.freeze(value.slots.map((/** @type {any} */row)=>Object.freeze({...row})))}:{})});
 }
