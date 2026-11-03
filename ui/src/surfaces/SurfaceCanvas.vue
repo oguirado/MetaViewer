@@ -861,7 +861,7 @@ function isTypingInTextField() {
   if (!active || typeof active !== 'object' || active === canvasRef.value) return false;
   if (active.isContentEditable === true || active.contentEditable === 'true') return true;
   const tag = typeof active.tagName === 'string' ? active.tagName.toUpperCase() : '';
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tag === 'CANVAS';
 }
 
 function focusCanvasOnEnable() {
@@ -872,7 +872,7 @@ function focusCanvasOnEnable() {
 
 // Losing the gate releases focus, so a stale focused canvas can never keep
 // capturing after a control handoff or a READ switch. Enabling input focuses
-// the canvas unless the operator is typing in another text field of the app.
+// the canvas unless the operator is typing in another field or canvas.
 // MVUI32 lane I (R3-INPUT-1): the gate closure also drops queued input.
 watch(() => props.inputEnabled, (enabled, previous) => {
   if (enabled !== true) {
@@ -1340,5 +1340,21 @@ onBeforeUnmount(() => {
   font-weight: 600;
   line-height: 14px;
   pointer-events: none;
+}
+/* The strip is part of the frame's flex height: wrapping consumes body space
+ * without overlapping pixels or clipping the safety labels mid word. */
+@container tile-chrome (max-width: 499px) {
+  .mv-surface:has(> .mv-surface__strip) { width:100%; height:100%; }
+  .mv-surface__strip {
+    flex-wrap:wrap;
+    gap:2px 8px;
+    padding:2px 8px;
+    white-space:normal;
+    overflow:visible;
+  }
+  .mv-surface__key { white-space:nowrap; }
+  .mv-surface__guard { margin-left:0; flex:0 1 auto; overflow-wrap:normal; }
+  .mv-surface__display-chip { flex:0 1 auto; overflow-wrap:normal; }
+  .mv-surface__state { display:none; }
 }
 </style>

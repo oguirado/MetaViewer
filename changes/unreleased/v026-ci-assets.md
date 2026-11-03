@@ -1,0 +1,1 @@
+- Upload verified Linux app and Node judge archives with SHA-256 checksums for x64 and arm64 as short-lived hosted workflow artifacts.

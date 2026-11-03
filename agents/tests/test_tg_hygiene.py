@@ -24,6 +24,11 @@ DEPS_LOCK = "perception/deps_lock.py"
 COMPONENT_ROOT_KEYS = {"vision-engine": "VQA_VE_ROOT", "wender-agent": "MV_WENDER_ROOT"}
 # Wender's bounded pipe helper executes the explicitly validated planner argv.
 WENDER = "wender_bridge.py"
+# Compiled distribution discovery has no spawn capability and reads only these
+# explicit executable paths. This exception is confined to its owning module.
+COMPILED = "perception/compiled.py"
+COMPILED_KEYS = {"vision-engine": "MV_VISION_EXECUTABLE", "wender-agent": "MV_WENDER_EXECUTABLE"}
+
 
 
 def process_audit(source, filename):
@@ -209,6 +214,18 @@ def environment_audit(source, filename=None):
                     mapping = None
                 if mapping == COMPONENT_ROOT_KEYS:
                     continue
+        elif (filename == COMPILED and isinstance(expression, ast.Subscript)
+              and ast.unparse(expression) == "VARIABLES[name]"):
+            mappings = [child.value for child in tree.body if isinstance(child, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == 'VARIABLES'
+                                for target in child.targets)]
+            if len(mappings) == 1 and isinstance(mappings[0], ast.Dict):
+                try:
+                    mapping = ast.literal_eval(mappings[0])
+                except (ValueError, TypeError):
+                    mapping = None
+                if mapping == COMPILED_KEYS:
+                    continue
         elif isinstance(expression, ast.Name):
             # The only admitted dynamic key is a lexical loop over literal keys.
             parent = parents.get(node)
@@ -315,6 +332,20 @@ class HygieneGapTests(unittest.TestCase):
         for filename in (DEPS_LOCK, "other.py"):
             self.assertTrue(environment_audit(
                 'import os\nos.getenv("NEW_UNAPPROVED_ROOT")', filename))
+
+    def test_compiled_paths_exception_is_exact_and_file_scoped_with_mutants(self):
+        source = (PRODUCT / COMPILED).read_text(encoding='utf-8')
+        self.assertEqual(environment_audit(source, COMPILED), [])
+        self.assertEqual(process_audit(source, COMPILED), ([], Counter()))
+        for filename in (None, 'other.py', DEPS_LOCK, WENDER):
+            self.assertTrue(environment_audit(source, filename))
+        for old, new in (("'MV_WENDER_EXECUTABLE'", "'TOKEN'"),
+                         ("'MV_VISION_EXECUTABLE'", "'NEW_UNAPPROVED_KEY'"),
+                         ('VARIABLES[name])', 'name)')):
+            mutant = source.replace(old, new)
+            self.assertNotEqual(mutant, source)
+            self.assertTrue(environment_audit(mutant, COMPILED))
+        self.assertTrue(process_audit(source + "\nimport subprocess\nsubprocess.run(['x'])", COMPILED)[0])
 
     def test_wender_pipe_exception_remains_exact_and_file_scoped(self):
         source = (PRODUCT / WENDER).read_text(encoding="utf-8")

@@ -1,0 +1,4 @@
+- Advertise owner handoff paths and evidence references only after successful persistence while retaining the closed handoff latch on write failure.
+- Cover failed handoff writes during acquisition and proposal rebind, including refusal of subsequent runs.
+- Verify that early program acquisition and planning failures preserve their original exception; reject the reported uninitialized guard lead.
+- Exercise admitted program input followed by failed settlement, asserting the verification call, uncertain disposition, and correlated failure artifact.
