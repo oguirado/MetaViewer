@@ -31,7 +31,7 @@ I verify MetaViewer across six overlapping layers:
 5. **Mutation proofs, budget gate, and negative controls** (`tests/test_contract_mutants.py`, `agents/tests/run_mutant_harness.py`, `tests/supervisor/check_mutations.py`, `tools/budget_gate.py --self-test`, and `tools/gate.sh --self-test`).
 6. **External testers** (two independent external testers across three adversarial rounds).
 
-The current candidate is **0.2.4** [CITED: `../VERSION`]. E2E source inventories
+The current candidate is **0.2.5** [CITED: `../VERSION`]. E2E source inventories
 below are measured from this tree; execution totals and pass results attributed to
 `a768a684` are historical [CITED: prior document snapshot]. Those totals do not
 establish a pass or live performance for the current assembly. Run the full gate

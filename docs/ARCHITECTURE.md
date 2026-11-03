@@ -9,7 +9,7 @@ Rust core as the single authority over lifecycle, admission, budgets, locks and
 durable session order. Electron renders state and submits intents. It never
 injects input.
 
-The current candidate **0.2.4** [CITED: `../VERSION`] carries the v0.2 contracts (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] schemas in `contracts/v0.2/` alongside `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] closed v0.1 schemas) and the
+The current candidate **0.2.5** [CITED: `../VERSION`] carries the v0.2 contracts (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] schemas in `contracts/v0.2/` alongside `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] closed v0.1 schemas) and the
 integration laws. This document mixes implemented behavior with historical plans. Labels such as
 "planned for v0.2.0" are uncompleted design notes, not release promises; use the
 [README status and limits](../README.md#status) for the current assembly. Features I have not integrated end

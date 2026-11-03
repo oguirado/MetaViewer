@@ -2,7 +2,7 @@
 
 ## Current assembly and historical boundary
 
-The current candidate is **0.2.4** [CITED: `../VERSION`]. This declaration
+The current candidate is **0.2.5** [CITED: `../VERSION`]. This declaration
 separates the pre-event documentation baseline from the implemented assembly.
 Kickoff was **October 26, 2026** [CITED: operator schedule]. The historical
 baseline below describes **0.1.1** [CITED: git `ebc5546`]; statements about empty
