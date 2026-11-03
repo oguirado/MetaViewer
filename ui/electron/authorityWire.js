@@ -719,6 +719,8 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   const createVM = async () => {
     if (identity.depth !== null || disposed) return refuse('DISPLAY_ONLY');
     if (creatingCapsule) return refuse('SURFACE_CREATE_BUSY');
+    const releaseCreation = acquireCapsuleCreation(capsuleStates);
+    if (!releaseCreation) return refuse('SURFACE_CREATE_BUSY');
     creatingCapsule = true;
     let reserved = false;
     let key = '';
@@ -756,7 +758,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       rememberCapsule(surface); reserved = false;
       return {ok:true};
     } catch { return refuse(reserved ? 'VM_CREATE_UNCERTAIN' : 'VM_UNAVAILABLE'); }
-    finally { creatingCapsule = false; }
+    finally { creatingCapsule = false; releaseCreation(); }
   };
   // [TARGET, unit decision] Main shares its boot reservation; frame states reconcile it.
   const rememberCapsule = (/** @type {any} */ state) => {

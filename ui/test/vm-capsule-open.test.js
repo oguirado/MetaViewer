@@ -4,19 +4,19 @@ import {mkdtemp,rm,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import vm from 'node:vm';
-import {configuredVMProfiles,configuredProfiles} from '../electron/profilePicker.js';
+import {configuredVMProfiles,configuredProfiles,acquireCapsuleCreation} from '../electron/profilePicker.js';
 import {installAuthorityWire,WIRE_CHANNELS} from '../electron/authorityWire.js';
 import {createPreloadFacade} from '../electron/preload.js';
 import {createAuthorityAdapter} from '../src/core/hostAdapters.js';
 
 const profile={Kind:'vm',NativeKind:'vm',Program:'notepad-vm',Width:1280,Height:900,Display:':100',RAMRoot:'/dev/shm/synthetic-vm',default_mode:'agent'};
-async function fixture(t,{rows={guest:profile},identities=[{id:'guest',browser:'program'}],memory=async()=>32*1024**3}={}){
-  const dir=await mkdtemp(join(tmpdir(),'vm-create-'));const handlers=new Map(),calls=[],states=new Map();
+async function fixture(t,{rows={guest:profile},identities=[{id:'guest',browser:'program'}],memory=async()=>32*1024**3,states=new Map(),surfaceId='surface-created'}={}){
+  const dir=await mkdtemp(join(tmpdir(),'vm-create-'));const handlers=new Map(),calls=[];
   const env={XDG_CONFIG_HOME:dir,MV_SRF_PROFILES:JSON.stringify(rows)};
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
   const contents={id:9,mainFrame:frame,isDestroyed:()=>false,send(){},postMessage(){}};
   const event={sender:contents,senderFrame:frame};
-  let reply=async request=>({schema:'surface_event/v0.2',event:'created',data:{surface:{schema:'surface/v0.2',surface_id:'surface-created',profile_id:request.params.profile_id,kind:request.params.kind,state:'active',control:'agent',visibility:'unfolded',display:':100',geometry:request.params.geometry}}});
+  let reply=async request=>({schema:'surface_event/v0.2',event:'created',data:{surface:{schema:'surface/v0.2',surface_id:surfaceId,profile_id:request.params.profile_id,kind:request.params.kind,state:'active',control:'agent',visibility:'unfolded',display:':100',geometry:request.params.geometry}}});
   const wire=installAuthorityWire({ipcMain:{handle:(name,fn)=>handlers.set(name,fn),removeHandler:name=>handlers.delete(name)},contents,env,argv:[],capsuleStates:states,hostArch:'arm64',
     listIdentities:async()=>({ok:true,rows:identities}),readFreeMemoryBytes:memory,
     core:{request:async request=>{calls.push(request);return reply(request);}}});
@@ -82,6 +82,54 @@ test('VM rechecks after deferred memory and preserves uncertain creation reserva
   assert.deepEqual(await f.api.createSurface({kind:'vm'}),{ok:false,code:'VM_CREATE_UNCERTAIN'});
   assert.equal(f.states.get('pending:guest').state,'creating');
   assert.equal((await f.api.createSurface({kind:'vm'})).ok,false);assert.equal(f.calls.length,1);
+});
+
+test('shared creation flight serializes browser and VM windows at the last slot',async t=>{
+  for(const firstKind of ['browser','vm']) await t.test(firstKind,async t=>{
+    const states=new Map(Array.from({length:15},(_,i)=>[`old-${i}`,{profile_id:`old-${i}`,state:'active'}]));
+    let resume,entered;
+    const waiting=new Promise(resolve=>{entered=resolve;});
+    const heldMemory=()=>{entered();return new Promise(resolve=>{resume=resolve;});};
+    const browser=await fixture(t,{states,surfaceId:'browser-created',rows:{browser:{Kind:'browser',Width:800,Height:600}},identities:[{id:'browser'}],...(firstKind==='browser'?{memory:heldMemory}:{})});
+    const guest=await fixture(t,{states,surfaceId:'guest-created',...(firstKind==='vm'?{memory:heldMemory}:{})});
+    const first=firstKind==='browser'?browser:guest,second=firstKind==='browser'?guest:browser;
+    const create=f=>f===guest?f.api.createSurface({kind:'vm'}):f.api.createSurface();
+    const pending=create(first);await waiting;
+    assert.deepEqual(await create(second),{ok:false,code:'SURFACE_CREATE_BUSY'});
+    assert.equal(first.calls.length+second.calls.length,0,'contention refuses before either dispatch');
+    resume(32*1024**3);assert.deepEqual(await pending,{ok:true});
+    assert.equal(states.size,16);
+    assert.equal((await create(second)).ok,false,'released flight still enforces the full quota');
+    assert.equal(second.calls.length,0);
+    states.delete('old-0');
+    assert.deepEqual(await create(second),{ok:true},'a free slot is admitted after the shared flight releases');
+    assert.equal(states.size,16);assert.equal(second.calls.length,1);
+  });
+});
+
+test('VM honors the same shared lease used by boot and role creation',async t=>{
+  const f=await fixture(t);const release=acquireCapsuleCreation(f.states);
+  assert.equal(typeof release,'function');
+  try {assert.deepEqual(await f.api.createSurface({kind:'vm'}),{ok:false,code:'SURFACE_CREATE_BUSY'});assert.equal(f.calls.length,0);}
+  finally {release();}
+  assert.deepEqual(await f.api.createSurface({kind:'vm'}),{ok:true});
+});
+
+test('VM releases the shared flight on refusals and retains only uncertain reservations',async t=>{
+  for(const outcome of ['missing','memory-error','core-error','unknown','malformed']) await t.test(outcome,async t=>{
+    const f=await fixture(t,{...(outcome==='missing'?{rows:{}}:{}),...(outcome==='memory-error'?{memory:async()=>{throw new Error('unavailable');}}:{})});
+    if(outcome==='core-error')f.respond(async()=>({schema:'surface_event/v0.2',event:'error',data:{code:'REFUSED'}}));
+    if(outcome==='unknown')f.respond(async()=>{throw new Error('unknown dispatch');});
+    if(outcome==='malformed')f.respond(async()=>({schema:'surface_event/v0.2',event:'created',data:{}}));
+    assert.equal((await f.api.createSurface({kind:'vm'})).ok,false);
+    const uncertain=outcome==='unknown'||outcome==='malformed';
+    assert.equal(f.states.has('pending:guest'),uncertain);
+    const release=acquireCapsuleCreation(f.states);assert.equal(typeof release,'function','every exit releases the shared flight');release();
+    const browser=await fixture(t,{states:f.states,rows:{browser:{Kind:'browser',Width:800,Height:600}},identities:[{id:'browser'}],surfaceId:'browser-created'});
+    assert.deepEqual(await browser.api.createSurface(),{ok:true});
+    assert.equal(f.states.has('pending:guest'),uncertain,'other creation cannot erase an uncertain VM reservation');
+    if(uncertain){assert.equal((await f.api.createSurface({kind:'vm'})).ok,false);assert.equal(f.calls.length,1,'uncertain VM dispatch cannot replay');}
+  });
 });
 
 test('App cold VM create goes through existing adapter without new dialog or optimistic tile',async t=>{
