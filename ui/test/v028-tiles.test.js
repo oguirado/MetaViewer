@@ -35,7 +35,7 @@ function gestureFixture(sibling = false) {
   const doc = {head,querySelector:()=>({getAttribute:()=> 'fixture-nonce'}),addEventListener:listen,removeEventListener:unlisten,defaultView:{addEventListener:listen,removeEventListener:unlisten},createElement:()=>({style:{},setAttribute(){},remove(){this.removed=true;}})};
   const element = {}, parent = {getBoundingClientRect:()=>({left:0,top:0,width:800,height:600}),appendChild(p){this.preview=p;}};
   const overlay = {parentElement:parent,contains:e=>e===element,style:{},setAttribute(){this.dragging=true;},removeAttribute(){this.dragging=false;},getBoundingClientRect:()=>({left:10,top:20,width:300,height:200})};
-  const header = {closest:()=>overlay}, target = {closest:selector=>selector.startsWith('button') ? null : header};
+  const header = {closest:()=>overlay}, target = {closest:selector=>selector.includes('[role="dialog"]') ? overlay : selector.startsWith('button') ? null : header};
   const root = {ownerDocument:doc,contains:()=>true,addEventListener:listen,removeEventListener:unlisten};
   let customized=0, saved=0;
   const group = {element,api:{location:{type:'floating'},setActive(){}}};
@@ -139,4 +139,15 @@ test('default floating frames use full wall height within bounds, including shor
       assert(rect.x>=0 && rect.y>=0 && rect.x+rect.width<=width && rect.y+rect.height<=height);
     }
   }
+});
+
+test('GRID6 plain and Control drag prevent new selection without clearing existing ranges; cleanup restores selection',()=>{
+ for(const ctrlKey of [false,true]) {
+  const f=gestureFixture();f.send('pointerdown',{ctrlKey});
+  assert.equal(f.send('selectstart').prevented,true);
+  assert.equal(f.send('pointermove',{clientX:200,ctrlKey}).prevented,true);
+  f.send('pointerup',{clientX:200,ctrlKey});
+  assert.equal(f.send('selectstart').prevented,undefined);
+  f.dispose();
+ }
 });

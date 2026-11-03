@@ -406,6 +406,12 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   };
   const roleFor = (/** @type {any} */ surface) => openingRoles.get(surface.surface_id) ?? roleOf(surface.profile_id);
   const savedPrograms = programBinaries(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'program-binaries'));
+  // [TARGET, unit decision] The desktop role owner decorates the existing core
+  // request, so marker carry completes before the successful copy reaches UI.
+  const originalRequest = core.request;
+  const markerRequest = async (/** @type {any} */ message) => message?.op === 'capsule-state' && message.request?.op === 'copy'
+    ? savedPrograms.copyWith(message.request,()=>originalRequest.call(core,message)) : originalRequest.call(core,message);
+  core.request = markerRequest;
   const markers = identityMarkers(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'identity-markers'));
   const transitions = new Map();
   const sessions = new Map(), failedSessions = new Map();
@@ -603,6 +609,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   async function programs() {
     const reply = await listIdentities();
     if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
+    await savedPrograms.reconcile?.(reply.rows);
     const hostRows = await savedPrograms.hostProfiles();
     const rows = [...reply.rows, ...hostRows.filter(row => !reply.rows.some((/** @type {any} */ r) => r.id === row.id))];
     return await Promise.all(rows.filter((/** @type {any} */ row) => row.browser === 'program' && !isForeignIdentity(row.id)).map(async (/** @type {any} */ row) => {
@@ -620,7 +627,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         try { binary = resolveHostBinary(row.id, {...process.env, ...env}).path; }
         catch { /* not on this host: stays unavailable, and other rows still list */ }
       }
-      return {profileId:row.id,kind:'program',binary,hostXpra:launch?.hostXpra === true,available:!!binary,
+      return {profileId:row.id,kind:'program',binary,hostXpra:launch?.hostXpra === true,...(launch?.identityBound ? {identityBound:true} : {}),available:!!binary,
         currentMode:entry?.state === 'lost' ? 'lost' : entry?.surface_id ? roleFor(entry) : 'closed',surfaceId:entry?.surface_id || null,
         busy:creating || transitions.has(row.id)};
     }));
@@ -788,6 +795,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         && !raw[candidate] && !profiles.some(p => p.id === candidate)
         && !dynamicProfiles.has(candidate) && (!knownIdentities.has(candidate) || programIdentities.has(candidate))
         && !programProfiles.has(candidate) && !windowProfiles.has(candidate) && !bound.has(candidate);
+      if (preferredProfileId && !canUse(preferredProfileId)) throw refuse('PROFILE_ALREADY_BOUND');
       let profileId = (preferredProfileId && canUse(preferredProfileId)) ? preferredProfileId : (canUse(base) ? base : '');
       for (let n = 2; !profileId && n <= 99; n++) {
         const candidate = `${base.slice(0, 36)}-${n}`;
@@ -817,7 +825,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         const reason = rawReason.includes(resolved.name) ? rawReason : `${resolved.name}: ${rawReason}`;
         throw Object.assign(refuse(rawCode), {reason});
       }
-      await savedPrograms.remember(profileId, resolved.path, choice.hostXpra === true);
+      await savedPrograms.remember(profileId, resolved.path, choice.hostXpra === true,(await savedPrograms.readLaunch(profileId))?.identityBound === true);
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profileId, role, resolved.path, choice.hostXpra === true);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
       const reply = await core.request({schema:'surface_request/v0.2', op:'create', params:{kind:'desktop_capsule', profile_id:profileId, geometry:{w:1280, h:900}}});
@@ -962,6 +970,12 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (roleFor(surface) !== choice.role) return {ok:false,code:'PROFILE_ALREADY_BOUND',surfaceId:surface.surface_id,currentMode:roleFor(surface),requestedMode:choice.role};
       return {ok:true,reused:true,surfaceId:surface.surface_id,role:choice.role};
     }
+    const identities = await listIdentities();
+    if (identities?.ok !== true || !Array.isArray(identities.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
+    if (identities.rows.some((/** @type {any} */ row)=>row.id === choice.profileId && row.browser === 'program')) {
+      const launch = await savedPrograms.readLaunch(choice.profileId) ?? {binary:resolveHostBinary(choice.profileId,{...process.env,...env}).path,hostXpra:false};
+      return await createProgram({binary:launch.binary,role:choice.role,...(launch.hostXpra ? {hostXpra:true} : {})},false,choice.profileId);
+    }
     return await create(choice);
   }
   /** @param {any} event @param {any} message */
@@ -1075,6 +1089,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (disposal) return disposal;
     disposal = (async () => {
       disposed = true; clearInterval(timer);
+      if (core.request === markerRequest) core.request = originalRequest;
       ipcMain.removeHandler(CHANNEL);
       try { parentSession.unregisterPreloadScript(preloadId); } catch { /* closed window */ }
       const results = await Promise.allSettled([...new Set([...sessions.keys(),...failedSessions.keys()])].map(close));
