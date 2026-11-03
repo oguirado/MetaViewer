@@ -199,6 +199,9 @@ class ProgramBackend(host.HostBackend):
         self.program_dispatch_witnesses[proposal['proposal_id']] = sensed.get('frame_witness', {})
         path = self.evidence / ('dispatch-' + proposal['proposal_id'] + '.json')
         artifact = atomic_journal(path, dict(status='pending_dispatch', proposal=proposal,
+            record_kind='immutable_pre_dispatch',
+            settlement_artifact=str(self.evidence / ('receipt-' +
+                Path(self.active_attempt['intent_artifact']).stem.removeprefix('intent-') + '.json')),
             frame=sensed['frame'], intent_artifact=self.active_attempt['intent_artifact'],
             program_binding=getattr(self, 'program_binding', None)))
         self.active_attempt['dispatch_artifact'] = artifact
@@ -476,9 +479,10 @@ def classify_text_readback(c2, target, text, *, caret=False, focused_area=False)
     if focused_area:
         # The changed area also holds unrelated updates, such as a status bar. Evidence
         # is the requested words, contiguous and literal, in what OCR read inside it.
-        words = [w[:-1] if caret and w.endswith('|') and len(w) > 1 else w for w in observed.split()]
-        wanted = text.split()
-        if wanted and any(words[i:i + len(wanted)] == wanted for i in range(len(words))):
+        # Preserve every requested space: tokenization cannot prove literal text.
+        # Only an adjacent terminal caret and word boundaries may be ignored.
+        suffix = r'(?:\|)?' if caret and not text.endswith('|') else ''
+        if text and re.search(r'(?<!\S)' + re.escape(text) + suffix + r'(?!\S)', observed):
             return 'exact'
     # A terminal vertical caret may be merged with the last word or emitted
     # as its own OCR mark. Never normalize case, words or requested pipes.
@@ -1163,11 +1167,19 @@ def run_entry(args):
         message = str(error)[:4096]
         print('mw_run_program: ' + str(error), file=sys.stderr)
     if evidence is not None and evidence.is_dir():
+        # [TARGET, unit decision] C2 marks belong to the removed RAM workspace.
+        # Keep semantic observations without publishing a dangling file reference.
+        observations = copy.deepcopy(getattr(backend, 'program_observations', []))
+        for observation in observations:
+            c2 = observation.get('c2')
+            if isinstance(c2, dict) and 'marks_png' in c2:
+                c2.pop('marks_png')
+                c2['marks_png_lifetime'] = 'ephemeral_workspace_removed'
         report = dict(result, status=('bounded_actions' if result['rc'] == 0 else
                                     'input_uncertain' if result['rc'] == 5 else 'refused'),
                       goal_completed=None, moves=getattr(backend, 'program_moves', []),
                       attempts=getattr(backend, 'program_attempts', []),
-                      observations=getattr(backend, 'program_observations', []), message=message,
+                      observations=observations, message=message,
                       subscription=getattr(backend, 'subscription', None),
                       program_binding=getattr(backend, 'program_binding', None),
                       frame_attempts=getattr(backend, 'frame_attempts', []))

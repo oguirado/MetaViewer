@@ -237,6 +237,32 @@ class BrowserGoalTests(unittest.TestCase):
             self.assertEqual(goal.run_entry(self.args), 4)
         self.assertEqual(json.loads(output.getvalue())['verdict_code'], 'HUMAN_HANDOFF')
 
+    def test_v027_browser_errors_have_typed_remedies_without_losing_uncertainty(self):
+        cases = [
+            (goal.host.tools.ToolRefusal('SURFACE_NOT_AGENT_CONTROLLED', 1), 'MW_PROGRAM_CONTROL', 'Release'),
+            (goal.host.subprocess.TimeoutExpired('native', 1), 'MW_RUN_NATIVE', 'timed out'),
+            (goal.host.ClientError('disconnected', 'socket closed'), 'MW_RUN_CORE', 'running MetaViewer core'),
+            (goal.host.DependencyLockError('commit_mismatch', 'wrong pin'), 'MW_DEPENDENCY', 'MV_WENDER_ROOT'),
+            (goal.host.OwnerRefused('MW_PROGRAM_MODEL_TIMEOUT'), 'MW_PROGRAM_MODEL_TIMEOUT', 'model'),
+        ]
+        self.args.planner, self.args.model_timeout_ms, self.args.identity = 'rules', 1000, 'fixture'
+        for error, expected, remedy in cases:
+            for pending in (False, True):
+                with self.subTest(error=expected, pending=pending):
+                    self.b.attempts = [dict(status='dispatch_pending')] if pending else []
+                    self.b.observe = Mock(side_effect=error)
+                    with patch.object(goal, 'private_evidence_base', return_value=self.root), \
+                         patch.object(goal.host, 'connect'), \
+                         patch.object(goal, 'BrowserGoalBackend', return_value=self.b), \
+                         contextlib.redirect_stdout(io.StringIO()) as output, \
+                         contextlib.redirect_stderr(io.StringIO()):
+                        self.assertEqual(goal.run_entry(self.args), 5 if pending else 6)
+                    result = json.loads(output.getvalue())
+                    self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN' if pending else expected)
+                    report = json.loads(Path(result['report']).read_text())
+                    self.assertIn(remedy, report['message'])
+                    self.b.propose.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
