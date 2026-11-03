@@ -2040,7 +2040,7 @@ test('capsule slot host waits through accepted and correlates completed while ot
  f.send({schema:'capsule_state_event/v0.2',operation_id:'unrelated-op',op:'list',profile_id:'test-profile',slot_id:'list',event:'completed',slots:[]});
  assert.equal(await bindings.core.request({op:'intent',json:JSON.stringify({schema:'ui_intent/v0.2',request_id:'other-op',op:'fold',params:{slot_id:'s1'}})}),true);
  assert.equal(done,false);
- const event={schema:'capsule_state_event/v0.2',operation_id:request.operation_id,op:'list',profile_id:'test-profile',slot_id:'list',event:'completed',slots:[]};f.send(event);
+ const event={schema:'capsule_state_event/v0.2',operation_id:request.operation_id,op:'list',profile_id:'test-profile',slot_id:'list',event:'completed',slots:[{slot_id:'slot-one',name:'slot-one',saved_at:'2026-11-03T20:14:34Z',generation:1,size_bytes:2140160}]};f.send(event);
  assert.deepEqual(await result,event);
  assert.ok(!JSON.stringify(await result).includes('/dev/'));
 });

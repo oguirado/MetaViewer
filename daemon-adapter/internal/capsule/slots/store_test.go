@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func localHelper(ctx context.Context, op, profile, stage string, cap int64) (receipt, error) {
@@ -483,6 +484,83 @@ func TestCopySelectedSlotToNewProfileAndRejectForeignSourceBeforeTouch(t *testin
 	source, e := os.ReadFile(filepath.Join(s.cfg.Root, "profiles", "demo", "data"))
 	if e != nil || string(source) != "original\x00bytes" {
 		t.Fatal("copy touched source", e)
+	}
+}
+
+// Listing different identities still traverses the same slot guards. Concurrent
+// dialog refreshes must queue, rather than turning valid saved games into errors.
+func TestConcurrentIdentityListingsRetainSavedSlot(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	if _, e := s.Save(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	s.helper = func(c context.Context, op, p, stage string, cap int64) (receipt, error) {
+		if op == "verify" {
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		return localHelper(c, op, p, stage, cap)
+	}
+	// Buffered signal permits the first verifier to stop under its slot guard.
+	entered = make(chan struct{}, 1)
+	done := make(chan error, 2)
+	go func() {
+		rows, e := s.List(ctx, r.ProfileID)
+		if e == nil && len(rows) != 1 {
+			e = errors.New("saved slot vanished")
+		}
+		done <- e
+	}()
+	<-entered
+	go func() { _, e := s.List(ctx, "other-profile"); done <- e }()
+	select {
+	case e := <-done:
+		close(release)
+		<-done
+		t.Fatalf("overlapping listing returned before verifier release: %v", e)
+	case <-time.After(40 * time.Millisecond):
+	}
+	close(release)
+	for i := 0; i < 2; i++ {
+		if e := <-done; e != nil {
+			t.Fatal(e)
+		}
+	}
+	rows, e := s.List(ctx, r.ProfileID)
+	if e != nil || len(rows) != 1 || rows[0].SlotID != r.SlotID {
+		t.Fatal(rows, e)
+	}
+}
+
+func TestCancelledOverwriteCannotPublish(t *testing.T) {
+	s, r := fixture(t)
+	first, e := s.Save(context.Background(), r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s.cfg.Failpoint = func(point string) error {
+		if point == "ref-file" {
+			cancel()
+		}
+		return nil
+	}
+	if _, e = s.Save(ctx, r); !errors.Is(e, context.Canceled) {
+		t.Fatal("cancelled write published", e)
+	}
+	s.cfg.Failpoint = nil
+	if e = s.Reconcile(context.Background(), r.SlotID); e != nil {
+		t.Fatal(e)
+	}
+	after, e := s.Select(context.Background(), r.SlotID)
+	if e != nil || after.Generation != first.Generation || after.PayloadSHA256 != first.PayloadSHA256 {
+		t.Fatal("old slot changed", after, e)
 	}
 }
 

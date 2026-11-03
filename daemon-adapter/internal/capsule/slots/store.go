@@ -26,6 +26,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -85,6 +86,9 @@ type receipt struct {
 }
 type helperFunc func(context.Context, string, string, string, int64) (receipt, error)
 type Store struct {
+	// [TARGET, unit decision] Dialog listings share slot guards across profiles.
+	// Serialize readers so they cannot spuriously refuse each other as SLOT_BUSY.
+	listMu     sync.Mutex
 	cfg        Config
 	helper     helperFunc
 	profileUID uint32
@@ -576,6 +580,10 @@ func (s *Store) Save(ctx context.Context, r Request) (Manifest, error) {
 	if m.Generation%2 == 0 {
 		target = "B.json"
 	}
+	// Cancellation can arrive after the helper finishes but before publication.
+	if e = ctx.Err(); e != nil {
+		return m, e
+	}
 	if e = os.Rename(name, filepath.Join(s.slot(r.SlotID), target)); e != nil {
 		return m, e
 	}
@@ -966,9 +974,15 @@ type Entry struct {
 	Name       string `json:"name"`
 	SavedAt    string `json:"saved_at"`
 	Generation uint64 `json:"generation"`
+	SizeBytes  int64  `json:"size_bytes"`
 }
 
 func (s *Store) List(ctx context.Context, profile string) ([]Entry, error) {
+	s.listMu.Lock()
+	defer s.listMu.Unlock()
+	if e := ctx.Err(); e != nil {
+		return nil, e
+	}
 	entries, e := os.ReadDir(filepath.Join(s.cfg.Root, "slots"))
 	if e != nil {
 		return nil, e
@@ -996,7 +1010,7 @@ func (s *Store) List(ctx context.Context, profile string) ([]Entry, error) {
 			}
 			stamp = st.ModTime().UTC().Format(time.RFC3339Nano)
 		}
-		out = append(out, Entry{entry.Name(), entry.Name(), stamp, m.Generation})
+		out = append(out, Entry{entry.Name(), entry.Name(), stamp, m.Generation, m.PayloadBytes})
 		if len(out) > 256 {
 			return nil, errors.New("SLOT_LIST_LIMIT")
 		}

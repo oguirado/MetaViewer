@@ -470,3 +470,38 @@ fn list_and_delete_keep_ui_authority_and_terminal_idempotency() {
         assert!(!state.apply(&admit(req, Component::Ui)).unwrap().dispatch);
     }
 }
+
+#[test]
+fn nonempty_slot_listing_survives_closed_core_and_replay() {
+    let mut req = request();
+    req["op"] = "list".into();
+    let mut state = CoreState::new("session-1", 8).unwrap();
+    assert!(
+        state
+            .apply(&admit(req.clone(), Component::Ui))
+            .unwrap()
+            .dispatch
+    );
+    let mut value = req;
+    value
+        .as_object_mut()
+        .unwrap()
+        .remove("credential_copy_confirmed");
+    value["schema"] = "capsule_state_event/v0.2".into();
+    value["event"] = "completed".into();
+    value["slots"] = json!([{"slot_id":"slot-one","name":"slot-one","saved_at":"2026-11-03T20:14:34.373343959Z","generation":1,"size_bytes":2140160}]);
+    assert!(decode_envelope(&envelope(value.clone()).to_string()).is_ok());
+    let event: CapsuleStateEvent = serde_json::from_value(value.clone()).unwrap();
+    state
+        .apply(&Input::CapsuleStateEvent {
+            epoch: state.epoch,
+            event,
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&state.slot_history["slot-op-1"].event).unwrap(),
+        value
+    );
+    value["slots"][0]["path"] = "/private".into();
+    assert!(decode_envelope(&envelope(value).to_string()).is_err());
+}

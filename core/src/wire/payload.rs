@@ -2192,6 +2192,11 @@ pub struct CapsuleStateRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CapsuleSlot {
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub size_bytes: Optional<u64>,
     pub slot_id: String,
     pub name: String,
     pub saved_at: String,
