@@ -535,7 +535,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		markLost := false
 		transientFailure := false
 		resized := capsule.IsHostWindowResize(e)
-		if resized {
+		if resized || capsule.IsHostWindowWaiting(e) {
 			// Resize proves a live window. Reset loss evidence and retry only
 			// at the next scheduled poll, including through a continuous drag.
 			consecutiveFailures = 0
@@ -544,6 +544,8 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		} else if e == nil {
 			consecutiveFailures = 0
 			consecutiveAbsenceFailures = 0
+		} else if e != nil && binding.Surface.State == "lost" {
+			markLost = true
 		} else if !t.cancelled.Load() && ctx.Err() == nil {
 			consecutiveFailures++
 			if attemptedCapture && shouldMarkCaptureLost(e) {

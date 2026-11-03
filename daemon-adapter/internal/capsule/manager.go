@@ -117,7 +117,8 @@ type Binding struct {
 	ConfirmedAbsent                                           bool
 	// [TARGET, unit decision] Delivery rollback requires a fresh positive probe.
 	// A distinct token prevents a probe started before rollback from reopening I/O.
-	recoveryProbe *bool
+	recoveryProbe   *bool
+	pendingHostLost json.RawMessage
 }
 type NativeFrame struct {
 	Path            string          `json:"path"`
@@ -1249,6 +1250,16 @@ func (m *Manager) BeginMarkLost(id string) (json.RawMessage, error) {
 func (m *Manager) markLostLocked(id string, confirmedAbsent bool, trackDelivery bool) (json.RawMessage, error) {
 	b, ok := m.bindings[id]
 	if ok && b.Surface.State == "lost" {
+		// Capture fences input immediately; its authoritative event still needs a wire owner.
+		if confirmedAbsent && b.ConfirmedAbsent && len(b.pendingHostLost) > 0 {
+			ev := b.pendingHostLost
+			b.pendingHostLost = nil
+			m.bindings[id] = b
+			if trackDelivery {
+				m.lostDone[id] = make(chan struct{})
+			}
+			return ev, nil
+		}
 		if !confirmedAbsent || !b.ConfirmedAbsent {
 			return nil, fault("surface", "confirmed active disappearance required")
 		}

@@ -594,7 +594,15 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       pruneProgramProfiles();
       const {live, bound} = summarizeSurfaces(capsuleStates);
       if ([...windowProfiles.values()].some(w => w.xid === validated.xid && w.state !== 'lost' && w.state !== 'destroyed')) {
-        throw Object.assign(refuse('PROFILE_ALREADY_BOUND'), {reason:`host_window_unavailable: ${validated.title}: window is already attached to a capsule`});
+        const incumbent = [...windowProfiles.values()].find(w => w.xid === validated.xid && w.state !== 'lost' && w.state !== 'destroyed');
+        const surface = incumbent && (core.getHumanSurface?.(incumbent.surfaceId) ?? capsuleStates.get(incumbent.surfaceId));
+        // [TARGET, unit decision] Preserve duplicate-attach refusal while providing
+        // a witnessed active surface that Add can reveal without changing control.
+        throw Object.assign(refuse('PROFILE_ALREADY_BOUND'), {
+          reason:`host_window_unavailable: ${validated.title}: window is already attached to a capsule`,
+          ...(incumbent?.witness === validated.witness && surface?.state === 'active'
+            ? {surfaceId:incumbent.surfaceId} : {}),
+        });
       }
       if (live >= MAX_CAPSULES) {
         throw Object.assign(refuse('CAPSULE_LIMIT_REACHED'), {reason:`host_window_unavailable: ${validated.title}: capsule limit reached; stop a capsule first`});
@@ -927,7 +935,16 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (needsCreation && !releaseCreation) throw refuse('SURFACE_CREATE_BUSY');
       if (op === 'choices') return await choices();
       if (op === 'programs') return await programs();
-      if (op === 'list-windows') return await listHostWindowChoices();
+      if (op === 'list-windows') {
+        const rows = await listHostWindowChoices();
+        pruneProgramProfiles();
+        for (const entry of windowProfiles.values()) {
+          if (entry.state !== 'active') continue;
+          const current = rows.find((/** @type {any} */ row) => row.xid === entry.xid && row.witness === entry.witness);
+          if (current) entry.title = current.title;
+        }
+        return rows;
+      }
       if (op === 'surfaces') {
         pruneProgramProfiles();
         // [TARGET, unit decision] Project window presentation metadata outside
@@ -970,6 +987,9 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     } catch (error) {
       const code = typeof /** @type {any} */ (error)?.code === 'string' ? /** @type {any} */ (error).code : 'XPRA_REFUSED';
       const reason = typeof /** @type {any} */ (error)?.reason === 'string' ? /** @type {any} */ (error).reason : undefined;
+      const surfaceId = code === 'PROFILE_ALREADY_BOUND' && id(/** @type {any} */ (error)?.surfaceId)
+        ? /** @type {any} */ (error).surfaceId : undefined;
+      if (surfaceId) return {ok:false, code, ...(reason ? {reason} : {}), surfaceId};
       return reason ? {ok:false,code,reason} : {ok:false,code};
     } finally { releaseCreation?.(); }
   };

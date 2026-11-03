@@ -68,6 +68,10 @@ async function openIdentity(profileId,role){
     const mode=modeFor(profileId);
     if (mode?.surfaceId) {
       if (mode.currentMode === 'lost') {error.value='Stop lost capsule before reopening this program.';return;}
+      if (role !== mode.currentMode) {
+        error.value=`This program is still open in ${mode.currentMode} mode. Stop the capsule before opening it in ${role} mode.`;
+        return;
+      }
       emit('open-identity',{profileId,surfaceId:mode.surfaceId,role:mode.currentMode});
       emit('close');return;
     }
