@@ -87,6 +87,10 @@ export function buildCapsuleReadyLine(input) {
     + 'In a subshell source "$XDG_RUNTIME_DIR/metaviewer/attach/current.env" '
     + '(published while MetaViewer is running; ignore it if its pid is not running), '
     + 'then choose goal mode or stored-workflow mode with the operator. '
+    + 'Choose guidance for the capsule kind reported by the host; never guess it. Desktop-window automation is unsupported. '
+    + 'For program goal mode, read tools/mw_run_program.md; from the agents directory run: '
+    + `python3 -m metaviewer_agents.mw_run --surface-kind program --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1. `
+    + 'Use the following browser commands only for browser capsules. '
     + 'For browser goal mode (supported by the compiled kit), read tools/mw_run_browser_goal.md; '
     + 'from "$MV_OPERATOR_REPO/agents" run: '
     + `\`python3 -m metaviewer_agents.mw_run --surface-kind browser --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1\`. `

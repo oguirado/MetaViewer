@@ -1846,6 +1846,11 @@ export function createTerminalDeckController(options = {}) {
       }
       return false;
     }
+    if (pendingCloseSlotId) {
+      event?.preventDefault?.();
+      event?.stopPropagation?.();
+      return true;
+    }
     const action = matchDeckShortcut(event);
     if (!action) return false;
     if (event && typeof event === 'object') {

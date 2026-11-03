@@ -173,15 +173,15 @@ export const HANDOFF_DISCOVERY=Object.freeze({maxScan:4096,maxRuns:32,maxAgeMs:6
 // not watcher installation or run-directory mtime. Older records need both the
 // adapter's exact surface binding and a currently running identity container.
 const HANDOFF_SESSION_START=Date.now()-process.uptime()*1000;
-/** @param {NodeJS.ProcessEnv} env @returns {Map<string,number>} */
+/** @param {NodeJS.ProcessEnv} env @returns {Map<string,number>|null} */
 function runningHandoffContainers(env) {
   const options={env,encoding:/** @type {const} */('utf8'),timeout:1000,maxBuffer:65536,windowsHide:true};
   const reply=spawnSync('docker',['ps','--format','{{.Names}}'],options);
-  if(reply.error || reply.status!==0)return new Map();
+  if(reply.error || reply.status!==0)return null;
   const names=reply.stdout.trim().split('\n').filter(name=>/^srf-(id|pg)-[a-z0-9][a-z0-9-]{0,63}$/.test(name));
-  if(!names.length || names.length>HANDOFF_DISCOVERY.maxLatched)return new Map();
+  if(!names.length || names.length>HANDOFF_DISCOVERY.maxLatched)return null;
   const inspected=spawnSync('docker',['inspect','--format','{{.Name}} {{.State.Running}} {{.State.StartedAt}}',...names],options);
-  if(inspected.error || inspected.status!==0)return new Map();
+  if(inspected.error || inspected.status!==0)return null;
   /** @type {Map<string,number>} */const running=new Map();
   for(const line of inspected.stdout.trim().split('\n')) {
     const [name,active,started]=line.split(' '),at=Date.parse(started);
@@ -189,21 +189,24 @@ function runningHandoffContainers(env) {
   }
   return running;
 }
-/** @param {NodeJS.ProcessEnv} env @param {any} record @param {number} modified @param {()=>Map<string,number>} containers */
+/** @param {NodeJS.ProcessEnv} env @param {any} record @param {number} modified @param {()=>Map<string,number>|null} containers */
 function survivingHandoff(env,record,modified,containers) {
-  if(!env.MV_SRF_STATE_DIR)return false;
+  if(!env.MV_SRF_STATE_DIR)return null;
   try {
     return privateDirectory(join(env.MV_SRF_STATE_DIR,'human-bindings'),root=>{
       const b=readPrivate(root,record.surface_id+'.json');
-      return b.schema==='metaviewer.human_binding/v0.3' && b.surface_id===record.surface_id
+      const valid=b.schema==='metaviewer.human_binding/v0.3' && b.surface_id===record.surface_id
         && b.control_ready===true && ['agent','human'].includes(b.role)
         && typeof b.profile_id==='string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(b.profile_id)
         && typeof b.run_id==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(b.run_id)
-        && (b.container==='srf-id-'+b.profile_id || b.container==='srf-pg-'+b.profile_id)
-        // A recreated container may reuse the name while the old surface file remains.
-        && (containers().get(b.container)??Infinity)<=modified;
+        && (b.container==='srf-id-'+b.profile_id || b.container==='srf-pg-'+b.profile_id);
+      if(!valid)return null;
+      const started=containers()?.get(b.container);
+      // [TARGET, unit decision] Only a witnessed replacement is final. Missing,
+      // partial or unavailable binding/container evidence is retried on refresh.
+      return started===undefined?null:started<=modified;
     });
-  }catch{return false;}
+  }catch{return null;}
 }
 /** Newest recent private run directories of tools/mw_run_backend.py, as the fixed
  * handoff path inside each. Symlinked entries and foreign names are skipped; the
@@ -272,13 +275,12 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
   const discover=env.MV_HANDOFF_PATHS===undefined;
   const rows=()=>[...latched.values()].filter(x=>!x.acked).map(x=>x.record);
   const state=()=>({ok:true,rows:rows()});
-  // refresh runs every second on the main thread: judge each old record once, or a stale
-  // binding would block the UI on docker until the record ages out.
+  // Cache only definitive old-record rejection, never a transient witness failure.
   /** @type {Map<string,number>} */const rejectedOld=new Map();
   function refresh() {
     let changed=false;
-    /** @type {Map<string,number>|undefined} */let running;
-    const containers=()=>running??=runningHandoffContainers(env);
+    /** @type {Map<string,number>|null|undefined} */let running;
+    const containers=()=>running===undefined?(running=runningHandoffContainers(env)):running;
     const candidates=discover?[...paths,...discoverHandoffPaths(env,now())]:paths;
     for(const path of candidates) {
       if(latched.has(path))continue;
@@ -292,7 +294,10 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
         privateDirectory(dirname(path),root=>{
           let modified=0;
           const record=readPrivate(root,basename(path),st=>{modified=st.mtimeMs;});if(!validHandoff(record))throw new Error('HANDOFF_RECORD');
-          if(modified<sessionStartedAt && !survivingHandoff(env,record,modified,containers)) {rejectedOld.set(path,modified);return;}
+          if(modified<sessionStartedAt) {
+            const verdict=survivingHandoff(env,record,modified,containers);
+            if(verdict!==true){if(verdict===false)rejectedOld.set(path,modified);return;}
+          }
           let acked=false;
           try {const ack=readPrivate(root,basename(path)+'.ack.json');acked=operatorKeys(ack,['schema','surface_id','step_index']) && ack.schema==='metaviewer.handoff_ack/v1' && ack.surface_id===record.surface_id && ack.step_index===record.step_index;}catch{/* No proven ack: keep visible. */}
           latched.set(path,{path,record,acked});changed=true;

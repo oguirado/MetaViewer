@@ -47,6 +47,12 @@ const revision = ref(0);
 const customCommand = ref('');
 const pastedBootstrapText = ref('');
 const lastBootstrapFocused = ref(false);
+// Ctrl+Shift+F6 leaves PTY input without consuming ordinary terminal Tab/Escape.
+const controlsFocused = ref(false);
+const closeDialog = ref(/** @type {any} */ (null));
+const newTerminalButton = ref(/** @type {any} */ (null));
+/** @type {any} */ let dialogReturnFocus = null;
+
 const contextMenu = ref(
   /** @type {{ open: boolean, x: number, y: number, slotId: string | null, hasSelection: boolean, selectionText: string }} */ ({
     open: false,
@@ -307,7 +313,7 @@ function syncTerminals() {
         } catch {
           // Fit is best-effort in headless DOMs.
         }
-        if (focusedSlotId.value === slot.id && !lastBootstrapFocused.value) {
+        if (focusedSlotId.value === slot.id && !lastBootstrapFocused.value && !controlsFocused.value && !pendingCloseSlotId.value) {
           try {
             current.term?.focus();
           } catch {
@@ -328,13 +334,14 @@ function syncTerminals() {
       const fit = new FitAddon();
       term.loadAddon(fit);
       term.attachCustomKeyEventHandler((event) => {
-        if (matchDeckShortcut(event) !== null) {
+        if (pendingCloseSlotId.value || (event.key === 'F6' && event.ctrlKey && event.shiftKey) || matchDeckShortcut(event) !== null) {
           return false;
         }
         return true;
       });
       const sessionId = slot.sessionId;
       const disposable = term.onData((data) => {
+        if (pendingCloseSlotId.value) return;
         const found = controller.findSlot(slot.id);
         const currentSlot = found?.slot ?? null;
         if (!currentSlot || currentSlot.status !== 'running' || !currentSlot.sessionId) return;
@@ -365,7 +372,7 @@ function syncTerminals() {
         disposeData: () => disposable.dispose(),
       });
       controller.registerTerminal(slot.id, term);
-      if (props.open && onActiveScreen && focusedSlotId.value === slot.id && !lastBootstrapFocused.value) {
+      if (props.open && onActiveScreen && focusedSlotId.value === slot.id && !lastBootstrapFocused.value && !controlsFocused.value && !pendingCloseSlotId.value) {
         try {
           term.focus();
         } catch {
@@ -389,8 +396,48 @@ function syncTerminals() {
  */
 function onWindowKeyDown(event) {
   if (!props.open) return;
+  if (pendingCloseSlotId.value) {
+    if (event.key === 'Escape') controller.cancelPendingClose();
+    else if (event.key === 'Tab') {
+      const buttons = [...(closeDialog.value?.querySelectorAll?.('button:not(:disabled)') ?? [])];
+      const at = buttons.indexOf(globalThis.document?.activeElement);
+      const next = event.shiftKey ? (at <= 0 ? buttons.length - 1 : at - 1) : (at + 1) % buttons.length;
+      buttons[next]?.focus?.();
+    } else if (closeDialog.value?.contains?.(event.target)) return;
+    event.preventDefault();event.stopImmediatePropagation();
+    return;
+  }
+  if (event.key === 'F6' && event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey) {
+    controlsFocused.value = true;
+    newTerminalButton.value?.focus?.();
+    event.preventDefault();event.stopImmediatePropagation();
+    return;
+  }
   controller.handleKeyDown(event);
 }
+
+/** @param {FocusEvent} event */
+function containDialogFocus(event) {
+  if (props.open && pendingCloseSlotId.value && !closeDialog.value?.contains?.(event.target)) {
+    closeDialog.value?.querySelector?.('#terminal-deck-confirm-close-no')?.focus?.();
+  }
+}
+
+watch(pendingCloseSlotId, async (id, previous) => {
+  if (id && !previous) {
+    dialogReturnFocus = globalThis.document?.activeElement;
+    controlsFocused.value = true;
+    closeContextMenu();
+    controller.setLauncherOpen(false);
+    await nextTick();
+    closeDialog.value?.querySelector?.('#terminal-deck-confirm-close-no')?.focus?.();
+  } else if (!id && previous) {
+    await nextTick();
+    if (dialogReturnFocus?.isConnected !== false && typeof dialogReturnFocus?.focus === 'function') dialogReturnFocus.focus();
+    else newTerminalButton.value?.focus?.();
+    dialogReturnFocus = null;
+  }
+});
 
 /**
  * @param {unknown} target
@@ -529,6 +576,7 @@ function onDocumentPointerDown(event) {
  * @param {MouseEvent | { clientX?: number, clientY?: number, preventDefault?: () => void, stopPropagation?: () => void }} [event]
  */
 function onTileContextMenu(slotId, event) {
+  if (pendingCloseSlotId.value) return;
   event?.preventDefault?.();
   event?.stopPropagation?.();
   lastBootstrapFocused.value = false;
@@ -544,6 +592,13 @@ function onTileContextMenu(slotId, event) {
     hasSelection: selText.length > 0,
     selectionText: selText,
   };
+  void nextTick(() => {
+    if (!contextMenu.value.open) return;
+    const bounds = contextMenuWrap.value?.getBoundingClientRect?.();
+    if (!bounds) return;
+    contextMenu.value.x = Math.max(0, Math.min(x, (globalThis.window?.innerWidth ?? x) - bounds.width));
+    contextMenu.value.y = Math.max(0, Math.min(y, (globalThis.window?.innerHeight ?? y) - bounds.height));
+  });
 }
 
 async function onContextMenuCopy() {
@@ -696,6 +751,8 @@ function canRemoveScreen(index) {
  * @param {string} slotId
  */
 function focusSlot(slotId) {
+  if (pendingCloseSlotId.value) return;
+  controlsFocused.value = false;
   lastBootstrapFocused.value = false;
   controller.focusSlot(slotId);
   const entry = mountedTerminals.get(slotId);
@@ -714,6 +771,7 @@ function focusSlot(slotId) {
  * @param {KeyboardEvent} event
  */
 function onTileKeyDown(slotId, event) {
+  if (pendingCloseSlotId.value || controlsFocused.value) return;
   if (matchDeckShortcut(event) !== null) return;
   const target = /** @type {{ tagName?: unknown } | null} */ (event?.target ?? null);
   const tagName = typeof target?.tagName === 'string' ? target.tagName.toUpperCase() : '';
@@ -770,6 +828,7 @@ watch(
 );
 
 onMounted(() => {
+  globalThis.document?.addEventListener?.('focusin', containDialogFocus, true);
   if (props.open) {
     void controller.refreshProviders();
   }
@@ -791,6 +850,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  globalThis.document?.removeEventListener?.('focusin', containDialogFocus, true);
   syncOverlayAttr(false);
   globalThis.window?.removeEventListener?.('keydown', onWindowKeyDown, true);
   globalThis.document?.removeEventListener?.('keydown', onWindowKeyDown, true);
@@ -917,6 +977,8 @@ defineExpose({
           <button
             type="button"
             id="terminal-deck-new"
+            ref="newTerminalButton"
+            title="New terminal (Ctrl+Shift+F6 leaves terminal input for controls)"
             data-semantic-anchor="terminal/new"
             class="mv-terminal-deck__action-btn mv-terminal-deck__action-btn--primary"
             :aria-expanded="launcherOpen"
@@ -1030,6 +1092,7 @@ defineExpose({
         :data-slot-screen="item.screenIndex + 1"
         tabindex="0"
         :aria-label="item.slot.title"
+        aria-description="Press Ctrl+Shift+F6 to leave terminal input and focus the deck controls."
         @mousedown="focusSlot(item.slot.id)"
         @focus="focusSlot(item.slot.id)"
         @contextmenu.prevent="onTileContextMenu(item.slot.id, $event)"
@@ -1116,6 +1179,7 @@ defineExpose({
     <div
       v-if="pendingCloseSlotId"
       id="terminal-deck-confirm-close"
+      ref="closeDialog"
       data-semantic-anchor="terminal/confirm-close"
       class="mv-terminal-deck__confirm-backdrop"
       role="dialog"
