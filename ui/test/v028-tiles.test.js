@@ -27,7 +27,7 @@ test('desktop grid survives JSON round trip, stays isolated, legacy profiles pas
   }
 });
 
-function gestureFixture() {
+function gestureFixture(sibling = false) {
   const listeners = new Map(), commits = [];
   const listen = (name,fn) => {if (!listeners.has(name)) listeners.set(name,new Set()); listeners.get(name).add(fn);};
   const unlisten = (name,fn) => listeners.get(name)?.delete(fn);
@@ -39,10 +39,14 @@ function gestureFixture() {
   const root = {ownerDocument:doc,contains:()=>true,addEventListener:listen,removeEventListener:unlisten};
   let customized=0, saved=0;
   const group = {element,api:{location:{type:'floating'},setActive(){}}};
-  const api = {groups:[group],addFloatingGroup:(g,b)=>commits.push({g,b})};
+  const content={setAttribute(){this.dragging=true;},removeAttribute(){this.dragging=false;}};
+  if(sibling) {header.closest=()=>null; element.closest=()=>overlay;}
+  const panel={group,view:{content:{element:{contains:e=>e===header,closest:()=>content}}}};
+  group.activePanel=panel;
+  const api = {panels:[panel],groups:[group],addFloatingGroup:(g,b)=>commits.push({g,b})};
   const dispose = wall.installFloatingDrag(root,api,()=>({cols:2,rows:2}),()=>customized++,()=>saved++);
-  const send = (name,patch={}) => {const event={button:0,pointerId:7,clientX:30,clientY:40,ctrlKey:false,target,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},...patch}; for(const fn of [...(listeners.get(name)||[])]) fn(event); return event;};
-  return {send,dispose,commits,parent,overlay,listeners,head,doc,customized:()=>customized,saved:()=>saved};
+  const send = (name,patch={}) => {const event={type:name,button:0,pointerId:7,clientX:30,clientY:40,ctrlKey:false,target,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},...patch}; for(const fn of [...(listeners.get(name)||[])]) fn(event); return event;};
+  return {send,dispose,commits,parent,overlay,content,listeners,head,doc,customized:()=>customized,saved:()=>saved};
 }
 test('floating pointer capture blocks native docking and commits free bounds once',()=>{
   const f=gestureFixture(); const down=f.send('pointerdown');
@@ -106,4 +110,33 @@ test('missing style nonce refuses the gesture before native docking can start',(
   const down=f.send('pointerdown');assert.equal(down.stopped,true);
   f.send('pointermove',{clientX:700});f.send('pointerup');
   assert.equal(f.commits.length,0);assert.equal(f.customized(),0);f.dispose();
+});
+
+test('sibling-rendered capsule header resolves its floating group and follows Control changes without pointer motion',()=>{
+  const f=gestureFixture(true);
+  assert.equal(f.send('pointerdown').stopped,true);
+  assert.equal(f.parent.preview.hidden,true);
+  f.send('pointermove',{clientX:700,clientY:500});
+  assert.equal(f.content.dragging,true);
+  assert.equal(f.parent.preview.hidden,true);
+  f.send('keydown',{key:'Control',ctrlKey:true});
+  assert.equal(f.parent.preview.hidden,false);
+  assert.match(f.head.sheet.textContent,/left:400px;top:300px;width:400px;height:300px/);
+  f.send('keyup',{key:'Control'});
+  assert.equal(f.parent.preview.hidden,true);
+  f.send('keydown',{key:'Control',ctrlKey:true});
+  f.send('pointerup',{clientX:700,clientY:500,ctrlKey:true});
+  assert.deepEqual(f.commits[0].b,{position:{left:400,top:300},width:400,height:300,disableSmartGuides:true});
+  assert.equal(f.content.dragging,false);f.dispose();
+});
+test('default floating frames use full wall height within bounds, including short and large walls',()=>{
+  for(const [width,height] of [[1240,359],[1600,1000],[320,240],[3840,2160]]) {
+    const rects=wall.presetRectangles('floating',Array.from({length:5},(_,id)=>({id:String(id)})),width,height);
+    for(const rect of rects) {
+      assert.equal(rect.height,height);
+      assert.equal(rect.width,Math.floor(width*.9));
+      assert(rect.width*rect.height>=width*height*.5);
+      assert(rect.x>=0 && rect.y>=0 && rect.x+rect.width<=width && rect.y+rect.height<=height);
+    }
+  }
 });

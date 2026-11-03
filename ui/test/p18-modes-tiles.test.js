@@ -191,7 +191,7 @@ test('P18 exact presets use tabs and reserve every grid cell',()=>{
   assert.deepEqual(wall.presetRectangles('single',tiles,1000,800).map(r=>[r.x,r.y,r.width,r.height]),Array.from({length:4},()=>[0,0,1000,800]));
   assert.deepEqual(wall.presetRectangles('focus-strip',tiles.slice(0,2),1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,700,800],[700,0,300,800]]);
   assert.deepEqual(wall.presetRectangles('focus-strip',tiles,1000,900).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,700,900],[700,0,300,300],[700,300,300,300],[700,600,300,300]]);
-  assert.deepEqual(wall.presetRectangles('floating',tiles,1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,600,480],[24,24,600,480],[48,48,600,480],[72,72,600,480]]);
+  assert.deepEqual(wall.presetRectangles('floating',tiles,1000,800).map(r=>[r.x,r.y,r.width,r.height]),[[0,0,900,800],[24,0,900,800],[48,0,900,800],[72,0,900,800]]);
 });
 
 test('P18 hidden tiles stay excluded; presets arrange floats too; maximize defers layout',()=>{
