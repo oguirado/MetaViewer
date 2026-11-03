@@ -1522,6 +1522,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                  python: str = "python3",
                  marks_out: str | Path | None = None,
                  ocr_marks: bool = False,
+                 tessdata_prefix: str | None = None,
                  verify_lock: bool = False,
                  queue_cap: int = 2,
                  max_restarts: int = 1,
@@ -1539,7 +1540,13 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         if type(pin_python) is not bool:
             _fail("bad_shape", "pin_python must be a boolean")
         _check_int(max_restarts, minimum=0, maximum=4, name="max_restarts")
-        self.ve_root = _resolve_ve_root(ve_root, verify_lock=verify_lock)
+        from .compiled import compiled_executable
+        try:
+            self._compiled = compiled_executable('vision-engine', root=ve_root)
+        except DependencyLockError as exc:
+            raise PerceptionError(exc.code, str(exc)) from exc
+        self.ve_root = (self._compiled.parent if self._compiled is not None else
+                        _resolve_ve_root(ve_root, verify_lock=verify_lock))
         self.timeout = timeout
         self.python = python
         self.extra_site: str | None = None
@@ -1555,6 +1562,9 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             except (PerceptionError, OSError, ValueError) as exc:
                 self.extra_site_error = str(exc)
         self._spawn_env = _scrubbed_env(self.ve_root, extra_site=self.extra_site)
+        # The OCR data location is not a secret; without it every mark loses its text.
+        if tessdata_prefix:
+            self._spawn_env["TESSDATA_PREFIX"] = tessdata_prefix
         self.marks_out = (_ram_marks_path(marks_out)
                           if marks_out is not None else None)
         self.ocr_marks = ocr_marks
@@ -1578,7 +1588,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         self._vserve_req_seq = 0
         self._vserve_rx_buf = bytearray()
         self._atexit_cb: Callable[[], None] | None = None
-        if pin_python:
+        if pin_python and self._compiled is None:
             self._pinned_python = _resolve_pinned_python(
                 self.python,
                 ve_root=self.ve_root,
@@ -1646,6 +1656,8 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             self._vserve_io_lock.release()
 
     def _vserve_available(self) -> bool:
+        if self._compiled is not None:
+            return True
         try:
             script = self.ve_root / "vadapt" / "vserve.py"
             return script.is_file() and not script.is_symlink()
@@ -1893,9 +1905,11 @@ class VCorePerceptionAdapter(PerceptionAdapter):
             else:
                 self._vserve_has_started = True
             self._vserve_success_streak = 0
-            pinned = self._ensure_pinned_python(deadline=active_deadline)
+            pinned = (str(self._compiled) if self._compiled is not None else
+                      self._ensure_pinned_python(deadline=active_deadline))
             _remaining_timeout(active_deadline)
-            argv = [pinned, "-m", "vadapt.vserve"]
+            argv = ([pinned, "vserve"] if self._compiled is not None else
+                    [pinned, "-m", "vadapt.vserve"])
             try:
                 proc = _spawn_vserve_proc(
                     argv,
@@ -2110,8 +2124,9 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                     return "%s%d" % (_PROC_FD_PREFIX, fd)
 
                 assert isinstance(frame, (Frame, str, Path))
-                command = [self.python, "-m", "vadapt.cu_describe",
-                           "--frame", png_path(frame)]
+                command = [self.python, "-m", "vadapt.cu_describe", "--frame", png_path(frame)]
+                if self._compiled is not None:
+                    command = [str(self._compiled), "cu-describe", "--frame", png_path(frame)]
                 if prev is not None:
                     assert isinstance(prev, (Frame, str, Path))
                     command += ["--prev", png_path(prev)]
@@ -2199,6 +2214,8 @@ class VCorePerceptionAdapter(PerceptionAdapter):
         for index, item in enumerate(args):
             if not isinstance(item, str) or _NUL in item:
                 _fail("bad_shape", "vcore arg[%d] is not a string" % index)
+        if self._compiled is not None:
+            _fail("unavailable", "compiled Vision supports vserve and cu-describe only")
         command = [self.python, "-m", "visioncore.cli", verb, *args]
         try:
             result = _run_bounded(

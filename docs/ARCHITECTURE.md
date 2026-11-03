@@ -9,9 +9,10 @@ Rust core as the single authority over lifecycle, admission, budgets, locks and
 durable session order. Electron renders state and submits intents. It never
 injects input.
 
-Release **0.1.2** [CITED: VERSION] carries the v0.2 contracts (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] schemas in `contracts/v0.2/` alongside `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] closed v0.1 schemas) and the
-integration laws. Every process behavior below is implemented as described
-unless it is marked "planned for v0.2.0". Features I have not integrated end
+The current candidate **0.2.5** [CITED: `../VERSION`] carries the v0.2 contracts (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] schemas in `contracts/v0.2/` alongside `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] closed v0.1 schemas) and the
+integration laws. This document mixes implemented behavior with historical plans. Labels such as
+"planned for v0.2.0" are uncompleted design notes, not release promises; use the
+[README status and limits](../README.md#status) for the current assembly. Features I have not integrated end
 to end yet (for example the AI loop on Holdings, dynamic catalog expansion, and
 OS installers) are marked that way and never described as done.
 
@@ -155,7 +156,7 @@ retain their own schema discriminator.
 
 ## Capture and integration seams
 
-I assemble MetaViewer with OpenSuperficies, vision-engine, and wender-agent in separate repositories. I treat the exact commits in `deps.lock` as authoritative; its version fields are release labels, not assertions that the locked commits equal tags. I have not measured live performance at the current pins. I scope earlier results to [historical live evidence](../README.md#historical-live-evidence).
+I assemble MetaViewer with OpenSuperficies, vision-engine, and wender-agent in separate repositories. Those three repositories are proprietary and fully private; MetaViewer's own source is `AGPL-3.0-only`. I treat the exact commits in `deps.lock` as authoritative; its version fields are release labels, not assertions that the locked commits equal tags. I have not measured live performance at the current pins. I scope earlier results to [historical live evidence](../README.md#historical-live-evidence).
 
 I use persistent `vadapt.vserve` when available, accepting the hello only with `describe`/`frame_raw`, affirmative `raw_shm`/`frame_raw`, and a boolean `ring` capability; on persistent failure I fall back to one-shot `vadapt.cu_describe` [CITED: `agents/metaviewer_agents/perception/vcore.py`]. I use `wender.plan.cli` through the pipe-only `{observation, element_table, goal}` boundary; Wender proposes a plan and MetaViewer admits and dispatches the action [CITED: `agents/metaviewer_agents/wender_bridge.py`]. I require that planner in assembly CI (`--require-planner`) [CITED: `.github/workflows/assembly.yml`].
 
@@ -168,7 +169,7 @@ I use persistent `vadapt.vserve` when available, accepting the hello only with `
 | Electron frame reader | `/dev/shm/` prefix, no `..`, generation ≥ 1, `^[0-9a-f]{64}$` digest, per-surface generation lease, null-digest fail-closed (`ui/electron/frameReader.js`) | Verify before handing bytes to tiles through the frame port (`34/34` [MEASURED] live deliveries verified with `isTrusted=true` and `utilityVerified=true`); paths never cross IPC |
 | vision-engine | Pin `v0.2.0`, commit `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED: deps.lock] | Integrated via `VCorePerceptionAdapter.perceive` and `vadapt.cu_describe` (`agents/metaviewer_agents/perception/`, `tools/gate_g_ai.py`); current-pin live acceptance is unmeasured |
 | wender-agent | Pin `v0.3.0`, commit `96120967b435b72fc6d29635f3844dae140388a9` [CITED: deps.lock] | Integrated via `agents/metaviewer_agents/wender_bridge.py`, `AdmittedExecutor.check_target`, and `tools/gate_g_ai.py` (live acceptance runner: `tests/e2e/e2e1_slice/demo_agent_drive.py`; current-pin live result unmeasured); the agent loop (`agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/planner.py`) can use `wender-agent` as planner via `MV_WENDER_PLANNER_CMD`, resolving the checkout through `deps.lock` (`resolve_locked_component("wender-agent")`) and refusing `commit_mismatch` before spawn |
-| OpenSuperficies | Pin `os-cu-w9-mv1`, commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5` [CITED: deps.lock] | Integrated via `daemon-adapter/` invoking `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR` (historical live21/live22 evidence is scoped above; current-pin live result unmeasured) |
+| OpenSuperficies | Pin `os-cu-w9-mv1`, commit `3cb86d752f38457b6730eefd235d4da4c4039721` [CITED: deps.lock] | Integrated via `daemon-adapter/` invoking `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR` (historical live21/live22 evidence is scoped above; current-pin live result unmeasured) |
 | Holdings lane | `lane_submit` verb plus `state_sha256` witness in v0.2 contracts; strict hex/tick `GroundTruth` parse (`daemon-adapter/internal/capsule/capsule.go`), core `holdings_lane` witness join (`core/src/serve/tools.rs`), and `input` + `state_sha256_change` planner (`agents/metaviewer_agents/planner.py`) | Bind lane to capsule, admit `holdings_lane` ground truth for the dispatched unsettled proposal, join the witness, and recompute receipts through `verify_receipt` (`core/src/serve/tools.rs`); digest-only capsule output still settles unverified with reason |
 
 Capture generations increase when a framebuffer allocation or display is

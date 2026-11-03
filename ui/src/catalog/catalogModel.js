@@ -115,14 +115,22 @@ export const CATALOG_KINDS = Object.freeze([
     keywords: Object.freeze(['program', 'run', 'app']),
   }),
   Object.freeze({
+    kind: 'host-program', label: 'Host program', category: 'Programs',
+    description: 'Runs on your computer — not isolated.', opensAs: 'tab', footprint: '',
+    keywords: Object.freeze(['host', 'xpra', 'binary', 'browser']),
+  }),
+  Object.freeze({
     kind: 'desktop-window',
     label: 'Desktop window',
     category: 'Windows',
-    description: 'Attach an open desktop window into a capsule tile.',
+    description: 'Attach an open X11 desktop window into a capsule tile. Native Wayland windows are not listed.',
     opensAs: 'tab',
     footprint: '',
     keywords: Object.freeze(['window', 'desktop', 'host', 'attach']),
   }),
+  Object.freeze({kind:'vm',label:'ARM64 Linux VM',category:'Virtual machines',
+    description:'Open the configured graphical VM with verified frames. Requires host support.',
+    opensAs:'tab',footprint:'',keywords:Object.freeze(['vm','linux','arm64'])}),
 ]);
 
 /**
@@ -130,6 +138,14 @@ export const CATALOG_KINDS = Object.freeze([
  * @type {ReadonlyArray<string>}
  */
 export const CATALOG_KIND_IDS = Object.freeze(CATALOG_KINDS.map((entry) => entry.kind));
+
+/** Static descriptors stay closed; runtime availability defaults to hidden.
+ * @param {unknown} [vmAvailable]
+ * @returns {ReadonlyArray<string>}
+ */
+export function availableCatalogKindIds(vmAvailable = false) {
+  return Object.freeze(CATALOG_KIND_IDS.filter(kind => kind !== 'vm' || vmAvailable === true));
+}
 
 /** @type {ReadonlyMap<string, Readonly<CatalogKind>>} */
 const BY_KIND = new Map(CATALOG_KINDS.map((entry) => [entry.kind, entry]));
@@ -401,7 +417,7 @@ export function buildCreateIntent(input) {
     return Object.freeze({ ok: false, error: unknownKindRow(record.kind) });
   }
   const placement = resolveCatalogPlacement(record.placement);
-  if (record.kind === 'program') {
+  if (record.kind === 'program' || record.kind === 'host-program') {
     const binary = typeof record.binary === 'string' ? record.binary.trim() : '';
     if (binary.length === 0) {
       return Object.freeze({ ok: false, error: invalidIntentRow() });
@@ -413,7 +429,7 @@ export function buildCreateIntent(input) {
       ok: true,
       intent: Object.freeze({
         type: 'create-capsule',
-        kind: 'program',
+        kind: record.kind,
         placement,
         binary,
         ...(record.role !== undefined ? { role: record.role } : {}),

@@ -5,6 +5,24 @@
 - Replace the fixed 4-capsule limit with admission up to the 16-capsule adapter ceiling, check host free memory against one capsule's 6 GiB Docker budget (4 GiB memory + 2 GiB shm) before each create, expand the logical display pool in the adapter to `MaxSurfaces` (`16`) without launcher changes, and report the limit, open count, and what to close on refusal instead of `host_program_unavailable`.
 - Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
 
+## 0.2.5 (2026-11-03) [CITED: `VERSION`]
+
+Pre-release. Verification differs by architecture and flow; see [the judge tour](docs/JUDGE_TOUR.md). Live capsules require the matching external runtime and images supplied through the judge kit.
+
+- Add Host program capsules through xpra, with an explicit warning that they run on your computer without isolation; keep Desktop window attachment limited to existing X11 windows.
+- Fix Desktop window resize, closed-window delivery, recovery and Stop cleanup; detaching leaves the original window open.
+- Improve Add capsule role selection, host binary discovery, identity feedback, compact tile controls and first-run recovery notices.
+- Preserve terminal sessions and runtime attachment paths across view changes, and correct copied commands and capsule-mode guidance.
+- Fix stale display delivery, replaced display ports, hidden tile roles and old wall banners; report capture refusal and closed windows visibly.
+- Add program text entry with focused-field or observed-field targeting and OCR readback: exact, explicitly uncertified unreadable text, or mismatch refusal. Program key input remains unsupported.
+- Verify program click effects from changed pixels, reject doubtful targets and preserve uncertain delivery, failed effect and busy-lane refusals without claiming goal completion.
+- Support compiled browser goal entry points and stop at observed login or CAPTCHA walls for human handoff; require fresh observations after control returns.
+- Harden handoff persistence and discovery, control takeover, frame freshness, adapter ownership and journal recovery.
+- Improve judge installation, dependency checks, launcher ownership, Docker access diagnostics, RAM admission and stop cleanup with actionable refusal messages.
+- Include product, runtime and supplied dependency notices in release archives, and update the judge kit and architecture-specific installation guidance.
+- Add the judge tour and troubleshooting guide with the supplied x64 and arm64 live results; keep unverified flows explicitly marked.
+- Expand offline lifecycle, automation, packaging and UI seam regressions with negative controls; keep VM capsule opening held pending its gates.
+
 ## 0.2.4 (2026-11-02) [CITED: `VERSION`]
 
 Pre-release. Program and desktop window capsules need OpenSuperficies binaries that are not published yet; without them those capsule kinds are refused with a reason.

@@ -1,0 +1,1 @@
+- Preserve product evaluation and license text, the Node runtime license, and supplied OpenSuperficies legal notices in release assets; document obtaining the matching public judge kit tag.

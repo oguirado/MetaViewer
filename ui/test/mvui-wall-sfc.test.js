@@ -48,7 +48,9 @@ describe('EmptyWallView static contract (pinned compiler)', async () => {
 
   test('props carry product copy defaults; emits declare add-capsule only', () => {
     assert.match(source, /title:\s*\{[^}]*default:\s*'A clear view of your work\.'/);
-    assert.match(source, /hint:\s*\{[^}]*default:\s*'Add a capsule to bring/);
+    assert.match(source, /hint:\s*\{[^}]*default:\s*'No capsules are visible on this desktop/);
+    assert.match(source, /Check the Humans and Agents views/);
+    assert.match(source, /choose Add capsule to open one/);
     const emits = source.match(/\bdefineEmits\(\[([\s\S]*?)\]\)/)[1]
       .split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''));
     assert.deepEqual(emits, ['add-capsule']);
