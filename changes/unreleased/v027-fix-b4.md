@@ -1,0 +1,6 @@
+- Serialize judge run and install ownership, preserve the winning pidfile, and restore the prior app when publication fails.
+- Recheck Docker access after installing system dependencies and provision configured browser profile directories.
+- Warn when UI capsule memory admission will refuse creation and require evidence for display reachability.
+- Report private packaged runtime, host program RAM and display roots during Stop without deleting unproven leftovers.
+- Align Quickstart layouts, top-bar actions and login handoff with shipped controls.
+- Cover ordered launcher, installation and preflight failures with offline judge regressions.
