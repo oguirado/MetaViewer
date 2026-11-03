@@ -225,9 +225,12 @@ test('component declares the required props, optionals, and exact emit set', () 
   }
   assert.match(setup, /hasKeyboardOwnership:\s*\{[^}]*default:\s*false/);
   assert.match(setup, /title:\s*\{[^}]*default:\s*''/);
+  assert.match(setup, /stateControls:\s*\{[^}]*default:\s*null/);
+  assert.match(template, /name="state-controls" :capabilities="props.stateControls"/);
+  assert.match(setup, /props\.stateControls\?\.\[action\]\?\.available === true/);
   const emits = setup.match(/\bdefineEmits\(\[([\s\S]*?)\]\)/)[1]
     .split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''));
-  assert.deepEqual(emits, ['submit-intent', 'presentation-intent', 'activate-surface']);
+  assert.deepEqual(emits, ['submit-intent', 'presentation-intent', 'activate-surface', 'state-action']);
 });
 
 test('kit panel is wired for one gesture one intent, without the generic emit', () => {
