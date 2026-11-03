@@ -408,6 +408,8 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const markers = identityMarkers(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'identity-markers'));
   const transitions = new Map();
   const sessions = new Map(), failedSessions = new Map();
+  // [TARGET, unit decision] Bounded automatic teardown retries retain custody and diagnostics.
+  const closeRetries = new Map(), closing = new Map();
   const viewStates = new Map();
   const locks = new Set();
   const epochs = new Map();
@@ -455,14 +457,28 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       view:viewStates.get(surfaceId) || {state:'closed'}, transition:transitions.get(s.profile_id) || null};
   };
   /** @param {string} surfaceId */
-  async function close(surfaceId) {
+  function close(surfaceId) {
+    if (closing.has(surfaceId)) return closing.get(surfaceId);
+    const completion = closeSession(surfaceId).finally(() => closing.delete(surfaceId));
+    closing.set(surfaceId, completion);
+    return completion;
+  }
+  /** @param {string} surfaceId */
+  async function closeSession(surfaceId) {
     let closedRole = openingRoles.get(surfaceId);
     try { closedRole = roleFor(authoritative(surfaceId)); } catch { /* terminal row */ }
     epochs.delete(surfaceId);
     const session = sessions.get(surfaceId) ?? failedSessions.get(surfaceId);
     sessions.delete(surfaceId); failedSessions.delete(surfaceId);
     viewStates.delete(surfaceId);
-    try {await session?.close();} catch(error) {failedSessions.set(surfaceId,session);throw error;}
+    try {await session?.close();closeRetries.delete(surfaceId);} catch(error) {
+      failedSessions.set(surfaceId,session);
+      const attempts = (closeRetries.get(surfaceId)?.attempts || 0) + 1;
+      closeRetries.set(surfaceId,{attempts,next:performance.now() + 100 * 2 ** attempts});
+      viewStates.set(surfaceId,{state:'error',code:'XPRA_CLOSE_UNRESOLVED'});
+      console.info(`METAVIEWER_XPRA_CLOSE_UNRESOLVED surface=${surfaceId}`);
+      throw error;
+    }
     if (session) console.info(`METAVIEWER_XPRA_STAGE surface=${surfaceId} role=${closedRole === 'human' ? 'human' : 'watch'} stage=CLOSED detail=view_closed`);
   }
   /** @param {string} surfaceId @param {any} bounds */
@@ -571,9 +587,11 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     }
     return await Promise.all(browserProfiles().filter(p=>!isForeignIdentity(p.id) && !programProfiles.has(p.id) && !windowProfiles.has(p.id)).map(async p => {
       const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
+      let lastLogin = null, markerError = null;
+      try { lastLogin = await markers.read(p.id); } catch { markerError = 'IDENTITY_MARKER_REFUSED'; }
       return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
         currentMode:entry?.state === 'lost' ? 'lost' : entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
-        lastLogin:await markers.read(p.id),busy:bound.has(p.id) && !entry?.surface_id};
+        lastLogin,markerError,busy:bound.has(p.id) && !entry?.surface_id};
     }));
   }
 
@@ -972,8 +990,15 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         // the frozen surface contract, including windows in the agent wall.
         return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active'
           && (roleFor(s) === 'human' || windowProfiles.has(s.profile_id)))
-          .map(s => ({schema:'metaviewer.role_surface/v0.3',role:roleFor(s),surface:rendererSurface(authoritative(s.surface_id)),
-            ...(windowProfiles.has(s.profile_id) ? {hostWindow:status(s.surface_id).hostWindow} : {})}));
+          .map(s => {
+            try { return {schema:'metaviewer.role_surface/v0.3',role:roleFor(s),surface:rendererSurface(authoritative(s.surface_id)),
+              ...(windowProfiles.has(s.profile_id) ? {hostWindow:status(s.surface_id).hostWindow} : {})}; }
+            catch {
+              // A stale mirror is presentation-only and must never grant input.
+              return {schema:'metaviewer.role_surface/v0.3',role:roleFor(s),
+                surface:rendererSurface({...s,state:'lost'}),diagnostic:'SURFACE_AUTHORITY_MISMATCH'};
+            }
+          });
       }
       if (op === 'create') return await create(message.choice);
       if (op === 'create-program') return await createProgram(message.choice);
@@ -1027,6 +1052,8 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const timer = setInterval(() => {
     pruneProgramProfiles();
     for (const surfaceId of new Set([...sessions.keys(),...failedSessions.keys()])) {
+      const retry = closeRetries.get(surfaceId);
+      if (retry && (retry.attempts >= 4 || performance.now() < retry.next)) continue;
       try { const s = status(surfaceId); if (failedSessions.has(surfaceId) || s.control !== (s.role === 'human' ? 'human' : 'agent')) void close(surfaceId).catch(()=>{}); }
       catch { void close(surfaceId).catch(()=>{}); }
     }

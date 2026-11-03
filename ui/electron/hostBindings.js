@@ -582,6 +582,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           } else if (['take_control','release_control','fold','unfold'].includes(item.body.op)) {
             const code = ['STALE_FRAME','SURFACE_NOT_AGENT_CONTROLLED','LOCKED_BY_OTHER','BUDGET_EXCEEDED','OUT_OF_BOUNDS','POLICY'].includes(body.reason_code)
               ? body.reason_code : 'INTENT_REFUSED';
+            lastIntentReplySeq = received;
             clearTimeout(item.timer);pending.delete(key);item.reject(Object.assign(new Error('INTENT_REFUSED'),{reason_code:code}));continue;
           } else continue;
         }

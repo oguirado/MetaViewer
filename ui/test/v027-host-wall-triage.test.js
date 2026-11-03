@@ -321,7 +321,7 @@ test('V027-ID03 saved host-Xpra program keeps its mode through dialog and App',a
     selectGlobalView(){},nextTick:async()=>{},revealOpenedIdentity:async()=>true,
   });
   const dialog=await setupFunctions('../src/identities/IdentitiesDialog.vue',['openIdentity'],{
-    isForeignIdentity:()=>false,busy:{value:false},error:{value:''},rows:{value:[{id:'saved',browser:'program'}]},
+    invocationGeneration:0,isForeignIdentity:()=>false,busy:{value:false},error:{value:''},rows:{value:[{id:'saved',browser:'program'}]},
     modeFor:()=>({available:true,binary:'/program',hostXpra:true}),roleApi:{createProgram(){}},
     props:{openProgram:app.createProgramCapsule},emit(){},identityErrorText:String,
   });

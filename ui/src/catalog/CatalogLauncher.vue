@@ -38,7 +38,7 @@ const windowChoiceXid = ref(0), windowError = ref(''), windowBusy = ref(false);
 const filteredWindows = computed(() => filterWindowCandidates(windowChoices.value, windowSearch.value));
 const selectedWindow = computed(() => filteredWindows.value.find(w => w.xid === windowChoiceXid.value) || null);
 let choiceGeneration = 0;
-watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
+watch(() => props.visible,visible=>{choiceGeneration++;programBusy.value=false;windowBusy.value=false;if(!visible){choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}},{flush:'sync'});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
@@ -52,6 +52,7 @@ function confirmRole() {
   emit('update:visible', false);
 }
 async function confirmProgram() {
+  const invocation = choiceGeneration;
   const result = buildCreateIntent({
     kind: pendingIntent.value?.kind || 'program',
     placement: pendingIntent.value?.placement,
@@ -79,6 +80,7 @@ async function confirmProgram() {
     }
     if (outcome && typeof outcome.then === 'function') {
       outcome = await outcome;
+      if (invocation !== choiceGeneration) return;
     }
     if (outcome && outcome.ok === false) {
       programError.value = outcome.reason || outcome.message || outcome.code || 'Program could not be started.';
@@ -91,10 +93,11 @@ async function confirmProgram() {
     choosingProgram.value = false;
     emit('update:visible', false);
   } catch (err) {
+    if (invocation !== choiceGeneration) return;
     const e = /** @type {any} */ (err);
     programError.value = e?.reason || e?.message || e?.code || 'Program could not be started.';
   } finally {
-    programBusy.value = false;
+    if (invocation === choiceGeneration) programBusy.value = false;
   }
 }
 function cancelProgram() {
@@ -110,6 +113,7 @@ function selectWindowRow(/** @type {number} */ xid) {
 async function confirmWindow() {
   if (typeof choosingWindow === 'undefined') return;
   const chosen = selectedWindow.value;
+  const invocation = choiceGeneration;
   const result = buildCreateIntent({
     kind: 'desktop-window',
     placement: pendingIntent.value?.placement,
@@ -136,6 +140,7 @@ async function confirmWindow() {
     }
     if (outcome && typeof outcome.then === 'function') {
       outcome = await outcome;
+      if (invocation !== choiceGeneration) return;
     }
     if (outcome && outcome.ok === false) {
       windowError.value = outcome.reason || outcome.message || outcome.code || 'Desktop window could not be attached.';
@@ -149,10 +154,11 @@ async function confirmWindow() {
     windowChoiceXid.value = 0;
     emit('update:visible', false);
   } catch (err) {
+    if (invocation !== choiceGeneration) return;
     const e = /** @type {any} */ (err);
     windowError.value = e?.reason || e?.message || e?.code || 'Desktop window could not be attached.';
   } finally {
-    windowBusy.value = false;
+    if (invocation === choiceGeneration) windowBusy.value = false;
   }
 }
 function cancelWindow() {
@@ -240,12 +246,14 @@ async function onCreate(payload) {
   choosingRole.value = true;
   try {
     const choices = await api.choices();
-    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }
+    if (!props.visible) { choosingRole.value = false; return; }
+    if (generation !== choiceGeneration) return;
     profileChoices.value = choices;
     if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');
     profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';
+    if (profileChoice.value && roleError.value.startsWith('NO_IDENTITY:')) roleError.value = '';
     roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';
-  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
+  } catch {if(!props.visible){choosingRole.value=false;return;}if(generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
   if (typeof roleEdited !== 'undefined' && roleEdited.value) roleChoice.value = editedRoleChoice.value;
 }
 

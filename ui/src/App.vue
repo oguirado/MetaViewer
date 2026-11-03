@@ -652,15 +652,23 @@ function onCapsuleMode(event) {
     stoppedSurfaces.value = {...stoppedSurfaces.value,[event.surfaceId]:true};
   }
 }
+// [TARGET, unit decision] Native creation stays successful while presentation is retryable.
+/** @param {string} surfaceId */
+function reportRevealPending(surfaceId) {
+  hostOutcome.value = {code:'CAPSULE_REVEAL_PENDING',tone:'refusal',message:`Capsule ${surfaceId} is running but its tile could not be shown. For a program, open it in Identities; for a window, select it again in Add capsule to retry.`};
+}
 /** @param {string} surfaceId @param {string} [mode] */
 async function revealOpenedIdentity(surfaceId, mode) {
   if (mode && ['human','agent'].includes(mode)) onCapsuleMode({surfaceId,mode});
   await pollNativeSurfaces().catch(() => {});
-  for (let attempt = 0; attempt < 30 && hostActive; attempt++) {
-    await wall.value?.followSurface?.(surfaceId,mode);
-    if (settled.value && wall.value?.revealSurface(surfaceId,'split')?.ok) { markPanelOpen(surfaceId); return true; }
-    await new Promise(resolve => setTimeout(resolve,100));
-  }
+  try {
+    for (let attempt = 0; attempt < 30 && hostActive; attempt++) {
+      await wall.value?.followSurface?.(surfaceId,mode);
+      if (settled.value && wall.value?.revealSurface(surfaceId,'split')?.ok) { markPanelOpen(surfaceId); return true; }
+      await new Promise(resolve => setTimeout(resolve,100));
+    }
+  } catch { /* Creation is already acknowledged; expose a presentation retry. */ }
+  if (hostActive) reportRevealPending(surfaceId);
   return false;
 }
 /** Remove the ended lifetime's pane only after the host acknowledged Stop/Switch.
@@ -784,7 +792,7 @@ async function createProgramCapsule(body) {
       await revealOpenedIdentity(reply.surfaceId, openedRole);
     }
   } catch {
-    // Post-launch view or reveal errors must not report the launch as failed.
+    if (reply.surfaceId) reportRevealPending(reply.surfaceId);
   }
   return reply;
 }
@@ -818,7 +826,7 @@ async function createWindowCapsule(body) {
       }
     }
   } catch {
-    // Post-attach view, reveal, or wall-control errors must not report the attach as failed.
+    if (reply.surfaceId) reportRevealPending(reply.surfaceId);
   }
   return reply;
 }
@@ -1400,6 +1408,9 @@ async function pollNativeSurfaces() {
     const listed = await nativeApi.surfaces();
     if (!hostActive) return;
     if (!Array.isArray(listed)) throw Error('NATIVE_PROJECTION_UNAVAILABLE');
+    const mismatch = listed.find(item => item?.diagnostic === 'SURFACE_AUTHORITY_MISMATCH');
+    if (mismatch) hostOutcome.value = {code:'SURFACE_AUTHORITY_MISMATCH',tone:'refusal',
+      message:`Capsule ${mismatch.surface?.profile_id || mismatch.surface?.surface_id} is unavailable because its host state changed. Refresh Identities to check its state; other capsules remain available.`};
     const availabilityChanged = !nativeLoaded || nativePollFailed;
     nativeLoaded = true; nativePollFailed = false;
     const admitted = listed.filter(item => item?.schema === 'metaviewer.role_surface/v0.3'
@@ -1493,7 +1504,7 @@ let desktopWallReady = false;
 function cancelFirstFrame() { if (firstFrame) window.cancelAnimationFrame(firstFrame); firstFrame = 0; }
 watch(wallView, view => {
   settled.value = view === 'workspace' && desktopWallReady;
-  revealed.clear(); closedPanels.value = []; cancelFirstFrame();
+  revealed.clear(); cancelFirstFrame();
 }, { flush: 'sync' });
 onMounted(() => {
   watch(wallView, view => {

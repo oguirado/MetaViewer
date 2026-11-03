@@ -117,7 +117,7 @@ function createAppProgramHarness(appSource, rolesDouble) {
     emit: () => {},
   };
   vm.createContext(ctx);
-  vm.runInContext([fnMap.recordActivity, fnMap.submitHost, fnMap.createProgramCapsule, fnMap.onCreateCapsule].join('\n'), ctx);
+  vm.runInContext([fnMap.recordActivity, fnMap.submitHost, fnMap.reportRevealPending, fnMap.createProgramCapsule, fnMap.onCreateCapsule].join('\n'), ctx);
   const origRecord = ctx.recordActivity;
   ctx.recordActivity = (entry) => {
     origRecord(entry);
@@ -621,7 +621,8 @@ async function runProbes({
     return okReply?.ok === true
       && okReply?.surfaceId === 'surface-pg-ok'
       && okH.views.includes('agent')
-      && okH.ctx.hostOutcome.value === null;
+      && okH.ctx.hostOutcome.value?.code === 'CAPSULE_REVEAL_PENDING'
+      && /running.*Identities.*retry/.test(okH.ctx.hostOutcome.value?.message);
   });
 
   // 12. Review Fix 6: intent with kind 'program' and empty binary or naming a profile is refused, never passed to identity branch.
@@ -1513,7 +1514,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
   // Mutant 12b (Fix 5 post-launch throw): post-launch reveal throw is not caught.
   {
     const mutatedApp = appSrc.replace(
-      '  } catch {\n    // Post-launch view or reveal errors must not report the launch as failed.\n  }',
+      '  } catch {\n    if (reply.surfaceId) reportRevealPending(reply.surfaceId);\n  }',
       '  } catch (err) { throw err; }',
     );
     assert.notEqual(mutatedApp, appSrc);
@@ -1590,7 +1591,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
         '',
       )
       .replace(
-        "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
+        "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible) { choosingRole.value = false; return; }\n    if (generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    if (profileChoice.value && roleError.value.startsWith('NO_IDENTITY:')) roleError.value = '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible){choosingRole.value=false;return;}if(generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
         "  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n    choosingRole.value = true;\n  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; profileChoice.value = ''; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; choosingRole.value = true; }",
       )
       .replace(
@@ -1800,7 +1801,7 @@ test('V024-WALL-FIXES: mounted CatalogLauncher shows role and identity dialog wi
       '',
     )
     .replace(
-      "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) { choosingRole.value = false; return; }\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
+      "  profileChoices.value = []; profileChoice.value = '';\n  choosingRole.value = true;\n  try {\n    const choices = await api.choices();\n    if (!props.visible) { choosingRole.value = false; return; }\n    if (generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    if (profileChoice.value && roleError.value.startsWith('NO_IDENTITY:')) roleError.value = '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n  } catch {if(!props.visible){choosingRole.value=false;return;}if(generation !== choiceGeneration)return;profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }",
       "  try {\n    const choices = await api.choices();\n    if (!props.visible || generation !== choiceGeneration) return;\n    profileChoices.value = choices;\n    if (!Array.isArray(profileChoices.value)) throw Error('IDENTITY_LIST_UNAVAILABLE');\n    profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';\n    roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';\n    choosingRole.value = true;\n  } catch {if(!props.visible || generation !== choiceGeneration)return;profileChoices.value = []; profileChoice.value = ''; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; choosingRole.value = true; }",
     )
     .replace(
