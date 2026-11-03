@@ -1936,6 +1936,55 @@ finally:s.close()
                 report=json.loads(Path(result['report']).read_text())
                 self.assertEqual(report['text_readback'],readback)
 
+    def test_v027_focused_readback_preserves_literal_spacing(self):
+        target = dict(box=[0, 0, 100, 100])
+        for observed, requested, expected in (
+                ('hello', ' hello', 'mismatch'), ('a b', 'a  b', 'mismatch'),
+                ('a b', 'a\tb', 'mismatch'), ('hello', 'hello ', 'mismatch'),
+                ('hello|', 'hello|', 'exact'), ('hello| Ln 1', 'hello', 'exact'),
+                ('hello world| Ln 1', 'hello world', 'exact'),
+                ('hello  world| Ln 1', 'hello  world', 'exact')):
+            with self.subTest(observed=observed, requested=requested):
+                c2 = dict(marks=[dict(x=0, y=0, w=50, h=10, ocr_text=observed)])
+                self.assertEqual(program.classify_text_readback(c2, target, requested,
+                    caret=True, focused_area=True), expected)
+
+    def test_v027_verified_dispatch_has_resolvable_settlement(self):
+        planner, submit, settle, _, _ = self.text_fixture('hello')
+        with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+             patch.object(host.tools, 'propose', side_effect=submit), \
+             patch.object(host.tools, 'wait_verify', side_effect=settle):
+            program.run_moves(self.b, planner, 'Message', 1, 1000)
+        attempt = self.b.program_attempts[0]
+        dispatch = json.loads(Path(attempt['dispatch_artifact']).read_text())
+        self.assertEqual(dispatch['record_kind'], 'immutable_pre_dispatch')
+        self.assertEqual(dispatch['settlement_artifact'], attempt['receipt_artifact'])
+        self.assertEqual(json.loads(Path(dispatch['settlement_artifact']).read_text())['status'], 'verified_move')
+
+    def test_v027_report_omits_ephemeral_marks_after_workspace_cleanup(self):
+        self.text_fixture()
+        self.b.wender = self.root
+        args = SimpleNamespace(identity='alice', goal='Message', steps=1,
+                               timeout_ms=1000, planner='muse', model_timeout_ms=1000)
+        vision = Mock()
+        def adapter(**kwargs):
+            marks = kwargs['marks_out']
+            marks.write_bytes(b'fixture marks')
+            self.b.program_observations = [dict(c2=dict(marks_png=str(marks), marks=[]))]
+            return vision
+        with patch.dict(host.os.environ, {'XDG_STATE_HOME': str(self.root)}), \
+             patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+             patch.object(program, 'ProgramBackend', return_value=self.b), \
+             patch.object(program, 'VCorePerceptionAdapter', side_effect=adapter), \
+             patch.object(program, 'WenderSubprocessAdapter'), patch.object(program, 'MuseProgramPlanner'), \
+             patch.object(program, 'run_moves', return_value=[]), \
+             contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(program.run_entry(args), 0)
+        result = json.loads(output.getvalue())
+        c2 = json.loads(Path(result['report']).read_text())['observations'][0]['c2']
+        self.assertNotIn('marks_png', c2)
+        self.assertEqual(c2['marks_png_lifetime'], 'ephemeral_workspace_removed')
+
 
 if __name__ == '__main__':
     unittest.main()

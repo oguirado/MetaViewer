@@ -310,6 +310,20 @@ def run_entry(args):
             host.ClientError, host.tools.ToolRefusal, host.tools.VerificationFailed,
             host.subprocess.SubprocessError) as error:
         code = getattr(error, 'code', getattr(error, 'reason_code', 'MW_BROWSER_GOAL_CONFIG'))
+        message = str(error)
+        if code in ('SURFACE_NOT_AGENT_CONTROLLED', 'MW_PROGRAM_CONTROL'):
+            code, message = 'MW_PROGRAM_CONTROL', ('the capsule is under human control; '
+                'press Release on the tile, then run again')
+        elif isinstance(error, host.subprocess.TimeoutExpired):
+            code, message = 'MW_RUN_NATIVE', 'native discovery command timed out'
+        elif isinstance(error, host.ClientError):
+            code, message = 'MW_RUN_CORE', (f'core connection failed ({error.code}: {error}); '
+                'is this the running MetaViewer core?')
+        elif isinstance(error, host.DependencyLockError):
+            code, message = 'MW_DEPENDENCY', (f'{error.code}: {error.message}; set MV_WENDER_ROOT '
+                'to the wender-agent checkout at its deps.lock commit')
+        elif code == 'MW_PROGRAM_MODEL_TIMEOUT':
+            message = 'model planning budget expired before dispatch; retry or use the rules planner'
         result.update(verdict_code=code)
         if code == 'MW_HANDOFF_REQUIRED':
             result.update(rc=4, verdict_code='HUMAN_HANDOFF',
@@ -318,7 +332,7 @@ def run_entry(args):
         elif any(a['status'] in ('dispatch_pending', 'settlement_pending')
                  for a in getattr(backend, 'attempts', [])):
             result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
-        message = str(error)[:4096]
+        message = message[:4096]
         print('mw_run_browser_goal: ' + message, file=sys.stderr)
     if evidence is not None and evidence.is_dir():
         try:
