@@ -94,8 +94,11 @@ clicks. **If refused:** inspect the missing binary, image or resource message.
 Use a GUI binary installed on the host and the required program image. Do not
 substitute Host program without reviewing its different isolation boundary.
 
-**Architecture:** x64 — available, unverified live; arm64 — calculator automation
-verified, standalone Program launch is not separately attested.
+**Architecture:** x64 — dialog verified; the binary is looked up on your computer,
+so without `gnome-calculator` installed it refuses with
+`host_program_unavailable: gnome-calculator: not found in PATH` (`sudo apt-get install -y gnome-calculator`);
+launch with the binary present is not verified live on x64; arm64 — calculator
+automation verified, standalone Program launch is not separately attested.
 
 ## Host program and Desktop window
 
@@ -298,13 +301,13 @@ available, separate cleanup verification not documented here.
 | T2 kit installation | Verified on WSL2 | Live environment used; kit install not separately attested |
 | Browser Human and Agent | Verified | Verified |
 | Views | Available, unverified separately | Verified |
-| Desktops and control handoff | Available, unverified separately | Available, unverified separately |
-| Program capsule | Available, unverified separately | Calculator verified; launch route not separately attested |
+| Desktops and control handoff | Take control and Release verified by clicks on WSL2; desktops unverified separately | Take control and Release verified |
+| Program capsule | Needs the binary on your computer; refusal verified, launch unverified | Calculator verified; launch route not separately attested |
 | Host program | Requires xpra; unverified live | Verified; requires xpra |
 | Desktop window | X11 only; unverified live | Verified; X11 only |
-| Browser goals | Verified with rules, local page | Verified with Muse, local page |
+| Browser goals | Verified with rules, local page, after Take control and Release | Verified with Muse and rules, local page |
 | Calculator 7+8 | Available, unverified live | Muse verified |
-| Program text | Implemented; live verification absent | Implemented; live verification absent |
+| Program text | Implemented; live verification absent | gedit typed; verdict certifies only when OCR reads it back |
 | Wall stop | Verified on a local page | Verified on local pages |
 | Terminal, prompt buttons, capture | Available; live verification absent | Available; live verification absent |
 | Stop | Verified | Available; separate cleanup verification absent |
