@@ -94,11 +94,26 @@ class BrowserGoalBackend(host.HostBackend):
         self.guard_wall(dict(ax_snapshot=dict(elements=fresh['ax'])), fresh)
         return fresh
 
-    def before_propose(self, proposal, sensed):
+    def prepare_propose(self, proposal, sensed):
+        # [TARGET, unit decision] Sync the dispatch intent before rebind. Its
+        # frame is explicitly a candidate, never evidence of the submitted
+        # generation. Core admission still checks the final exact binding.
+        self.journal_dispatch(proposal, sensed, binding_status='candidate_before_rebind')
+        self.prepared_proposal_id = proposal['proposal_id']
+
+    def journal_dispatch(self, proposal, sensed, *, binding_status):
         self.active_attempt['dispatch_artifact'] = atomic_journal(
             self.evidence / ('dispatch-' + proposal['proposal_id'] + '.json'),
             dict(status='pending_dispatch', proposal=proposal, frame=sensed['frame'],
+                 binding_status=binding_status,
                  intent_artifact=self.active_attempt['intent_artifact']))
+
+    def before_propose(self, proposal, sensed):
+        if getattr(self, 'prepared_proposal_id', None) != proposal['proposal_id']:
+            # Single-shot callers without HostBackend's prepare seam retain
+            # their durable intent. The host path performs no disk I/O here.
+            self.journal_dispatch(proposal, sensed, binding_status='bound')
+        self.active_attempt['submitted_proposal'] = host.copy.deepcopy(proposal)
         self.active_attempt['status'] = 'dispatch_pending'
 
 

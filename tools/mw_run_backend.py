@@ -824,6 +824,16 @@ class HostBackend:
         for attempt in range(3 if 'ax' in sensed else 1):
             remaining = (deadline - time.monotonic_ns()) // 1_000_000
             need(remaining > 0, 'MW_STALE_FRAME_EXHAUSTED')
+            proposal_id = 'mw-' + uuid.uuid4().hex
+            prepare_propose = getattr(self, 'prepare_propose', None)
+            if callable(prepare_propose):
+                # Durable intent work must precede the final publication read.
+                # Its candidate binding is replaced only after normal rebind.
+                candidate = build_proposal(sensed['frame'], proposal_id=proposal_id,
+                    action=plan['action'], expectation=plan['expectation'], max_ms=remaining)
+                prepare_propose(candidate, sensed)
+                remaining = (deadline - time.monotonic_ns()) // 1_000_000
+                need(remaining > 0, 'MW_STALE_FRAME_EXHAUSTED')
             # Older assembly callers supply only a frame: retain their single-shot
             # core path; fresh-target retry requires the owner's AX evidence.
             try:
@@ -839,7 +849,7 @@ class HostBackend:
                 continue
             remaining = (deadline - time.monotonic_ns()) // 1_000_000
             need(remaining > 0, 'MW_STALE_FRAME_EXHAUSTED')
-            proposal = build_proposal(fresh['frame'], proposal_id='mw-' + uuid.uuid4().hex,
+            proposal = build_proposal(fresh['frame'], proposal_id=proposal_id,
                                       action=plan['action'], expectation=plan['expectation'], max_ms=remaining)
             binding = proposal.get('based_on_frame')
             if binding is None:
