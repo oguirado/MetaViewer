@@ -34,8 +34,11 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
   let cancel = () => {};
   const down = (/** @type {any} */ event) => {
     if (event.button !== 0 || event.target.closest('button,input,select,a,[role="button"]')) return;
-    const header = event.target.closest('.dv-floating-titlebar,.dv-tabs-and-actions-container');
-    const overlay = header?.closest('.dv-resize-container');
+    const header = event.target.closest('.dv-floating-titlebar,.dv-tabs-and-actions-container,.cuk-capsule-panel__header');
+    // Dockview renders panel content in a sibling overlay, outside the group's
+    // resize container. Resolve that header through the public panel model.
+    const panel = header && api.panels?.find((/** @type {any} */ p)=>p.view?.content?.element?.contains(header));
+    const overlay = header?.closest('.dv-resize-container') ?? panel?.group?.element?.closest('.dv-resize-container');
     if (!overlay || !root.contains(overlay)) return;
     const group = api.groups.find((/** @type {any} */ g)=>g.api.location.type === 'floating' && overlay.contains(g.element));
     if (!group) return;
@@ -49,32 +52,39 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
     doc.head.appendChild(sheet);
     const token = String(++floatingDragSerial);
     overlay.setAttribute('data-wall-drag',token);
+    const content = (panel ?? group.activePanel)?.view?.content?.element?.closest('.dv-render-overlay');
+    content?.setAttribute('data-wall-drag',token);
     const wall = overlay.parentElement.getBoundingClientRect(), box = overlay.getBoundingClientRect();
     const start = {x:box.left-wall.left,y:box.top-wall.top,width:box.width,height:box.height};
     const origin = {x:event.clientX-wall.left,y:event.clientY-wall.top};
-    const last = event;
+    let control = event.ctrlKey;
     let moved = false;
     const preview = doc.createElement('div');
     preview.className = 'wall-snap-preview'; preview.setAttribute('aria-hidden','true');
+    preview.hidden = true;
     preview.setAttribute('data-wall-snap',token);
     overlay.parentElement.appendChild(preview);
-    const bounds = (/** @type {any} */ e) => floatDragBounds(start,origin,{x:e.clientX-wall.left,y:e.clientY-wall.top,ctrlKey:e.ctrlKey},wall.width,wall.height,grid());
+    const bounds = (/** @type {any} */ e) => floatDragBounds(start,origin,{x:e.clientX-wall.left,y:e.clientY-wall.top,ctrlKey:control},wall.width,wall.height,grid());
     const paint = (/** @type {any} */ e) => {
       const rect = bounds(e);
-      preview.hidden = !e.ctrlKey;
+      preview.hidden = !control;
       sheet.textContent = `[data-wall-snap="${token}"]{left:${rect.x}px;top:${rect.y}px;width:${rect.width}px;height:${rect.height}px}
-[data-wall-drag="${token}"]{transform:translate(${e.clientX-last.clientX}px,${e.clientY-last.clientY}px)}`;
+[data-wall-drag="${token}"]{transform:translate(${e.clientX-event.clientX}px,${e.clientY-event.clientY}px)}`;
     };
     const move = (/** @type {any} */ e) => {
       if (e.pointerId !== event.pointerId) return;
       if (!moved && Math.abs(e.clientX-event.clientX)+Math.abs(e.clientY-event.clientY) > 3) {moved = true; custom();}
       if (moved) paint(e);
     };
-    const key = (/** @type {any} */ e) => { if (e.key === 'Control') paint({...last,clientX:point.x,clientY:point.y,ctrlKey:e.type === 'keydown'}); };
+    const key = (/** @type {any} */ e) => {
+      if (e.key !== 'Control') return;
+      control = e.type === 'keydown';
+      if (moved) paint({clientX:point.x,clientY:point.y});
+    };
     let point = {x:event.clientX,y:event.clientY};
-    const track = (/** @type {any} */ e) => {if(e.pointerId === event.pointerId) {point={x:e.clientX,y:e.clientY}; move(e);}};
+    const track = (/** @type {any} */ e) => {if(e.pointerId === event.pointerId) {control=e.ctrlKey; point={x:e.clientX,y:e.clientY}; move(e);}};
     const cleanup = () => {
-      overlay.removeAttribute('data-wall-drag'); preview.remove(); sheet.remove();
+      overlay.removeAttribute('data-wall-drag'); content?.removeAttribute('data-wall-drag'); preview.remove(); sheet.remove();
       for (const [name,fn] of /** @type {Array<[string,EventListener]>} */ ([['pointermove',track],['pointerup',up],['pointercancel',abort],['keydown',key],['keyup',key],['visibilitychange',abort]])) doc.removeEventListener(name,fn,true);
       doc.defaultView?.removeEventListener('blur',abort);
       cancel = () => {};
@@ -82,6 +92,7 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
     const abort = () => cleanup();
     const up = (/** @type {any} */ e) => {
       if (e.pointerId !== event.pointerId) return;
+      control = e.ctrlKey;
       const rect = bounds(e); cleanup();
       if (moved) {api.addFloatingGroup(group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true}); complete();}
       else group.api.setActive();
@@ -90,8 +101,10 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
     for (const [name,fn] of /** @type {Array<[string,EventListener]>} */ ([['pointermove',track],['pointerup',up],['pointercancel',abort],['keydown',key],['keyup',key],['visibilitychange',abort]])) doc.addEventListener(name,fn,true);
     doc.defaultView?.addEventListener('blur',abort);
   };
-  root.addEventListener('pointerdown',down,true);
-  return () => {cancel(); root.removeEventListener('pointerdown',down,true);};
+  // Dockview installs its own overlay handlers. Capture on the document before
+  // those handlers, while keeping ownership restricted to this wall's floats.
+  doc.addEventListener('pointerdown',down,true);
+  return () => {cancel(); doc.removeEventListener('pointerdown',down,true);};
 }
 
 // Presentation only: no capsule geometry, ownership, or lifecycle operations.
@@ -108,7 +121,9 @@ export function presetRectangles(preset, tiles, width, height) {
   const count = visible.length;
   return visible.map((tile, index) => {
     if (preset === 'floating') {
-      const w = Math.min(640, Math.max(240,width * .6),width), h = Math.min(480,Math.max(200,height * .65),height);
+      // [TARGET, unit decision] Preserve the full available height for chrome
+      // and the frame; avoid fixed pixel caps on large and short workspaces.
+      const w = Math.floor(width * .9), h = height;
       return {id:tile.id,x:Math.min(24 * index, Math.max(0,width-w)),y:Math.min(24 * index,Math.max(0,height-h)),width:w,height:h};
     }
     if (preset === 'single') return {id:tile.id,x:0,y:0,width,height};

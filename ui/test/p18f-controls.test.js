@@ -24,7 +24,7 @@ function geometryOracle(api,preset) {
       if(preset==='side-by-side')return n===1 ? {id,x:0,y:0,width:1400,height:1000} : {id,x:i ? 700:0,y:0,width:700,height:1000};
       if(preset==='grid')return {id,x:(Math.min(i,3)%2)*700,y:Math.floor(Math.min(i,3)/2)*500,width:700,height:500};
       if(preset==='focus-strip') { if(n===1||i===0)return {id,x:0,y:0,width:n===1?1400:979,height:1000};const y=Math.floor((i-1)*1000/(n-1));return {id,x:979,y,width:421,height:Math.floor(i*1000/(n-1))-y}; }
-      return {id,x:24*i,y:24*i,width:640,height:480};
+      return {id,x:24*i,y:0,width:1260,height:1000};
     });
     assert.deepEqual(rects,expected,preset+' '+n);
     const layout=api.arrangePreset(createWallLayout(SCOPE,rows).dockview,preset,tiles,1400,1000);
