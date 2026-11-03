@@ -28,6 +28,20 @@
  * - The boot create keeps using buildFirstSurfaceCreateRequest (first profile).
  */
 
+// [TARGET, unit decision] One creation flight per host state map, shared by
+// boot, browser and role bridges before their first asynchronous admission read.
+/** @type {WeakSet<object>} */
+const creationFlights = new WeakSet();
+/** @param {object} states @returns {(() => void) | null} */
+export function acquireCapsuleCreation(states) {
+  if (creationFlights.has(states)) return null;
+  creationFlights.add(states);
+  let released = false;
+  return () => {
+    if (!released) { released = true; creationFlights.delete(states); }
+  };
+}
+
 /** Concurrent capsule ceiling matching the daemon-adapter MaxSurfaces limit [MEASURED]. */
 export const MAX_CAPSULES = 16;
 

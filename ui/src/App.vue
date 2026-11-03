@@ -744,7 +744,7 @@ async function createProgramCapsule(body) {
   }
   let programReply;
   if (body.role === 'human' || body.role === 'agent') {
-    programReply = await roles.createProgram({ binary: body.binary.trim(), role: body.role, ...(body.kind === 'host-program' ? {hostXpra:true} : {}) });
+    programReply = await roles.createProgram({ binary: body.binary.trim(), role: body.role, ...(body.kind === 'host-program' || body.hostXpra === true ? {hostXpra:true} : {}) });
   } else {
     const reply = await roles.createProgram({ binary: body.binary.trim() });
     programReply = reply;
@@ -1485,8 +1485,8 @@ function onSettled() { settled.value = true; revealRows(); }
 function openCapsule(payload) {
   if (nestedMode.displayOnly) return;
   const id = payload?.type?.id ?? payload?.id;
-  if (typeof id === 'string') selectedCapsuleId.value = id;
   if (id === 'add') { launcherOpen.value = true; return; }
+  if (typeof id === 'string') selectedCapsuleId.value = id;
   if (rows.value.some(row => row.id === id)) void wall.value?.followSurface?.(id,capsuleModes.value[id]);
   if (rows.value.some(row => row.id === id) && wall.value?.revealSurface(id, payload?.placement ?? 'tab')?.ok === true) markPanelOpen(id);
 }

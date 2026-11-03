@@ -82,6 +82,21 @@ async function openIdentity(profileId,role){
   }
   emit('open-identity',{profileId,role});emit('close');
 }
+/** @param {string} profileId */
+async function stopIdentity(profileId) {
+  if (busy.value) return;
+  if (isForeignIdentity(profileId)) { error.value=identityErrorText('IDENTITY_PROTECTED',profileId); return; }
+  const surfaceId=modeFor(profileId)?.surfaceId;
+  if (!surfaceId || !roleApi?.stop) return;
+  busy.value=true;error.value='';
+  try {
+    const reply=await roleApi.stop(surfaceId);
+    if (reply?.ok !== true) throw Error(reply?.code || 'CAPSULE_STOP_UNPROVEN');
+    busy.value=false;
+    await invoke('list');
+  } catch (reason) {error.value=identityErrorText(reason instanceof Error ? reason.message : '',profileId);}
+  finally {busy.value=false;}
+}
 function create(){if(form.value)void invoke('create',form.value);}
 // App owns the marker during normal use. Also cover isolated dialog mounts;
 // release only a marker this component installed, leaving other modals alone.
@@ -108,8 +123,9 @@ watch(()=>props.open,open=>{if(open)void invoke('list');},{immediate:true});
         </div>
         <div class="identity-actions">
         <UiButton v-if="!roleApi" label="Log in" :disabled="busy || isForeignIdentity(row.id) || row.browser === 'program'" @click="invoke('login',{id:row.id})" />
-        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'human')" />
-        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy" @click="openIdentity(row.id,'agent')" />
+        <UiButton label="Open as human" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy || modeFor(row.id)?.currentMode === 'lost'" @click="openIdentity(row.id,'human')" />
+        <UiButton label="Open as agent" :disabled="busy || isForeignIdentity(row.id) || !modeFor(row.id)?.available || !!modeFor(row.id)?.busy || modeFor(row.id)?.currentMode === 'lost'" @click="openIdentity(row.id,'agent')" />
+        <UiButton v-if="roleApi && modeFor(row.id)?.currentMode === 'lost' && modeFor(row.id)?.surfaceId" label="Stop lost capsule" :disabled="busy || isForeignIdentity(row.id)" @click="stopIdentity(row.id)" />
         <UiButton label="Delete" :disabled="busy || isProtectedIdentity(row.id)" :title="isProtectedIdentity(row.id) ? 'Managed outside MetaViewer' : undefined" @click="askDelete(row.id)" />
         </div>
       </li>
