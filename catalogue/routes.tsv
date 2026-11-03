@@ -2205,6 +2205,7 @@ v027-u3c.test.js	ui/test/v027-u3c.test.js
 v027win-4af1694b2e2c	ui/test/v027-window-close-live-order.test.js
 v027win-4508650304ef	ui/test/v027-window-resize.test.js
 v028-fit-render.cjs	ui/test/v028-fit-render.cjs
+v028fit-1d677c28111c	ui/test/v028-fit-render.test.js
 v028-fit.test.js	ui/test/v028-fit.test.js
 v028-tiles-visual.js	ui/test/v028-tiles-visual.js
 v028-tiles.html	ui/test/v028-tiles.html
