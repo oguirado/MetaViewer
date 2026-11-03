@@ -13,6 +13,10 @@ const surface = {schema:'surface/v0.2',surface_id:'surface-owned',profile_id:'gu
   kind:'vm',state:'active',control:'agent',visibility:'unfolded',display:':100',geometry:{w:1280,h:900}};
 
 async function fixture(t, {profiles={guest:profile}, current=surface, lookup=true}={}) {
+  // VM roles exist only on arm64: pin the host architecture so x64 CI runs the same path.
+  const arch=Object.getOwnPropertyDescriptor(process,'arch');
+  Object.defineProperty(process,'arch',{...arch,value:'arm64'});
+  t.after(()=>Object.defineProperty(process,'arch',arch));
   const root = await mkdtemp(join(tmpdir(),'vm-role-'));
   let handler, nativeCalls=0, mutations=0;
   const window = new EventEmitter();
