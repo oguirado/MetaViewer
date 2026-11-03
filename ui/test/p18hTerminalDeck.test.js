@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as vue from 'vue';
 import * as deckModel from '../src/terminal/terminalDeckModel.js';
+import {createPairedTerminals} from '../src/terminal/pairedTerminals.js';
 import { assertSpawnProfile } from '../electron/ptyBroker.js';
 
 function extractEntryPrompt(markdown) {
@@ -727,7 +728,7 @@ async function compileSfc(relPath, deps = {}, mutateSource = null) {
   const { descriptor } = parse(source);
   let code = compileScript(descriptor, { id: `p18h-${++serial}`, inlineTemplate: true }).content;
   const key = `__p18hDeps_${serial}`;
-  globalThis[key] = { ...deps, vue };
+  globalThis[key] = { './pairedTerminals.js':{createPairedTerminals}, ...deps, vue };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '');
   code = code.replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_line, binding, _q, spec) => {
     const normalized = binding
@@ -2797,3 +2798,59 @@ test('V024-WALL-FIXES: real broker refusal code (CLASS_LIMIT), dismissible error
   }
 });
 
+
+
+test('paired terminal keeps newest requested capsule focused and retains hidden sessions', async () => {
+  const harness = createBrokerDouble(), waiting = [];
+  harness.broker.open = () => new Promise(resolve => waiting.push(resolve));
+  class Terminal {loadAddon() {} attachCustomKeyEventHandler() {} onData() {return {dispose(){}};} open() {} write() {} focus() {} blur() {} dispose() {}}
+  const View = await compileSfc('../src/terminal/TerminalDeckView.vue', {
+    '@xterm/xterm': {Terminal}, '@xterm/addon-fit': {FitAddon:class {fit(){}}},
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},
+    './terminalDeckModel.js':deckModel,
+  });
+  const target=vue.ref({surfaceId:'surface-a',profileId:'identity-a',title:'Alpha'}), open=vue.ref(true), focus=[];
+  let deck;
+  const Root={setup(){return ()=>vue.h(View,{ref:value=>{deck=value;},open:open.value,pairedTarget:target.value,terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage(),'onPair-focus':id=>focus.push(id)});}};
+  const mounted=mountTree(Root);
+  try {
+    await tick(); assert.equal(waiting.length,1);
+    target.value={surfaceId:'surface-b',profileId:'identity-b',title:'Beta'};await tick();assert.equal(deck.$props.pairedTarget.surfaceId,'surface-b');assert.equal(waiting.length,1,'broker admission serializes opens');
+    waiting[0]({session:'pair-a'});await tick();assert.equal(waiting.length,2);
+    assert.equal(deck.controller.state.focusedSlotId,null,'obsolete Alpha opens in background');
+    waiting[1]({session:'pair-b'});await tick();
+    const b=deck.controller.state.focusedSlotId;assert.ok(b);assert.equal(focus.at(-1),'surface-b');
+    assert.equal(deck.controller.state.focusedSlotId,b,'latest Beta retains focus');
+    assert.match(mounted.textOf(mounted.root),/Beta.*Host shell/);
+    open.value=false;await tick();open.value=true;await tick();
+    assert.equal(waiting.length,2,'reopening retains the paired PTY');
+    target.value={surfaceId:'surface-a',profileId:'identity-a',title:'Alpha'};await tick();
+    assert.equal(focus.at(-1),'surface-a');assert.notEqual(deck.controller.state.focusedSlotId,b);
+    assert.equal(waiting.length,2,'switching back reuses Alpha');
+  } finally {mounted.app.unmount();}
+});
+
+
+test('terminal viewport resize fits retained contents without taking focus',async()=>{
+  const previous=globalThis.ResizeObserver;let observer,focus=0,fits=0;
+  class Observer {constructor(cb){this.cb=cb;this.nodes=new Set();observer=this;}observe(n){this.nodes.add(n);}unobserve(n){this.nodes.delete(n);}disconnect(){this.disconnected=true;}}
+  globalThis.ResizeObserver=Observer;
+  const harness=createBrokerDouble();
+  class Terminal {cols=80;rows=24;loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){focus++;}dispose(){}}
+  const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{
+    '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){fits++;}}},
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel,
+  });
+  const mounted=mountTree(View,{terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage()});
+  try {
+    await mounted.vm.controller.launchProfile('shell');await tick();
+    const node=[...observer.nodes][0];assert.ok(node);
+    const beforeFocus=focus,beforeFit=fits,beforeResize=harness.resizeCalls.length;
+    observer.cb([{target:node,contentRect:{width:450,height:600}}]);
+    assert.equal(focus,beforeFocus);assert.equal(fits,beforeFit+1);assert.equal(harness.resizeCalls.length,beforeResize+1);
+    observer.cb([{target:node,contentRect:{width:450,height:600}}]);
+    assert.equal(harness.resizeCalls.length,beforeResize+1,'unchanged character dimensions do not resend PTY resize');
+    observer.cb([{target:node,contentRect:{width:0,height:0}}]);assert.equal(fits,beforeFit+2,'hidden viewport is not fitted');
+  } finally {mounted.app.unmount();globalThis.ResizeObserver=previous;}
+  assert.equal(observer.disconnected,true);
+});

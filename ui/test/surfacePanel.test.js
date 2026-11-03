@@ -1,3 +1,4 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -264,7 +265,7 @@ test('surface slot forwards exact identity; host never unmounts', () => {
   assert.match(template, /:drawable="drawable"/);
   // The hidden attribute preserves mounting without CSP-blocked inline styles.
   assert.match(template, /:hidden="!surfaceHostVisible"/);
-  assert.doesNotMatch(template, /v-if/);
+  assert.doesNotMatch(withoutPairedTerminalControl(template), /v-if/);
 });
 
 test('dependencies reach children through provides; no imperative API escapes', () => {

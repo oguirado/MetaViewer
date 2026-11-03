@@ -114,6 +114,9 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     if (size.width !== 1280 || size.height !== 900) throw Error('XPRA_FIXED_SIZE_REQUIRED');
     wc.setZoomFactor(1);
     view.setBounds(rect);
+    // Native child views can retain a blank compositor surface after a hidden
+    // mount or resize. Request paint without changing keyboard ownership.
+    wc.invalidate?.();
   }
   /** @type {Set<string>} */
   const droppedCodes = new Set();
@@ -203,7 +206,11 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
       /** @param {{background:string,foreground:string}} theme */
       setTheme(theme) { if (!live()) throw Error('XPRA_HUMAN_LEASE_LOST'); themeScript=nativeThemeScript(theme); return wc.executeJavaScript(themeScript); },
       /** @param {boolean} visible */
-      setVisible(visible) { if (!detached) view.setVisible(visible); } });
+      setVisible(visible) {
+        if (detached) return;
+        view.setVisible(visible);
+        if (visible) wc.invalidate?.();
+      } });
   } catch (error) { await close(); throw failure || error; }
   finally { stopFocusWatch(); }
 }

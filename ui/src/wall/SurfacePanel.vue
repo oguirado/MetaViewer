@@ -365,6 +365,8 @@ let chromePointerHeld = false;
 const chromeExpanded = computed(() => !chromeDragging.value && (chromeHover.value || chromeFocus.value || chromeControl.value || networkOpen.value));
 const chromeOverlays = /** @type {ReturnType<typeof import('../surfaces/overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
 const chromeOwner = {};
+/** @typedef {{available:()=>boolean,isOpen:(id:string)=>boolean,toggle:(id:string)=>void}} CapsuleTerminal */
+const capsuleTerminal = /** @type {CapsuleTerminal|null} */ (inject('capsuleTerminal', null));
 /** @param {PointerEvent} event */
 function chromePointer(event) {
   chromeHover.value = !!(/** @type {Element|null} */ (event.target))?.closest?.('.cuk-capsule-panel__header, .mv-tile-rail');
@@ -682,6 +684,7 @@ function onActivateSurface() {
   <div class="mv-tile" :hidden="presentationHidden" :data-chrome-expanded="String(chromeExpanded)" :data-mv-window-hidden="String(presentationHidden)" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">
   <Teleport :to="stateControlTarget || 'body'" :disabled="!stateControlTarget">
     <div class="mv-tile-state-controls" :hidden="!props.stateControls"><slot name="state-controls" :capabilities="props.stateControls" :on-action="onStateAction" /></div>
+    <button v-if="!props.displayOnly && capsuleTerminal?.available()" type="button" class="mv-tile-terminal-toggle" :id="`tile-terminal-${props.capsuleId}`" :data-semantic-anchor="`capsule/${props.capsuleId}/terminal`" :aria-label="`Terminal for ${props.title}`" :aria-expanded="capsuleTerminal.isOpen(props.capsuleId)" :title="capsuleTerminal.isOpen(props.capsuleId) ? 'Hide paired terminal' : 'Open paired terminal'" @click.stop="capsuleTerminal.toggle(props.capsuleId)">›_</button>
   </Teleport>
   <div class="mv-tile-rail">
   <NetworkPanel :open="networkOpen && !props.displayOnly" :display-only="props.displayOnly" :capsule-id="props.capsuleId" :identity="row?.profile_id ?? ''" :refusal-code="row?.refusal?.code ?? row?.readinessError?.code ?? ''" @open="networkOpen=true" @close="networkOpen=false" />

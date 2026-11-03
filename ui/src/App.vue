@@ -196,6 +196,19 @@ const foldOverrides = ref(/** @type {Record<string, boolean>} */ ({}));
 const selectedFolded = computed(() => selectedSurface.value
   ? foldOverrides.value[selectedSurface.value.id] ?? selectedSurface.value.visibility === 'folded' : false);
 const selectedSurface = computed(() => rows.value.find(row => row.id === selectedCapsuleId.value) ?? rows.value[0] ?? null);
+const pairedTerminalTarget = shallowRef(/** @type {any} */ (null));
+const activeTerminalPair = ref(/** @type {string|null} */ (null));
+provide('capsuleTerminal', {
+  available: () => !nestedMode.displayOnly && typeof props.terminalBroker?.open === 'function',
+  isOpen: (/** @type {string} */ id) => terminalDeckOpen.value && activeTerminalPair.value === id,
+  toggle(/** @type {string} */ id) {
+    if (terminalDeckOpen.value && activeTerminalPair.value === id) { terminalOpen.value=false; return; }
+    const row=rows.value.find(row=>row.id===id && row.backendLifecycle!=='destroyed' && row.backendLifecycle!=='lost');
+    if (!row) return;
+    if (!terminalDeckOpen.value) toggleTerminal();
+    pairedTerminalTarget.value={surfaceId:row.id,profileId:row.profile_id,title:surfaceLabel(row)};
+  },
+});
 /** Renderer intents remain events until a host supplies an authoritative dispatcher. */
 const emit = defineEmits(['submit-intent', 'create-capsule']);
 /** HANDOFF F5 (INPUT-ARM): the handoff take-control also selects and reveals
@@ -1709,7 +1722,7 @@ onMounted(() => {
     <aside v-if="!nestedMode.displayOnly" class="mv-terminal-dock" :class="{ 'mv-terminal-dock--open': terminalDeckOpen }" aria-label="Terminal dock">
       <UiButton label="Terminal" id="shell-terminal" data-semantic-anchor="terminal/toggle" class="mv-terminal-dock-toggle" type="button" :aria-expanded="terminalOpen" :aria-label="terminalDeckOpen ? 'Collapse terminal dock' : 'Open terminal dock'" @click="toggleTerminal()"><span aria-hidden="true">›_</span><span v-if="terminalDeckOpen">Terminal</span><span v-if="terminalDeckOpen" aria-hidden="true">×</span></UiButton>
         <section v-if="!nestedMode.displayOnly" :hidden="!terminalDeckOpen" :inert="!terminalDeckOpen ? true : undefined" :aria-hidden="!terminalDeckOpen ? 'true' : undefined" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
-          <TerminalDeckView :open="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @update:open="terminalOpen = $event" />
+          <TerminalDeckView :open="terminalDeckOpen" :paired-target="pairedTerminalTarget" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @pair-focus="activeTerminalPair = $event" @update:open="terminalOpen = $event" />
         </section>
     </aside>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
@@ -1812,7 +1825,7 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-menu-popover[popover]:not(:popover-open) { display:none; }
 .mv-tile { position:relative; }
 .mv-tile .cuk-capsule-panel__axes { display:none; }
-.mv-tile .cuk-capsule-panel__actions > button:not([id^="window-"]):not([data-semantic-anchor$="/close"]) { display:none; }
+.mv-tile .cuk-capsule-panel__actions > button:not(.mv-tile-terminal-toggle):not([id^="window-"]):not([data-semantic-anchor$="/close"]) { display:none; }
 /* Window-hidden is permanent presentation state, including the entire shell. */
 .mv-tile[hidden] { display:none !important; }
 .dv-resize-container:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])), .dv-groupview:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])) { display:none !important; }

@@ -1282,7 +1282,7 @@ export const WallMissingPanel = defineComponent({
 });
 </script>
 <script setup>
-import { markRaw, onBeforeUnmount, ref, useSlots } from 'vue';
+import { inject, provide, markRaw, onBeforeUnmount, ref, useSlots } from 'vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
 import SurfacePanel from './SurfacePanel.vue';
 
@@ -1357,6 +1357,9 @@ function changeGrid(/** @type {'cols'|'rows'} */ axis, /** @type {Event} */ even
 }
 const slots = useSlots();
 const surfaceSlot = slots.surface ?? null;
+// Dockview mounts router components in isolated roots. Carry the scoped
+// capability into that root instead of relying on App's ancestor provides.
+const capsuleTerminal = inject('capsuleTerminal', null);
 
 const viewportWidth = WALL_INITIAL_VIEWPORT_WIDTH;
 const viewportHeight = WALL_INITIAL_VIEWPORT_HEIGHT;
@@ -1413,6 +1416,7 @@ const WallSurfaceRouter = markRaw(defineComponent({
     params: { type: Object, required: true },
   },
   setup(routerProps) {
+    provide('capsuleTerminal', capsuleTerminal);
     return () => {
       const capsuleId = resolveRouterCapsuleId(routerProps.params);
       if (capsuleId === null) {

@@ -108,20 +108,23 @@ function clippingOracle(api) {
  const doc=globalThis.document, style=globalThis.getComputedStyle;
  try {
   const tiny={x:0,y:0,width:1,height:1},visible={x:400,y:300,width:400,height:300};
-  const wall={id:'shell-wall',className:'',getBoundingClientRect:()=>tiny};
+  const wall={id:'shell-wall',className:'',getBoundingClientRect:()=>({x:0,y:0,width:1600,height:1000})};
   const floating={className:'dv-resize-container',getBoundingClientRect:()=>visible,parentElement:wall};
   const content={className:'content',getBoundingClientRect:()=>visible,parentElement:floating};
   const el={closest:()=>floating,parentElement:content};
   globalThis.document={getElementById:()=>wall};globalThis.getComputedStyle=()=>({overflow:'visible'});
-  const clips=api.collectClipRects(el);assert.equal(clips.wallViewport,null);
+  const clips=api.collectClipRects(el);assert.deepEqual(clips.wallViewport,wall.getBoundingClientRect());
   assert(api.clipRoleBounds(visible,clips.scrollAncestors,clips.wallViewport,{width:1600,height:1000}).visible);
+  wall.getBoundingClientRect=()=>tiny;
+  assert.equal(api.clipRoleBounds(visible,...Object.values(api.collectClipRects(el)),{width:1600,height:1000}).visible,false,'floating content cannot cover the dock outside its wall');
+  wall.getBoundingClientRect=()=>({x:0,y:0,width:1600,height:1000});
   content.className='clipped';globalThis.getComputedStyle=()=>({overflow:'hidden'});content.getBoundingClientRect=()=>tiny;
   assert.equal(api.clipRoleBounds(visible,...Object.values(api.collectClipRects(el)),{width:1600,height:1000}).visible,false);
  }finally{globalThis.document=doc;globalThis.getComputedStyle=style;}
 }
-test('P18F floating clips stop at the floating window; internal clips still apply',()=>clippingOracle(role));
-test('P18F mutant wall fallback on floats is killed',async()=>assert.throws(()=>clippingOracle(awaitedClipMutant),{code:'ERR_ASSERTION'}));
-const awaitedClipMutant=await load(mut(roleSource,'!floating && !wallViewport','!wallViewport'));
+test('P18F floating clips include the wall beside the dock and preserve internal clipping',()=>clippingOracle(role));
+test('P18F mutant skipping wall bounds for floats is killed',async()=>assert.throws(()=>clippingOracle(awaitedClipMutant),{code:'ERR_ASSERTION'}));
+const awaitedClipMutant=await load(mut(roleSource,'if (!wallViewport &&','if (!floating && !wallViewport &&'));
 
 function modelessOracle(api) {
  const previous={MutationObserver:globalThis.MutationObserver,getComputedStyle:globalThis.getComputedStyle};

@@ -129,7 +129,9 @@ export function floatingPresentation(el, doc = globalThis.document, styleOf = gl
   }
   const stack = floats.map((node,index)=>({node,index,z:z(node)})).sort((a,b)=>a.z-b.z || a.index-b.index);
   const index = stack.findIndex(item=>item.node===own);
-  return {front:index >= 0 && index === stack.length-1,occluders:stack.slice(index+1).map(item=>item.node.getBoundingClientRect())};
+  return {front:index >= 0 && index === stack.length-1,
+    bounds:own ? normalizeRect(own.getBoundingClientRect()) : null,
+    occluders:stack.slice(index+1).map(item=>item.node.getBoundingClientRect())};
 }
 /** @param {any} [doc] */
 export function isModalActive(doc = globalThis.document) {
@@ -165,13 +167,13 @@ export function collectClipRects(el) {
     const id = cur.id ?? cur.props?.id ?? '';
     const cls = typeof cur.className === 'string' ? cur.className : (typeof cur.props?.class === 'string' ? cur.props.class : '');
     if (floating && /\b(?:dv-resize-container|dv-render-overlay-float)\b/.test(cls)) break;
-    if (id === 'shell-wall' || /\bwall-workspace\b/.test(cls)) { if (!floating) wallViewport = rect; }
+    if (id === 'shell-wall' || /\bwall-workspace\b/.test(cls)) { wallViewport = rect; }
     else {
       const style = typeof globalThis.getComputedStyle === 'function' ? globalThis.getComputedStyle(cur) : null;
-      if (!style || /hidden|clip|auto|scroll/.test([style.overflow,style.overflowX,style.overflowY].join(' '))) scrollAncestors.push(rect);
+      if (/\bmv-tile\b/.test(cls) || !style || /hidden|clip|auto|scroll/.test([style.overflow,style.overflowX,style.overflowY].join(' '))) scrollAncestors.push(rect);
     }
   }
-  if (!floating && !wallViewport && typeof doc?.getElementById === 'function') {
+  if (!wallViewport && typeof doc?.getElementById === 'function') {
     const wallEl = doc.getElementById('shell-wall');
     if (wallEl && typeof wallEl.getBoundingClientRect === 'function') wallViewport = wallEl.getBoundingClientRect();
   }
@@ -277,7 +279,7 @@ async function sync() {
     const box = root.value?.getBoundingClientRect();
     const {scrollAncestors, wallViewport} = collectClipRects(root.value);
     const floating = floatingPresentation(root.value);
-    const baseClip = clipRoleBounds(box, scrollAncestors, wallViewport);
+    const baseClip = clipRoleBounds(box, [...scrollAncestors, ...(floating.bounds ? [floating.bounds] : [])], wallViewport);
     const clipped = baseClip.visible ? subtractRoleOccluders(baseClip.bounds,floating.occluders) : baseClip;
     const geometricallyShown = props.presentationActive && baseClip.visible && isRoleElementPainted(root.value);
     const scopedOcclusion = overlays?.isSurfaceOccluded(props.surfaceId) === true;
@@ -557,8 +559,8 @@ onBeforeUnmount(() => { stopOverlaySubscription?.(); stopNativeFocus?.(); overla
 .mv-role-menu-button { flex:0 0 28px; min-width:28px; min-height:28px; }
 .mv-role-menu-host hr { width:100%; }
 :global(.mv-tile:has([data-capsule-role="human"]) [data-semantic-anchor$="/control"]) { display:none; }
-.mv-role-surface { flex:1 1 auto; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; }
-.mv-role-viewport { position:relative; flex:1; min-height:0; overflow:hidden; background:var(--cuk-semantic-surface-canvas); }
+.mv-role-surface { flex:1 1 auto; display:flex; flex-direction:column; width:100%; height:100%; min-width:0; min-height:0; }
+.mv-role-viewport { position:relative; flex:1; min-width:0; min-height:0; overflow:hidden; background:var(--cuk-semantic-surface-canvas); }
 /* [TARGET, unit decision] The slot contains a banner and a surface: reserve
  * separate rows before fitting pixels. The banner must never share a row. */
 .mv-role-agent-canvas { width:100%; height:100%; min-width:0; min-height:0; container-type:size; display:flex; flex-direction:column; align-items:stretch; }
