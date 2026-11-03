@@ -1449,7 +1449,10 @@ test('DISPLAY pull replaces lost ports, bounds requests, and parks unbound reade
     assert.equal(host.requestPort('pull'),false,'before subscription refuses without latching');
     host.setSubscribed(true);
     writer.writeFrame(Buffer.alloc(6,1),1n,1n);
-    await new Promise(r=>setTimeout(r,60));
+    // The first offer is the one this test loses. Wait for it: a slow filesystem lookup can outlast
+    // any sleep, and then the request below would create the first offer and discard it instead.
+    for (const deadline = Date.now() + 3000; offered === 0 && Date.now() < deadline;) await new Promise(r=>setTimeout(r,20));
+    assert.equal(offered,1,'first offer delivered before the replacement request');
     let painted = 0;
     const unbind = router.bindSurface({surfaceId:'pull',onFrame:()=>{painted++;return true;}});
     assert.equal(host.requestPort('stranger'),false);
