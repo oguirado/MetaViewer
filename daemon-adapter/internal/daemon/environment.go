@@ -676,24 +676,22 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 				if baselineErr != nil {
 					return failure(baselineErr)
 				}
-				if current.NativeKind != "holdings" {
-					profile, ok := profiles[current.Surface.ProfileID]
-					if !ok {
-						profile, ok = m.ProfileFor(current.Surface.ProfileID)
-					}
-					if !ok {
-						return failure(configuration("current input frame publisher required"))
-					}
-					ref, baselineErr := pubs[profile.RAMRoot].Current(input.SurfaceID)
-					if baselineErr != nil {
-						return failure(configuration("current published input frame required"))
-					}
-					currentJSON, baselineErr := json.Marshal(ref)
-					if baselineErr != nil {
-						return failure(baselineErr)
-					}
-					currentBaseline = currentJSON
+				profile, ok := profiles[current.Surface.ProfileID]
+				if !ok {
+					profile, ok = m.ProfileFor(current.Surface.ProfileID)
 				}
+				if !ok {
+					return failure(configuration("current input frame publisher required"))
+				}
+				ref, baselineErr := pubs[profile.RAMRoot].Current(input.SurfaceID)
+				if baselineErr != nil {
+					return failure(configuration("current published input frame required"))
+				}
+				currentJSON, baselineErr := json.Marshal(ref)
+				if baselineErr != nil {
+					return failure(baselineErr)
+				}
+				currentBaseline = currentJSON
 			}
 			events, evidence, err = m.HandleInputWithEvidence(ctx, q)
 		} else {
@@ -935,8 +933,8 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		}
 		var beforeRef frames.Ref
 		if canObserve {
-			if len(before) == 0 ||
-				json.Unmarshal(before, &beforeRef) != nil ||
+			if len(baselineSource) == 0 ||
+				json.Unmarshal(baselineSource, &beforeRef) != nil ||
 				beforeRef.SurfaceID != id ||
 				beforeRef.Generation == 0 ||
 				beforeRef.Generation >= ref.Generation ||
@@ -1066,6 +1064,10 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 		SurfaceID string `json:"surface_id"`
 	}
 	_ = json.Unmarshal(q.Params, &params)
+	var creation *CreationError
+	if errors.As(err, &creation) && creation.SurfaceID != "" {
+		params.SurfaceID = creation.SurfaceID
+	}
 	if params.SurfaceID == "" {
 		params.SurfaceID = e.MsgID
 	}

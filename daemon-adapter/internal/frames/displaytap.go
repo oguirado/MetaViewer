@@ -260,7 +260,23 @@ func (d *DisplayTaps) run(ctx context.Context, id string) {
 		if err != nil {
 			d.setErr(id, err)
 			d.diag("adapter: DISPLAY tap %s: resolve: %v", id, err)
-			return
+			var refusal *cli.Fault
+			var errno syscall.Errno
+			retryIO := errors.As(err, &errno) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+			if !retryIO || errors.As(err, &refusal) || ctx.Err() != nil {
+				return
+			}
+			// Inventory I/O may recover without any new surface event. Keep the
+			// existing task alive, with the same bounded restart backoff.
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			delay = min(2*time.Second, delay*2)
+			continue
 		}
 		if err = validDisplayTarget(target); err != nil {
 			d.setErr(id, err)

@@ -2,6 +2,8 @@ package capsule
 
 // [TARGET, unit decision] Host-xpra uses one unreaped Xvfb group anchor; xpra
 // and its shell-free child inherit that group. All browser state lives in RAM.
+// [TARGET, unit decision] Startup requires a visible normal window whose XID
+// and witness remain unchanged across consecutive native inventories.
 import (
 	"context"
 	"crypto/rand"
@@ -135,8 +137,16 @@ func xpraChild(path, root string) string {
 	}
 	return strings.Join(argv, " ")
 }
-func waitHostSocket(ctx context.Context, path string) error {
+func waitHostSocket(ctx context.Context, path string, child *exec.Cmd, label string, log *hostXpraLog) error {
 	for {
+		// Inspect without Wait: the unreaped anchor must continue reserving its
+		// process-group witness until stop has signalled and verified removal.
+		if child != nil && child.Process != nil {
+			_, _, state, err := processWitness(child.Process.Pid)
+			if err != nil || state == "Z" || state == "X" {
+				return fault("host_program_unavailable", label+" exited before socket readiness: "+log.String())
+			}
+		}
 		c, err := net.DialTimeout("unix", path, 100*time.Millisecond)
 		if err == nil {
 			c.Close()
@@ -150,15 +160,26 @@ func waitHostSocket(ctx context.Context, path string) error {
 	}
 }
 func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role string) (_ *hostXpraProcess, err error) {
+	// A proven pre-spawn refusal or verified startup compensation leaves no
+	// incumbent. Callers may release their in-flight reservation in that case.
+	clean := true
+	defer func() {
+		if err != nil && clean {
+			err = &preSpawnRefusal{err}
+		}
+	}()
 	if err = r.validateStateDir(); err != nil {
 		return nil, err
 	}
 	tools := map[string]string{}
-	for _, name := range []string{"xpra", "Xvfb", "xauth"} {
+	for _, name := range []string{"xpra", "Xvfb", "xauth", "xdotool"} {
 		tools[name], err = ResolveHostBinary(name, r.SearchPath())
 		if err != nil {
 			return nil, fault("host_program_unavailable", "host_program_unavailable: "+name+" missing; install xpra xvfb xauth (apt install xpra xvfb xauth)")
 		}
+	}
+	if _, err = ResolveHostBinary(filepath.Join(r.root, "srf-host-window"), r.SearchPath()); err != nil {
+		return nil, fault("host_program_unavailable", "host_program_unavailable: srf-host-window missing")
 	}
 	root, err := os.MkdirTemp("/dev/shm", "mv-host-xpra-")
 	if err != nil {
@@ -168,7 +189,9 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 	defer func() {
 		if err != nil {
 			if p.anchor != nil && p.start != "" {
-				_ = p.stop()
+				stopErr := p.stop()
+				clean = stopErr == nil
+				err = errors.Join(err, stopErr)
 			} else {
 				_ = os.RemoveAll(root)
 				_ = os.RemoveAll(p.view)
@@ -200,13 +223,14 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 	if err = p.anchor.Start(); err != nil {
 		return nil, err
 	}
+	clean = false
 	p.start, _, _, err = processWitness(p.anchor.Process.Pid)
 	if err != nil {
 		return nil, err
 	}
 	ready, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if err = waitHostSocket(ready, filepath.Join("/tmp/.X11-unix", "X"+strings.TrimPrefix(p.display, ":"))); err != nil {
+	if err = waitHostSocket(ready, filepath.Join("/tmp/.X11-unix", "X"+strings.TrimPrefix(p.display, ":")), p.anchor, "Xvfb", p.log); err != nil {
 		return nil, err
 	}
 	l, e := net.Listen("tcp4", "127.0.0.1:0")
@@ -226,7 +250,7 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 		p.server = nil
 		return nil, err
 	}
-	if err = waitHostSocket(ready, filepath.Join(p.view, "s", "xpra.sock")); err != nil {
+	if err = waitHostSocket(ready, filepath.Join(p.view, "s", "xpra.sock"), p.server, "xpra", p.log); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -237,43 +261,75 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 		return nil, fault("configuration", "host-xpra requires process runner")
 	}
 	container := "srf-pg-hx-" + profile
-	process, err := startHostXpra(ctx, r, path, container, p.Role)
+	// Reserve capacity and the profile before leaving the manager lock. Native
+	// readiness must not delay emergency control of an unrelated surface.
+	m.quarantined[profile] = true
+	m.mu.Unlock()
+	locked, releaseReservation := false, false
+	defer func() {
+		if !locked {
+			m.mu.Lock()
+		}
+		if releaseReservation {
+			delete(m.quarantined, profile)
+		}
+	}()
+	start := m.hostXpraStart
+	if start == nil {
+		start = startHostXpra
+	}
+	process, err := start(ctx, r, path, container, p.Role)
 	if err != nil {
+		var clean *preSpawnRefusal
+		releaseReservation = errors.As(err, &clean)
 		return nil, err
 	}
 	success := false
 	defer func() {
 		if !success {
-			_ = process.stop()
+			releaseReservation = process.stop() == nil
+			if locked && !releaseReservation {
+				m.quarantined[profile] = true
+			}
 		}
 	}()
 	var spec *HostWindowSpec
+	var candidate *HostWindowSpec
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) && ctx.Err() == nil {
+		var observed *HostWindowSpec
 		out, e := m.executeRawHostWindow(ctx, p, append([]string{"list"}, HostWindowSessionArgs(process.display, process.authority)...), nil)
 		if e == nil {
 			var reply struct {
 				Windows []struct {
-					XID     uint32 `json:"xid"`
-					Witness string `json:"witness"`
-					Title   string `json:"title"`
-					PID     int    `json:"pid"`
+					XID       uint32 `json:"xid"`
+					Witness   string `json:"witness"`
+					Title     string `json:"title"`
+					PID       int    `json:"pid"`
+					Type      string `json:"window_type"`
+					Visible   bool   `json:"visible"`
+					Minimized bool   `json:"minimized"`
 				} `json:"windows"`
 			}
 			if json.Unmarshal(out, &reply) == nil {
 				for _, w := range reply.Windows {
 					_, group, state, witnessErr := processWitness(w.PID)
-					if witnessErr == nil && group == process.anchor.Process.Pid && state != "Z" && w.XID != 0 && validHostWitness(w.Witness) {
-						spec = &HostWindowSpec{XID: w.XID, Witness: w.Witness, Title: w.Title, Program: filepath.Base(path), Display: process.display, Xauthority: process.authority}
+					if witnessErr == nil && group == process.anchor.Process.Pid && state != "Z" && state != "X" && w.XID != 0 && validHostWitness(w.Witness) && w.Type == "normal" && w.Visible && !w.Minimized {
+						observed = &HostWindowSpec{XID: w.XID, Witness: w.Witness, Title: w.Title, Program: filepath.Base(path), Display: process.display, Xauthority: process.authority}
 						break
 					}
 				}
 			}
 		}
-		if spec != nil {
+		if observed != nil && candidate != nil && observed.XID == candidate.XID && observed.Witness == candidate.Witness {
+			spec = observed
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		candidate = observed
+		select {
+		case <-ctx.Done():
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 	if spec == nil {
 		return nil, fault("host_program_unavailable", "host_program_unavailable: program did not publish an X11 window on its private display")
@@ -283,6 +339,8 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 	if err = fitHostXpraWindow(ctx, r, process, spec.XID); err != nil {
 		return nil, err
 	}
+	m.mu.Lock()
+	locked = true
 	p.Display = process.display
 	m.cfg.Profiles[profile] = p
 	if _, err = m.attachHostWindow(profile, id, version, p, spec, geom); err != nil {
@@ -299,8 +357,9 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 	}
 	m.bindings[id] = b
 	if err = m.publishHumanBinding(b); err != nil {
+		cleanupErr := m.detachHostWindowLocked(b)
 		delete(m.bindings, id)
-		return nil, err
+		return nil, errors.Join(err, cleanupErr)
 	}
 	success = true
 	return []json.RawMessage{surfaceEvent(version, "created", b.Surface)}, nil
