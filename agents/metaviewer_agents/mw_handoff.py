@@ -10,6 +10,10 @@ from dataclasses import dataclass
 import json
 
 
+class HandoffPersistenceError(OSError):
+    code = 'MW_HANDOFF_REQUIRED'
+
+
 @dataclass(frozen=True)
 class HandoffResult:
     rc: int
@@ -23,6 +27,7 @@ class HandoffLatch:
     def __init__(self, path, *, detector=None):
         self.path = path
         self.latched = False
+        self.persisted = None
         self.detector = detector
 
     def inspect(self, sensed, seq, write):
@@ -55,5 +60,10 @@ class HandoffLatch:
         record = dict(schema='metaviewer.handoff/v1', surface_id=sensed['frame']['surface_id'],
                       step_index=seq, reason=receipt['reason'], confidence=receipt['confidence'],
                       evidence_kinds=sorted({e['kind'] for e in receipt['evidence']}))
-        write(self.path, (json.dumps(record, sort_keys=True) + '\n').encode())
+        try:
+            write(self.path, (json.dumps(record, sort_keys=True) + '\n').encode())
+        except OSError as error:
+            self.persisted = False
+            raise HandoffPersistenceError('handoff latched; artifact persistence failed') from error
+        self.persisted = True
         return True

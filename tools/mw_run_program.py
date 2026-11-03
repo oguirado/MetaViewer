@@ -203,6 +203,13 @@ class ProgramBackend(host.HostBackend):
             program_binding=getattr(self, 'program_binding', None)))
         self.active_attempt['dispatch_artifact'] = artifact
 
+    def proposal_refused(self, row, error):
+        path = self.evidence / ('dispatch-' + row['proposal_id'] + '.json')
+        record = json.loads(path.read_text())
+        host.need(record['proposal']['proposal_id'] == row['proposal_id'], 'MW_RECEIPT_MISMATCH')
+        record.update(status='refused_before_execution', reason_code=error.reason_code, submitted=True)
+        atomic_journal(path, record, replace=True)
+
     def observe(self, timeout_ms):
         self.ownership()
         observed = host.tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
@@ -630,6 +637,9 @@ def dispatch_text(backend, sensed, target, text, timeout_ms, *, focused=False):
             backend.program_clean_refusal = True
         else:
             attempt['status'] = 'input_uncertain'
+        if isinstance(error, host.tools.VerificationFailed):
+            attempt['status'] = 'input_uncertain'
+            journal_verification_failure(backend, attempt, error, journal_id)
         raise
 
 
@@ -849,12 +859,15 @@ def wait_for_publication(backend, after_generation, timeout_ms):
     raise host.OwnerRefused('MW_PROGRAM_NO_NEW_PUBLICATION')
 
 
-def atomic_journal(path, value):
+def atomic_journal(path, value, *, replace=False):
     """Publish a new private record only after its complete contents are synced."""
     temporary = path.with_name('.' + path.name + '.' + uuid.uuid4().hex)
     try:
         host.ReplayOwner.write(temporary, (json.dumps(value) + '\n').encode())
-        os.link(temporary, path, follow_symlinks=False)
+        if replace:
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path, follow_symlinks=False)
         fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(fd)
@@ -1003,6 +1016,10 @@ def run_moves(backend, planner, goal, steps, timeout_ms, text=None):
                 break
             except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError, host.ClientError,
                     host.tools.ToolRefusal, host.tools.VerificationFailed) as error:
+                if attempt['status'] == 'verified_move' and settled_frame is not None:
+                    # A following type owns its own attempt. Its acquisition or
+                    # settlement failure cannot rewrite this settled click.
+                    raise
                 rows = getattr(backend, 'frame_attempts', [])[start:]
                 if isinstance(error, ProgramObservationChanged):
                     # The current rebind has not submitted a proposal. Earlier
@@ -1141,7 +1158,7 @@ def run_entry(args):
                          getattr(backend, 'program_clean_refusal', False))
         if ((getattr(backend, 'program_moves', []) and not clean_refusal) or any(a.get('status') in
                 ('input_uncertain','dispatch_or_settlement_pending','settlement_pending')
-                for a in getattr(backend, 'program_attempts', []))):
+                for a in attempts)):
             result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
         message = str(error)[:4096]
         print('mw_run_program: ' + str(error), file=sys.stderr)

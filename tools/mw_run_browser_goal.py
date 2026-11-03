@@ -27,6 +27,7 @@ from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, detect_stop
 
 class BrowserGoalBackend(host.HostBackend):
     compiled_wender_ok = True  # planning goes through WenderSubprocessAdapter and the model entry.
+    eager_slot_text = False  # Only the chosen text target requires exact readback.
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -124,11 +125,19 @@ def focused_target(sensed, target):
 
 
 def exact_readback(backend, sensed, target, text):
-    row = focused_target(sensed, target)
-    value = backend.slot_text(row)  # Always ax --text-of, even if AX has value.
-    host.need(value == text and row.get('value_len') == len(text), 'MW_BROWSER_TEXT_MISMATCH')
-    return dict(status='exact_native_readback', editor_id=row['id'],
-                code_points=len(value), bytes=len(value.encode('utf-8')))
+    # [TARGET, unit decision] Poll only stale content within the remaining run
+    # budget. Every sample reacquires wall/focus/identity; never repeat input.
+    deadline = time.monotonic_ns() + remaining_budget(backend, 1000) * 1_000_000
+    while True:
+        row = focused_target(sensed, target)
+        value = backend.slot_text(row)  # Always ax --text-of, even if AX has value.
+        if value == text and row.get('value_len') == len(text):
+            return dict(status='exact_native_readback', editor_id=row['id'],
+                        code_points=len(value), bytes=len(value.encode('utf-8')))
+        host.need(time.monotonic_ns() < deadline, 'MW_BROWSER_TEXT_MISMATCH')
+        time.sleep(min(0.05, max(0, (deadline - time.monotonic_ns()) / 1e9)))
+        sensed = backend.perceive(backend.observe(remaining_budget(backend,
+            max(1, (deadline - time.monotonic_ns()) // 1_000_000))))
 
 
 def annotate_ax(backend, sensed, marks_path):
@@ -293,7 +302,8 @@ def run_entry(args):
         result.update(verdict_code=code)
         if code == 'MW_HANDOFF_REQUIRED':
             result.update(rc=4, verdict_code='HUMAN_HANDOFF',
-                          receipt=str(backend.handoff.path) if backend.handoff.latched else None)
+                          receipt=str(backend.handoff.path) if backend.handoff.latched and
+                          backend.handoff.persisted is not False else None)
         elif any(a['status'] in ('dispatch_pending', 'settlement_pending')
                  for a in getattr(backend, 'attempts', [])):
             result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
@@ -304,9 +314,15 @@ def run_entry(args):
             atomic_journal(evidence / 'report.json', dict(result, goal_completed=None,
                 moves=getattr(backend, 'moves', []), attempts=getattr(backend, 'attempts', []),
                 frame_attempts=getattr(backend, 'frame_attempts', []), message=message,
+                handoff_persistence=('failed' if getattr(getattr(backend, 'handoff', None),
+                    'persisted', None) is False else 'persisted' if
+                    getattr(getattr(backend, 'handoff', None), 'persisted', None) is True else None),
                 vision_crosscheck='not_performed', model_reading='commentary_only'))
         except OSError:
-            result.update(rc=5 if getattr(backend, 'moves', []) else 6,
-                          verdict_code='MW_PRIVATE_OUTPUT', receipt=None)
+            if result['verdict_code'] == 'HUMAN_HANDOFF':
+                result['report'] = None
+            else:
+                result.update(rc=5 if getattr(backend, 'moves', []) else 6,
+                              verdict_code='MW_PRIVATE_OUTPUT', receipt=None)
     print(json.dumps(result))
     return result['rc']
