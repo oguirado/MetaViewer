@@ -1,0 +1,2 @@
+- Add named stored-data slots in Identities with timestamps, Save, confirmed Overwrite, Load, confirmed Copy to a new capsule and Delete; route every action through core authority and asynchronous daemon storage, refuse native leases/login reservations, reconcile intents at startup, and keep renderer replies path-free.
+- Extend only the new capsule-state contracts with List/Delete and closed listing metadata; update fixtures and pinned fixture-set digests.

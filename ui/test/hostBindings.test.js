@@ -49,6 +49,7 @@ async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=n
         } else if(extended) send(env.body);
         else send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,control:env.body.op==='take_control'?'human':'agent',visibility:env.body.op==='fold'?'folded':'unfolded'}}});
       }
+      else if(env.body.schema==='capsule_state_request/v0.2') {const {credential_copy_confirmed,...body}=env.body;send({...body,schema:'capsule_state_event/v0.2',event:'accepted'});}
       else send({schema:'action_verdict/v0.2',proposal_id:env.body.proposal_id,decision:'refused',reason_code:'POLICY',core_seq:1});
     }
   });});
@@ -2027,4 +2028,19 @@ test('V027 socket outage publishes lost state before clearing the session', asyn
  assert.equal(entries.at(-1).state.state,'lost');
  assert.equal(bindings.core.getHumanSurface('s1'),null);
  await assert.rejects(bindings.core.stopSurface('s1'),/CAPSULE_STOP_REFUSED/);
+});
+
+test('capsule slot host waits through accepted and correlates completed while other requests proceed',async t=>{
+ const f=await fixture(t);const bindings=await loadMainBindings(f.env,{createMessageChannel:f.createMessageChannel});t.after(()=>bindings.core.dispose());
+ await bindings.core.start();
+ const request={schema:'capsule_state_request/v0.2',operation_id:'slot-op-1',op:'list',profile_id:'test-profile',slot_id:'list',credential_copy_confirmed:true};
+ let done=false;const result=bindings.core.request({op:'capsule-state',request}).then(value=>{done=true;return value;});
+ await waitForCondition(()=>f.requests.some(env=>env.body.operation_id===request.operation_id));
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(done,false);
+ f.send({schema:'capsule_state_event/v0.2',operation_id:'unrelated-op',op:'list',profile_id:'test-profile',slot_id:'list',event:'completed',slots:[]});
+ assert.equal(await bindings.core.request({op:'intent',json:JSON.stringify({schema:'ui_intent/v0.2',request_id:'other-op',op:'fold',params:{slot_id:'s1'}})}),true);
+ assert.equal(done,false);
+ const event={schema:'capsule_state_event/v0.2',operation_id:request.operation_id,op:'list',profile_id:'test-profile',slot_id:'list',event:'completed',slots:[]};f.send(event);
+ assert.deepEqual(await result,event);
+ assert.ok(!JSON.stringify(await result).includes('/dev/'));
 });

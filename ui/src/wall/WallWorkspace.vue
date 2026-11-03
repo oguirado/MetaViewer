@@ -8,6 +8,105 @@
  * which the kit emits after its cold restore settles.
  */
 import { defineComponent, h } from 'vue';
+/** [TARGET, unit decision] Presentation-only free drag, Control-held cell snap.
+ * Grid counts are per desktop; geometry never dispatches backend intents.
+ * @param {any} start @param {any} origin @param {any} pointer
+ * @param {number} width @param {number} height @param {{cols:number,rows:number}} grid */
+export function floatDragBounds(start, origin, pointer, width, height, grid) {
+  if (![grid?.cols,grid?.rows].every(n=>Number.isInteger(n) && n >= 1 && n <= 5) ||
+      ![width,height].every(n=>Number.isFinite(n) && n > 0)) throw Error('SNAP_GRID_INVALID');
+  if (!pointer.ctrlKey) return {x:Math.max(0,Math.min(width-start.width,start.x+pointer.x-origin.x)),
+    y:Math.max(0,Math.min(height-start.height,start.y+pointer.y-origin.y)),width:start.width,height:start.height};
+  const col = Math.max(0,Math.min(grid.cols-1,Math.floor(pointer.x*grid.cols/width)));
+  const row = Math.max(0,Math.min(grid.rows-1,Math.floor(pointer.y*grid.rows/height)));
+  const x = Math.floor(col*width/grid.cols), y = Math.floor(row*height/grid.rows);
+  return {x,y,width:Math.floor((col+1)*width/grid.cols)-x,height:Math.floor((row+1)*height/grid.rows)-y};
+}
+
+let floatingDragSerial = 0;
+/** Capture floating title drags before Dockview can start native docking.
+ * Live movement uses a temporary transform; release commits through the public
+ * floating-group API, retaining panel instances and the kit persistence gate.
+ * @param {any} root @param {any} api @param {()=>{cols:number,rows:number}} grid
+ * @param {()=>void} custom @param {()=>void} complete */
+export function installFloatingDrag(root, api, grid, custom, complete) {
+  const doc = root.ownerDocument;
+  let cancel = () => {};
+  const down = (/** @type {any} */ event) => {
+    if (event.button !== 0 || event.target.closest('button,input,select,a,[role="button"]')) return;
+    const header = event.target.closest('.dv-floating-titlebar,.dv-tabs-and-actions-container,.cuk-capsule-panel__header');
+    // Dockview renders panel content in a sibling overlay, outside the group's
+    // resize container. Resolve that header through the public panel model.
+    const panel = header && api.panels?.find((/** @type {any} */ p)=>p.view?.content?.element?.contains(header));
+    const overlay = header?.closest('.dv-resize-container') ?? panel?.group?.element?.closest('.dv-resize-container');
+    if (!overlay || !root.contains(overlay)) return;
+    const group = api.groups.find((/** @type {any} */ g)=>g.api.location.type === 'floating' && overlay.contains(g.element));
+    if (!group) return;
+    cancel();
+    event.preventDefault(); event.stopPropagation();
+    const nonce = doc.querySelector('meta[name$="-style-nonce"]')?.getAttribute('content');
+    // Refuse the gesture if the authenticated stylesheet channel is unavailable.
+    if (!nonce) return;
+    group.api.setActive();
+    const sheet = doc.createElement('style'); sheet.setAttribute('nonce',nonce);
+    doc.head.appendChild(sheet);
+    const token = String(++floatingDragSerial);
+    overlay.setAttribute('data-wall-drag',token);
+    const content = (panel ?? group.activePanel)?.view?.content?.element?.closest('.dv-render-overlay');
+    content?.setAttribute('data-wall-drag',token);
+    const wall = overlay.parentElement.getBoundingClientRect(), box = overlay.getBoundingClientRect();
+    const start = {x:box.left-wall.left,y:box.top-wall.top,width:box.width,height:box.height};
+    const origin = {x:event.clientX-wall.left,y:event.clientY-wall.top};
+    let control = event.ctrlKey;
+    let moved = false;
+    const preview = doc.createElement('div');
+    preview.className = 'wall-snap-preview'; preview.setAttribute('aria-hidden','true');
+    preview.hidden = true;
+    preview.setAttribute('data-wall-snap',token);
+    overlay.parentElement.appendChild(preview);
+    const bounds = (/** @type {any} */ e) => floatDragBounds(start,origin,{x:e.clientX-wall.left,y:e.clientY-wall.top,ctrlKey:control},wall.width,wall.height,grid());
+    const paint = (/** @type {any} */ e) => {
+      const rect = bounds(e);
+      preview.hidden = !control;
+      sheet.textContent = `[data-wall-snap="${token}"]{left:${rect.x}px;top:${rect.y}px;width:${rect.width}px;height:${rect.height}px}
+[data-wall-drag="${token}"]{transform:translate(${e.clientX-event.clientX}px,${e.clientY-event.clientY}px)}`;
+    };
+    const move = (/** @type {any} */ e) => {
+      if (e.pointerId !== event.pointerId) return;
+      if (!moved && Math.abs(e.clientX-event.clientX)+Math.abs(e.clientY-event.clientY) > 3) {moved = true; custom();}
+      if (moved) paint(e);
+    };
+    const key = (/** @type {any} */ e) => {
+      if (e.key !== 'Control') return;
+      control = e.type === 'keydown';
+      if (moved) paint({clientX:point.x,clientY:point.y});
+    };
+    let point = {x:event.clientX,y:event.clientY};
+    const track = (/** @type {any} */ e) => {if(e.pointerId === event.pointerId) {control=e.ctrlKey; point={x:e.clientX,y:e.clientY}; move(e);}};
+    const cleanup = () => {
+      overlay.removeAttribute('data-wall-drag'); content?.removeAttribute('data-wall-drag'); preview.remove(); sheet.remove();
+      for (const [name,fn] of /** @type {Array<[string,EventListener]>} */ ([['pointermove',track],['pointerup',up],['pointercancel',abort],['keydown',key],['keyup',key],['visibilitychange',abort]])) doc.removeEventListener(name,fn,true);
+      doc.defaultView?.removeEventListener('blur',abort);
+      cancel = () => {};
+    };
+    const abort = () => cleanup();
+    const up = (/** @type {any} */ e) => {
+      if (e.pointerId !== event.pointerId) return;
+      control = e.ctrlKey;
+      const rect = bounds(e); cleanup();
+      if (moved) {api.addFloatingGroup(group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true}); complete();}
+      else group.api.setActive();
+    };
+    cancel = cleanup;
+    for (const [name,fn] of /** @type {Array<[string,EventListener]>} */ ([['pointermove',track],['pointerup',up],['pointercancel',abort],['keydown',key],['keyup',key],['visibilitychange',abort]])) doc.addEventListener(name,fn,true);
+    doc.defaultView?.addEventListener('blur',abort);
+  };
+  // Dockview installs its own overlay handlers. Capture on the document before
+  // those handlers, while keeping ownership restricted to this wall's floats.
+  doc.addEventListener('pointerdown',down,true);
+  return () => {cancel(); doc.removeEventListener('pointerdown',down,true);};
+}
+
 // Presentation only: no capsule geometry, ownership, or lifecycle operations.
 export const TILE_PRESETS = Object.freeze(['single','side-by-side','grid','focus-strip','floating']);
 
@@ -22,7 +121,9 @@ export function presetRectangles(preset, tiles, width, height) {
   const count = visible.length;
   return visible.map((tile, index) => {
     if (preset === 'floating') {
-      const w = Math.min(640, Math.max(240,width * .6),width), h = Math.min(480,Math.max(200,height * .65),height);
+      // [TARGET, unit decision] Preserve the full available height for chrome
+      // and the frame; avoid fixed pixel caps on large and short workspaces.
+      const w = Math.floor(width * .9), h = height;
       return {id:tile.id,x:Math.min(24 * index, Math.max(0,width-w)),y:Math.min(24 * index,Math.max(0,height-h)),width:w,height:h};
     }
     if (preset === 'single') return {id:tile.id,x:0,y:0,width,height};
@@ -1030,11 +1131,12 @@ export const WallMissingPanel = defineComponent({
 });
 </script>
 <script setup>
-import { markRaw, onBeforeUnmount, useSlots } from 'vue';
+import { markRaw, onBeforeUnmount, ref, useSlots } from 'vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
 import SurfacePanel from './SurfacePanel.vue';
 
 const props = defineProps({
+  snapGrid: {type: /** @type {import('vue').PropType<{cols:number,rows:number}>} */ (Object), default:()=>({cols:2,rows:2})},
   workspaceComponent: { type: Object, default: () => DockWorkspace },
   scope: {
     type: /** @type {import('vue').PropType<KitLayoutScope>} */ (Object),
@@ -1078,6 +1180,8 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
+  'custom-layout',
+  'snap-grid-change',
   'ready',
   'wall-settled',
   'layout-saved',
@@ -1093,6 +1197,12 @@ const emit = defineEmits([
 const controller = createWallWorkspaceController({ projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
 const callbacks = controller.createPanelCallbacks(emit);
 
+const wallRoot = ref(null);
+let releaseDrag = () => {};
+function changeGrid(/** @type {'cols'|'rows'} */ axis, /** @type {Event} */ event) {
+  const value = Number(/** @type {HTMLSelectElement} */ (event.target).value);
+  emit('snap-grid-change',{...props.snapGrid,[axis]:value});
+}
 const slots = useSlots();
 const surfaceSlot = slots.surface ?? null;
 
@@ -1103,7 +1213,10 @@ const viewportHeight = WALL_INITIAL_VIEWPORT_HEIGHT;
  * @param {unknown} payload
  */
 function onReady(payload) {
-  controller.handleReady(payload);
+  const accepted = controller.handleReady(payload);
+  releaseDrag();
+  if (accepted.ok && /** @type {any} */ (wallRoot.value)?.ownerDocument && /** @type {any} */ (payload)?.api) releaseDrag = installFloatingDrag(wallRoot.value,/** @type {any} */ (payload).api,
+    ()=>props.snapGrid,()=>{controller.setPreset(null); emit('custom-layout');},()=>{void /** @type {any} */ (payload).host?.completeUserGesture?.();});
   emit('ready', payload);
 }
 
@@ -1217,12 +1330,18 @@ presetTimer.unref?.();
 defineExpose({ revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
 
 onBeforeUnmount(() => {
+  releaseDrag();
   clearInterval(presetTimer);
   controller.dispose();
 });
 </script>
 <template>
-  <div class="wall-workspace" data-testid="wall-workspace">
+  <div ref="wallRoot" class="wall-workspace" data-testid="wall-workspace">
+    <div class="wall-grid-controls" aria-label="Workspace snap grid">
+      <label>Columns <select :id="`${ownerWindowId}-snap-columns`" :data-semantic-anchor="`workspace/${ownerWindowId}/snap-columns`" aria-label="Workspace snap columns" :value="snapGrid.cols" @change="changeGrid('cols',$event)"><option v-for="n in 5" :key="n" :value="n">{{n}}</option></select></label>
+      <label>Rows <select :id="`${ownerWindowId}-snap-rows`" :data-semantic-anchor="`workspace/${ownerWindowId}/snap-rows`" aria-label="Workspace snap rows" :value="snapGrid.rows" @change="changeGrid('rows',$event)"><option v-for="n in 5" :key="n" :value="n">{{n}}</option></select></label>
+      <span>Hold Control while dragging to snap</span>
+    </div>
     <component :is="props.workspaceComponent"
       :scope="props.scope"
       :storage="props.storage"
@@ -1246,7 +1365,11 @@ onBeforeUnmount(() => {
   </div>
 </template>
 <style>
-.wall-workspace {
+.wall-grid-controls { display:flex; gap:12px; align-items:center; padding:4px 8px; font-size:12px; }
+.wall-grid-controls select { color:inherit; background:var(--mv-panel-bg,Canvas); }
+.wall-snap-preview { position:absolute; pointer-events:none; z-index:9999; box-sizing:border-box; border:2px solid Highlight; background:color-mix(in srgb,Highlight 20%,transparent); }
+.wall-workspace > .mv-dock-workspace { flex:1; height:0; min-height:0; }
+.wall-workspace { display:flex; flex-direction:column;
   /* Contain Dockview sashes below sibling full-screen app panels. */
   position: relative;
   z-index: 0;
