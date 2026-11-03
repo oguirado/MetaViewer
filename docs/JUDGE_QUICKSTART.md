@@ -196,15 +196,17 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 `:101`, `mv-live-3` on `:102`, `mv-live-4` on `:103`):
 
 - Switch between **`Humans`** and **`Agents`** views (`Ctrl+Tab`), create virtual
-  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`Single`, `Side by side`,
-  `Grid`, `Focus + strip`, `Floating`).
+  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1 tile`, `2 side by side`,
+  `2×2`, `Focus + strip`, `Floating layout`).
 - Click **`＋ Add capsule`** to launch an **`Identity browser`**, a Linux **`Program`**
   (inside `opensuperficies-program-host:0.1.0`), or capture an X11 **`Desktop window`**.
-- Log into a site in human mode, click **`Mark as logged in`** to hand the capsule to
-  agent mode, watch live read-only, or click **`Take control (emergency)`**.
+- Log into a site in human mode and click **`Mark as logged in`** to save its login
+  status. Then choose **`Switch to agent mode`** separately to hand the capsule to
+  the agent; watch live read-only, or click **`Take control (emergency)`**.
 - Click **`ID`** (**`Copy ID for AI`**), open **`More ▾ -> Terminal`**, click
-  **`🚀 Bootstrap`**, or open **`More ▾ -> Use MetaViewer`** to connect an AI CLI.
-- Record a workflow and run **`More ▾ -> Automate from a demo`** (or `mw_run`).
+  **`🚀 Bootstrap`**, or click the top-bar **`Use MetaViewer`** button to connect an AI CLI.
+- Record a workflow and run `mw_run` from the terminal. There is no
+  **`Automate from a demo`** menu action.
   Full step-by-step instructions: [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md).
 
 ## 5. Stop

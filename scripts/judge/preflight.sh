@@ -233,13 +233,14 @@ chk_userns() {
 }
 
 chk_display() {
-    command -v xdpyinfo >/dev/null 2>&1 || return 0
     if [ -z "${DISPLAY:-}" ]; then # MUT:JUDGE_DISPLAY
         if [ -n "${WAYLAND_DISPLAY:-}" ]; then
             refuse JUDGE_DISPLAY "Wayland-only session: DISPLAY is empty so there is no XWayland" "enable XWayland (WSLg provides it) or run under xvfb-run"
         else
             refuse JUDGE_DISPLAY "DISPLAY is not set" "xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY)"
         fi
+    elif ! command -v xdpyinfo >/dev/null 2>&1; then
+        refuse JUDGE_DISPLAY "xdpyinfo is missing; display reachability is unverified" "sudo apt-get install -y x11-utils, then re-run doctor"
     elif ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
         refuse JUDGE_DISPLAY "the X server at DISPLAY=$DISPLAY is not reachable" "xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY)"
     fi
@@ -284,6 +285,8 @@ chk_ram() {
     rec=$((floor + 4194304))
     if [ "$avail" -lt "$need" ]; then # MUT:JUDGE_RAM
         refuse JUDGE_RAM "MemAvailable is $(kib_mib "$avail") MiB [MEASURED], minimum $(kib_mib "$need") MiB [TARGET] needed (floor $(kib_mib "$floor") MiB + 512 MiB capsule reserve)" "close applications, add RAM, or (WSL2) raise memory= in .wslconfig"
+    elif [ "$avail" -lt 6291456 ]; then
+        note "warning (JUDGE_RAM): UI capsule creation is refused below 6144 MiB [CITED] MemAvailable (capsule RAM plus shared memory); close applications or add RAM before Add capsule"
     elif [ "$avail" -lt "$rec" ]; then
         note "warning (JUDGE_RAM): MemAvailable is $(kib_mib "$avail") MiB [MEASURED], below recommended $(kib_mib "$rec") MiB [TARGET] for multi-capsule runs; single capsule can run"
     fi

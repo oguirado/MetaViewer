@@ -191,6 +191,20 @@ running_pid() {
     if pid_alive "$pid"; then printf '%s' "$pid"; fi
 }
 
+# [TARGET, unit decision] One owner spans the check, install/launch and cleanup.
+# Keep the locked descriptor in the launcher; children must not retain it.
+lock_launcher() {
+    mkdir -p "$JUDGE_HOME/run" && chmod 0700 "$JUDGE_HOME" "$JUDGE_HOME/run" ||
+        fail JUDGE_PIDFILE "cannot create launcher lock directory" "make $JUDGE_HOME writable"
+    exec 9>"$JUDGE_HOME/run/launcher.lock" || fail JUDGE_PIDFILE "cannot open launcher lock" "make $JUDGE_HOME/run writable"
+    python3 -c 'import fcntl; fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)' 2>/dev/null ||
+        fail JUDGE_RUNNING "another launcher owns run or install" "wait for install to finish, or run: bash $0 stop"
+}
+
+remove_owned_pid() {
+    [ "$(head -n 1 "$PIDFILE" 2>/dev/null)" != "$1" ] || rm -f -- "$PIDFILE"
+}
+
 tar_names_ok() { # file, ERE every member name must match
     local names
     names=$(tar -tf "$1" 2>/dev/null) || return 1
@@ -317,8 +331,15 @@ step_extract_app() {
     tar --no-same-owner -pxf "$ASSET_DIR/$asset" -C "$work" || fail JUDGE_ASSET "cannot unpack $asset" "download $asset again from $RELEASE_BASE"
     [ -x "$work/MetaViewer-linux-$ARCHN/metaviewer" ] || fail JUDGE_ASSET "$asset holds no executable MetaViewer-linux-$ARCHN/metaviewer" "download the tarball for $ARCHN"
     rm -rf -- "$JUDGE_HOME/app.old"
-    [ -d "$APP_ROOT" ] && mv -- "$APP_ROOT" "$JUDGE_HOME/app.old"
-    mv -- "$work" "$APP_ROOT"
+    if [ -d "$APP_ROOT" ]; then
+        mv -- "$APP_ROOT" "$JUDGE_HOME/app.old" || fail JUDGE_ASSET "cannot preserve installed app" "make $JUDGE_HOME writable and retry install"
+    fi
+    if ! mv -- "$work" "$APP_ROOT"; then
+        if [ -d "$JUDGE_HOME/app.old" ]; then
+            mv -- "$JUDGE_HOME/app.old" "$APP_ROOT" || fail JUDGE_ASSET "cannot restore installed app from app.old" "restore $JUDGE_HOME/app.old to $APP_ROOT before retrying"
+        fi
+        fail JUDGE_ASSET "cannot publish extracted app; previous install preserved" "make $JUDGE_HOME writable and retry install"
+    fi
     rm -rf -- "$JUDGE_HOME/app.old"
 }
 
@@ -388,10 +409,27 @@ step_images() {
 }
 
 step_profile() {
-    local pid p st idver=0.1.1 admin=$JUDGE_HOME/deps/opensuperficies/bin/srf-identity-admin
+    local pid p st pool= idver=0.1.1 admin=$JUDGE_HOME/deps/opensuperficies/bin/srf-identity-admin
+    if [ -n "${MV_SRF_PROFILES:-}" ]; then
+        pool=$(python3 -c '
+import json, re, sys
+try:
+    pool = json.loads(sys.argv[1])
+    if not isinstance(pool, dict) or not pool:
+        raise ValueError()
+    for name, spec in pool.items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name) or not isinstance(spec, dict):
+            raise ValueError()
+        if spec.get("Kind") == "browser" or spec.get("NativeKind") == "browser":
+            print(name)
+except (ValueError, TypeError):
+    sys.exit(2)
+' "$MV_SRF_PROFILES") || fail JUDGE_PROFILE "MV_SRF_PROFILES is not a valid profile pool" "set a valid profile pool and retry install --capsules"
+    fi
     [ "$(net_mode_now)" = open ] && idver=0.2.0
     mkdir -p "$STORE/identities" "$STORE/profiles" && chmod 0700 "$STORE" "$STORE/identities" "$STORE/profiles" || fail JUDGE_PROFILE "cannot create $STORE/profiles" "choose a writable SRF_IDENTITY_STORE_ROOT"
-    for pid in "$PROFILE_ID" mv-live-1 mv-live-2 mv-live-3 mv-live-4; do
+    while IFS= read -r pid; do
+        [ -n "$pid" ] || continue
         if [ -x "$admin" ] && [ ! -f "$STORE/metadata/$pid.json" ]; then
             "$admin" create --store-root "$STORE" --id "$pid" --label "$pid" --domains example.com >/dev/null 2>&1 || true
         fi
@@ -406,7 +444,7 @@ step_profile() {
             "opensuperficies-identity-browser-$ARCHN:$idver" \
             -c 'mkdir -p "$1" && chown 10001:10001 "$1" && chmod 0700 "$1"' -- "/profiles/$pid" >/dev/null 2>&1 ||
             fail JUDGE_PROFILE "cannot provision $p via Docker" "docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=$STORE/profiles,dst=/profiles opensuperficies-identity-browser-$ARCHN:$idver -c 'mkdir -p /profiles/$pid && chown 10001:10001 /profiles/$pid && chmod 0700 /profiles/$pid'"
-    done
+    done < <(printf '%s\n' "$PROFILE_ID" mv-live-1 mv-live-2 mv-live-3 mv-live-4 "$pool")
     p="$STORE/profiles/$PROFILE_ID"
     st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
     [ "$st" = "700 10001" ] || fail JUDGE_PROFILE "profile directory $p is not mode 0700 owned by uid 10001 (found '${st:-absent}')" "docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=$STORE/profiles,dst=/profiles opensuperficies-identity-browser-$ARCHN:$idver -c 'mkdir -p /profiles/$PROFILE_ID && chown 10001:10001 /profiles/$PROFILE_ID && chmod 0700 /profiles/$PROFILE_ID'"
@@ -519,10 +557,12 @@ write_receipt() {
 
 cmd_install() {
     local assets_used
+    lock_launcher
     [ -z "$(running_pid)" ] || fail JUDGE_RUNNING "MetaViewer is running" "bash $0 stop"
     mkdir -p "$JUDGE_HOME" && chmod 0700 "$JUDGE_HOME" || fail JUDGE_ASSET "cannot create $JUDGE_HOME" "set MV_JUDGE_HOME to a writable directory"
     pf_or_exit --tier "$TIER" --phase static
     step_sysdeps
+    [ "$TIER" != T2 ] || pf_or_exit --tier "$TIER" --phase static
     step_node
     pf_or_exit --tier "$TIER" --phase display
     step_extract_app
@@ -562,6 +602,7 @@ receipt_tier() { sed -n 's/^  "tier": "\(T[0-2]\)",\{0,1\}$/\1/p' "$RECEIPT" 2>/
 cmd_run() {
     local pid tier v rc child dest statedir ramroot profiles_json p2 p3 p4 rjson
     local -a envv
+    lock_launcher
     if [ ! -x "$APP_BIN" ] || [ ! -f "$RECEIPT" ]; then # MUT:JUDGE_NOT_INSTALLED
         fail JUDGE_NOT_INSTALLED "MetaViewer is not installed under $JUDGE_HOME" "bash $0 install [--capsules]"
     fi
@@ -623,7 +664,7 @@ cmd_run() {
         fi
     fi
     mkdir -p "$JUDGE_HOME/run"
-    env -i "${envv[@]}" "$APP_BIN" --ozone-platform=x11 &
+    env -i "${envv[@]}" "$APP_BIN" --ozone-platform=x11 9>&- &
     child=$!
     if ! printf '%s\n' "$child" >"$PIDFILE"; then
         # A child without a published PID cannot be recovered by a later stop.
@@ -646,7 +687,7 @@ cmd_run() {
         rc=$?
         kill -0 "$child" 2>/dev/null || break
     done
-    rm -f -- "$PIDFILE"
+    remove_owned_pid "$child"
     return "$rc"
 }
 
@@ -667,7 +708,7 @@ cmd_stop() {
     else
         say "no running MetaViewer process"
     fi
-    rm -f -- "$PIDFILE"
+    remove_owned_pid "$pid"
     local statedir="${MV_SRF_STATE_DIR:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf}"
     if [ -x "$SRF_BIN/srf-identity-surface" ] && command -v docker >/dev/null 2>&1; then
         while IFS= read -r name; do
@@ -689,6 +730,26 @@ cmd_stop() {
             [ -n "$name" ] || continue
             leaks=$((leaks + 1))
             printf 'JUDGE_STOP_LEAK: socket %s is still present -- fix: rm -- %q\n' "$name" "$name" >&2
+        done < <(find "$f" -maxdepth 3 -name '*.sock' 2>/dev/null)
+    done
+    # Census only: private package sessions and host/display roots have no
+    # reliable absence witness here. Never remove them or foreign resources.
+    local temp_root=${TMPDIR:-$JUDGE_HOME/run/unconfigured-private-runtime}
+    if [ -z "${TMPDIR:-}" ]; then
+        note "private packaged runtime census incomplete: TMPDIR is unset; shared /tmp roots cannot be attributed to this install. Set a dedicated TMPDIR for run and stop to census them."
+    fi
+    for f in "$temp_root"/mv-pkg-* "$SHM"/mv-host-xpra-* "${MV_DISPLAY_DIR:-$SHM/metaviewer-display-$UID_NOW}"; do
+        [ -d "$f" ] && [ ! -L "$f" ] || continue
+        # The display publisher retains its empty directory skeleton on close.
+        if [ "$f" = "${MV_DISPLAY_DIR:-$SHM/metaviewer-display-$UID_NOW}" ] &&
+            [ -z "$(find "$f" -mindepth 1 ! -type d -print -quit 2>/dev/null)" ]; then
+            continue
+        fi
+        leaks=$((leaks + 1))
+        printf 'JUDGE_STOP_LEAK: private runtime/RAM root %s is still present -- fix: verify its owning processes have exited before removing it\n' "$f" >&2
+        while IFS= read -r name; do
+            [ -n "$name" ] || continue
+            printf 'JUDGE_STOP_LEAK: private socket %s is still present -- fix: verify its owning processes have exited before removing it\n' "$name" >&2
         done < <(find "$f" -maxdepth 3 -name '*.sock' 2>/dev/null)
     done
     ram=$SHM/vqa-ramws/opensuperficies/os-cu-0
