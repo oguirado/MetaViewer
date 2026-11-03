@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,7 +27,7 @@ async function loadApp(captured) {
     './terminal/SideTerminalOverlay.vue': overlay, './multislot/MultislotHost.vue': stub,
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': settings,
     './agent/AgentLaneHost.vue': stub, './surfaces/SurfaceCanvas.vue': stub,
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   const { descriptor } = parse(readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8'));
   const compiled = compileScript(descriptor, { id: 'f3-app', inlineTemplate: true });

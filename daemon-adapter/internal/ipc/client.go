@@ -206,6 +206,7 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		return loopErr
 	}
 	first := true
+	capsuleHelloSeen := false
 	var ctrlGate <-chan struct{}
 	for {
 		raw, err := framer.Read(ctx)
@@ -225,13 +226,18 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 			fail(err)
 			return exitLoop(err)
 		}
-		if in.Schema != "envelope/v0.2" || in.From != registration.From || in.To != registration.To || in.SessionID != registration.SessionID || in.Seq == 0 || in.Nonce == "" {
+		if in.Schema != EnvelopeSchema(in.Body) || in.From != registration.From || in.To != registration.To || in.SessionID != registration.SessionID || in.Seq == 0 || in.Nonce == "" {
 			err = errors.New("registered core route refused")
 			fail(err)
 			return exitLoop(err)
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
-		if !isHello && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" {
+		if in.Schema == "capsule_envelope/v0.2" && !capsuleHelloSeen {
+			err = errors.New("authenticated core hello required before requests")
+			fail(err)
+			return exitLoop(err)
+		}
+		if !isHello && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)
@@ -248,6 +254,7 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		}
 		first = false
 		if isHello {
+			capsuleHelloSeen = true
 			continue
 		}
 		var op struct{ Op string }

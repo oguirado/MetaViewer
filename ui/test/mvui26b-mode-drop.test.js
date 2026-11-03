@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI26B lane M: the shared input mode drops to READ when control leaves
 // human or the selected surface goes away. Mounts the REAL App with stub
@@ -71,7 +73,7 @@ async function loadDropApp(captured) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': canvasStub,
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `v-drop-${++appSerial}`, inlineTemplate: true });

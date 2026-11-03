@@ -37,6 +37,8 @@ import uuid
 import signal
 import subprocess
 import sys
+import hashlib
+import importlib.util
 from urllib.parse import urlsplit
 
 SCHEMA = "metaviewer.identity/v1"
@@ -69,6 +71,159 @@ HINTS = {
 
 class Refused(Exception):
     pass
+
+
+def normal_read(path, limit=131072, private_file=True, sync=False):
+    """Normal-mode control/source metadata only; never browser payload data."""
+    p = Path(path)
+    if not p.is_absolute() or str(p.resolve(strict=True)) != str(p):
+        raise Refused('INVENTORY_CUSTODY')
+    fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        before = os.fstat(fd)
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid not in (0, os.getuid())
+                or before.st_mode & 0o022 or not 0 < before.st_size <= limit
+                or (private_file and (before.st_uid != os.getuid() or before.st_mode & 0o077))):
+            raise Refused('INVENTORY_CUSTODY')
+        raw = os.read(fd, limit + 1)
+        if sync:
+            os.fsync(fd)
+        fields = ('st_dev','st_ino','st_mode','st_uid','st_gid','st_nlink','st_size','st_mtime_ns','st_ctime_ns')
+        after, now = os.fstat(fd), p.lstat()
+        if len(raw) != before.st_size or any(getattr(before,k) != getattr(after,k) or getattr(before,k) != getattr(now,k) for k in fields):
+            raise Refused('INVENTORY_CUSTODY')
+        return raw
+    finally:
+        os.close(fd)
+
+
+def normal_json(raw):
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise Refused('INVENTORY_JSON')
+            result[key] = value
+        return result
+    return json.loads(raw.decode('utf-8','strict'), object_pairs_hook=pairs,
+        parse_constant=lambda _: (_ for _ in ()).throw(Refused('INVENTORY_JSON')))
+
+
+def _normal_inventory(tool):
+    mode = os.environ.get('MV_ARM64_CAPSULES', '')
+    if not mode:
+        return None
+    if mode != '1' or not os.environ.get('MV_ARM64_INVENTORY_CONFIG'):
+        raise Refused('INVENTORY_REQUIRED')
+    config_path = Path(os.environ['MV_ARM64_INVENTORY_CONFIG'])
+    config = normal_json(normal_read(config_path))
+    root = Path(config['root'])
+    private(root)
+    if (config_path != root / 'inventory-config.json' or tool.root != root / 'store'
+            or not config.get('images', {}).get('browser')):
+        raise Refused('INVENTORY_CONTEXT')
+    snapshot = normal_read(root / 'setup.json')
+    if hashlib.sha256(snapshot).hexdigest() != config['registry_sha256']:
+        raise Refused('INVENTORY_CONTEXT')
+    descriptor = normal_json(snapshot)
+    own = descriptor['identity_provisioner']
+    if (own != config['identity_provisioner'] or own['path'] != str(Path(__file__).resolve())
+            or hashlib.sha256(normal_read(own['path'], 1 << 20, False)).hexdigest() != own['sha256']):
+        raise Refused('INVENTORY_SOURCE')
+    pin = descriptor['reconciler']
+    if (Path(pin['path']) != Path(__file__).resolve().with_name('arm64_capsule_reconcile.py')
+            or hashlib.sha256(normal_read(pin['path'], 1 << 20, False)).hexdigest() != pin['sha256']):
+        raise Refused('INVENTORY_SOURCE')
+    spec = importlib.util.spec_from_file_location('identity_inventory', pin['path'])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    checked, _ = module.load_config(config_path)
+    if checked != config:
+        raise Refused('INVENTORY_CONTEXT')
+    expected_bin = Path(descriptor['native']['srf-identity-admin']['path']).parent
+    if tool.bin_dir != expected_bin:
+        raise Refused('INVENTORY_CONTEXT')
+    return module, config_path, config
+
+
+def normal_inventory(tool):
+    try:
+        return _normal_inventory(tool)
+    except Refused:
+        raise
+    except (KeyError, TypeError, ValueError, OSError, ImportError) as error:
+        raise Refused('INVENTORY_REQUIRED') from error
+
+
+def identity_append(context, payload):
+    module, path, _ = context
+    return module.append_identity_helper(path, {'producer': 'setup', **payload}, Path(__file__).resolve())
+
+
+def normal_cid(path):
+    raw = normal_read(path, 128, sync=True)
+    value = (raw[:-1] if raw.endswith(b'\n') else raw).decode('ascii','strict')
+    if not re.fullmatch('[0-9a-f]{64}', value):
+        raise Refused('INVENTORY_CID')
+    return value
+
+
+def normal_absent(cid):
+    p = subprocess.run(['/usr/bin/docker','container','ls','--all','--no-trunc','--format','{{.ID}}'],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=False)
+    if type(p.returncode) is not int or p.returncode != 0 or len(p.stdout) > 1 << 20:
+        raise Refused('INVENTORY_ABSENCE_UNKNOWN')
+    rows = p.stdout.decode('ascii','strict').splitlines()
+    if not all(re.fullmatch('[0-9a-f]{64}', row) for row in rows):
+        raise Refused('INVENTORY_ABSENCE_UNKNOWN')
+    return cid not in rows
+
+
+def normal_helper_owned(cid, name, image, target, run_id, script, identity):
+    identity_format = ('[{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},'
+                       '"Run":{{json (index .Config.Labels "metaviewer.arm64-run")}}}]')
+    p = subprocess.run(['/usr/bin/docker','container','inspect',cid,'--format',identity_format], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=False)
+    if type(p.returncode) is not int or p.returncode != 0 or len(p.stdout) > 4096:
+        return False
+    first = normal_json(p.stdout)
+    if (type(first) is not list or len(first) != 1 or type(first[0]) is not dict
+            or first[0] != {'Id':cid,'Name':'/'+name,'Image':image,'Run':run_id}):
+        return False
+    # Select only required fields; never read Config.Env or unrelated metadata.
+    observed_format = ('[{"Id":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},'
+        '"Config":{"Labels":{"metaviewer.arm64-run":{{json (index .Config.Labels "metaviewer.arm64-run")}}},'
+        '"Entrypoint":{{json .Config.Entrypoint}},"User":{{json .Config.User}},"Cmd":{{json .Config.Cmd}}},'
+        '"HostConfig":{"NetworkMode":{{json .HostConfig.NetworkMode}},"AutoRemove":{{json .HostConfig.AutoRemove}},'
+        '"Privileged":{{json .HostConfig.Privileged}},"Memory":{{json .HostConfig.Memory}},'
+        '"MemorySwap":{{json .HostConfig.MemorySwap}},"PidsLimit":{{json .HostConfig.PidsLimit}},'
+        '"NanoCpus":{{json .HostConfig.NanoCpus}},"SecurityOpt":{{json .HostConfig.SecurityOpt}}},'
+        '"Mounts":{{json .Mounts}}}]')
+    p = subprocess.run(['/usr/bin/docker','container','inspect',cid,'--format',observed_format], stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5, check=False)
+    if type(p.returncode) is not int or p.returncode != 0 or len(p.stdout) > 131072:
+        return False
+    rows = normal_json(p.stdout)
+    if type(rows) is not list or len(rows) != 1 or type(rows[0]) is not dict:
+        return False
+    obj = rows[0]
+    config, host = obj.get('Config', {}), obj.get('HostConfig', {})
+    mounts = obj.get('Mounts', [])
+    if (type(config) is not dict or type(host) is not dict or type(mounts) is not list
+            or len(mounts) != 1 or type(mounts[0]) is not dict
+            or type(config.get('Labels')) is not dict):
+        return False
+    return (obj.get('Id') == cid and obj.get('Name') == '/' + name and obj.get('Image') == image
+        and config.get('Labels', {}).get('metaviewer.arm64-run') == run_id
+        and config.get('Entrypoint') == ['/bin/sh'] and config.get('User') == '0'
+        and config.get('Cmd') == ['-c', script, 'mv-profile-helper', identity]
+        and host.get('NetworkMode') == 'none' and host.get('AutoRemove') is True
+        and host.get('Privileged') is False and host.get('Memory') == 128 * 1024**2
+        and host.get('MemorySwap') == 128 * 1024**2 and host.get('PidsLimit') == 16
+        and host.get('NanoCpus') == 250000000
+        and host.get('SecurityOpt') in (['no-new-privileges'], ['no-new-privileges=true'])
+        and len(mounts) == 1 and mounts[0].get('Type') == 'bind'
+        and mounts[0].get('Source') == str(target.parent) and mounts[0].get('Destination') == '/profiles')
 
 
 class Parser(argparse.ArgumentParser):
@@ -167,6 +322,10 @@ class Identities:
             private(self.root)
 
     def native(self, binary, args, timeout=180, absent_ok=False):
+        if os.environ.get('MV_ARM64_CAPSULES') and binary == 'srf-identity-surface':
+            context = normal_inventory(self)
+            identity_append(context, {'stage': 'unknown', 'id': 'identity-mutation-' + uuid.uuid4().hex[:24],
+                                     'reason': 'direct_native_surface_mutation'})
         try:
             p = subprocess.run([str(self.bin_dir / binary), *args], stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=timeout,
@@ -197,6 +356,8 @@ class Identities:
                                      "created_unix", "last_login_unix") if k in result}
 
     def create(self, identity, label, domains="", browser="browser"):
+        if os.environ.get('MV_ARM64_CAPSULES'):
+            normal_inventory(self)  # Before even metadata-only create/reclaim.
         fresh_id(identity, self.live_profile)
         if not label or label != label.strip() or len(label) > 128 or any(ord(c) < 32 for c in label):
             raise Refused("INVALID_LABEL")
@@ -336,6 +497,7 @@ class Identities:
     def profile_helper(self, identity, remove=False):
         identity = operational_id(identity)
         target = self.profile_path(identity)
+        context = normal_inventory(self)
         # Removal retains the entry until success. Delete holds the native guard
         # and this check refuses removal of any actively leased profile.
         if remove:
@@ -350,7 +512,7 @@ class Identities:
                 raise Refused("IDENTITY_BOUND")
         else:
             self.show(identity)
-        image = profile_image()
+        image = context[2]['images']['browser'] if context else profile_image()
         name = "mv-provision-" + identity + "-" + uuid.uuid4().hex[:12]
         receipts = self.root / "locks" / "profile-helpers"
         receipts.mkdir(mode=0o700, exist_ok=True)
@@ -368,11 +530,36 @@ class Identities:
                    "--network", "none", "--user", "0", "--entrypoint", "/bin/sh",
                    "--mount", "type=bind,src=" + str(target.parent) + ",dst=/profiles",
                    image, "-c", script, "mv-profile-helper", identity]
+        bound = False
+        if context:
+            if not target.exists():
+                target.mkdir(mode=0o700)
+            before = target.lstat()
+            if not stat.S_ISDIR(before.st_mode) or stat.S_IMODE(before.st_mode) != 0o700:
+                raise Refused('INVENTORY_PAYLOAD')
+            command[0] = '/usr/bin/docker'
+            command[2:2] = ['--label', 'metaviewer.arm64-run=' + context[2]['run_id']]
+            command[2:2] = ['--memory','128m','--memory-swap','128m','--pids-limit','16',
+                            '--cpus','0.25','--security-opt','no-new-privileges']
+            if remove:
+                identity_append(context, {'stage':'unknown', 'id':'identity-mutation-' + uuid.uuid4().hex[:24],
+                                         'reason':'direct_identity_profile_remove'})
+            identity_append(context, {'stage':'helper_pending', 'id':name, 'name':name, 'image_id':image,
+                'payload':str(target), 'payload_device':before.st_dev, 'payload_inode':before.st_ino})
         try:
-            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, timeout=PROFILE_TIMEOUT, check=False)
-            if result.returncode:
+            old_umask = os.umask(0o077) if context else None
+            try:
+                result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                        stderr=subprocess.DEVNULL, timeout=PROFILE_TIMEOUT, check=False)
+            finally:
+                if old_umask is not None:
+                    os.umask(old_umask)
+            if result.returncode or (context and type(result.returncode) is not int):
                 raise Refused("PROFILE_NOT_PROVISIONED")
+            if context:
+                cid = normal_cid(cidfile)
+                identity_append(context, {'stage':'helper_bound', 'id':name, 'cid':cid})
+                bound = True
             self.profile_path(identity)  # Repeat containment after the helper.
             if remove:
                 if target.exists() or target.is_symlink():
@@ -382,21 +569,39 @@ class Identities:
                 if (not stat.S_ISDIR(st.st_mode) or st.st_uid != NATIVE_PROFILE_UID or
                         st.st_gid != NATIVE_PROFILE_UID or stat.S_IMODE(st.st_mode) != 0o700):
                     raise Refused("PROFILE_NOT_PROVISIONED")
+            if context:
+                if not remove and (st.st_dev, st.st_ino) != (before.st_dev, before.st_ino):
+                    raise Refused('INVENTORY_PAYLOAD_CHANGED')
+                if not normal_absent(cid):
+                    raise Refused('INVENTORY_ABSENCE_UNKNOWN')
+                identity_append(context, {'stage':'helper_removed', 'id':name})
             cidfile.unlink(missing_ok=True)
-        except (OSError, subprocess.TimeoutExpired, Refused) as exc:
+        except (OSError, subprocess.TimeoutExpired, Refused, ValueError) as exc:
+            if context is None and isinstance(exc, ValueError):
+                raise  # Preserve the unset-mode exception behavior.
             # A failed name-based create proves no ownership. Only Docker's
             # private CID file can authorize cleanup; never remove by name.
             cid = None
-            try:
-                fd = os.open(cidfile, os.O_RDONLY | os.O_NOFOLLOW)
-                with os.fdopen(fd, "r") as source:
-                    st = os.fstat(source.fileno())
-                    if stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_size <= 128:
-                        value = source.read(129).strip()
-                        if re.fullmatch(r"[0-9a-f]{64}", value):
-                            cid = value
-            except (OSError, UnicodeError):
-                pass
+            if context is None:
+                try:
+                    fd = os.open(cidfile, os.O_RDONLY | os.O_NOFOLLOW)
+                    with os.fdopen(fd, "r") as source:
+                        st = os.fstat(source.fileno())
+                        if stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_size <= 128:
+                            value = source.read(129).strip()
+                            if re.fullmatch(r"[0-9a-f]{64}", value):
+                                cid = value
+                except (OSError, UnicodeError):
+                    pass
+            if context:
+                try:
+                    cid = normal_cid(cidfile)
+                    if not bound:
+                        identity_append(context, {'stage':'helper_bound', 'id':name, 'cid':cid})
+                        bound = True
+                    identity_append(context, {'stage':'unknown', 'id':name, 'reason':'identity_helper_outcome_unknown'})
+                except (Refused, OSError, ValueError):
+                    cid = None  # Unbound/foreign/poisoned evidence never authorizes removal.
             if cid:
                 record = {"schema":"metaviewer.profile_helper/v1", "profile_id":identity,
                           "container_id":cid, "container_name":name, "state":"cleanup_pending"}
@@ -404,12 +609,14 @@ class Identities:
                 with os.fdopen(fd,"w") as sink:
                     json.dump(record,sink); sink.flush(); os.fsync(sink.fileno())
                 try:
-                    cleanup = subprocess.run(["docker", "rm", "-f", cid], stdin=subprocess.DEVNULL,
+                    if context and not normal_helper_owned(cid, name, image, target, context[2]['run_id'], script, identity):
+                        raise Refused('INVENTORY_HELPER_FOREIGN')
+                    cleanup = subprocess.run(["/usr/bin/docker" if context else "docker", "rm", "-f", cid], stdin=subprocess.DEVNULL,
                                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                              timeout=5, check=False)
-                    if cleanup.returncode == 0:
+                    if cleanup.returncode == 0 and not context:
                         receipt.unlink(); cidfile.unlink(missing_ok=True)
-                except (OSError, subprocess.TimeoutExpired):
+                except (OSError, subprocess.TimeoutExpired, Refused, ValueError):
                     pass  # Durable control receipt retains ownership for recovery.
 
             raise Refused("PROFILE_NOT_PROVISIONED") from exc

@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -110,7 +112,7 @@ async function loadApp(captured) {
     './wall/DesktopWorkspace.vue': wall,
     '../electron/desktopLayout.js': {createDesktopState,desktopRows},
     './surfaces/SurfaceCanvas.vue': stub,
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
     RoleSurface: roleSurface,
   };
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');

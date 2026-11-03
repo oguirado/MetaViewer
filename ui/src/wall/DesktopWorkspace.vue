@@ -10,6 +10,7 @@ defineOptions({inheritAttrs:false});
 const props = defineProps({
   storage:{type:Object,required:true}, scope:{type:/** @type {import('vue').PropType<import('capsule-ui-kit/layout').LayoutProfileScope>} */ (Object),required:true}, defaultProfile:{type:Object,required:true},
   projectionView:{type:Object,required:true},
+  workloadTiles:{type:/** @type {import('vue').PropType<Array<any>>} */ (Array),default:()=>[]},
   intentBuilders:{type:Object,required:true}, controlRegistry:{type:Object,required:true}, scheduler:{type:Object,required:true}, tileScheduler:{type:Object,required:true}, rows:{type:/** @type {import('vue').PropType<Array<{id:string,[key:string]:any}>>} */ (Array),default:()=>[]}, modes:{type:Object,default:()=>({})},
 });
 const emit = defineEmits(['ready','wall-settled','desktops-change','layout-error','navigate','activate-surface','panel-closed','submit-intent']);
@@ -67,7 +68,7 @@ function persist() {
 }
 function reconcile() {
   if (!loaded.value) return;
-  for (const row of props.rows) {
+  for (const row of [...props.rows,...props.workloadTiles]) {
     const view = props.modes[row.id] || 'agent';
     if (VIEWS.includes(view)) assignSurface(state.value,row.id,view);
   }
@@ -257,7 +258,7 @@ function onKey(event) {
 }
 /** @param {Event} event */
 const onNativeShortcut = event => shortcut(/** @type {CustomEvent} */(event).detail);
-watch(() => [props.rows,props.modes], () => {reconcile(); announce(); for (const key of ready) revealAll(key);}, {deep:true});
+watch(() => [props.rows,props.modes,props.workloadTiles], () => {reconcile(); announce(); for (const key of ready) revealAll(key);}, {deep:true});
 watch(state, () => {announce(); void persist().catch(() => {});}, {deep:true});
 onMounted(async () => {
   try {
@@ -298,6 +299,7 @@ onMounted(async () => {
       projectionSince ??= Date.now();
       if (Date.now() - projectionSince >= 5000) {
         const ids = new Set(projection.rows.filter((/** @type {any} */ row)=>row.backendLifecycle !== 'destroyed').map((/** @type {any} */ row)=>row.id));
+        for(const row of props.workloadTiles)ids.add(row.id);
         for (const id of Object.keys(state.value.assignments)) if (!ids.has(id)) {
           delete state.value.assignments[id];
           for (const seen of revealed.values()) seen.delete(id);
@@ -322,7 +324,9 @@ function forgetSurface(/** @type {string} */ id) {
   for (const seen of revealed.values()) seen.delete(id);
   cleanLayouts(state.value);
 }
-defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
+/** @param {string} id */
+function revealWorkload(id){const home=homeOf(id);if(!home)return;state.value.activeView=home.view;state.value.views[home.view].active=home.desktop;announce();return walls.get(keyOf(home.view,home.desktop))?.revealWorkload?.(id);}
+defineExpose({revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
 </script>
 <template>
   <div class="mv-desktop-workspace" :hidden="$attrs.hidden === true">
@@ -332,10 +336,11 @@ defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,appl
         :intent-builders="/** @type {any} */ (intentBuilders)" :control-registry="controlRegistry" :scheduler="scheduler" :tile-scheduler="/** @type {any} */ (tileScheduler)"
         :scope="scope" :default-profile="adapter(view,desktop.id).defaultProfile" :storage="adapter(view,desktop.id).storage"
         :identity-cells="desktop.identityCells" :snap-grid="desktop.snapGrid" @custom-layout="desktop.preset = $event ?? null" @snap-grid-change="desktop.snapGrid = $event"
-        :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
+        :workload-tiles="props.workloadTiles.filter(row=>homeOf(row.id)?.view===view&&homeOf(row.id)?.desktop===desktop.id)" :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
         @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">
         <template #surface="slotProps"><slot name="surface" v-bind="slotProps" :desktop-active="isActive(view,desktop.id)" /></template>
+        <template #workload="slotProps"><slot name="workload" v-bind="slotProps" /></template>
       </WallWorkspace>
     </template>
   </div>

@@ -1,3 +1,91 @@
+// Closed canonical guest command contracts; verify parity against contracts/v0.2.
+/** @type {Record<string,any>} */
+const GC_SCHEMAS = {"guest_command_request.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://metaviewer.local/contracts/v0.2/guest_command_request.schema.json","oneOf":[{"type":"object","properties":{"schema":{"const":"guest_command_request/v0.2"},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"op":{"const":"create"},"params":{"type":"object","properties":{"profile_id":{"const":"guest-command-arm64-v1"}},"required":["profile_id"],"additionalProperties":false}},"required":["schema","request_id","op","params"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_request/v0.2"},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"op":{"const":"run"},"params":{"type":"object","properties":{"workload_id":{"type":"string","pattern":"^workload-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":73},"generation":{"type":"integer","minimum":1,"maximum":9007199254740991},"job_id":{"type":"string","pattern":"^job-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":68},"command_utf8":{"type":"string","minLength":1,"maxLength":16384},"cwd":{"type":"string","maxLength":1024,"pattern":"^[^\\x00-\\x1f\\x7f]*$"},"stdin_b64":{"type":"string","maxLength":65536,"pattern":"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"},"timeout_ms":{"type":"integer","minimum":1,"maximum":60000}},"required":["workload_id","generation","job_id","command_utf8","cwd","stdin_b64","timeout_ms"],"additionalProperties":false}},"required":["schema","request_id","op","params"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_request/v0.2"},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"op":{"const":"cancel"},"params":{"type":"object","properties":{"workload_id":{"type":"string","pattern":"^workload-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":73},"generation":{"type":"integer","minimum":1,"maximum":9007199254740991},"job_id":{"type":"string","pattern":"^job-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":68}},"required":["workload_id","generation","job_id"],"additionalProperties":false}},"required":["schema","request_id","op","params"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_request/v0.2"},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"op":{"const":"stop"},"params":{"type":"object","properties":{"workload_id":{"type":"string","pattern":"^workload-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":73},"generation":{"type":"integer","minimum":1,"maximum":9007199254740991}},"required":["workload_id","generation"],"additionalProperties":false}},"required":["schema","request_id","op","params"],"additionalProperties":false}],"title":"guest_command_request"},"guest_command_event.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://metaviewer.local/contracts/v0.2/guest_command_event.schema.json","oneOf":[{"type":"object","properties":{"schema":{"const":"guest_command_event/v0.2"},"event_id":{"type":"string","pattern":"^event-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"reservation_id":{"type":"string","pattern":"^reservation-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":76},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"session":{"$ref":"guest_command_session.schema.json"},"event":{"const":"accepted"},"data":{"type":"object","properties":{"op":{"type":"string","enum":["create","run","cancel","stop"]}},"required":["op"],"additionalProperties":false}},"required":["schema","event_id","request_id","reservation_id","owner_id","session","event","data"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_event/v0.2"},"event_id":{"type":"string","pattern":"^event-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"reservation_id":{"type":"string","pattern":"^reservation-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":76},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"session":{"$ref":"guest_command_session.schema.json"},"event":{"const":"ready"},"data":{"type":"object","properties":{},"required":[],"additionalProperties":false}},"required":["schema","event_id","request_id","reservation_id","owner_id","session","event","data"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_event/v0.2"},"event_id":{"type":"string","pattern":"^event-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"reservation_id":{"type":"string","pattern":"^reservation-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":76},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"session":{"$ref":"guest_command_session.schema.json"},"event":{"const":"output"},"data":{"type":"object","properties":{"job_id":{"type":"string","pattern":"^job-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":68},"stream":{"type":"string","enum":["stdout","stderr"]},"chunk_index":{"type":"integer","minimum":0,"maximum":65535},"data_b64":{"type":"string","maxLength":21848,"minLength":4,"pattern":"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"}},"required":["job_id","stream","chunk_index","data_b64"],"additionalProperties":false}},"required":["schema","event_id","request_id","reservation_id","owner_id","session","event","data"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_event/v0.2"},"event_id":{"type":"string","pattern":"^event-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"reservation_id":{"type":"string","pattern":"^reservation-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":76},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"session":{"$ref":"guest_command_session.schema.json"},"event":{"const":"job_finished"},"data":{"type":"object","properties":{"job_id":{"type":"string","pattern":"^job-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":68},"cause":{"type":"string","enum":["exit","cancel","timeout","output_limit","stop"]},"stdout_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"stderr_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},"guest_job_empty":{"const":true},"cancel_request_id":{"oneOf":[{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},{"type":"null"}]},"stop_request_id":{"oneOf":[{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},{"type":"null"}]},"stdout_sent_bytes":{"type":"integer","minimum":0,"maximum":65536},"stderr_sent_bytes":{"type":"integer","minimum":0,"maximum":65536}},"required":["job_id","cause","stdout_sha256","stderr_sha256","guest_job_empty","cancel_request_id","stop_request_id","stdout_sent_bytes","stderr_sent_bytes"],"additionalProperties":false}},"required":["schema","event_id","request_id","reservation_id","owner_id","session","event","data"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_event/v0.2"},"event_id":{"type":"string","pattern":"^event-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"reservation_id":{"type":"string","pattern":"^reservation-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":76},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"session":{"$ref":"guest_command_session.schema.json"},"event":{"const":"stopped"},"data":{"type":"object","properties":{"native_absent":{"const":true}},"required":["native_absent"],"additionalProperties":false}},"required":["schema","event_id","request_id","reservation_id","owner_id","session","event","data"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_event/v0.2"},"event_id":{"type":"string","pattern":"^event-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"reservation_id":{"type":"string","pattern":"^reservation-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":76},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"session":{"oneOf":[{"$ref":"guest_command_session.schema.json"},{"type":"null"}]},"event":{"const":"refused"},"data":{"type":"object","properties":{"op":{"type":"string","enum":["create","run","cancel","stop"]},"code":{"type":"string","enum":["INVALID","OWNER","BUSY","STALE","DUPLICATE","UNAVAILABLE","DEADLINE","CAPACITY"]}},"required":["op","code"],"additionalProperties":false}},"required":["schema","event_id","request_id","reservation_id","owner_id","session","event","data"],"additionalProperties":false},{"type":"object","properties":{"schema":{"const":"guest_command_event/v0.2"},"event_id":{"type":"string","pattern":"^event-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"reservation_id":{"type":"string","pattern":"^reservation-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":76},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"session":{"oneOf":[{"$ref":"guest_command_session.schema.json"},{"type":"null"}]},"event":{"const":"outcome_unknown"},"data":{"type":"object","properties":{"op":{"type":"string","enum":["create","run","cancel","stop"]},"code":{"type":"string","enum":["TRANSPORT","DEADLINE","PROCESS_IDENTITY","STORAGE","OUTPUT_LOSS","CLEANUP","PROTOCOL"]}},"required":["op","code"],"additionalProperties":false}},"required":["schema","event_id","request_id","reservation_id","owner_id","session","event","data"],"additionalProperties":false}],"title":"guest_command_event"},"guest_command_session.schema.json":{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://metaviewer.local/contracts/v0.2/guest_command_session.schema.json","type":"object","properties":{"schema":{"const":"guest_command_session/v0.2"},"workload_id":{"type":"string","pattern":"^workload-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":73},"generation":{"type":"integer","minimum":1,"maximum":9007199254740991},"owner_id":{"type":"string","pattern":"^actor-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":70},"profile_id":{"const":"guest-command-arm64-v1"},"backend":{"const":"firecracker"},"isa":{"const":"aarch64"},"phase":{"type":"string","enum":["starting","ready","running","cancelling","awaiting_control","stopping","uncertain","stopped"]},"ownership":{"type":"string","enum":["held","released"]},"jobs_started":{"type":"integer","minimum":0,"maximum":64},"job":{"oneOf":[{"type":"object","properties":{"job_id":{"type":"string","pattern":"^job-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":68},"state":{"type":"string","enum":["running","cancelling","exited","cancelled","timed_out","output_limit","unknown"]},"exit_code":{"oneOf":[{"type":"integer","minimum":0,"maximum":255},{"type":"null"}]},"signal":{"oneOf":[{"type":"integer","minimum":1,"maximum":64},{"type":"null"}]},"stdout_bytes":{"type":"integer","minimum":0,"maximum":65536},"stderr_bytes":{"type":"integer","minimum":0,"maximum":65536},"output_complete":{"type":"boolean"}},"required":["job_id","state","exit_code","signal","stdout_bytes","stderr_bytes","output_complete"],"additionalProperties":false},{"type":"null"}]},"controls":{"type":"object","properties":{"cancel":{"oneOf":[{"type":"null"},{"type":"object","properties":{"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"ack":{"enum":["pending","accepted","refused"]}},"required":["request_id","ack"],"additionalProperties":false}]},"stop":{"oneOf":[{"type":"null"},{"type":"object","properties":{"request_id":{"type":"string","pattern":"^request-[a-z0-9][a-z0-9._-]{0,63}$","maxLength":72},"ack":{"enum":["pending","accepted","refused"]}},"required":["request_id","ack"],"additionalProperties":false}]}},"required":["cancel","stop"],"additionalProperties":false}},"required":["schema","workload_id","generation","owner_id","profile_id","backend","isa","phase","ownership","jobs_started","job","controls"],"additionalProperties":false,"title":"guest_command_session"}};
+/** @param {any} v @param {string} names */
+const gcKeys=(v,names)=>v!==null && typeof v==='object' && !Array.isArray(v) && [Object.prototype,null].includes(Object.getPrototypeOf(v)) && Reflect.ownKeys(v).every(k=>typeof k==='string' && 'value' in (Object.getOwnPropertyDescriptor(v,k)??{})) && Reflect.ownKeys(v).sort().join(',')===names;
+/** @param {any} value @param {any} schema @param {any} document @returns {boolean} */
+function gcCheck(value,schema,document){
+ if(schema.$ref){const [name,fragment='']=schema.$ref.split('#');let target=name?GC_SCHEMAS[name]:document;const doc=target;for(const key of fragment.split('/').slice(1))target=target[key.replaceAll('~1','/').replaceAll('~0','~')];if(!gcCheck(value,target,doc))return false;}
+ if(schema.oneOf && schema.oneOf.filter((/** @type {any} */ s)=>gcCheck(value,s,document)).length!==1)return false;
+ if('const' in schema && value!==schema.const)return false;
+ if(schema.enum && !schema.enum.includes(value))return false;
+ switch(schema.type){
+ case 'object':if(!gcKeys(value,Object.keys(schema.properties).sort().join(',')))return false;return Object.entries(schema.properties).every(([k,s])=>gcCheck(value[k],s,document));
+ case 'integer':return Number.isSafeInteger(value) && value>=(schema.minimum??-Number.MAX_SAFE_INTEGER) && value<=(schema.maximum??Number.MAX_SAFE_INTEGER);
+ case 'string':return typeof value==='string' && !/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value) && value.length>=(schema.minLength??0) && value.length<=(schema.maxLength??65536) && (!schema.pattern || new RegExp('(?:'+schema.pattern+')(?![\\s\\S])','u').test(value));
+ case 'null':return value===null;case 'boolean':return typeof value==='boolean';default:return true;
+ }
+}
+/** @param {string} name @param {any} value */
+const gcValid=(name,value)=>{try{return gcCheck(value,GC_SCHEMAS[name],GC_SCHEMAS[name]);}catch{return false;}};
+/** @param {string} value */
+const gcByteLength=value=>Array.from(value).reduce((total,c)=>total+((c.codePointAt(0)??0)>65535?4:(c.codePointAt(0)??0)>2047?3:(c.codePointAt(0)??0)>127?2:1),0);
+/** @param {any} a */
+function gcAction(a){
+ if(gcKeys(a,'op'))return a.op==='create';
+ const target=typeof a?.workload_id==='string' && /^workload-[a-z0-9][a-z0-9._-]{0,63}$(?![\s\S])/.test(a.workload_id) && Number.isSafeInteger(a.generation) && a.generation>0;
+ if(!target)return false;
+ if(gcKeys(a,'generation,op,workload_id'))return a.op==='stop';
+ if(gcKeys(a,'generation,job_id,op,workload_id'))return a.op==='cancel' && /^job-[a-z0-9][a-z0-9._-]{0,63}$(?![\s\S])/.test(a.job_id);
+ if(!gcKeys(a,'command_utf8,cwd,generation,op,stdin_b64,timeout_ms,workload_id') || a.op!=='run')return false;
+ if(typeof a.stdin_b64!=='string'||a.stdin_b64.length>65536||! /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$(?![\s\S])/.test(a.stdin_b64))return false;
+ const alphabet='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+ if(a.stdin_b64.endsWith('==')&&(alphabet.indexOf(a.stdin_b64.at(-3))&15)!==0||a.stdin_b64.endsWith('=')&&!a.stdin_b64.endsWith('==')&&(alphabet.indexOf(a.stdin_b64.at(-2))&3)!==0)return false;
+ const p={...a};delete p.op;
+ return gcValid('guest_command_request.schema.json',{schema:'guest_command_request/v0.2',request_id:'request-validation',op:'run',params:{...p,job_id:'job-validation'}}) && gcByteLength(a.command_utf8)<=16384 && !a.command_utf8.includes('\0') && gcByteLength(a.cwd)<=1024 && !/[\x00-\x1f\x7f]/.test(a.cwd) && (!a.cwd || (!a.cwd.startsWith('/') && a.cwd.split('/').every((/** @type {string} */ p)=>p!=='' && p!=='.' && p!=='..' && gcByteLength(p)<=255)));
+}
+/** @param {any} s */
+const gcSnapshot=s=>gcKeys(s,'available,busy,canCancel,code,revision,session,stderr,stdout,uncertain') && typeof s.available==='boolean' && typeof s.busy==='boolean' && typeof s.canCancel==='boolean' && typeof s.uncertain==='boolean' && Number.isSafeInteger(s.revision) && s.revision>=0 && (s.code===null || typeof s.code==='string' && s.code.length<=64) && typeof s.stdout==='string' && typeof s.stderr==='string' && s.stdout.length+s.stderr.length<=131072 && (s.session===null || gcValid('guest_command_session.schema.json',s.session));
+
+/** @param {any} value */
+function capsuleCapabilitiesValid(value) {
+ const row=(/** @type {any} */ v)=>gcKeys(v,'available,reason')&&typeof v.available==='boolean'&&typeof v.reason==='string'&&[...v.reason].length<=256&&!/[\uD800-\uDFFF]/u.test(v.reason)&&!/[\x00-\x1f\x7f/\\]/.test(v.reason)&&(v.available||v.reason.trim().length>0);
+ return gcKeys(value,'microvm,schema,supported_host,vm')&&value.schema==='capsule_capabilities/v0.2'&&typeof value.supported_host==='boolean'&&row(value.vm)&&row(value.microvm)&&(value.supported_host||!value.vm.available&&!value.microvm.available);
+}
+
+/** Inline closed headless validators keep the native CommonJS preload self-contained. */
+/** Closed headless values. No renderer-selected profile, path, backend or request ID. */
+/** @param {any} v @param {string} names */
+const keys = (v, names) => v !== null && typeof v === 'object' && !Array.isArray(v)
+  && [Object.prototype, null].includes(Object.getPrototypeOf(v))
+  && Reflect.ownKeys(v).every(k => typeof k === 'string' && 'value' in (Object.getOwnPropertyDescriptor(v,k) ?? {}))
+  && Reflect.ownKeys(v).sort().join(',') === names;
+/** @param {any} v @param {string} p */
+const id = (v,p) => typeof v === 'string' && new RegExp(`^${p}-[a-z0-9][a-z0-9._-]{0,63}$`).test(v);
+/** @param {any} n */
+const validN = n => Number.isSafeInteger(n) && n >= 0 && n <= 10000;
+/** @param {any} s */
+function validSession(s) {
+  if (!keys(s,'backend,generation,isa,job,owner_id,ownership,phase,profile_id,schema,workload_id')
+      || s.schema !== 'headless_session/v0.2' || !id(s.workload_id,'workload') || !id(s.owner_id,'actor')
+      || !Number.isSafeInteger(s.generation) || s.generation < 1 || s.profile_id !== 'headless-sumsq-v1'
+      || s.backend !== 'firecracker' || s.isa !== 'aarch64'
+      || !['starting','ready','running','completed','stopping','stopped','uncertain'].includes(s.phase)
+      || s.ownership !== (s.phase === 'stopped' ? 'released' : 'held')) return false;
+  const j = s.job;
+  if (j !== null && (!keys(j,'job_id,n,operation,status,value') || !id(j.job_id,'job') || j.operation !== 'sumsq'
+      || !validN(j.n) || !['accepted','completed','unknown'].includes(j.status)
+      || (j.status === 'completed' ? j.value !== j.n*(j.n+1)*(2*j.n+1)/6 : j.value !== null))) return false;
+  if (['starting','ready'].includes(s.phase)) return j === null;
+  if (s.phase === 'running') return j?.status === 'accepted';
+  if (s.phase === 'completed') return j?.status === 'completed';
+  return j === null || j.status !== 'accepted';
+}
+/** @param {any} a */
+function validAction(a) {
+  if (keys(a,'op')) return a.op === 'create';
+  if (keys(a,'generation,op,workload_id')) return a.op === 'stop' && id(a.workload_id,'workload') && Number.isSafeInteger(a.generation) && a.generation > 0;
+  return keys(a,'generation,n,op,workload_id') && a.op === 'run' && validN(a.n)
+    && id(a.workload_id,'workload') && Number.isSafeInteger(a.generation) && a.generation > 0;
+}
+/** @param {any} v */
+function validSnapshot(v) {
+  return keys(v,'available,busy,code,revision,session,uncertain') && typeof v.available === 'boolean'
+    && typeof v.busy === 'boolean' && typeof v.uncertain === 'boolean' && Number.isSafeInteger(v.revision) && v.revision >= 0
+    && (v.session === null || validSession(v.session))
+    && (v.code === null || ['UNAVAILABLE','BUSY','BAD_REQUEST','OWNER_MISMATCH','UNKNOWN_WORKLOAD','STALE_GENERATION','DUPLICATE_REQUEST','DUPLICATE_JOB','OUT_OF_ORDER','POLICY','OUTCOME_UNKNOWN'].includes(v.code));
+}
+
 // @ts-check
 /** [TARGET, unit decision] Operator button calls carry references only.
  * The host owns document paths, argv, clipboard contents and recording lifetime. */
@@ -145,6 +233,7 @@ export function createOperatorFacade(transport) {
  * @property {() => Promise<string|null>} recordingDestination
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
+ * @property {{status:()=>Promise<any>,request:(action:any)=>Promise<any>,subscribe:(cb:(snapshot:any)=>void)=>(()=>void)}} headless
  * @property {{vmAvailable:()=>Promise<boolean>,createSurface:(selector?:{kind:'vm'})=>Promise<any>,propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
  * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>,onResult:(cb:(result:{surface_id:string,seq:number,ok:boolean,code:string|null})=>void)=>(()=>void)}} input
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
@@ -786,7 +875,7 @@ function assertSurfaceInputReply(reply, maxAccepted) {
   }
   throw new ContractError('OUTCOME', 'surface input reply');
 }
-const WIRE_NAMES = Object.freeze({slotRequest:'capsule-state.request',loadSettings:'settings.load',saveSettings:'settings.save',
+const WIRE_NAMES = Object.freeze({slotRequest:'capsule-state.request',guestCommandCapabilities:'guest-command.capabilities',guestCommandStatus:'guest-command.status',guestCommandRequest:'guest-command.request',headlessStatus:'headless.status',headlessRequest:'headless.request',loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
   vmAvailable:'authority.vmAvailable',propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
@@ -803,10 +892,12 @@ function wireCall(channel,args) {
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
-  const arity=['slotRequest','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
+  const arity=['slotRequest','guestCommandRequest','headlessRequest','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
   const vmCreate = name==='createSurface' && Array.isArray(args) && args.length===1 && args[0] && typeof args[0]==='object'
     && !Array.isArray(args[0]) && Reflect.ownKeys(args[0]).join(',')==='kind' && /** @type {any} */(args[0]).kind==='vm';
   if (!Array.isArray(args) || (args.length !== arity && !vmCreate)) throw new ContractError('ARGS','wrong arity');
+  if(name==='guestCommandRequest'&&!gcAction(args[0]))throw new ContractError('PAYLOAD','guest command action');
+  if(name==='headlessRequest' && !validAction(args[0])) throw new ContractError('PAYLOAD','headless action');
   if (name==='intent' && args[0] !== null && typeof args[0] === 'object') {
     const checked = validateSurfaceInputBatch(args[0]);
     if (!checked.ok) throw new ContractError('PAYLOAD', checked.code);
@@ -1028,6 +1119,12 @@ function wireFacade(transport) {
         throw new ContractError('OUTCOME','clipboard text');
       }
       return reply;
+    }
+    if(name==='guestCommandCapabilities'){if(!capsuleCapabilitiesValid(reply))throw new ContractError('OUTCOME','capsule capabilities');return reply;}
+    if(name==='guestCommandStatus'||name==='guestCommandRequest'){if(!gcSnapshot(reply))throw new ContractError('OUTCOME','guest command state');return reply;}
+    if (name==='headlessStatus' || name==='headlessRequest') {
+      if(!validSnapshot(reply)) throw new ContractError('OUTCOME','headless state');
+      return structuredClone(reply);
     }
     if (name==='vmAvailable') {
       if (typeof reply !== 'boolean') throw new ContractError('OUTCOME','VM availability');
@@ -1437,6 +1534,17 @@ function wireFacade(transport) {
       };
     },
   });
+  api.guestCommand=Object.freeze({capabilities:(/** @type {any[]} */ ...args)=>call('guestCommandCapabilities',args),status:(/** @type {any[]} */ ...args)=>call('guestCommandStatus',args),request:(/** @type {any[]} */ ...args)=>call('guestCommandRequest',args),subscribe:(/** @type {(v:any)=>void} */ cb)=>{if(typeof cb!=='function'||!transport.subscribe)throw new ContractError('ARGS','guest command callback');return transport.subscribe('metaviewer:guest-command.state',value=>{if(!gcSnapshot(value))throw new ContractError('OUTCOME','guest command state');cb(structuredClone(value));});}});
+  api.headless=Object.freeze({
+    /** @param {...unknown} args */
+    status:(...args)=>call('headlessStatus',args),
+    /** @param {...unknown} args */
+    request:(...args)=>call('headlessRequest',args),
+    subscribe:(/** @type {(snapshot:any)=>void} */ cb)=>{
+      if(typeof cb!=='function' || !transport.subscribe) throw new ContractError('ARGS','headless callback');
+      return transport.subscribe('metaviewer:headless.state',value=>{if(!validSnapshot(value)) throw new ContractError('OUTCOME','headless state');cb(structuredClone(value));});
+    },
+  });
   api.authority=Object.freeze({
     /** @param {...unknown} args */
     vmAvailable:(...args)=>call('vmAvailable',args),
@@ -1677,7 +1785,7 @@ export function installPreload(electron) {
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
         if (nested && channel === 'metaviewer:side-terminal.port') throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
-        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port','metaviewer:handoff.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
+        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port','metaviewer:handoff.state','metaviewer:headless.state','metaviewer:guest-command.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
           // The facade validates this authenticated host channel before transfer.

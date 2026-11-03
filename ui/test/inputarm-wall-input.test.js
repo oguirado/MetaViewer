@@ -1,4 +1,6 @@
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
+import * as guestWorkloadTileModel from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 // INPUT-ARM (FEEDBACK R-INPUT): the operator takes control of a capsule from
 // the wall and immediately clicks and types in it, and always sees the state.
@@ -129,6 +131,8 @@ async function loadApp(source, captured) {
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
     './surfaces/tileScheduler.js': { createTileScheduler },
+    './wall/guestWorkloadTile.js': guestWorkloadTileModel,
+    '../electron/guestCommandValues.js': guestCommandValues,
   };
   const key = `__inputarm${++serial}`;
   globalThis[key] = deps;

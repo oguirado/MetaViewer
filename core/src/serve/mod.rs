@@ -50,6 +50,8 @@
 //! [TARGET, unit decision] Server shutdown/Drop and serve() teardown flush the
 //! authority journal and join its background sync worker before returning.
 mod capture;
+mod guest_command;
+mod headless;
 mod layout;
 mod timings;
 mod tools;
@@ -209,6 +211,7 @@ pub struct Server {
     subscriptions: BTreeSet<(Endpoint, String)>,
     unsubscribed: BTreeSet<(Endpoint, String)>,
     human_inputs: BTreeMap<String, HumanInputPending>,
+    headless_graphical_seen: bool,
     tool_state: tools::ToolState,
     capture: crate::record::capture::Host,
     frame_timings: timings::Writer,
@@ -259,11 +262,18 @@ impl Server {
         let mut envelopes = Vec::new();
         let mut seen = BTreeSet::new();
         let mut human_inputs = BTreeMap::new();
+        let mut headless_graphical_seen = false;
         let mut tool_state = tools::ToolState::default();
         for seq in 1..=authority.state().core_seq {
             let event: serde_json::Value = serde_json::from_slice(&fs::read(
                 root.join("events").join(format!("{seq}.json")),
             )?)?;
+            if event["input"]["event"] == "SurfaceRequest"
+                && event["input"]["request"]["op"] == "create"
+                && event["outcome"]["reason"].is_null()
+            {
+                headless_graphical_seen = true;
+            }
             if let Some(cancelled) = event["outcome"]["cancelled"].as_array() {
                 for pid in cancelled.iter().filter_map(|v| v.as_str()) {
                     tool_state.evict_proposal(pid);
@@ -452,6 +462,7 @@ impl Server {
             subscriptions: BTreeSet::new(),
             unsubscribed: BTreeSet::new(),
             human_inputs,
+            headless_graphical_seen,
             tool_state,
             capture,
         })
@@ -490,6 +501,10 @@ impl Server {
             self.subscriptions.retain(|(p, _)| p != peer);
             self.unsubscribed.retain(|(p, _)| p != peer);
             if peer.component == Component::Daemon {
+                if let Ok(now_ns) = self.now() {
+                    let _ = self.mark_headless_unknown(now_ns);
+                    let _ = self.mark_guest_command_unknown(now_ns);
+                }
                 let mut pending: Vec<_> = self
                     .human_inputs
                     .iter()
@@ -583,7 +598,7 @@ impl Server {
             .checked_add(1)
             .ok_or_else(|| invalid("sequence exhausted"))?;
         let env = Envelope {
-            schema: "envelope/v0.2".into(),
+            schema: crate::wire::envelope_schema(&body).into(),
             msg_id: format!("{tag}-{}-{}", self.authority.state().epoch, self.serial),
             ts_ns: Clock::new(ts_ns),
             from: self.config.core.endpoint.clone(),
@@ -648,6 +663,7 @@ impl Server {
                         "data":{"surface_id":to.instance,"code":"QUEUE_OVERFLOW",
                         "detail":"Peer send queue exhausted; reconnect and refresh state"}}),
                 )?));
+                env.schema = crate::wire::envelope_schema(&env.body).to_owned();
                 let mut terminal = c
                     .terminal
                     .lock()
@@ -1331,6 +1347,19 @@ impl Server {
                     .clone();
                 return self.send_at(now_ns, &sender, env.body.clone());
             }
+            (Component::Ui | Component::Agent, Command::GuestCommandRequest(request)) => {
+                return self.guest_command_request(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::GuestCommandEvent(event)) => {
+                return self.guest_command_event(now_ns, &env, event, epoch, boundary);
+            }
+
+            (Component::Ui | Component::Agent, Command::HeadlessRequest(request)) => {
+                return self.headless_request(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::HeadlessEvent(event)) => {
+                return self.headless_event(now_ns, &env, event, epoch, boundary);
+            }
             (Component::Ui, Command::RecordRequest(request)) => {
                 return self.capture_wire(now_ns, &env, request, boundary);
             }
@@ -1420,6 +1449,7 @@ impl Server {
                         );
                     }
                     self.authority.flush_sync()?;
+                    self.headless_graphical_seen = true;
                 }
                 match op {
                     "frame_subscribe" | "frame_unsubscribe" => {
@@ -1969,6 +1999,8 @@ impl Server {
         self.poll_tool_waiters_at(now_ns)
     }
     fn poll_tool_waiters_at(&mut self, now_ns: u64) -> Result<()> {
+        self.poll_headless_at(now_ns)?;
+        self.poll_guest_command_at(now_ns)?;
         let prev = self.route_now_ns.replace(now_ns);
         let result = self.poll_tool_waiters();
         self.route_now_ns = prev;
@@ -2981,6 +3013,37 @@ mod nv_regressions {
         drop(second);
         assert!(!second_path.exists());
     }
+    #[test]
+    fn capsule_queue_overflow_terminal_keeps_legacy_body_family() {
+        for raw in [
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.headless_request.valid.create.json"),
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.headless_event.valid.accepted_1.json"),
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.guest_command_request.0.json"),
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.guest_command_event.0.json"),
+    ] {
+        let mut f = Fixture::new();
+        let to = f.endpoint(Component::Ui);
+        let (queue, _receiver) = mpsc::sync_channel(MAX_SEND_QUEUE);
+        let terminal = Arc::new(Mutex::new(None));
+        f.server.connections.insert(to.clone(), Connection {
+            id: 1, epoch: f.server.authority.state().epoch, queue,
+            terminal: terminal.clone(),
+        });
+        let mut env = decode_envelope(raw).unwrap();
+        env.to = to.clone();
+        for _ in 0..MAX_SEND_QUEUE { f.server.enqueue(&to, env.clone()).unwrap(); }
+        let err = f.server.enqueue(&to, env).unwrap_err();
+        assert!(matches!(err.downcast_ref::<SendFailure>(), Some(SendFailure::QueueOverflow(_))));
+        let mut diagnostic = terminal.lock().unwrap().take().unwrap();
+        assert_eq!(diagnostic.schema, "envelope/v0.2");
+        assert!(decode_envelope(&serde_json::to_string(&diagnostic).unwrap()).is_ok());
+        assert!(matches!(diagnostic.body, Command::SurfaceEvent(_)));
+        // Negative control: stale capsule tag must remain invalid.
+        diagnostic.schema = "capsule_envelope/v0.2".into();
+        assert!(decode_envelope(&serde_json::to_string(&diagnostic).unwrap()).is_err());
+    }
+    }
+
     struct Fixture {
         server: Server,
         root: PathBuf,

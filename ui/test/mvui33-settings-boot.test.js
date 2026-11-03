@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI33 lane S: density boot and application. The entry resolves the stored
 // density before first paint and hands the frames port to App; App paints the
@@ -178,7 +180,7 @@ async function mountAppForDensity(initial = {}) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
       './surfaces/SurfaceCanvas.vue': stub,
-      './surfaces/tileScheduler.js': { createTileScheduler },
+      './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
     });
     const row = vue.reactive({
       id: 'cap-01', surfaceId: 'cap-01', title: 'Capsule', generation: 1,

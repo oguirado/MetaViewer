@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI32 lane L: lost surface end-to-end on the real renderer path.
 //
@@ -226,7 +228,7 @@ const App = await (async () => {
     './creative/CreativeCapsule.vue': stub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   try {
     const compiled = compileScript(parse(appSource).descriptor, { id: 'mvui32l-app', inlineTemplate: true });

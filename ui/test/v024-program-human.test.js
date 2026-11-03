@@ -51,6 +51,7 @@ function createLauncherHarness(sfcSource, buildCreateIntentFn, apiMock = null) {
   const events = [];
   const ctx = {
     props: { visible: true, kinds: [...catalogModel.CATALOG_KIND_IDS] },
+    disabledArmKinds: { get value() { return catalogModel.unavailableArmCapsules(ctx.props.arm64Capabilities); } },
     api: apiMock,
     roleChoice: { value: 'agent' },
     profileChoice: { value: '' },

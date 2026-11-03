@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -33,7 +35,7 @@ async function appComponent(captured) {
     './multislot/MultislotHost.vue': slotStub, './recording/MvRecordingPanel.vue': slotStub,
     './settings/MvSettingsPanel.vue': slotStub, './agent/AgentLaneHost.vue': agent,
     './surfaces/SurfaceCanvas.vue': slotStub, './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   });
 }
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await vue.nextTick(); };

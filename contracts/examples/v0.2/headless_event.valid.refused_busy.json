@@ -1,0 +1,12 @@
+{
+  "schema": "headless_event/v0.2",
+  "event_id": "event-38",
+  "request_id": "request-38",
+  "event": "refused",
+  "data": {
+    "workload_id": null,
+    "generation": null,
+    "code": "BUSY",
+    "effect": "not_dispatched"
+  }
+}

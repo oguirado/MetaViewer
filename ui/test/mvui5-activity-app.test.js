@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // Lane V App wiring: strip mount, bounded feed, authority-only receipts.
 import { test, describe } from 'node:test';
@@ -87,7 +89,7 @@ async function loadApp(captured) {
     './terminal/SideTerminalOverlay.vue': stub, './multislot/MultislotHost.vue': stub,
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': stub,
     './agent/AgentLaneHost.vue': stub, './surfaces/SurfaceCanvas.vue': stub,
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `v-app-${++serial}`, inlineTemplate: true });

@@ -1098,3 +1098,14 @@ test('early identity contention is replayed once after the renderer bridge is re
   assert.equal(fx.dialogs.length,0);
   assert.equal(fx.capsuleStates.has('pending:mv-live-1'),false);
 });
+
+test('normal ARM capsule chooser suppresses only automatic creation; legacy startup still creates',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'mv-arm-chooser-'));
+  try{for(const flag of [undefined,'0','1']){
+    const dir=join(root,flag??'absent');await mkdir(dir);
+    const fixture=await createStubBootFixture(dir,{env:{MV_SRF_BIN_DIR:root,...(flag===undefined?{}:{MV_ARM64_CAPSULES:flag})},adapterStart:async()=>({availability:'live',pid:5252,handshakeSeen:true,code:'ADAPTER_LIVE',reason:null,userMessage:null})});
+    const boot=await bootProductionMain(fixture.handles);
+    try{assert.equal(fixture.getWindowsConstructed(),1);assert.equal(fixture.coreRequests.length,flag==='1'?0:1);assert.ok(fixture.calls.includes('adapter.start'));}
+    finally{await boot.dispose();}
+  }}finally{await rm(root,{recursive:true,force:true});}
+});

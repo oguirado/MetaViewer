@@ -13,6 +13,7 @@ import { NewCapsuleDialog } from '../../.kit/capsule-ui-kit/src/index-shell.js';
 import {
   CATALOG_KIND_IDS,
   availableCatalogKindIds,
+  unavailableArmCapsules,
   buildCreateIntent,
   createInvokerFocus,
   filterWindowCandidates,
@@ -23,7 +24,10 @@ import {
 const props = defineProps({
   visible: { type: Boolean, default: false },
   kinds: { type: Array, default: () => [...CATALOG_KIND_IDS] },
+  headlessAvailable: { type: Boolean, default: false },
+  guestCommandAvailable: { type: Boolean, default: false },
   vmAvailable: { type: Boolean, default: false },
+  arm64Capabilities:{type:/** @type {import('vue').PropType<any>} */ (Object),default:null},
   title: { type: String, default: 'Add capsule' },
   subtitle: { type: String, default: 'Choose a capsule kind to open in your wall' },
   emptyText: { type: String, default: 'No capsule kinds match this search.' },
@@ -171,7 +175,8 @@ function cancelWindow() {
   emit('update:visible', false);
 }
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
-const dialogTypes = computed(() => normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable).includes(type.id)));
+const disabledArmKinds=computed(()=>unavailableArmCapsules(props.arm64Capabilities));
+const dialogTypes = computed(() => normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable,props.headlessAvailable,props.arm64Capabilities).includes(type.id)).map(type=>type.id==='microvm'&&props.guestCommandAvailable?{...type,description:'Run commands inside an isolated ARM64 guest. No interactive terminal or desktop.'}:type));
 const catalogErrors = computed(() => normalized.value.errors);
 
 const invokerFocus = createInvokerFocus();
@@ -194,6 +199,7 @@ function forwardVisible(value) {
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
+  if(disabledArmKinds.value.some(row=>row.kind===payload?.type?.id))return;
   if (payload?.type?.id === 'program' || payload?.type?.id === 'host-program') {
     pendingIntent.value = { kind: payload.type.id, placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
@@ -408,7 +414,10 @@ function onClose() {
     @create="onCreate"
     @close="onClose"
   >
-    <template v-if="catalogErrors.length" #empty>
+    <template v-if="catalogErrors.length || disabledArmKinds.length" #empty>
+      <section v-if="disabledArmKinds.length" aria-label="Unavailable ARM64 capsules" class="mv-arm64-unavailable">
+        <div v-for="row in disabledArmKinds" :key="row.kind" :data-semantic-anchor="`dialog/new-capsule/unavailable-${row.kind}`"><button type="button" disabled :aria-describedby="`capsule-${row.kind}-reason`">{{ row.label }}</button><p :id="`capsule-${row.kind}-reason`" :data-semantic-anchor="`dialog/new-capsule/unavailable-reason-${row.kind}`" role="status">{{ row.reason }}</p></div>
+      </section>
       <ul class="mv-catalog-errors" aria-label="Unavailable capsule kinds">
         <li
           v-for="row in catalogErrors"

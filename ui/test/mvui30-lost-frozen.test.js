@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI30 lane L: a lost capsule shows its last presented frame frozen with a
 // Lost badge instead of "Connecting to surface". Canvas state maps from the
@@ -590,7 +592,7 @@ async function loadApp(captured) {
     './creative/CreativeCapsule.vue': stub,
     './surfaces/SurfaceCanvas.vue': canvasStub,
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `mvui30-app-${++appSerial}`, inlineTemplate: true });

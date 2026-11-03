@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import {addOperatorStubs} from './operator-stubs.mjs';
 // MVUI18 lane J: live frames paint (L3-1), frame scale jitter (L2-8), kit
@@ -649,7 +651,7 @@ async function loadAppHarness(captured, row) {
     './agent/AgentLaneHost.vue': stub,
     './settings/settingsHost.js': { createSettingsHost },
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   addOperatorStubs(deps);
   globalThis.__mvui18AppDeps = deps;

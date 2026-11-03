@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // Lane V bench hook: fixture-only dispatch handle driving production paths.
 import { test, describe } from 'node:test';
@@ -37,6 +39,8 @@ const PINNED_IMPORTS = [
   'capsule-ui-kit/theme',
   './wall/WallWorkspace.vue',
   './wall/DesktopWorkspace.vue',
+  './wall/guestWorkloadTile.js',
+  '../electron/guestCommandValues.js',
   '../electron/desktopLayout.js',
   './surfaces/SurfaceCanvas.vue',
   './surfaces/tileScheduler.js',
@@ -115,7 +119,7 @@ async function loadApp(captured) {
     './creative/CreativeCapsule.vue': stub,
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `v-bench-${++serial}`, inlineTemplate: true });

@@ -68,6 +68,29 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 	if err != nil {
 		return nil, err
 	}
+	// Preserve every original count/name-set pin; additive examples have a
+	// separate exhaustive content pin rather than relaxing the legacy oracle.
+	allFiles := files
+	files = nil
+	seenAdditive := 0
+	for _, file := range allFiles {
+		if pin, added := additiveFixturePins[filepath.Base(file)]; added {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(raw)
+			if hex.EncodeToString(sum[:]) != pin {
+				return nil, fmt.Errorf("additive fixture bytes changed: %s", filepath.Base(file))
+			}
+			seenAdditive++
+		} else {
+			files = append(files, file)
+		}
+	}
+	if seenAdditive != len(additiveFixturePins) {
+		return nil, errors.New("additive fixture corpus incomplete")
+	}
 	if len(entries) < minContractEntryCount || (len(files) != minContractFixtureCount && len(files) != minContractFixtureCount+1) || len(schemas) < minContractSchemaCount {
 		return nil, fmt.Errorf("fixture corpus count mismatch: entries=%d files=%d schemas=%d", len(entries), len(files), len(schemas))
 	}
@@ -99,7 +122,7 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 	for _, s := range schemas {
 		prefix := strings.TrimSuffix(filepath.Base(s), ".schema.json")
 		hasValid, hasInvalid := false, false
-		for _, f := range files {
+		for _, f := range allFiles {
 			base := filepath.Base(f)
 			if strings.HasPrefix(base, prefix+".valid.") {
 				hasValid = true

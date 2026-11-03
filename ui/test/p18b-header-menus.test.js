@@ -1,3 +1,4 @@
+import * as guestWorkloadTileModel from '../src/wall/guestWorkloadTile.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -240,7 +241,7 @@ async function headerOracle(source) {
   const fragment=shortcut+navigation+dock;
   const dockToggle=source.match(/function toggleTerminalDock\(\) \{[\s\S]*?\n\}/)?.[0];
   assert.ok(dockToggle, 'drawer transition keeps the real dock handler');
-  const Component=await compile(`<script setup>import {ref} from 'vue';const props={fixture:true};const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),terminalDockOpen=ref(false),terminalInDrawer=ref(false),terminalPreferDock=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');${dockToggle}</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
+  const Component=await compile(`<script setup>import {ref} from 'vue';const guestWorkloadTiles=ref([]);const showGuestConsole=()=>{};const props={fixture:true};const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),terminalDockOpen=ref(false),terminalInDrawer=ref(false),terminalPreferDock=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');${dockToggle}</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
   const Button=vue.defineComponent({props:['label'],setup:(p,ctx)=>()=>vue.h('button',ctx.attrs,p.label)});
   const Host=vue.defineComponent({setup(){vue.getCurrentInstance().appContext.components.UiButton=Button;return()=>vue.h(Component);}});
   const live=mount(Host);

@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import {addOperatorStubs} from './operator-stubs.mjs';
 // MVUI16 lane P shared harness: bounded mounts for the ARG-pmui-3..7
@@ -141,7 +143,7 @@ export async function mountApp(initial = {}, compile = compileSfc, options = {})
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   });
   const row = vue.reactive({ id: MVUI16_ID, surfaceId: MVUI16_ID, title: 'Capsule', generation: 1, visibility: 'unfolded', control: 'human', backendLifecycle: 'active' });
   const feed = { getSnapshot: () => null, getProjection: () => ({ rows: [row] }), subscribe: () => () => {} };

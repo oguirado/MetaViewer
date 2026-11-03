@@ -658,6 +658,7 @@ export default defineComponent({
     assert.equal(errors.length, 0);
     const compiled = compileScript(descriptor, { id: 'wall-workspace-test', inlineTemplate: true });
     let code = compiled.content;
+    code=code.replaceAll("'./guestWorkloadTile.js'",JSON.stringify(pathToFileURL(path.join(uiDir,'src/wall/guestWorkloadTile.js')).href));
     code = code.replace(/(['"])capsule-ui-kit\/DockWorkspace\1/g, "'./stubDockWorkspace.mjs'");
     code = code.replace(/(['"])\.\/SurfacePanel\.vue\1/g, "'./stubSurfacePanel.mjs'");
     code = code.replace(/(['"])\.\/workloadPanelParams\.js\1/g, JSON.stringify(pathToFileURL(path.join(uiDir,'src/wall/workloadPanelParams.js')).href));
@@ -750,7 +751,7 @@ export default defineComponent({
       assert.equal(kitProps.initialViewportWidth, 1280);
       assert.equal(kitProps.initialViewportHeight, 720);
       assert.ok(kitProps.panelComponents?.CapsulePanel, 'CapsulePanel router is registered');
-      assert.deepEqual(Object.keys(kitProps.panelComponents), ['CapsulePanel'], 'only product panel types are registered');
+      assert.deepEqual(Object.keys(kitProps.panelComponents), ['GuestWorkloadPanel','CapsulePanel'], 'only product panel types are registered');
       assert.ok(kitProps.tabComponents?.SurfaceTab, 'product tab is registered');
       assert.ok(html.includes('data-scope-product="metaviewer"'));
       assert.ok(html.includes('data-viewport="1280x720"'));

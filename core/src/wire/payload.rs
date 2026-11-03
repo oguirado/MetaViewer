@@ -2237,6 +2237,10 @@ pub struct CapsuleStateEvent {
 pub enum Command {
     CapsuleStateRequest(Box<CapsuleStateRequest>),
     CapsuleStateEvent(Box<CapsuleStateEvent>),
+    GuestCommandRequest(Box<super::guest_command::GuestCommandRequest>),
+    GuestCommandEvent(Box<super::guest_command::GuestCommandEvent>),
+    HeadlessRequest(Box<super::headless::HeadlessRequest>),
+    HeadlessEvent(Box<super::headless::HeadlessEvent>),
     ActionProposal(Box<ActionProposal>),
     ActionReceipt(Box<ActionReceipt>),
     ActionVerdict(Box<ActionVerdict>),

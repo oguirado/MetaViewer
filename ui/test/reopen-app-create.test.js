@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // REOPEN-FLOW renderer half: the tile close (x) removes only the dock panel, the capsule row and
 // its profile stay bound. Open-browser then comes back SURFACE_PROFILE_BOUND from the host; the
@@ -53,7 +55,7 @@ async function loadApp(captured, mutate = null) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   const original = readFileSync(APP_URL, 'utf8');
   const source = mutate ? mutate(original) : original;

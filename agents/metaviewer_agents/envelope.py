@@ -26,6 +26,7 @@ import time
 
 __all__ = [
     "SCHEMA",
+    "CAPSULE_SCHEMA",
     "COMPONENTS",
     "EnvelopeError",
     "make_envelope",
@@ -35,6 +36,7 @@ __all__ = [
 ]
 
 SCHEMA = "envelope/v0.2"
+CAPSULE_SCHEMA = "capsule_envelope/v0.2"
 _LEGACY_SCHEMA = "envelope/v0.1"
 _MAX_SAFE_INT = (1 << 53) - 1
 COMPONENTS = frozenset({"core", "ui", "daemon", "agent", "vision", "wender"})
@@ -531,13 +533,29 @@ _FILES = {
 }
 
 _KEYWORDS = frozenset((
-    "$ref", "type", "properties", "required", "additionalProperties",
+    "$ref", "$defs", "type", "properties", "required", "additionalProperties",
     "enum", "const", "oneOf", "items", "minItems", "minimum", "maximum",
     "minLength", "maxLength", "pattern", "maxItems", "maxProperties",
 ))
 _TYPES = frozenset(("object", "array", "string", "integer", "number",
                     "boolean", "null"))
 _PATTERNS: dict = {}
+
+
+def _resolve_reference(ref):
+    if not isinstance(ref, str):
+        return None
+    filename, marker, fragment = ref.partition("#")
+    target = _FILES.get(filename)
+    if target is None or marker and not fragment.startswith("/"):
+        return None
+    if marker:
+        for token in fragment[1:].split("/"):
+            token = token.replace("~1", "/").replace("~0", "~")
+            if not isinstance(target, dict) or token not in target:
+                return None
+            target = target[token]
+    return target if isinstance(target, dict) else None
 
 
 def _audit(schema, seen=None):
@@ -579,8 +597,13 @@ def _audit(schema, seen=None):
     if "enum" in schema and (not isinstance(schema["enum"], list)
                              or not schema["enum"]):
         raise AssertionError("embedded enum invalid")
-    if "$ref" in schema and schema["$ref"] not in _FILES:
+    if "$ref" in schema and _resolve_reference(schema["$ref"]) is None:
         raise AssertionError("embedded reference escapes siblings")
+    definitions = schema.get("$defs", {})
+    if not isinstance(definitions, dict):
+        raise AssertionError("embedded definitions must be an object")
+    for definition in definitions.values():
+        _audit(definition, seen)
     if "oneOf" in schema:
         if not isinstance(schema["oneOf"], list) or not schema["oneOf"]:
             raise AssertionError("embedded oneOf invalid")
@@ -591,32 +614,53 @@ def _audit(schema, seen=None):
 
 
 _V02_FILES = copy.deepcopy(_V02_FILES)
+# Preserve the established tool-result v0.2 projection also used by Rust's
+# wire/schemas.rs. The generated FILES map remains the exact source projection.
+for _definition in _V02_FILES.get("mv_tool_result.schema.json", {}).get("$defs", {}).values():
+    _tag = _definition.get("properties", {}).get("schema", {})
+    if isinstance(_tag.get("const"), str) and _tag["const"].endswith("/v0.1"):
+        _tag["const"] = _tag["const"][:-5] + "/v0.2"
 _FILES = {**_FILES, **{f"v0.2/{k}": v for k, v in _V02_FILES.items()}}
 
-def _version_refs(value):
+def _version_refs(value, base_name=""):
     if isinstance(value, dict):
         for key, child in value.items():
             if key == "$ref":
-                value[key] = "v0.2/" + child
+                value[key] = "v0.2/" + (base_name if child.startswith("#") else "") + child
             else:
-                _version_refs(child)
+                _version_refs(child, base_name)
     elif isinstance(value, list):
         for child in value:
-            _version_refs(child)
+            _version_refs(child, base_name)
 
-for _schema in _V02_FILES.values():
-    _version_refs(_schema)
 for _name, _schema in _V02_FILES.items():
-    if _name != "envelope.schema.json":
+    _version_refs(_schema, _name)
+_REGISTERED_BODY_FILES = frozenset(
+    branch["$ref"].removeprefix("v0.2/")
+    for branch in _V02_FILES["envelope.schema.json"]["properties"]["body"]["oneOf"]
+)
+_CAPSULE_BODY_FILES = frozenset(
+    branch["$ref"].removeprefix("v0.2/")
+    for branch in _V02_FILES["capsule_envelope.schema.json"]["properties"]["body"]["oneOf"]
+)
+if _CAPSULE_BODY_FILES != frozenset({"headless_request.schema.json", "headless_event.schema.json",
+                                    "guest_command_request.schema.json", "guest_command_event.schema.json"}):
+    raise AssertionError("closed capsule body registry mismatch")
+_CAPSULE_BODY_FAMILIES = frozenset(name.removesuffix(".schema.json") for name in _CAPSULE_BODY_FILES)
+_CAPSULE_BODY_TAGS = frozenset(name + "/v0.2" for name in _CAPSULE_BODY_FAMILIES)
+for _name, _schema in _V02_FILES.items():
+    if _name in _REGISTERED_BODY_FILES | _CAPSULE_BODY_FILES:
         _BODIES[_name.removesuffix(".schema.json") + "/v0.2"] = _schema
 
 _KNOWN_BODY_FAMILIES = frozenset(
     _name.removesuffix(".schema.json")
     for _name in _V02_FILES
-    if _name != "envelope.schema.json"
+    if _name in _REGISTERED_BODY_FILES
 )
 
 for _schema in _BODIES.values():
+    _audit(_schema)
+for _schema in _V02_FILES.values():
     _audit(_schema)
 del _schema
 
@@ -654,7 +698,7 @@ def _check(value, schema, depth):
     if depth > _MAX_DEPTH:
         raise _Mismatch("nesting limit")
     if "$ref" in schema:
-        target = _FILES.get(schema["$ref"])
+        target = _resolve_reference(schema["$ref"])
         if target is None:
             raise _Mismatch("unresolvable reference")
         _check(value, target, depth + 1)
@@ -793,7 +837,7 @@ def validate_envelope(value: object) -> dict:
     schema = value["schema"]
     if not isinstance(schema, str) or not schema:
         raise EnvelopeError("bad_shape", "envelope schema malformed")
-    if schema not in (SCHEMA, _LEGACY_SCHEMA):
+    if schema not in (SCHEMA, CAPSULE_SCHEMA, _LEGACY_SCHEMA):
         raise EnvelopeError("unknown_version", "unknown envelope version")
     if not _valid_endpoint(value["from"]) or not _valid_endpoint(value["to"]):
         raise EnvelopeError("bad_shape", "envelope endpoint malformed")
@@ -820,7 +864,8 @@ def validate_envelope(value: object) -> dict:
         if "/" not in discriminator:
             raise EnvelopeError("bad_shape", "body discriminator malformed")
         body_family, body_version = discriminator.split("/", 1)
-        if not body_version or body_family not in _KNOWN_BODY_FAMILIES:
+        allowed_families = _CAPSULE_BODY_FAMILIES if schema == CAPSULE_SCHEMA else _KNOWN_BODY_FAMILIES
+        if not body_version or body_family not in allowed_families:
             raise EnvelopeError("bad_shape", "body discriminator malformed")
         if body_version != "v0.2":
             raise EnvelopeError("unknown_version", "unknown body version")
@@ -863,7 +908,8 @@ def make_envelope(*, msg_id: str, from_component: str,
         if ts_ns < 0 or ts_ns > _MAX_SAFE_INT:
             raise EnvelopeError("bad_shape", "session clock ceiling exceeded")
     envelope = {
-        "schema": (_LEGACY_SCHEMA if isinstance(body, dict) and str(body.get("schema", "")).endswith("/v0.1") else SCHEMA),
+        "schema": (CAPSULE_SCHEMA if isinstance(body, dict) and isinstance(body.get("schema"), str) and body["schema"] in _CAPSULE_BODY_TAGS
+                   else _LEGACY_SCHEMA if isinstance(body, dict) and str(body.get("schema", "")).endswith("/v0.1") else SCHEMA),
         "msg_id": msg_id,
         "ts_ns": ts_ns,
         "from": {"component": from_component, "instance": from_instance},

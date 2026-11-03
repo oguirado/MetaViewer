@@ -43,7 +43,7 @@ def _conjoin_normalized(base, sibling):
             )
         elif key == "additionalProperties":
             merged[key] = False if (merged[key] is False or value is False) else value
-        elif key == "properties":
+        elif key in ("properties", "$defs"):
             props = copy.deepcopy(merged[key])
             for prop_name, prop_schema in value.items():
                 if prop_name in props:
@@ -58,22 +58,25 @@ def _conjoin_normalized(base, sibling):
     return merged
 
 
-def normalized(node, root):
+def normalized(node, root, filename=None, include_definitions=False):
     """Inline local definitions and account for the decoder's global bounds."""
     if isinstance(node, list):
-        return [normalized(value, root) for value in node]
+        return [normalized(value, root, filename, include_definitions) for value in node]
     if not isinstance(node, dict):
         return node
     ref = node.get("$ref", "")
     local_target = None
+    unversioned = ref.removeprefix("v0.2/")
+    if filename and unversioned.startswith(filename + "#/"):
+        ref = unversioned[len(filename):]
     if ref.startswith("#/"):
         target = root
         for part in ref[2:].split("/"):
             target = target[part.replace("~1", "/").replace("~0", "~")]
-        local_target = normalized(target, root)
+        local_target = normalized(target, root, filename, include_definitions)
     result = {}
     for key, value in node.items():
-        if key in ("$schema", "$id", "title", "description", "$defs"):
+        if key in ("$schema", "$id", "title", "description") or key == "$defs" and not include_definitions:
             continue
         if key == "$ref" and ref.startswith("#/"):
             continue
@@ -83,11 +86,11 @@ def normalized(node, root):
             continue
         if key == "$ref":
             value = value.removeprefix("v0.2/")
-        if key == "properties":
+        if key in ("properties", "$defs"):
             # Property names are data, even when named like schema metadata.
-            result[key] = {name: normalized(child, root) for name, child in value.items()}
+            result[key] = {name: normalized(child, root, filename, include_definitions) for name, child in value.items()}
         else:
-            result[key] = normalized(value, root)
+            result[key] = normalized(value, root, filename, include_definitions)
     for key in ("oneOf", "required", "enum"):
         if key in result:
             result[key] = sorted(result[key], key=lambda value: json.dumps(value, sort_keys=True))
@@ -127,8 +130,8 @@ class PythonContractMirrorTests(unittest.TestCase):
                 canonical = json.loads(path.read_text(encoding="utf-8"))
                 raw_mirror = _RAW_V02_FILES[path.name]
                 effective_mirror = _V02_FILES[path.name]
-                self.assertEqual(normalized(canonical, canonical), normalized(raw_mirror, raw_mirror))
-                self.assertEqual(normalized(canonical, canonical), normalized(effective_mirror, effective_mirror))
+                self.assertEqual(normalized(canonical, canonical, path.name, "$defs" in raw_mirror), normalized(raw_mirror, raw_mirror, path.name, "$defs" in raw_mirror))
+                self.assertEqual(normalized(canonical, canonical, path.name, "$defs" in effective_mirror), normalized(effective_mirror, effective_mirror, path.name, "$defs" in effective_mirror))
 
     def test_nested_optional_property_drift_is_detected_in_every_schema(self):
         for name, mirror in _V02_FILES.items():
@@ -150,7 +153,7 @@ class PythonContractMirrorTests(unittest.TestCase):
                     return False
 
                 self.assertTrue(add_property(mutant), "schema must contain an object")
-                self.assertNotEqual(normalized(mutant, mutant), normalized(mirror, mirror))
+                self.assertNotEqual(normalized(mutant, mutant, name, True), normalized(mirror, mirror, name, True))
 
     def test_metadata_named_properties_are_preserved(self):
         schema = {"type": "object", "properties": {

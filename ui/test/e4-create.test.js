@@ -1,4 +1,6 @@
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
+import * as guestWorkloadTileModel from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 // @ts-check
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -125,6 +127,8 @@ async function compileApp(captured, transform = (s) => s, adaptersMod = hostAdap
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },
+    './wall/guestWorkloadTile.js': guestWorkloadTileModel,
+    '../electron/guestCommandValues.js': guestCommandValues,
   };
   const mutatedSource = transform(APP_SOURCE);
   const { descriptor } = parse(mutatedSource);

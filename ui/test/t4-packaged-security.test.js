@@ -63,7 +63,7 @@ test('R1-050 package requires ASAR, applies sole fuse config and verifies finish
     await writeFile(join(app, 'dist/renderer/index.html'), '<html></html>');
     await writeFile(join(app, 'dist/preload/preload.cjs'), 'preload');
     await writeFile(join(app, 'electron/nesting.js'), 'entry');
-    for (const name of ['main.js', 'coreLauncher.js']) {
+    for (const name of ['main.js', 'coreLauncher.js', 'guestCommandProfile.js']) {
       await copyFile(new URL(`../electron/${name}`, import.meta.url), join(app, 'electron', name));
     }
     await packaging.sealRendererAssets(app);

@@ -1,3 +1,5 @@
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import { validates, intentSchema } from './mvui-x-schema.js';
@@ -286,7 +288,7 @@ test('mounted App routes wall controls and catalog proposals, renders typed verd
     './terminal/SideTerminalOverlay.vue': stub, './multislot/MultislotHost.vue': vue.defineComponent({ setup: (_p, ctx) => { captured.multislot = ctx; return () => vue.h('div'); } }),
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': stub,
     './agent/AgentLaneHost.vue': stub, './surfaces/SurfaceCanvas.vue': stub,
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
   };
   const App = await component('App.vue', deps);
   const mounted = mountComponent(App, booted.props);
