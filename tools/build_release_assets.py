@@ -228,8 +228,9 @@ def build_node_asset(
             for n in names:
                 if n.startswith("/") or ".." in Path(n).parts or not re.match(r"^[^/]+/", n if n.endswith("/") else n + "/"):
                     raise AssetBuildError(f"unsafe member name in node tarball: {n}")
-            if not any(n.endswith("/bin/node") for n in names):
-                raise AssetBuildError(f"node tarball has no */bin/node member: {node_tarball}")
+            executables = [m for m in tf.getmembers() if m.name.endswith("/bin/node")]
+            if len(executables) != 1 or not executables[0].isfile() or executables[0].size == 0:
+                raise AssetBuildError(f"node tarball requires one nonempty regular */bin/node member: {node_tarball}")
             for member in tf.getmembers():
                 if member.name.endswith("/bin/node"):
                     license_name = member.name.removesuffix("bin/node") + "LICENSE"
@@ -447,6 +448,58 @@ def default_image_tags(arch: str, include_open_020: bool = False) -> list[str]:
     return tags
 
 
+
+def verify_images_archive(archive: Path, required_tags: list[str]) -> None:
+    """[TARGET, unit decision] Require a Docker-save manifest and its file closure.
+
+    Validate supplied archives before copying them into the release surface.
+    This proves archive structure and tag coverage, not runtime compatibility.
+    """
+    try:
+        with tarfile.open(archive, mode="r:*") as tf:
+            members = {}
+            for member in tf.getmembers():
+                name = member.name
+                if name.startswith("/") or ".." in Path(name).parts or name in members:
+                    raise AssetBuildError(f"unsafe or duplicate image archive member: {name}")
+                members[name] = member
+
+            def regular(name):
+                member = members.get(name) if isinstance(name, str) else None
+                if member is None or not member.isfile() or member.size == 0:
+                    raise AssetBuildError(f"images archive requires a nonempty regular member: {name}")
+                return member
+
+            def json_member(name):
+                member = regular(name)
+                if member.size > 16 * 1024 * 1024:
+                    raise AssetBuildError(f"image metadata too large: {name}")
+                return json.load(tf.extractfile(member))
+
+            manifest = json_member("manifest.json")
+            if not isinstance(manifest, list) or not manifest:
+                raise AssetBuildError("images archive requires a nonempty Docker-save manifest")
+            found = set()
+            for image in manifest:
+                if not isinstance(image, dict):
+                    raise AssetBuildError("invalid Docker-save manifest entry")
+                tags, layers = image.get("RepoTags"), image.get("Layers")
+                if not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags):
+                    raise AssetBuildError("invalid Docker-save RepoTags")
+                if not isinstance(layers, list):
+                    raise AssetBuildError("invalid Docker-save Layers")
+                if not isinstance(json_member(image.get("Config")), dict):
+                    raise AssetBuildError("invalid Docker image config")
+                for layer in layers:
+                    regular(layer)
+                found.update(tags)
+            missing = sorted(set(required_tags) - found)
+            if missing:
+                raise AssetBuildError(f"images archive missing required tags: {', '.join(missing)}")
+    except (tarfile.TarError, OSError, ValueError, TypeError) as exc:
+        raise AssetBuildError(f"invalid images archive {archive.name}: {exc}") from exc
+
+
 def build_images_asset(
     out_dir: Path,
     arch: str,
@@ -454,14 +507,15 @@ def build_images_asset(
     image_tags: list[str] | None = None,
 ) -> Path:
     out_path = out_dir / f"images-linux-{arch}.tar"
+    tags = image_tags or default_image_tags(arch)
     if images_tar is not None:
         if not images_tar.is_file():
             raise AssetBuildError(f"images tar not found: {images_tar}")
+        verify_images_archive(images_tar, tags)
         if images_tar.resolve() != out_path.resolve():
             shutil.copyfile(images_tar, out_path)
         return out_path
 
-    tags = image_tags or default_image_tags(arch)
     docker_bin = shutil.which("docker")
     if not docker_bin:
         raise AssetBuildError("docker not found on PATH and --images-tar was not provided")
@@ -472,6 +526,7 @@ def build_images_asset(
     res = subprocess.run([docker_bin, "save", "-o", str(out_path), *tags], capture_output=True, text=True)
     if res.returncode != 0:
         raise AssetBuildError(f"docker save failed: {res.stderr.strip()}")
+    verify_images_archive(out_path, tags)
     return out_path
 
 

@@ -2,7 +2,7 @@
 // [TARGET, unit decision] Deterministic Linux bundle with an owned real-core session.
 // Local archives are mandatory; packager never reaches its download branch.
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, closeSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { createReadStream, closeSync, mkdirSync, openSync, readFileSync, rmdirSync, readdirSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { once } from 'node:events';
 import * as fs from 'node:fs/promises';
 import { dirname, basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -652,13 +652,30 @@ export async function publishAttachPointer(hostRuntime, record) {
   }
   const json = JSON.stringify(validateAttachRecord(record), null, 2) + '\n';
   const files = [['current.json', json], ['current.env', renderAttachEnv(record)]];
-  for (const [name, body] of files) {
-    const temp = join(dir, `.${name}.${record.pid}.tmp`);
-    await fs.writeFile(temp, body, {mode: 0o600, flag: 'w'});
-    await fs.chmod(temp, 0o600);
-    await fs.rename(temp, join(dir, name));
+  // [TARGET, unit decision] Serialize the entire pair with exit-time retraction
+  // across processes. A retractor never waits on an active publisher. Refuse a
+  // persistently busy lock rather than deleting another process's ownership.
+  const lock = join(dir, '.pointer-lock');
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    try { await fs.mkdir(lock, {mode: 0o700}); break; }
+    catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (Date.now() >= deadline) throw new Error(`ATTACH_POINTER_BUSY: ${lock}; stop other sessions before removing a stale lock`);
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
   }
-  return {json: join(dir, 'current.json'), env: join(dir, 'current.env')};
+  try {
+    for (const [name, body] of files) {
+      const temp = join(dir, `.${name}.${record.pid}.tmp`);
+      try {
+        await fs.writeFile(temp, body, {mode: 0o600, flag: 'w'});
+        await fs.chmod(temp, 0o600);
+        await fs.rename(temp, join(dir, name));
+      } finally { await fs.rm(temp, {force: true}); }
+    }
+    return {json: join(dir, 'current.json'), env: join(dir, 'current.env')};
+  } finally { await fs.rmdir(lock); }
 }
 
 /** Remove the pointer pair only when it still names this session (never a newer
@@ -667,14 +684,17 @@ export async function publishAttachPointer(hostRuntime, record) {
 export function retractAttachPointerSync(hostRuntime, sessionId) {
   if (!hostRuntime || !sessionId) return false;
   const dir = join(hostRuntime, 'metaviewer', 'attach');
+  const lock = join(dir, '.pointer-lock');
+  try { mkdirSync(lock, {mode: 0o700}); } catch { return false; }
   try {
     const current = JSON.parse(readFileSync(join(dir, 'current.json'), 'utf8'));
     if (current?.session_id !== sessionId) return false;
+    for (const name of ['current.env', 'current.json']) {
+      try { rmSync(join(dir, name), {force: true}); } catch {}
+    }
+    return true;
   } catch { return false; }
-  for (const name of ['current.env', 'current.json']) {
-    try { rmSync(join(dir, name), {force: true}); } catch {}
-  }
-  return true;
+  finally { try { rmdirSync(lock); } catch {} }
 }
 
 /** [TARGET, unit decision] Operator guide staged as resources/operator/ATTACH.md. */
@@ -1077,7 +1097,7 @@ export async function createPackagedBootLifecycle(options = {}) {
 export const productionEntry = String.raw`
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { lstatSync, readdirSync, readFileSync, rmSync, writeSync } from 'node:fs';
+import { lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, writeSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -2621,8 +2641,8 @@ export async function operatorPackagedSmoke(installed, source = process.env) {
  * @param {string} artifact */
 export async function cleanInstallSmoke(artifact) {
   const clean=await fs.mkdtemp(join(tmpdir(),'mv-clean-'));
-  validateOutput(clean,repo);
   try {
+    validateOutput(clean,repo);
     const types=await execute('tar',['-tvf',artifact],{maxBuffer:1024*1024});
     if (types.stdout.split('\n').filter(Boolean).some(line => !['-','d'].includes(line[0]))) throw new Error('PKG_ARCHIVE_ALIAS');
     const listing=await execute('tar',['-tf',artifact],{maxBuffer:1024*1024});

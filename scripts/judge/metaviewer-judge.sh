@@ -123,6 +123,16 @@ export MV_JUDGE_HOME="$JUDGE_HOME" MV_JUDGE_KIT="$KIT" MV_JUDGE_ASSET_DIR="$ASSE
 export SRF_IDENTITY_STORE_ROOT="$STORE" MV_JUDGE_PROFILE="$PROFILE_ID" MV_JUDGE_SHM_DIR="$SHM"
 export MV_JUDGE_APPARMOR_DIR="$APPARMOR_DIR" MV_JUDGE_FW_WITNESS="$WITNESS" MV_JUDGE_RUN_USER_ROOT="$RUN_USER_ROOT"
 
+
+# [TARGET, unit decision] Docker metadata may wait up to 120 seconds; image
+# load/save/pull/build may take 1800 seconds. Kill a stuck client after grace.
+# Environment overrides allow slower machines and offline deadline controls.
+bounded_docker() {
+    local limit=${MV_JUDGE_DOCKER_TIMEOUT:-120}
+    case ${1:-} in load | save | pull | build) limit=${MV_JUDGE_DOCKER_IMAGE_TIMEOUT:-1800} ;; esac
+    timeout --kill-after=5 "$limit" docker "$@"
+}
+
 # ------------------------------------------------------------------- helpers
 pf() { bash "$PREFLIGHT" "$@"; }
 
@@ -258,12 +268,25 @@ ensure_assets() { # asset names
         fi
         for n in $missing; do
             tmp="$ASSET_DIR/.$n.part"
-            if curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error --output "$tmp" "$RELEASE_BASE/$n"; then
-                mv -f -- "$tmp" "$ASSET_DIR/$n"
+            # [TARGET, unit decision] Bound connection setup and a stalled
+            # transfer, not total download time: large assets may take minutes.
+            # Keep cleanup in this subshell so run's signal traps are untouched.
+            if (
+                trap 'rm -f -- "$tmp"' EXIT
+                trap 'exit 130' INT
+                trap 'exit 143' TERM HUP
+                if curl --fail --location --proto '=https' --tlsv1.2 --silent --show-error \
+                    --connect-timeout "${MV_JUDGE_DOWNLOAD_CONNECT:-60}" \
+                    --speed-limit 1 --speed-time "${MV_JUDGE_DOWNLOAD_STALL:-120}" \
+                    --output "$tmp" "$RELEASE_BASE/$n"; then
+                    mv -f -- "$tmp" "$ASSET_DIR/$n"
+                else
+                    exit 1
+                fi
+            ); then
                 DOWNLOADED="$DOWNLOADED $n"
             else
-                rm -f -- "$tmp"
-                fail JUDGE_ASSET "download of $n failed" "check the network and the release URL $RELEASE_BASE/$n"
+                fail JUDGE_ASSET "download of $n failed, stalled or was interrupted" "check the network and the release URL $RELEASE_BASE/$n, then re-run install"
             fi
         done
     fi
@@ -362,12 +385,19 @@ ensure_pkg_tool_deps() {
     local log=$1 ui
     ui=$KIT/ui
     [ -f "$ui/package-lock.json" ] || return 0
-    [ ! -d "$ui/node_modules/@electron/asar" ] || return 0
+    # Import the actual tool: this checks its complete transitive import tree,
+    # including asar's dependencies, rather than a directory left by failed ci.
+    if [ -f "$ui/node_modules/@electron/asar/package.json" ] &&
+        "$NODE_BIN" --input-type=module -e 'import {pathToFileURL} from "node:url"; const tool = process.argv.pop(); await import(pathToFileURL(tool).href)' "$PKG_TOOL" >"$log" 2>&1; then
+        return 0
+    fi
     PATH="$(dirname "$NODE_BIN"):$PATH" command -v npm >/dev/null 2>&1 ||
         fail JUDGE_NPM "the Node asset has no npm and package verification needs it" "sudo apt-get install -y npm"
     if ! PATH="$(dirname "$NODE_BIN"):$PATH" npm --prefix "$ui" ci --ignore-scripts --no-audit --no-fund >"$log" 2>&1; then
         fail JUDGE_SMOKE "cannot install the package tool dependencies: $(tail -n 3 "$log" | tr '\n' ' ')" "check the network, then run: npm --prefix $ui ci --ignore-scripts"
     fi
+    "$NODE_BIN" --input-type=module -e 'import {pathToFileURL} from "node:url"; const tool = process.argv.pop(); await import(pathToFileURL(tool).href)' "$PKG_TOOL" >>"$log" 2>&1 ||
+        fail JUDGE_SMOKE "package tool imports still fail after npm ci" "see $log; restore the complete kit and retry npm --prefix $ui ci --ignore-scripts"
 }
 
 step_verify_smoke() {
@@ -403,11 +433,11 @@ step_images() {
     local asset=images-linux-$ARCHN.tar img missing=0 idver=0.1.1
     [ "$(net_mode_now)" = open ] && idver=0.2.0
     for img in "opensuperficies-identity-browser-$ARCHN:$idver" "opensuperficies-program-host-$ARCHN:0.1.0" "opensuperficies-desktop-$ARCHN:1.1.0"; do
-        docker image inspect "$img" >/dev/null 2>&1 || missing=1
+        bounded_docker image inspect "$img" >/dev/null 2>&1 || missing=1
     done
     [ "$missing" = 1 ] || return 0
     ensure_assets "$asset"
-    docker load -i "$ASSET_DIR/$asset" >/dev/null || fail JUDGE_IMAGE "docker load of $asset failed" "check 'docker info' and free disk space, then re-run install --capsules"
+    bounded_docker load -i "$ASSET_DIR/$asset" >/dev/null || fail JUDGE_IMAGE "docker load of $asset failed" "check 'docker info' and free disk space, then re-run install --capsules"
 }
 
 step_profile() {
@@ -433,15 +463,17 @@ except (ValueError, TypeError):
     while IFS= read -r pid; do
         [ -n "$pid" ] || continue
         if [ -x "$admin" ] && [ ! -f "$STORE/metadata/$pid.json" ]; then
-            "$admin" create --store-root "$STORE" --id "$pid" --label "$pid" --domains example.com >/dev/null 2>&1 || true
+            "$admin" create --store-root "$STORE" --id "$pid" --label "$pid" --domains example.com >/dev/null 2>&1 ||
+                fail JUDGE_PROFILE "identity publication failed for $pid in $STORE" "check SRF_IDENTITY_STORE_ROOT ownership and run srf-identity-admin create --store-root '$STORE' --id '$pid' --label '$pid' --domains example.com; then retry install --capsules"
         fi
         if [ ! -f "$STORE/identities/$pid.json" ]; then
-            printf '{"profile_id":"%s","display_name":"%s","domains":["example.com"]}\n' "$(json_str "$pid")" "$(json_str "$pid")" >"$STORE/identities/$pid.json" 2>/dev/null || true
+            printf '{"profile_id":"%s","display_name":"%s","domains":["example.com"]}\n' "$(json_str "$pid")" "$(json_str "$pid")" >"$STORE/identities/$pid.json" 2>/dev/null ||
+                fail JUDGE_PROFILE "cannot publish identity $pid in $STORE/identities" "choose a writable SRF_IDENTITY_STORE_ROOT and retry install --capsules"
         fi
         p="$STORE/profiles/$pid"
         st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
         [ "$st" = "700 10001" ] && continue
-        docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh \
+        bounded_docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh \
             --mount "type=bind,src=$STORE/profiles,dst=/profiles" \
             "opensuperficies-identity-browser-$ARCHN:$idver" \
             -c 'mkdir -p "$1" && chown 10001:10001 "$1" && chmod 0700 "$1"' -- "/profiles/$pid" >/dev/null 2>&1 ||
@@ -531,7 +563,7 @@ write_receipt() {
     \"$(json_str "$n")\": \"$(json_str "$sum")\""
         first=0
     done
-    if [ "$TIER" = T2 ]; then docker_ver=$(docker version --format '{{.Server.Version}}' 2>/dev/null || printf ''); fi
+    if [ "$TIER" = T2 ]; then docker_ver=$(bounded_docker version --format '{{.Server.Version}}' 2>/dev/null || printf ''); fi
     (
         umask 077
         {
@@ -584,7 +616,7 @@ cmd_install_locked() {
         assets_used="$assets_used opensuperficies-linux-$ARCHN.tar.gz vision-engine.tar.gz wender-agent.tar.gz images-linux-$ARCHN.tar"
         # Load the legacy-compatible set before deciding whether Open is available.
         step_images
-        if docker image inspect "opensuperficies-identity-browser-$ARCHN:0.2.0" >/dev/null 2>&1; then
+        if bounded_docker image inspect "opensuperficies-identity-browser-$ARCHN:0.2.0" >/dev/null 2>&1; then
             step_firewall || true
         elif [ -s "$WITNESS" ]; then
             fail JUDGE_IMAGE "Open firewall is active but the kit lacks the Open browser image" "obtain a kit containing opensuperficies-identity-browser-$ARCHN:0.2.0"
@@ -637,12 +669,14 @@ cmd_run() {
         case ${!v:-} in /*) envv+=("$v=${!v}") ;; esac
     done
     dest=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/recordings
-    mkdir -p "$dest" && chmod 0700 "$dest"
+    mkdir -p "$dest" && chmod 0700 "$dest" ||
+        fail JUDGE_PROFILE "cannot prepare private recording directory $dest" "make XDG_STATE_HOME writable and retry run"
     envv+=("MV_RECORDING_DESTINATION=$dest")
     if [ "$TIER" = T2 ]; then
         statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
         ramroot=$SHM/vqa-ramws/opensuperficies/os-cu-0
-        mkdir -p "$statedir" "$ramroot" "$STORE" && chmod 0700 "$statedir" "$ramroot"
+        mkdir -p "$statedir" "$ramroot" "$STORE" && chmod 0700 "$statedir" "$ramroot" ||
+            fail JUDGE_PROFILE "cannot prepare capsule state or RAM directories ($statedir, $ramroot, $STORE)" "check XDG_STATE_HOME, MV_JUDGE_SHM_DIR and SRF_IDENTITY_STORE_ROOT ownership and free space, then retry run"
         if [ -n "${MV_SRF_PROFILES:-}" ]; then
             profiles_json=$MV_SRF_PROFILES
         else
@@ -755,8 +789,8 @@ cmd_stop() {
     local statedir="${MV_SRF_STATE_DIR:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf}"
     programs=$(owned_programs "$statedir" 2>/dev/null) || programs=
     if [ -x "$SRF_BIN/srf-identity-surface" ] && command -v docker >/dev/null 2>&1 &&
-        docker info >/dev/null 2>&1 &&
-        inventory=$(docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
+        bounded_docker info >/dev/null 2>&1 &&
+        inventory=$(bounded_docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
         while IFS= read -r name; do
             [ -n "$name" ] || continue
             case $name in
@@ -768,8 +802,8 @@ cmd_stop() {
                 note "capsule stop for $name reported a problem; the leak check below is authoritative"
         done <<< "$inventory"
     fi
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 &&
-        inventory=$(docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
+    if command -v docker >/dev/null 2>&1 && bounded_docker info >/dev/null 2>&1 &&
+        inventory=$(bounded_docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
         while IFS= read -r name; do
             [ -n "$name" ] && [ "$name" != srf-egress-proxy ] || continue
             leaks=$((leaks + 1))
@@ -812,9 +846,9 @@ cmd_stop() {
     if [ -d "$ram" ]; then
         # A capsule's RAM directory outlives its container. Only an entry whose container
         # is gone is safe to remove; anything else stays and is reported below.
-        if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        if command -v docker >/dev/null 2>&1 && bounded_docker info >/dev/null 2>&1; then
             local live
-            if live=$(docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
+            if live=$(bounded_docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then
                 for f in "$ram"/srf-id-* "$ram"/srf-pg-*; do
                     [ -d "$f" ] && [ ! -L "$f" ] && [ -O "$f" ] || continue
                     case ${f##*/} in
