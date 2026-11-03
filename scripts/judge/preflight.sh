@@ -94,6 +94,16 @@ else
     NODE_BIN=$(command -v node 2>/dev/null || printf '')
 fi
 
+
+# [TARGET, unit decision] Docker metadata may wait up to 120 seconds; image
+# load/save/pull/build may take 1800 seconds. Kill a stuck client after grace.
+# Environment overrides allow slower machines and offline deadline controls.
+bounded_docker() {
+    local limit=${MV_JUDGE_DOCKER_TIMEOUT:-120}
+    case ${1:-} in load | save | pull | build) limit=${MV_JUDGE_DOCKER_IMAGE_TIMEOUT:-1800} ;; esac
+    timeout --kill-after=5 "$limit" docker "$@"
+}
+
 # ------------------------------------------------------------------- helpers
 FAILS=0
 refuse() { FAILS=$((FAILS + 1)); printf '%s: %s -- fix: %s\n' "$1" "$2" "$3" >&2; }
@@ -336,9 +346,9 @@ chk_docker_host() {
 chk_docker() {
     local ctx
     command -v docker >/dev/null 2>&1 || return 0 # JUDGE_SYSDEP reports it
-    if DOCKER_INFO=$(docker info --format '{{.SecurityOptions}}|{{.OperatingSystem}}|{{.DockerRootDir}}' 2>/dev/null); then : # MUT:JUDGE_DOCKER
+    if DOCKER_INFO=$(bounded_docker info --format '{{.SecurityOptions}}|{{.OperatingSystem}}|{{.DockerRootDir}}' 2>/dev/null); then : # MUT:JUDGE_DOCKER
     else
-        refuse JUDGE_DOCKER "'docker info' fails for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info"
+        refuse JUDGE_DOCKER "'docker info' failed or timed out for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info"
         return
     fi
     DOCKER_ROOT=${DOCKER_INFO##*|}
@@ -348,9 +358,12 @@ chk_docker() {
             return
             ;;
     esac
-    ctx=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || printf '')
+    if ! ctx=$(bounded_docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null); then
+        refuse JUDGE_DOCKER "Docker context inspection failed or timed out; local endpoint is unverified" "run docker context inspect; restore the local engine or run docker context use default, then retry"
+        return
+    fi
     case $ctx in
-        '' | unix://*) ;;
+        unix://?*) ;;
         *) refuse JUDGE_DOCKER "the active Docker endpoint '$ctx' is not a local unix socket" "docker context use default"; return ;;
     esac
     DOCKER_OK=1
@@ -374,7 +387,7 @@ chk_image() {
     local idver=0.1.1
     open_ready && idver=0.2.0
     for img in "opensuperficies-identity-browser-$ARCHN:$idver" "opensuperficies-program-host-$ARCHN:0.1.0" "opensuperficies-desktop-$ARCHN:1.1.0"; do
-        if docker image inspect "$img" >/dev/null 2>&1; then : # MUT:JUDGE_IMAGE
+        if bounded_docker image inspect "$img" >/dev/null 2>&1; then : # MUT:JUDGE_IMAGE
         else
             refuse JUDGE_IMAGE "image $img is not present" "bash scripts/judge/metaviewer-judge.sh install --capsules (loads the images from the kit)"
         fi
@@ -404,8 +417,8 @@ chk_net() {
     [ "$DOCKER_OK" = 1 ] || return 0
     open_ready && return 0
     # Legacy network: srf-idnet internal on 172.30.80.0/24 plus the running proxy.
-    net=$(docker network inspect srf-idnet --format '{{.Internal}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || printf '')
-    proxy=$(docker inspect --format '{{.State.Running}}' srf-egress-proxy 2>/dev/null || printf '')
+    net=$(bounded_docker network inspect srf-idnet --format '{{.Internal}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || printf '')
+    proxy=$(bounded_docker inspect --format '{{.State.Running}}' srf-egress-proxy 2>/dev/null || printf '')
     if [ "$net" != "true 172.30.80.0/24 " ] || [ "$proxy" != true ]; then # MUT:JUDGE_NET
         refuse JUDGE_NET "legacy network srf-idnet or the srf-egress-proxy container is not ready" "bash scripts/judge/metaviewer-judge.sh install --capsules (ensures the scoped capsule network)"
     fi
