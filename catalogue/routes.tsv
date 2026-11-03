@@ -241,12 +241,14 @@ v027-fix-u4.md	changes/unreleased/v027-fix-u4.md
 v027-fix-u5.md	changes/unreleased/v027-fix-u5.md
 v027-fix-u6.md	changes/unreleased/v027-fix-u6.md
 v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
+v027-host-wsl.md	changes/unreleased/v027-host-wsl.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
 v027-license.md	changes/unreleased/v027-license.md
 v027-lost-stop.md	changes/unreleased/v027-lost-stop.md
 v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-open-start.md	changes/unreleased/v027-open-start.md
+v027pro-225ad6e4d5d0	changes/unreleased/v027-program-provision.md
 v027-rebind-caret.md	changes/unreleased/v027-rebind-caret.md
 v027rel-acff733643dd	changes/unreleased/v027-release-notices.md
 v027-repo.md	changes/unreleased/v027-repo.md
@@ -1577,6 +1579,7 @@ test_v027_fix_j4.py	tests/test_v027_fix_j4.py
 test_v027_fix_k3.py	tests/test_v027_fix_k3.py
 testv02-4fc2cd804a0a	tests/test_v027_judge_triage.py
 testv02-d4158620998e	tests/test_v027_mw_triage.py
+testv02-7c7e355119a0	tests/test_v027_program_provision.py
 testv02-6183b1eda27f	tests/test_v027_release_assets.py
 testv02-828a9d0ea891	tests/test_v027_seams_mw_wire.py
 test_video_seal.py	tests/test_video_seal.py
