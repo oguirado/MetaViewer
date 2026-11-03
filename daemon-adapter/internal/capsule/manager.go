@@ -1177,6 +1177,10 @@ func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
 func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()
 	b, ok := m.bindings[id]
+	if ok && m.hasPendingHostLossLocked(b) {
+		m.mu.Unlock()
+		return b, NativeFrame{}, fault("host_window_unavailable", b.HostLostReason)
+	}
 	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[id] {
 		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")

@@ -187,10 +187,20 @@ func writeHostWindowFrameFile(framesRoot string, seq uint64, rgb []byte) (string
 	return finalPath, nil
 }
 
+// [TARGET, unit decision] A capture/input can fence the window before the next
+// subscription poll. Preserve its pending loss through every capture entry so
+// the wire owner can deliver state_changed before capture_failed, without IO.
+// Caller holds m.mu; this is evidence for delivery, never capture admission.
+func (m *Manager) hasPendingHostLossLocked(b Binding) bool {
+	return (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") &&
+		b.Surface.State == "lost" && b.ConfirmedAbsent &&
+		len(b.pendingHostLost) > 0 && !m.destroying[b.Surface.SurfaceID]
+}
+
 func (m *Manager) captureHostWindow(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()
 	b, ok := m.bindings[id]
-	if ok && b.Surface.State == "lost" && len(b.pendingHostLost) > 0 {
+	if ok && m.hasPendingHostLossLocked(b) {
 		m.mu.Unlock()
 		return b, NativeFrame{}, fault("host_window_unavailable", b.HostLostReason)
 	}
@@ -422,7 +432,10 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 				reason := extractOrDefaultHostWindowReason(errText, "host_window_unavailable: window closed or witness changed")
 				b.HostLostReason = reason
 				m.bindings[surfaceID] = b
-				_, _ = m.markLostLocked(surfaceID, true, false)
+				ev, _ := m.markLostLocked(surfaceID, true, false)
+				lost := m.bindings[surfaceID]
+				lost.pendingHostLost = ev
+				m.bindings[surfaceID] = lost
 				return nil, fault("host_window_unavailable", reason)
 			}
 			return nil, execErr
