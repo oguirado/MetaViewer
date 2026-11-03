@@ -159,7 +159,7 @@ class CaretRebindTests(unittest.TestCase):
         frame = dict(self.fixture_frame())
         rows = [dict(role='textbox', focused=True, box=[20, 20, 60, 20])]
         off = bytearray(b'\xff' * (frame['width'] * frame['height'] * 3))
-        for y, level in ((23, 0xe1), (24, 0xef), (25, 0xc0)):
+        for y, level in ((23, 0xe1), (24, 0xef), (25, 0xbb)):
             offset = (y * frame['width'] + 30) * 3
             off[offset:offset+3] = bytes([level]) * 3
         caret = bytearray(off)
