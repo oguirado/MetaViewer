@@ -47,6 +47,17 @@ export function writeFdSync(fd, value) {
 const execute = promisify(execFile);
 const ui = fileURLToPath(new URL('../', import.meta.url));
 const repo = resolve(ui, '..');
+/** Preserve Electron's root license and the product notice's relative link.
+ * @param {string} bundle
+ */
+export async function stageProductNotices(bundle) {
+  const destination = join(bundle, 'licenses/metaviewer');
+  await fs.mkdir(destination, { recursive: true });
+  for (const name of ['LICENSE', 'NOTICE-EVALUATION.md']) {
+    await fs.copyFile(join(repo, name), join(destination, name));
+    await fs.chmod(join(destination, name), 0o644);
+  }
+}
 /** Stage the complete host module tree, shared by packaging and smoke fixtures.
  * @param {string} app
  * @param {NodeJS.ProcessEnv} [env]
@@ -2850,6 +2861,7 @@ export async function packageShell(env = process.env) {
       electronZipDir: zipDir, asar: true, prune: false, overwrite: false });
     if (built.length !== 1) throw new Error(`Expected exactly one linux-${architecture.arch} package`);
     await verifyBinary(join(built[0],'metaviewer'));
+    await stageProductNotices(built[0]);
     await fs.cp(native,join(built[0],'resources/bin'),{recursive:true});
     await fs.cp(join(repo,'contracts/v0.2'),join(built[0],'resources/contracts/v0.2'),{recursive:true});
     await fs.copyFile(join(repo,'deps.lock'),join(built[0],'resources/deps.lock'));
