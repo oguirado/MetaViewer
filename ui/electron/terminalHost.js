@@ -228,7 +228,7 @@ export function createTerminalHost({
   const cwd = typeof osInfo.homedir === 'string' && osInfo.homedir.startsWith('/') && !osInfo.homedir.includes('\0')
     ? osInfo.homedir
     : (typeof env?.HOME === 'string' && env.HOME.startsWith('/') ? env.HOME : '/tmp');
-  const defaultEnv = validateProviderEnv({ TERM: 'xterm-256color', ...env }, ['PATH', 'HOME', 'LANG', 'TERM', 'COLORTERM']);
+  const defaultEnv = validateProviderEnv({ TERM: 'xterm-256color', ...env }, ['PATH', 'HOME', 'LANG', 'TERM', 'COLORTERM', 'XDG_RUNTIME_DIR']);
 
   /** @type {Map<string, any>} */
   const owned = new Map();
