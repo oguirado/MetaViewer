@@ -1,4 +1,4 @@
-import { workflowPrompt } from './workflowPrompts.js';
+import { assertSafeWorkflowPrompt, workflowPrompt } from './workflowPrompts.js';
 /**
  * OpenFresnel-style Terminal Deck model and controller for MetaViewer (P18h).
  *
@@ -490,8 +490,8 @@ export function deserializeDeckState(raw) {
     const screenMatch = /^screen-(\d+)$/.exec(screenId);
     if (screenMatch) maxScreenNum = Math.max(maxScreenNum, Number(screenMatch[1]));
     const allRawSlots = Array.isArray(rawScreen.slots) ? rawScreen.slots : [];
-    if (allRawSlots.length > 16) return null;
-    const rawSlots = allRawSlots.slice(0, MAX_SLOTS_PER_SCREEN);
+    if (allRawSlots.length > MAX_SLOTS_PER_SCREEN) return null;
+    const rawSlots = allRawSlots;
     /** @type {DeckSlot[]} */
     const slots = [];
     for (const rawSlot of rawSlots) {
@@ -638,10 +638,15 @@ export function createTerminalDeckController(options = {}) {
   let toastTimer = /** @type {ReturnType<typeof setTimeout>|null} */ (null);
   let disposed = false;
 
+  let storageProtected = false;
   const restored = (() => {
     try {
-      return options.storage ? deserializeDeckState(options.storage.getItem(TERMINAL_DECK_STORAGE_KEY)) : null;
+      const raw = options.storage?.getItem(TERMINAL_DECK_STORAGE_KEY);
+      const saved = deserializeDeckState(raw);
+      storageProtected = raw != null && !saved;
+      return saved;
     } catch {
+      storageProtected = true;
       return null;
     }
   })();
@@ -780,7 +785,7 @@ export function createTerminalDeckController(options = {}) {
   }
 
   function persist() {
-    if (!options.storage) return;
+    if (!options.storage || storageProtected) return;
     try {
       const json = serializeDeckState({
         screens,
@@ -904,6 +909,7 @@ export function createTerminalDeckController(options = {}) {
       }
       return;
     }
+    if (pendingCloseSlotId === found.slot.id) pendingCloseSlotId = null;
     found.slot.status = 'exited';
     found.slot.busy = false;
     if (!cleanExit) {
@@ -1136,6 +1142,20 @@ export function createTerminalDeckController(options = {}) {
     return null;
   }
 
+  /** @param {string} sessionId */
+  function claimNewSlotScreen(sessionId) {
+    const screen = resolveTargetScreenForNewSlot();
+    if (screen) return screen;
+    void closeSessionOnBroker(sessionId);
+    const error = Object.assign(new Error('SESSION_LIMIT: All terminal screens are full.'), { code: 'SESSION_LIMIT' });
+    const formatted = formatTerminalRefusal(error);
+    errorCode = formatted.code;
+    errorMessage = formatted.message;
+    launcherOpen = false;
+    notify();
+    throw error;
+  }
+
   function dismissError() {
     if (!errorCode && !errorMessage) return;
     errorCode = '';
@@ -1226,7 +1246,7 @@ export function createTerminalDeckController(options = {}) {
       return existing.slot;
     }
 
-    const screen = resolveTargetScreenForNewSlot() ?? screens[activeScreenIndex];
+    const screen = claimNewSlotScreen(sessionId);
     const slotId = `slot-${nextSlotSeq++}`;
     /** @type {DeckSlot} */
     const slot = {
@@ -1309,10 +1329,23 @@ export function createTerminalDeckController(options = {}) {
       notify();
       throw error;
     }
-    const commandBytes = Array.from(encoder.encode(`${commandText}\n`));
-    writeSessionBytes(sessionId, commandBytes);
-
     const existing = launchOpts.reuseSlotId ? findSlot(launchOpts.reuseSlotId) : null;
+    if (!existing && !hasCapacityForNewSlot()) claimNewSlotScreen(sessionId);
+    const commandBytes = Array.from(encoder.encode(`${commandText}\n`));
+    try {
+      if (typeof sessionFacade?.write !== 'function' && !directPortFacades.has(sessionId)) {
+        throw Object.assign(new Error('TERMINAL_SESSION_UNAVAILABLE: Custom command could not be sent.'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
+      }
+      writeSessionBytes(sessionId, commandBytes);
+    } catch (error) {
+      await closeSessionOnBroker(sessionId);
+      const formatted = formatTerminalRefusal(error);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw error;
+    }
     if (existing) {
       const prevSessionId = existing.slot.sessionId;
       if (prevSessionId && prevSessionId !== sessionId) {
@@ -1974,7 +2007,9 @@ export function createTerminalDeckController(options = {}) {
     switchScreen,
     focusSlot,
     bootstrap,
-    copyWorkflowPrompt: (/** @type {string} */ kind) => bootstrap(workflowPrompt(kind)),
+    copyWorkflowPrompt: (/** @type {string} */ kind, /** @type {string} */ identityLine = '') => bootstrap(assertSafeWorkflowPrompt(
+      workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => identityLine || '<operator-pasted capsule identity line>'),
+    )),
     dismissError,
     handleKeyDown,
     writeSessionBytes,
