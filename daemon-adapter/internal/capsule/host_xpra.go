@@ -139,7 +139,36 @@ func xpraChild(path, root string) string {
 	}
 	return strings.Join(argv, " ")
 }
-func waitHostSocket(ctx context.Context, path string, child *exec.Cmd, label string, log *hostXpraLog) error {
+
+// appendAbstractXauth adds a wildcard entry for this private file's cookie. A client reaching
+// Xvfb through the abstract socket (see hostDisplaySockets) has no display number to match; the
+// file serves one private display, so no other server gains this cookie.
+func appendAbstractXauth(path string, cookie []byte) error {
+	const familyWild = 0xffff
+	entry := binary.BigEndian.AppendUint16(nil, familyWild)
+	for _, field := range [][]byte{nil, nil, []byte("MIT-MAGIC-COOKIE-1"), cookie} {
+		entry = binary.BigEndian.AppendUint16(entry, uint16(len(field)))
+		entry = append(entry, field...)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err = file.Write(entry); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+// hostDisplaySockets lists where Xvfb can listen. Under WSLg /tmp/.X11-unix is a read-only
+// mount, so Xvfb serves only the abstract socket and the path never appears.
+func hostDisplaySockets(display string) []string {
+	path := filepath.Join("/tmp/.X11-unix", "X"+strings.TrimPrefix(display, ":"))
+	return []string{path, "@" + path}
+}
+
+func waitHostSocket(ctx context.Context, paths []string, child *exec.Cmd, label string, log *hostXpraLog) error {
 	for {
 		// Inspect without Wait: the unreaped anchor must continue reserving its
 		// process-group witness until stop has signalled and verified removal.
@@ -149,10 +178,12 @@ func waitHostSocket(ctx context.Context, path string, child *exec.Cmd, label str
 				return fault("host_program_unavailable", label+" exited before socket readiness: "+log.String())
 			}
 		}
-		c, err := net.DialTimeout("unix", path, 100*time.Millisecond)
-		if err == nil {
-			c.Close()
-			return nil
+		for _, path := range paths {
+			c, err := net.DialTimeout("unix", path, 100*time.Millisecond)
+			if err == nil {
+				c.Close()
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -217,6 +248,9 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 	if err = auth.Run(); err != nil {
 		return nil, fault("host_program_unavailable", "private Xauthority creation failed")
 	}
+	if err = appendAbstractXauth(p.authority, entropy[:]); err != nil {
+		return nil, fault("host_program_unavailable", "private Xauthority creation failed")
+	}
 	p.anchor = exec.Command(tools["Xvfb"], p.display, "-screen", "0", "1280x900x24", "-nolisten", "tcp", "-noreset", "+extension", "Composite", "-auth", p.authority)
 	p.anchor.Env = env
 	p.anchor.Stderr = p.log
@@ -232,7 +266,7 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 	}
 	ready, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	if err = waitHostSocket(ready, filepath.Join("/tmp/.X11-unix", "X"+strings.TrimPrefix(p.display, ":")), p.anchor, "Xvfb", p.log); err != nil {
+	if err = waitHostSocket(ready, hostDisplaySockets(p.display), p.anchor, "Xvfb", p.log); err != nil {
 		return nil, err
 	}
 	l, e := net.Listen("tcp4", "127.0.0.1:0")
@@ -252,7 +286,7 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 		p.server = nil
 		return nil, err
 	}
-	if err = waitHostSocket(ready, filepath.Join(p.view, "s", "xpra.sock"), p.server, "xpra", p.log); err != nil {
+	if err = waitHostSocket(ready, []string{filepath.Join(p.view, "s", "xpra.sock")}, p.server, "xpra", p.log); err != nil {
 		return nil, err
 	}
 	return p, nil

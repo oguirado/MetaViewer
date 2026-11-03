@@ -1,0 +1,1 @@
+- Start Host programs under WSLg, where the X socket directory is read-only: accept the abstract display socket and give its clients a matching private cookie.

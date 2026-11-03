@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -293,5 +294,53 @@ func TestV027HostProgramExitDuringWindowDiscovery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Measured on WSL2: /tmp/.X11-unix is a read-only mount and Xvfb listens only on the abstract socket.
+func TestHostDisplayReadyOnAbstractSocket(t *testing.T) {
+	display := ":64999"
+	sockets := hostDisplaySockets(display)
+	if len(sockets) != 2 || sockets[1] != "@"+sockets[0] {
+		t.Fatalf("sockets %v", sockets)
+	}
+	l, err := net.Listen("unix", sockets[1])
+	if err != nil {
+		t.Skip("abstract sockets unavailable:", err)
+	}
+	defer l.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := waitHostSocket(ctx, sockets, nil, "Xvfb", &hostXpraLog{}); err != nil {
+		t.Fatal(err)
+	}
+	short, stop := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer stop()
+	if err := waitHostSocket(short, []string{"/nonexistent/socket"}, nil, "Xvfb", &hostXpraLog{}); err == nil {
+		t.Fatal("absent socket reported ready")
+	}
+}
+
+// The X client library matches this entry when the connection has no display number.
+func TestAbstractXauthEntryFormat(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "xauthority")
+	if err := os.WriteFile(path, []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := appendAbstractXauth(path, []byte{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := append([]byte("existing"), 0xff, 0xff, 0, 0, 0, 0, 0, 18)
+	want = append(want, "MIT-MAGIC-COOKIE-1"...)
+	want = append(want, 0, 2, 1, 2)
+	if string(raw) != string(want) {
+		t.Fatalf("entry %x want %x", raw, want)
+	}
+	if appendAbstractXauth(filepath.Join(t.TempDir(), "absent", "file"), []byte{1}) == nil {
+		t.Fatal("unwritable path admitted")
 	}
 }
