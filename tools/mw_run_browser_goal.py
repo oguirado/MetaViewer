@@ -27,6 +27,7 @@ from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, detect_stop
 
 
 class BrowserGoalBackend(host.HostBackend):
+    rebind_caret_keys = True  # Focus/identity/value survive native revalidation.
     compiled_wender_ok = True  # planning goes through WenderSubprocessAdapter and the model entry.
     eager_slot_text = False  # Only the chosen text target requires exact readback.
     agent_control_required = True
