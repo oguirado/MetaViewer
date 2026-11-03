@@ -106,7 +106,7 @@ granting redistribution rights in those components.
 | vision-engine | `v0.2.0` | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` | `deps.lock` |
 | wender-agent | `v0.3.0` | `96120967b435b72fc6d29635f3844dae140388a9` | `deps.lock` |
 | OpenSuperficies | `os-cu-w9-mv1` | `3cb86d752f38457b6730eefd235d4da4c4039721` | `deps.lock` |
-| capsule-ui-kit | `0.2.1` | `bf31bc201987206d16dbd88d93102f9d5ce026f9` | `ui/kit.lock.json` |
+| capsule-ui-kit | `0.2.1` | `aaada9dedc177b096e8b4764959e258e76c1ef02` | `ui/kit.lock.json` |
 
 ## Built during the event
 

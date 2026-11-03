@@ -140,7 +140,7 @@ Electron renders state and submits intents; it never injects input [CITED: `docs
 | Go | `1.26.0` [CITED: `daemon-adapter/go.mod`] |
 | Node | `>=24` [CITED: `ui/package.json` `engines.node`] |
 | Python | `>=3.11` [CITED: `agents/pyproject.toml`] |
-| Capsule UI kit | `0.2.1`, commit `bf31bc201987206d16dbd88d93102f9d5ce026f9` [CITED: `ui/kit.lock.json`]; set `CAPSULE_UI_KIT_REPO` |
+| Capsule UI kit | `0.2.1`, commit `aaada9dedc177b096e8b4764959e258e76c1ef02` [CITED: `ui/kit.lock.json`]; set `CAPSULE_UI_KIT_REPO` |
 | Electron dist | `44.9.2` [CITED: `ui/package.json`]; set `ELECTRON_OVERRIDE_DIST_PATH` |
 
 External components stay in their own repositories, pinned in `deps.lock` (`3` components [MEASURED: `python3 -c 'import json; print(len(json.load(open("deps.lock"))["components"]))'`]) with source kept separate: `vision-engine` `v0.2.0` (`3bb54835db8a2e545311cfcc45185a0dfbd9313a`), `wender-agent` `v0.3.0` (`96120967b435b72fc6d29635f3844dae140388a9`), and `opensuperficies` `os-cu-w9-mv1` (`3cb86d752f38457b6730eefd235d4da4c4039721`) [CITED: `deps.lock`].
