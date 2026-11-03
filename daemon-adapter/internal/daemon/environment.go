@@ -1084,6 +1084,27 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 const postInputSettleBound = 1500 * time.Millisecond
 const postInputCaptureInterval = 50 * time.Millisecond
 
+// [TARGET, unit decision] Bootstrap one capture under a hard ceiling, then
+// budget four measured capture costs plus polling gaps. Slow hosts need room
+// for a second post-input paint; fast hosts retain the original settle window.
+// The caller's earlier deadline always wins. No pre-input frame is reused.
+const postInputSlowCaptureBound = 6 * time.Second
+
+func inputSettleBudget(cost time.Duration) time.Duration {
+	// Clamp before multiplication, including when a clock moves backwards.
+	if cost <= 0 {
+		return postInputSettleBound
+	}
+	if cost >= (postInputSlowCaptureBound-3*postInputCaptureInterval)/4 {
+		return postInputSlowCaptureBound
+	}
+	budget := 4*cost + 3*postInputCaptureInterval
+	if budget < postInputSettleBound {
+		return postInputSettleBound
+	}
+	return budget
+}
+
 func waitInputCapture(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -1099,18 +1120,26 @@ func settleInput(ctx context.Context, before string,
 	capture func(context.Context) (capsule.Binding, capsule.NativeFrame, error),
 	now func() time.Time, wait func(context.Context, time.Duration) error,
 ) (capsule.Binding, capsule.NativeFrame, error) {
-	deadline := now().Add(postInputSettleBound)
-	bounded, cancel := context.WithTimeout(ctx, postInputSettleBound)
+	start := now()
+	deadline := start.Add(postInputSlowCaptureBound)
+	bounded, cancel := context.WithTimeout(ctx, postInputSlowCaptureBound)
 	defer cancel()
 	var binding capsule.Binding
 	var last capsule.NativeFrame
 	for {
-		b, frame, err := capture(bounded)
+		captureStart := now()
+		attempt, stop := context.WithTimeout(bounded, deadline.Sub(captureStart))
+		b, frame, err := capture(attempt)
+		attemptErr := attempt.Err()
+		stop()
 		if err != nil {
-			if last.Seq != 0 && bounded.Err() != nil && ctx.Err() == nil {
+			if last.Seq != 0 && attemptErr != nil && ctx.Err() == nil {
 				return binding, last, nil
 			}
 			return b, frame, err
+		}
+		if last.Seq == 0 {
+			deadline = start.Add(inputSettleBudget(now().Sub(captureStart)))
 		}
 		binding, last = b, frame
 		// Without a published baseline no pixel change can be established.

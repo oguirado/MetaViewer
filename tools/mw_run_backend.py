@@ -383,7 +383,7 @@ def connect(env, trace=None):
     return client
 
 
-CARET_OFF_MIN_LEVEL = 0xc0  # [MEASURED] x64 off phase beside a glyph: e1e1e1, efefef, ffffff
+CARET_OFF_MIN_LEVEL = 0x80  # [MEASURED] x64 off phase beside a glyph: bbbbbb, bcbcbc, e1e1e1, efefef, ffffff
 
 
 class HostBackend:
