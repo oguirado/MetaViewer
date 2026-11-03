@@ -231,6 +231,8 @@ v027-fix-b1.md	changes/unreleased/v027-fix-b1.md
 v027-fix-b2.md	changes/unreleased/v027-fix-b2.md
 v027-fix-b3.md	changes/unreleased/v027-fix-b3.md
 v027-fix-b4.md	changes/unreleased/v027-fix-b4.md
+v027-fix-l1.md	changes/unreleased/v027-fix-l1.md
+v027-fix-l3.md	changes/unreleased/v027-fix-l3.md
 v027-fix-u1.md	changes/unreleased/v027-fix-u1.md
 v027-fix-u2.md	changes/unreleased/v027-fix-u2.md
 v027-fix-u3.md	changes/unreleased/v027-fix-u3.md
@@ -241,6 +243,7 @@ v027-fix-u6.md	changes/unreleased/v027-fix-u6.md
 v027-frame-robust.md	changes/unreleased/v027-frame-robust.md
 v027-judge-planner.md	changes/unreleased/v027-judge-planner.md
 v027-kit-judge.md	changes/unreleased/v027-kit-judge.md
+v027-license.md	changes/unreleased/v027-license.md
 v027-lost-stop.md	changes/unreleased/v027-lost-stop.md
 v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-rebind-caret.md	changes/unreleased/v027-rebind-caret.md
@@ -248,12 +251,15 @@ v027rel-acff733643dd	changes/unreleased/v027-release-notices.md
 v027-repo.md	changes/unreleased/v027-repo.md
 v027-review-fix-2.md	changes/unreleased/v027-review-fix-2.md
 v027-seams.md	changes/unreleased/v027-seams.md
+v027-stale-race.md	changes/unreleased/v027-stale-race.md
 v027-verify-2.md	changes/unreleased/v027-verify-2.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
+v027-vm-gate.md	changes/unreleased/v027-vm-gate.md
 v027-walls.md	changes/unreleased/v027-walls.md
 v027win-9c20b1c75b6a	changes/unreleased/v027-window-close-2.md
 v027-window-close.md	changes/unreleased/v027-window-close.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
+v027-x64-evidence.md	changes/unreleased/v027-x64-evidence.md
 vm-capsule-create.md	changes/unreleased/vm-capsule-create.md
 vm-microvm-roadmap.md	changes/unreleased/vm-microvm-roadmap.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
@@ -1042,6 +1048,7 @@ run.go	daemon-adapter/internal/daemon/run.go
 run_test.go	daemon-adapter/internal/daemon/run_test.go
 runtime_test.go	daemon-adapter/internal/daemon/runtime_test.go
 sharedr-febf55a9219e	daemon-adapter/internal/daemon/shared_roots_test.go
+slow_capture_test.go	daemon-adapter/internal/daemon/slow_capture_test.go
 state_frame.go	daemon-adapter/internal/daemon/state_frame.go
 state_frame_test.go	daemon-adapter/internal/daemon/state_frame_test.go
 stream.go	daemon-adapter/internal/daemon/stream.go
@@ -1455,6 +1462,7 @@ test_mutants.py	tests/judge/test_mutants.py
 test_preflight.py	tests/judge/test_preflight.py
 test_static.py	tests/judge/test_static.py
 test_v027_fix_j1.py	tests/judge/test_v027_fix_j1.py
+test_v027_fix_l1.py	tests/judge/test_v027_fix_l1.py
 test_v027_seams.py	tests/judge/test_v027_seams.py
 p18dmut-f16c1e7759b6	tests/p18d_mutant_loader.mjs
 p18d_panel.py	tests/p18d_panel.py
@@ -1540,6 +1548,7 @@ test_mw_refusals.py	tests/test_mw_refusals.py
 testmwr-cf2f3fed6e97	tests/test_mw_run_backend.py
 testmws-a6db1334a46b	tests/test_mw_slot_length.py
 testmws-8fd51d7e49a9	tests/test_mw_stale_frame.py
+test_mw_stale_race.py	tests/test_mw_stale_race.py
 testmww-565d17f6f4d0	tests/test_mw_wall_deadline.py
 test_mw_wall_pages.py	tests/test_mw_wall_pages.py
 test_net_scope.py	tests/test_net_scope.py
@@ -1565,6 +1574,7 @@ test_v027_fix_j4.py	tests/test_v027_fix_j4.py
 test_v027_fix_k3.py	tests/test_v027_fix_k3.py
 testv02-4fc2cd804a0a	tests/test_v027_judge_triage.py
 testv02-d4158620998e	tests/test_v027_mw_triage.py
+testv02-6183b1eda27f	tests/test_v027_release_assets.py
 testv02-828a9d0ea891	tests/test_v027_seams_mw_wire.py
 test_video_seal.py	tests/test_video_seal.py
 assembly_smoke.py	tools/assembly_smoke.py
@@ -2171,6 +2181,8 @@ v027fix-46b26230c523	ui/test/v027-fix-k2-cache.test.js
 v027fix-df3425b4e373	ui/test/v027-fix-k2-presentation.test.js
 v027fix-89dde92796eb	ui/test/v027-fix-k2-terminal.test.js
 v027-fix-k5.test.js	ui/test/v027-fix-k5.test.js
+v027-fix-l1.test.js	ui/test/v027-fix-l1.test.js
+v027-fix-l3.test.js	ui/test/v027-fix-l3.test.js
 v027hos-06c56f4d7d15	ui/test/v027-host-wall-triage.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 v027los-97148691a987	ui/test/v027-lost-stop.test.js
