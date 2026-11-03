@@ -788,7 +788,7 @@ function assertSurfaceInputReply(reply, maxAccepted) {
 }
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
-  propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',listVMCapsules:'authority.listVMCapsules',createVMCapsule:'authority.createVMCapsule',subscribeFrames:'authority.subscribe',
+  propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
   terminalAttach:'side-terminal.attach',terminalResize:'side-terminal.resize',
   terminalClose:'side-terminal.close',terminalProviders:'side-terminal.providers',
@@ -803,13 +803,8 @@ function wireCall(channel,args) {
   if(captureName){assertCaptureCall(captureName,args);return {channel,args:Object.freeze([...args])};}
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
-  const arity=['createVMCapsule','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
+  const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
   if (!Array.isArray(args) || args.length !== arity) throw new ContractError('ARGS','wrong arity');
-  if (name==='createVMCapsule') {
-    const v=/** @type {any} */(args[0]);
-    if (!v || typeof v!=='object' || Array.isArray(v) || Reflect.ownKeys(v).join(',')!=='choiceId'
-        || typeof v.choiceId!=='string' || !/^[0-9a-f-]{36}$/.test(v.choiceId)) throw new ContractError('PAYLOAD','VM choice');
-  }
   if (name==='intent' && args[0] !== null && typeof args[0] === 'object') {
     const checked = validateSurfaceInputBatch(args[0]);
     if (!checked.ok) throw new ContractError('PAYLOAD', checked.code);
@@ -1034,20 +1029,6 @@ function wireFacade(transport) {
       if (reply!==null && reply!==0 && reply!==1) throw new ContractError('OUTCOME','nested depth');return reply;
     }
     const value=/** @type {any} */(reply);
-    if (name==='listVMCapsules' || name==='createVMCapsule') {
-      if (value?.ok===false && Object.keys(value).sort().join(',')==='code,ok'
-          && typeof value.code==='string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)) return Object.freeze({ok:false,code:value.code});
-      if (name==='listVMCapsules' && value?.ok===true && Object.keys(value).sort().join(',')==='choices,ok'
-          && Array.isArray(value.choices) && value.choices.length<=16
-          && new Set(value.choices.map((/** @type {any} */ row)=>row?.choiceId)).size===value.choices.length
-          && value.choices.every((/** @type {any} */ row)=>row && Object.keys(row).sort().join(',')==='choiceId,label'
-            && typeof row.choiceId==='string' && /^[0-9a-f-]{36}$/.test(row.choiceId) && row.label==='ARM64 Linux desktop VM')) {
-        return Object.freeze({ok:true,choices:Object.freeze(value.choices.map((/** @type {any} */ row)=>Object.freeze({...row})))});
-      }
-      if (name==='createVMCapsule' && value?.ok===true && Object.keys(value).sort().join(',')==='ok,surfaceId'
-          && typeof value.surfaceId==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.surfaceId)) return Object.freeze({ok:true,surfaceId:value.surfaceId});
-      throw new ContractError('OUTCOME','VM capsule');
-    }
     if (name==='createSurface') {
       if (value?.ok === true && Object.keys(value).join(',') === 'ok') return Object.freeze({ok:true});
       if (value?.ok === false && Object.keys(value).sort().join(',') === 'code,ok' && typeof value.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(value.code)) return Object.freeze({ok:false,code:value.code});
@@ -1450,10 +1431,6 @@ function wireFacade(transport) {
   api.authority=Object.freeze({
     /** @param {...unknown} args */
     createSurface:(...args)=>call('createSurface',args),
-    /** @param {...unknown} args */
-    listVMCapsules:(...args)=>call('listVMCapsules',args),
-    /** @param {...unknown} args */
-    createVMCapsule:(...args)=>call('createVMCapsule',args),
     /** @param {...unknown} args */
     propose:(...args)=>call('propose',args),
     /** @param {...unknown} args */

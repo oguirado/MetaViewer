@@ -24,11 +24,11 @@ import {
   normalizeCapsuleCatalog,
 } from '../.kit/capsule-ui-kit/src/shell/NewCapsuleModel.js';
 
-test('closed kind set carries the admitted kinds in display order', () => {
+test('closed kind set carries the four kinds in display order', () => {
   assert.deepEqual([...CATALOG_KIND_IDS],
-    ['identity-browser', 'program', 'host-program', 'desktop-window', 'vm']);
+    ['identity-browser', 'program', 'host-program', 'desktop-window']);
   assert.deepEqual(CATALOG_KINDS.map((entry) => entry.label),
-    ['Identity browser', 'Program', 'Host program', 'Desktop window', 'ARM64 Linux VM']);
+    ['Identity browser', 'Program', 'Host program', 'Desktop window']);
   // Negative control: an extra or reordered id breaks the contract.
   assert.throws(() => assert.deepEqual([...CATALOG_KIND_IDS, 'extra'], [...CATALOG_KIND_IDS]),
     assert.AssertionError);
@@ -187,10 +187,10 @@ test('invoker focus never touches disconnected or unfocusable nodes', () => {
   assert.equal(createInvokerFocus().restore(), false);
 });
 
-test('catalog lists_exact_admitted_kinds and kills mutants that re-add removed kinds', async () => {
-  function assertExactAdmittedKindCatalog(mod) {
-    assert.deepEqual([...mod.CATALOG_KIND_IDS], ['identity-browser', 'program', 'host-program', 'desktop-window', 'vm']);
-    assert.deepEqual(mod.CATALOG_KINDS.map((entry) => entry.kind), ['identity-browser', 'program', 'host-program', 'desktop-window', 'vm']);
+test('catalog lists_exact_four_kinds and kills mutants that re-add removed kinds', async () => {
+  function assertExactFourKindCatalog(mod) {
+    assert.deepEqual([...mod.CATALOG_KIND_IDS], ['identity-browser', 'program', 'host-program', 'desktop-window']);
+    assert.deepEqual(mod.CATALOG_KINDS.map((entry) => entry.kind), ['identity-browser', 'program', 'host-program', 'desktop-window']);
     const normalized = mod.normalizeCatalogEntries(mod.CATALOG_KIND_IDS);
     assert.deepEqual(
       capsuleCategories([...normalized.types]),
@@ -198,7 +198,6 @@ test('catalog lists_exact_admitted_kinds and kills mutants that re-add removed k
         { id: 'browse', label: 'Browse', count: 1 },
         { id: 'programs', label: 'Programs', count: 2 },
         { id: 'windows', label: 'Windows', count: 1 },
-        { id: 'virtual-machines', label: 'Virtual machines', count: 1 },
       ],
     );
     for (const removed of ['holdings-app', 'desktop']) {
@@ -212,7 +211,7 @@ test('catalog lists_exact_admitted_kinds and kills mutants that re-add removed k
     }
   }
 
-  assertExactAdmittedKindCatalog({
+  assertExactFourKindCatalog({
     CATALOG_KIND_IDS,
     CATALOG_KINDS,
     normalizeCatalogEntries,
@@ -233,7 +232,7 @@ test('catalog lists_exact_admitted_kinds and kills mutants that re-add removed k
   const mutantHoldings = await import(
     `data:text/javascript;base64,${Buffer.from(readdedHoldings).toString('base64')}#mutant-holdings`
   );
-  assert.throws(() => assertExactAdmittedKindCatalog(mutantHoldings), assert.AssertionError);
+  assert.throws(() => assertExactFourKindCatalog(mutantHoldings), assert.AssertionError);
 
   const readdedDesktop = source.replace(
     "kind: 'program',",
@@ -243,5 +242,5 @@ test('catalog lists_exact_admitted_kinds and kills mutants that re-add removed k
   const mutantDesktop = await import(
     `data:text/javascript;base64,${Buffer.from(readdedDesktop).toString('base64')}#mutant-desktop`
   );
-  assert.throws(() => assertExactAdmittedKindCatalog(mutantDesktop), assert.AssertionError);
+  assert.throws(() => assertExactFourKindCatalog(mutantDesktop), assert.AssertionError);
 });

@@ -806,25 +806,6 @@ function onCreateCapsule(intent, settle) {
   }
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
-  if (body?.kind === 'vm') {
-    const valid = Object.keys(body).sort().join(',') === 'choiceId,kind'
-      && typeof body.choiceId === 'string' && /^[0-9a-f-]{36}$/.test(body.choiceId);
-    const promise = (async () => {
-      if (!valid) return {ok:false,code:'VM_CHOICE_INVALID'};
-      const vmHost = /** @type {any} */ (props.authorityHost);
-      if (!vmHost?.createVMCapsule) return {ok:false,code:'VM_UNAVAILABLE'};
-      const reply = await vmHost.createVMCapsule({choiceId:body.choiceId});
-      if (reply?.ok && reply.surfaceId) void revealOpenedIdentity(reply.surfaceId, undefined);
-      return reply;
-    })();
-    settle?.(promise);
-    void submitHost(async () => {
-      const reply = await promise;
-      if (!reply?.ok) throw Object.assign(new Error(reply?.code || 'VM_UNAVAILABLE'),{code:reply?.code || 'VM_UNAVAILABLE'});
-      return null;
-    });
-    return;
-  }
   if (body?.kind === 'program' || body?.kind === 'host-program') {
     if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id) {
       const reason = 'Renderer cannot select a profile for a program capsule.';
@@ -1646,7 +1627,7 @@ onMounted(() => {
       </div>
     </div>
     <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :open-program="createProgramCapsule" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
-    <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" :vm-host="props.authorityHost ?? undefined" @create="onCreateCapsule" />
+    <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>
 </template>
