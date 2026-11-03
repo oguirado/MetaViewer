@@ -1325,7 +1325,7 @@ onBeforeUnmount(() => {
   padding: 0 8px;
   font-size: 11px;
   line-height: 23px;
-  color: var(--mv-primitive-color-neutral-300, #ced0d4);
+  color: var(--cuk-semantic-text-primary);
 }
 .mv-surface__strip {
   flex: 0 0 auto;
@@ -1336,10 +1336,10 @@ onBeforeUnmount(() => {
   padding: 0 8px 0 48px;
   overflow: hidden;
   white-space: nowrap;
-  border-top: 1px solid var(--mv-primitive-color-neutral-600, #525b66);
+  border-top: 1px solid var(--cuk-semantic-border-default);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: var(--mv-primitive-color-neutral-400, #a9b2bc);
+  color: var(--cuk-semantic-text-primary);
 }
 .mv-surface__key {
   overflow: hidden;

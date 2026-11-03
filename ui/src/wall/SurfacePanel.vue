@@ -350,13 +350,42 @@ export function mirrorKitFoldedSnapshot(snapshot) {
 }
 </script>
 <script setup>
-import { computed, inject, onBeforeUnmount, provide, shallowRef, watch } from 'vue';
+import { computed, inject, onBeforeUnmount, onMounted, provide, shallowRef, watch } from 'vue';
 import NetworkPanel from '../netmode/NetworkPanel.vue';
 import CapsulePanel from 'capsule-ui-kit/CapsulePanel';
 import TileCaptureChrome from './TileCaptureChrome.vue';
 import { deriveTileState, controlVerbForRow, frameFreshnessText, isAgentActingRow, presentedFrameHandle, TILE_ERROR_DISPLAY_STATUS } from './tileStates.js';
 import './wall.css';
 const networkOpen=shallowRef(false);
+const chromeRoot = shallowRef(/** @type {HTMLElement|null} */ (null));
+const stateControlTarget = shallowRef(/** @type {Element|null} */ (null));
+const chromeHover = shallowRef(false), chromeFocus = shallowRef(false), chromeControl = shallowRef(false);
+const chromeExpanded = computed(() => chromeHover.value || chromeFocus.value || chromeControl.value || networkOpen.value);
+const chromeOverlays = /** @type {ReturnType<typeof import('../surfaces/overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
+const chromeOwner = {};
+/** @param {PointerEvent} event */
+function chromePointer(event) {
+  chromeHover.value = !!(/** @type {Element|null} */ (event.target))?.closest?.('.cuk-capsule-panel__header, .mv-tile-rail');
+}
+/** @param {FocusEvent} event */
+function chromeFocused(event) {
+  chromeFocus.value = !!(/** @type {Element|null} */ (event.target))?.closest?.('.cuk-capsule-panel__header, .mv-tile-rail');
+}
+/** @param {KeyboardEvent} event */
+function chromeKey(event) { if (event.key === 'Control') chromeControl.value = event.type === 'keydown'; }
+function chromeBlur() { chromeControl.value = false; chromeFocus.value = false; chromeHover.value = false; }
+onMounted(() => {
+  stateControlTarget.value = chromeRoot.value?.querySelector?.('.cuk-capsule-panel__actions') ?? null;
+  globalThis.window?.addEventListener?.('keydown', chromeKey);
+  globalThis.window?.addEventListener?.('keyup', chromeKey);
+  globalThis.window?.addEventListener?.('blur', chromeBlur);
+});
+onBeforeUnmount(() => {
+  chromeOverlays?.setSurface(chromeOwner, props.capsuleId, false);
+  globalThis.window?.removeEventListener?.('keydown', chromeKey);
+  globalThis.window?.removeEventListener?.('keyup', chromeKey);
+  globalThis.window?.removeEventListener?.('blur', chromeBlur);
+});
 
 const props = defineProps({
   capsuleId: { type: String, required: true },
@@ -384,11 +413,21 @@ const props = defineProps({
   hasKeyboardOwnership: { type: Boolean, default: false },
   title: { type: String, default: '' },
   captureState: { type: Object, default: null },
+  // Native state owners supply real capabilities and the state-controls slot.
+  // No default controls are manufactured for unsupported capsule kinds.
+  stateControls: { type: Object, default: null },
   displayOnly: { type: Boolean, default: false },
   clipboard: { type: /** @type {import('vue').PropType<import('./capsuleId.js').CapsuleClipboardLike | null>} */ (Object), default: null },
 });
 
-const emit = defineEmits(['submit-intent', 'presentation-intent', 'activate-surface']);
+watch([chromeExpanded, () => props.capsuleId], ([open, id]) => chromeOverlays?.setSurface(chromeOwner, id, open), { flush: 'sync' });
+const emit = defineEmits(['submit-intent', 'presentation-intent', 'activate-surface', 'state-action']);
+/** @param {string} action */
+function onStateAction(action) {
+  if (['back', 'save', 'load'].includes(action) && props.stateControls?.[action]?.available === true) {
+    emit('state-action', { capsuleId: props.capsuleId, action });
+  }
+}
 
 validatePanelDeps({
   capsuleId: props.capsuleId,
@@ -406,6 +445,9 @@ const presentationHidden = computed(() => {
   windowPresentation?.revision.value;
   return windowPresentation?.get()?.state(props.presentationInstance || props.capsuleId)?.hidden ?? false;
 });
+watch(presentationHidden, hidden => {
+  if (hidden) { chromeBlur(); networkOpen.value = false; }
+}, { flush: 'sync' });
 // Object dependencies travel by injection: the kit panel reads the view, scheduler
 // and registry through its documented inject fallback, and the frames lane reads
 // the tile scheduler under the same key it injects.
@@ -616,7 +658,10 @@ function onActivateSurface() {
 }
 </script>
 <template>
-  <div class="mv-tile" :hidden="presentationHidden" :data-mv-window-hidden="String(presentationHidden)" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code">
+  <div class="mv-tile" :hidden="presentationHidden" :data-chrome-expanded="String(chromeExpanded)" :data-mv-window-hidden="String(presentationHidden)" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">
+  <Teleport :to="stateControlTarget || 'body'" :disabled="!stateControlTarget">
+    <div class="mv-tile-state-controls" :hidden="!props.stateControls"><slot name="state-controls" :capabilities="props.stateControls" :on-action="onStateAction" /></div>
+  </Teleport>
   <div class="mv-tile-rail">
   <NetworkPanel :open="networkOpen && !props.displayOnly" :display-only="props.displayOnly" :capsule-id="props.capsuleId" :identity="row?.profile_id ?? ''" :refusal-code="row?.refusal?.code ?? row?.readinessError?.code ?? ''" @open="networkOpen=true" @close="networkOpen=false" />
   <TileCaptureChrome
