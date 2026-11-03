@@ -224,7 +224,9 @@ func (s *Store) step(p string) error {
 func (s *Store) slot(id string) string          { return filepath.Join(s.cfg.Root, "slots", id) }
 func (s *Store) generation(id, d string) string { return filepath.Join(s.slot(id), "generations", d) }
 func lock(p string) (func(), error) {
-	fd, e := syscall.Open(p, syscall.O_RDWR|syscall.O_CREAT|syscall.O_NOFOLLOW, 0600)
+	// Helpers may outlive their invoking process. Never let them retain custody
+	// after this process releases it (notably Provision followed by copy Load).
+	fd, e := syscall.Open(p, syscall.O_RDWR|syscall.O_CREAT|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
 	if e != nil {
 		return nil, e
 	}
@@ -236,7 +238,7 @@ func lock(p string) (func(), error) {
 	}
 	if e = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); e != nil {
 		f.Close()
-		return nil, errors.New("SLOT_BUSY")
+		return nil, fmt.Errorf("SLOT_BUSY: %s: %w", p, e)
 	}
 	return func() { f.Close() }, nil
 }

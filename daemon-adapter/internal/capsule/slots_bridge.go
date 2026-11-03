@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,8 +162,11 @@ func stateReason(e error) string {
 	return "SLOT_OPERATION_FAILED"
 }
 func (m *Manager) HandleState(ctx context.Context, r StateRequest) json.RawMessage {
+	phase := "validate"
 	result := map[string]any{"schema": "capsule_state_event/v0.2", "operation_id": r.OperationID, "op": r.Op, "profile_id": r.ProfileID, "slot_id": r.SlotID, "event": "completed"}
 	fail := func(e error) json.RawMessage {
+		// Keep the underlying cause in adapter diagnostics, outside the public contract.
+		log.Printf("capsule state refused: op=%q profile=%q slot=%q destination=%q phase=%q cause=%v", r.Op, r.ProfileID, r.SlotID, r.Destination, phase, e)
 		result["event"] = "refused"
 		result["reason_code"] = stateReason(e)
 		b, _ := json.Marshal(result)
@@ -229,6 +233,7 @@ func (m *Manager) HandleState(ctx context.Context, r StateRequest) json.RawMessa
 	case "delete":
 		err = m.slots.Delete(ctx, request)
 	case "copy":
+		phase = "copy-source-custody"
 		if !slotID.MatchString(r.Destination) || r.Destination == r.ProfileID || r.Destination == m.cfg.SlotLiveProfile || protectedIdentity(r.Destination) {
 			return fail(errors.New("IDENTITY_PROTECTED"))
 		}
@@ -237,6 +242,7 @@ func (m *Manager) HandleState(ctx context.Context, r StateRequest) json.RawMessa
 			return fail(e)
 		}
 		defer release()
+		phase = "copy-select"
 		manifest, err = m.slots.Select(ctx, r.SlotID)
 		if err != nil {
 			break
@@ -250,11 +256,14 @@ func (m *Manager) HandleState(ctx context.Context, r StateRequest) json.RawMessa
 		}
 		// Native create refuses an existing identity; a failed load leaves a new,
 		// stopped identity for explicit operator recovery rather than deleting data.
+		phase = "copy-create"
 		_, err = runner.Run(ctx, slotCreateArgs(runner.root, r.Destination, kind), nil)
 		if err == nil {
+			phase = "copy-provision"
 			err = m.slots.Provision(ctx, r.Destination)
 		}
 		if err == nil {
+			phase = "copy-load"
 			request.ProfileID = r.Destination
 			manifest, err = m.slots.Load(ctx, request)
 		}
