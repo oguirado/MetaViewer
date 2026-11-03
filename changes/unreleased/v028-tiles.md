@@ -1,0 +1,1 @@
+- Floating wall windows move freely without docking into slots. Hold Control during a drag to preview and snap to the selected workspace grid. Each desktop saves its own column and row counts with its layout; older profiles remain readable. Manual drags switch the desktop to a custom layout so preset refresh and restore preserve the window placement.
