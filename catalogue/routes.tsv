@@ -159,6 +159,7 @@ e5-fixtures.md	changes/unreleased/e5-fixtures.md
 firstvi-f9f97c74eb21	changes/unreleased/first-view-shows-capsule.md
 flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
+fronten-b6bbf2d128e7	changes/unreleased/frontend-paired-terminal.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 handoff-state-home.md	changes/unreleased/handoff-state-home.md
 identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
@@ -1822,6 +1823,7 @@ BrokerL-921ee8c1c9e6	ui/src/terminal/BrokerLaunchControls.vue
 SideTer-dd1d47225092	ui/src/terminal/SideTerminalOverlay.vue
 TerminalDeckView.vue	ui/src/terminal/TerminalDeckView.vue
 TerminalView.vue	ui/src/terminal/TerminalView.vue
+pairedTerminals.js	ui/src/terminal/pairedTerminals.js
 providers.js	ui/src/terminal/providers.js
 sideTerminalFacade.js	ui/src/terminal/sideTerminalFacade.js
 terminal.css	ui/src/terminal/terminal.css
@@ -2173,6 +2175,8 @@ p18g-session.test.js	ui/test/p18g-session.test.js
 p18g-wall.test.js	ui/test/p18g-wall.test.js
 p18hTer-5a0b2261d0fe	ui/test/p18hTerminalDeck.test.js
 packageOutput.test.js	ui/test/packageOutput.test.js
+pairedt-c0a4db7e132c	ui/test/paired-terminals.test.js
+pairedT-2f9e39f09a5d	ui/test/pairedTerminalMarkup.js
 pkg-fullstack.test.js	ui/test/pkg-fullstack.test.js
 pkgfixm-e990d26c7b4f	ui/test/pkgfix-main-quit.test.js
 pkgfixp-8cb06ca34469	ui/test/pkgfix-packaged-entry.test.js
