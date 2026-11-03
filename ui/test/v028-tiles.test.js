@@ -10,6 +10,29 @@ test('Control gates snapping; plain movement keeps exact free position and size'
   assert.deepEqual(wall.floatDragBounds(start,{x:30,y:40},{x:779,y:577,ctrlKey:false},800,600,{cols:2,rows:2}),{x:490,y:370,width:310,height:230});
   assert.deepEqual(wall.floatDragBounds(start,{x:30,y:40},{x:779,y:577,ctrlKey:true},801,601,{cols:2,rows:2}),{x:400,y:300,width:401,height:301});
 });
+test('floating cells follow dock width and return exactly from canonical geometry',()=>{
+  const original={left:534,top:300,width:267,height:301}, wide={width:801,height:601}, narrow={width:503,height:601};
+  const changed=wall.reflowFloatingRect(original,wide,narrow,{cols:3,rows:2});
+  assert.deepEqual(changed,{left:335,top:300,width:168,height:301});
+  assert.deepEqual(wall.reflowFloatingRect(original,wide,wide,{cols:3,rows:2}),original);
+  assert.ok(changed.left+changed.width<=narrow.width);
+  assert.notDeepEqual(changed,original,'retaining old pixel bounds would overlap the dock');
+});
+test('free floating positions remain proportional and stay inside the resized wall',()=>{
+  const rect=wall.reflowFloatingRect({left:120,top:80,width:350,height:220},{width:1000,height:600},{width:600,height:400},{cols:3,rows:2});
+  assert.deepEqual(rect,{left:72,top:53,width:210,height:147});
+  assert.ok(rect.left+rect.width<=600 && rect.top+rect.height<=400);
+});
+test('floating layout removes obsolete empty dividers without closing populated groups',()=>{
+  const make=(id,size,type='grid')=>({id,size,api:{location:{type}}});
+  const home=make('home',0),obsolete=make('old-cell',0),occupied=make('kept',1),floating=make('float',1,'floating');
+  const groups=[home,obsolete,occupied,floating],removed=[];
+  wall.retainFloatingHome({groups,removeGroup:group=>removed.push(group.id),addGroup(){throw Error('home already exists');}});
+  assert.deepEqual(removed,['old-cell']);
+  let added;
+  wall.retainFloatingHome({groups:[floating],addGroup:options=>{added=options;}});
+  assert.deepEqual(added,{direction:'right',skipSetActive:true});
+});
 test('grid validates limits and clamps edges without losing rounding pixels', () => {
   assert.deepEqual(wall.floatDragBounds({x:0,y:0,width:50,height:50},{x:0,y:0},{x:-3,y:-2,ctrlKey:true},801,601,{cols:3,rows:2}),{x:0,y:0,width:267,height:300});
   for (const cols of [0,-1,1.5,6,NaN]) assert.throws(()=>wall.floatDragBounds({}, {}, {},800,600,{cols,rows:2}));

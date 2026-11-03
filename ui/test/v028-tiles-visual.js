@@ -2,7 +2,7 @@
 import {createDockview} from 'dockview-core';
 import {installFloatingDrag} from '../src/wall/WallWorkspace.vue';
 const root = document.querySelector('#wall'), result=document.querySelector('#result');
-const api=createDockview(root,{createComponent:()=>({element:document.createElement('div'),init(){this.element.textContent='Floating capsule';}})});
+const api=createDockview(root,{createComponent:()=>({element:document.createElement('div'),init(){this.element.innerHTML='<header class="cuk-capsule-panel__header">Floating capsule</header>';}})});
 api.layout(800,600);
 const panel=api.addPanel({id:'test',component:'test',title:'Drag this window'});
 api.addFloatingGroup(panel,{position:{left:30,top:30},width:300,height:220});
@@ -15,7 +15,7 @@ const release=installFloatingDrag(root,api,()=>({cols:2,rows:2}),()=>custom++,()
 window.addEventListener('beforeunload',()=>{release();api.dispose();});
 window.tileProbe={api,get result(){return result.textContent;}};
 function exercise(ctrlKey) {
-  const overlay=root.querySelector('.dv-resize-container'), header=overlay.querySelector('.dv-floating-titlebar');
+  const overlay=root.querySelector('.dv-resize-container'), header=panel.view.content.element.querySelector('.cuk-capsule-panel__header');
   const b=header.getBoundingClientRect(), area=overlay.parentElement.getBoundingClientRect();
   const start={...api.toJSON().floatingGroups[0].position};
   const pointer=(type,x,y)=>new PointerEvent(type,{bubbles:true,button:0,pointerId:9,clientX:x,clientY:y,ctrlKey});

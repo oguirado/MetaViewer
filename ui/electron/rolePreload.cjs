@@ -20,6 +20,8 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
     mount: (surfaceId, bounds) => invoke('mount', {surfaceId,bounds}),
     resize: (surfaceId, bounds) => invoke('resize', {surfaceId,bounds}),
     visibility: (surfaceId, visible) => invoke('visibility', {surfaceId,visible}),
+    preview: surfaceId => invoke('preview', {surfaceId}),
+    theme: (surfaceId, theme) => invoke('theme', {surfaceId,theme}),
     raise: surfaceId => invoke('raise', {surfaceId}),
     onFocus: callback => {
       const listener = (_event,id) => {if(typeof id === 'string')callback(id);};

@@ -3,7 +3,7 @@ export const DESKTOP_SCHEMA = 'metaviewer.desktops/v1';
 /** Maximum persistent walls per view [TARGET]. */
 export const MAX_DESKTOPS_PER_VIEW = 16;
 export const VIEWS = Object.freeze(['human', 'agent']);
-export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'focus-strip', 'floating']);
+export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'grid-3x2', 'focus-strip', 'floating']);
 
 /** @typedef {{id:number,preset:string|null,layout:any,snapGrid?:{cols:number,rows:number},identityCells?:Record<string,{col:number,row:number}>}} Desktop */
 /** @typedef {{schema:string,activeView:string,views:Record<string,{active:number,next:number,desktops:Desktop[]}>,assignments:Record<string,{view:string,desktop:number}>}} DesktopState */

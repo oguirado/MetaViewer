@@ -79,6 +79,12 @@ async function probe(){
     assert(visible(tile.querySelector('.mv-surface__strip')),'held Control reveals witness');
     assert(rect(viewport).height===before.height,'held Control never resizes canvas host');
     window.dispatchEvent(new KeyboardEvent('keyup',{key:'Control'}));await settle();
+    header.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,buttons:1}));
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'Control'}));await settle();
+    assert([...document.querySelectorAll('.mv-tile-rail')].every(node=>!visible(node)),'Control during a drag never reveals any tile tools');
+    assert(rect(viewport).height===before.height,'drag modifier never resizes canvas host');
+    window.dispatchEvent(new PointerEvent('pointerup'));
+    window.dispatchEvent(new KeyboardEvent('keyup',{key:'Control'}));await settle();
     measurements.push({width:w,header:rect(header).height,rail:rect(tile.querySelector('.mv-tile-rail')).height});
   }
   width.value=410;count.value=3;await settle();

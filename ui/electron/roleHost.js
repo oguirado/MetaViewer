@@ -984,7 +984,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const {op} = message;
     const keys = ['choices','programs','surfaces','list-windows'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window'].includes(op) ? 'choice,op,schema'
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
-      : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
+      : op === 'visibility' ? 'op,schema,surfaceId,visible' : op === 'theme' ? 'op,schema,surfaceId,theme' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
     const needsCreation = ['create','open','create-program','create-window','switch'].includes(op);
     const releaseCreation = needsCreation ? acquireCapsuleCreation(capsuleStates) : null;
@@ -1038,6 +1038,22 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         return {ok:true,lastLogin:await markers.confirm(surface.profile_id)};
       }
       if (op === 'raise') {authoritative(message.surfaceId);sessions.get(message.surfaceId)?.bringToFront();return {ok:true};}
+      if (op === 'preview') {
+        authoritative(message.surfaceId);
+        const session = sessions.get(message.surfaceId);
+        if (!session?.preview) throw refuse('PREVIEW_UNAVAILABLE');
+        const image = await session.preview();
+        authoritative(message.surfaceId);
+        if (sessions.get(message.surfaceId) !== session) throw refuse('PREVIEW_UNAVAILABLE');
+        return {ok:true,image};
+      }
+      if (op === 'theme') {
+        authoritative(message.surfaceId);
+        const session=sessions.get(message.surfaceId);
+        if (!session?.setTheme) throw refuse('NATIVE_THEME_UNAVAILABLE');
+        await session.setTheme(message.theme);
+        return {ok:true};
+      }
       if (op === 'status') {
         pruneProgramProfiles();
         if ([...windowProfiles.values()].some(w => w.surfaceId === message.surfaceId && w.state === 'active')) {
