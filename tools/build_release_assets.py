@@ -126,9 +126,10 @@ def _open_deterministic_tar_gz(dest: Path):
     return raw, gz, tf
 
 
-def compute_app_manifest(app_dir: Path) -> bytes:
+def compute_app_manifest(app_dir: Path, extra_files: dict[str, Path] | None = None) -> bytes:
     """Compute MetaViewer-linux-<arch>.sha256 matching ui/tools/package.js."""
     entries: list[tuple[str, int, Path]] = []
+    extra_files = extra_files or {}
     for root, dirs, files in os.walk(app_dir, followlinks=False):
         dirs.sort()
         files.sort()
@@ -145,7 +146,9 @@ def compute_app_manifest(app_dir: Path) -> bytes:
             if not stat.S_ISREG(st.st_mode):
                 raise AssetBuildError(f"non-regular file refused in app bundle: {p}")
             rel = (rel_root / fname).as_posix() if rel_root != Path(".") else fname
-            entries.append((rel, st.st_mode & 0o777, p))
+            if rel not in extra_files:
+                entries.append((rel, st.st_mode & 0o777, p))
+    entries.extend((rel, 0o644, p) for rel, p in extra_files.items())
     entries.sort(key=lambda item: item[0])
     lines: list[str] = []
     for rel, mode, p in entries:
@@ -165,8 +168,16 @@ def build_app_asset(app_dir: Path, out_dir: Path, arch: str) -> Path:
     if not exe.is_file() or not os.access(exe, os.X_OK):
         raise AssetBuildError(f"packaged app directory has no executable metaviewer binary: {exe}")
 
-    sibling_sha = app_dir.parent / f"{bundle_name}.sha256"
-    manifest_bytes = sibling_sha.read_bytes() if sibling_sha.is_file() else compute_app_manifest(app_dir)
+    # [TARGET, unit decision] Keep the product's relative LICENSE link valid,
+    # preserve Electron's root LICENSE, and seal the delivered notice bytes.
+    product_notices = {
+        f"licenses/metaviewer/{name}": REPO_ROOT / name
+        for name in ("LICENSE", "NOTICE-EVALUATION.md")
+    }
+    for source in product_notices.values():
+        if not source.is_file() or source.is_symlink():
+            raise AssetBuildError(f"missing regular product notice: {source}")
+    manifest_bytes = compute_app_manifest(app_dir, product_notices)
 
     out_path = out_dir / f"metaviewer-linux-{arch}.tar.gz"
     raw, gz, tf = _open_deterministic_tar_gz(out_path)
@@ -185,7 +196,13 @@ def build_app_asset(app_dir: Path, out_dir: Path, arch: str) -> Path:
             for fname in files:
                 src = Path(root) / fname
                 rel_f = (rel_root / fname).as_posix() if rel_root != Path(".") else fname
-                _add_file_from_disk(tf, f"{bundle_name}/{rel_f}", src)
+                if rel_f not in product_notices:
+                    _add_file_from_disk(tf, f"{bundle_name}/{rel_f}", src)
+        for directory in ("licenses", "licenses/metaviewer"):
+            if not (app_dir / directory).is_dir():
+                _add_dir(tf, f"{bundle_name}/{directory}")
+        for relative, source in product_notices.items():
+            _add_file_from_disk(tf, f"{bundle_name}/{relative}", source, mode=0o644)
         _add_bytes(tf, f"{bundle_name}.sha256", manifest_bytes, 0o644)
     finally:
         tf.close()
@@ -213,6 +230,12 @@ def build_node_asset(
                     raise AssetBuildError(f"unsafe member name in node tarball: {n}")
             if not any(n.endswith("/bin/node") for n in names):
                 raise AssetBuildError(f"node tarball has no */bin/node member: {node_tarball}")
+            for member in tf.getmembers():
+                if member.name.endswith("/bin/node"):
+                    license_name = member.name.removesuffix("bin/node") + "LICENSE"
+                    licenses = [m for m in tf.getmembers() if m.name == license_name]
+                    if len(licenses) != 1 or not licenses[0].isfile() or licenses[0].size == 0:
+                        raise AssetBuildError(f"node tarball missing regular runtime LICENSE: {license_name}")
         if node_tarball.resolve() != out_path.resolve():
             shutil.copyfile(node_tarball, out_path)
         return out_path
@@ -224,12 +247,16 @@ def build_node_asset(
         node_bin = Path(found)
     if not node_bin.is_file():
         raise AssetBuildError(f"node binary not found: {node_bin}")
+    node_license = node_bin.resolve().parent.parent / "LICENSE"
+    if not node_license.is_file() or node_license.is_symlink() or node_license.stat().st_size == 0:
+        raise AssetBuildError(f"node runtime LICENSE not found: {node_license}")
 
     top = f"node-v24-linux-{arch}"
     with lzma.open(out_path, mode="wb", preset=6) as xz:
         with tarfile.open(mode="w", fileobj=xz, format=tarfile.GNU_FORMAT) as tf:
             _add_dir(tf, top, 0o755)
             _add_dir(tf, f"{top}/bin", 0o755)
+            _add_file_from_disk(tf, f"{top}/LICENSE", node_license, mode=0o644)
             _add_file_from_disk(tf, f"{top}/bin/node", node_bin.resolve(), mode=0o755)
             npm_root = node_bin.resolve().parent.parent / "lib/node_modules/npm"
             if npm_root.is_dir():
@@ -248,6 +275,7 @@ def build_opensuperficies_asset(
     arch: str,
     firewall_dir: Path | None = None,
 ) -> Path:
+    notice_root = srf_bin_dir
     if (srf_bin_dir / "bin" / "srf-identity-surface").is_file():
         if firewall_dir is None and (srf_bin_dir / "firewall").is_dir():
             firewall_dir = srf_bin_dir / "firewall"
@@ -265,6 +293,13 @@ def build_opensuperficies_asset(
                 continue
             if item.name.startswith("srf"):
                 _add_file_from_disk(tf, f"opensuperficies/bin/{item.name}", item, mode=0o755)
+        # [TARGET, unit decision] Retain supplied legal files only; no grant is
+        # inferred from their presence. Flat inputs keep their bin layout.
+        for source_dir in dict.fromkeys((notice_root, srf_bin_dir)):
+            prefix = "opensuperficies/bin" if source_dir == srf_bin_dir else "opensuperficies"
+            for item in sorted(source_dir.iterdir()):
+                if re.match(r"^(LICENSE|LICENCE|NOTICE|COPYING|COPYRIGHT|EULA|THIRD[-_]PARTY[-_](?:LICENSES?|NOTICES?))(?:[._-].*)?$", item.name, re.I):
+                    _add_file_from_disk(tf, f"{prefix}/{item.name}", item, mode=0o644)
         if firewall_dir is not None and firewall_dir.is_dir():
             _add_dir(tf, "opensuperficies/firewall", 0o755)
             for fname in ("apply.sh", "srf-open-egress.rules", "srf-open-egress6.rules", "srf-open-egress.service"):

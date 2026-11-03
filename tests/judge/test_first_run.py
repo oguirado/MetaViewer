@@ -125,6 +125,7 @@ class ReleaseNodeTests(unittest.TestCase):
             node = base / 'runtime/bin/node'
             node.parent.mkdir(parents=True)
             node.write_bytes(b'node')
+            (node.parent.parent / 'LICENSE').write_bytes(b'Node fixture license\n')
             cli = base / 'runtime/lib/node_modules/npm/bin/npm-cli.js'
             cli.parent.mkdir(parents=True)
             cli.write_bytes(b'npm')

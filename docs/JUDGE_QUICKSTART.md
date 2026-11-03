@@ -46,6 +46,11 @@ The judge kit uses the release assets in `assets/` (verified against
 
 From a fresh clone, fetch the assets in one command (Python is required):
 
+Obtain the judge kit from the public repository at the tag of the same release
+as the assets: set `RELEASE_TAG` to that published tag, run
+`git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/oguirado/MetaViewer.git`,
+then `cd MetaViewer` and fetch below.
+
 ```bash
 # Complete directory supplied by the release maintainer; add --capsules for T2.
 python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules
