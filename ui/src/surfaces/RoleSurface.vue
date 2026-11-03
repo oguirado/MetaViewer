@@ -1,4 +1,16 @@
 <script>
+/** Resolve opaque computed CSS colors to the native wrapper's closed hex form.
+ * @param {string} color @returns {string|null} */
+export function nativeThemeColor(color) {
+  if (/^#[\da-f]{6}$/i.test(color)) return color.toLowerCase();
+  if (/^#[\da-f]{3}$/i.test(color)) return '#'+[...color.slice(1)].map(c=>c+c).join('').toLowerCase();
+  if (!/^rgba?\([\d.,\s/]+\)$/i.test(color)) return null;
+  const values=color.slice(color.indexOf('(')+1,-1).trim().split(/[\s,/]+/).map(Number);
+  if (values.length!==3 && (values.length!==4 || values[3]!==1)) return null;
+  if (!values.slice(0,3).every(value=>Number.isFinite(value) && value>=0 && value<=255)) return null;
+  return '#'+values.slice(0,3).map(value=>Math.round(value).toString(16).padStart(2,'0')).join('');
+}
+
 // [TARGET, unit decision] Explicit recovery uses existing window-list, detach,
 // and create operations. A matching live witness is required before releasing the tile.
 /** @param {any} api @param {any} previous */
@@ -220,11 +232,15 @@ let transferring = false;
 let syncGeneration = 0;
 let alive = true, mounted = false, busy = false, signature = '', shown = true;
 const viewState = ref('closed'), hasConnected = ref(false);
+const nativePreview = ref(''), previewOccluded = ref(false);
+let nativeThemeSignature = '';
 let timer = /** @type {ReturnType<typeof setInterval>|undefined} */ (undefined);
 /** @type {Array<() => void>} */
 const scrollCleanups = [];
 const wanted = () => role.value === 'human' || role.value === 'agent' && watching.value && props.control === 'agent';
 async function revoke() {
+  nativePreview.value = ''; previewOccluded.value = false;
+  nativeThemeSignature = '';
   syncGeneration++;
   hiddenSessions?.remove(props.surfaceId);
   mounted = false; signature = ''; shown = true; hasConnected.value = false; viewState.value = 'closed';
@@ -264,14 +280,35 @@ async function sync() {
     const baseClip = clipRoleBounds(box, scrollAncestors, wallViewport);
     const clipped = baseClip.visible ? subtractRoleOccluders(baseClip.bounds,floating.occluders) : baseClip;
     const geometricallyShown = props.presentationActive && baseClip.visible && isRoleElementPainted(root.value);
-    const visible = geometricallyShown && clipped.visible && !isModalActive() && !overlays?.isSurfaceOccluded(props.surfaceId);
+    const scopedOcclusion = overlays?.isSurfaceOccluded(props.surfaceId) === true;
+    previewOccluded.value = scopedOcclusion;
+    if (!scopedOcclusion) nativePreview.value = '';
+    const visible = geometricallyShown && clipped.visible && !isModalActive() && !scopedOcclusion;
     if (mounted) hiddenSessions?.update(props.surfaceId, geometricallyShown, releaseHiddenSession, isGeometricallyShown);
     if (resourceReleased.value) return;
     if (!wanted()) { if (mounted) await revoke(); return; }
+    if (mounted && root.value && typeof api.theme==='function' && typeof getComputedStyle==='function') {
+      const style=getComputedStyle(root.value);
+      const theme={background:nativeThemeColor(style.backgroundColor),foreground:nativeThemeColor(style.color)};
+      const themeKey=JSON.stringify(theme);
+      if (theme.background && theme.foreground && themeKey!==nativeThemeSignature) {
+        const reply=await api.theme(props.surfaceId,theme);
+        if (!current()) return;
+        if (reply?.ok) nativeThemeSignature=themeKey;
+      }
+    }
     // Temporary clipping, docking and window visibility must not revoke the
     // authenticated session. Hide the native view and retain its connection.
     if (!visible) {
       if (mounted && shown) {
+        if (scopedOcclusion && geometricallyShown && typeof api.preview === 'function') {
+          try {
+            const preview = await api.preview(props.surfaceId);
+            if (!current()) return;
+            if (preview?.ok && typeof preview.image === 'string' && preview.image.length <= 2800000
+                && /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(preview.image)) nativePreview.value = preview.image;
+          } catch { /* The typed placeholder remains when native capture is unavailable. */ }
+        }
         const reply = await api.visibility(props.surfaceId,false);
         if (!current()) return;
         if (!reply.ok) throw Error(reply.code);
@@ -492,6 +529,10 @@ onBeforeUnmount(() => { stopOverlaySubscription?.(); stopNativeFocus?.(); overla
     </Teleport>
     <span v-if="progress" role="status">{{ progress }}</span>
     <div ref="root" class="mv-role-viewport">
+      <div v-if="previewOccluded && nativePreview" class="mv-native-preview" aria-label="Last native frame">
+        <img :src="nativePreview" alt="Last native frame before opening tile tools" draggable="false">
+        <span>Last frame · tools open</span>
+      </div>
       <!-- [TARGET, unit decision] Terminal canvas leaves layout: visibility:hidden still consumes the clipped viewport. -->
       <div v-if="role === 'agent' && hostWindow?.state !== 'lost'" :style="{visibility: (watching || hostWindow?.minimized || hostWindow?.state === 'lost') ? 'hidden' : undefined}" :inert="watching || Boolean(hostWindow?.minimized) || hostWindow?.state === 'lost'" class="mv-role-agent-canvas"><slot /></div>
       <button v-if="resourceReleased" :id="`tile-reconnect-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/reconnect`" type="button" @click="reconnectReleased">Disconnected to save resources, click to reconnect</button>
@@ -517,11 +558,14 @@ onBeforeUnmount(() => { stopOverlaySubscription?.(); stopNativeFocus?.(); overla
 .mv-role-menu-host hr { width:100%; }
 :global(.mv-tile:has([data-capsule-role="human"]) [data-semantic-anchor$="/control"]) { display:none; }
 .mv-role-surface { flex:1 1 auto; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; }
-.mv-role-viewport { position:relative; flex:1; min-height:0; overflow:hidden; }
+.mv-role-viewport { position:relative; flex:1; min-height:0; overflow:hidden; background:var(--cuk-semantic-surface-canvas); }
 /* [TARGET, unit decision] The slot contains a banner and a surface: reserve
  * separate rows before fitting pixels. The banner must never share a row. */
 .mv-role-agent-canvas { width:100%; height:100%; min-width:0; min-height:0; container-type:size; display:flex; flex-direction:column; align-items:stretch; }
 .mv-role-status { position:absolute; top:0; left:0; pointer-events:none; }
+.mv-native-preview { position:absolute; inset:0; z-index:1; pointer-events:none; }
+.mv-native-preview img { width:100%; height:100%; object-fit:fill; }
+.mv-native-preview span { position:absolute; right:4px; bottom:4px; padding:2px 4px; background:var(--cuk-semantic-surface-panel); color:var(--cuk-semantic-text-primary); font-size:11px; }
 .mv-role-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
 .mv-role-watch { display:flex; justify-content:flex-end; }
 .mv-role-compact-actions { display:none; }

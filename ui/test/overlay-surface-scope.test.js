@@ -80,8 +80,22 @@ async function scopedOracle(source) {
 test('tile chrome occludes its native view only and global modals still hide all views',()=>scopedOracle(read('../src/surfaces/RoleSurface.vue')));
 test('ignoring scoped occlusion is rejected by the same native-view oracle',async()=>{
   const source=read('../src/surfaces/RoleSurface.vue');
-  const mutant=source.replace(' && !overlays?.isSurfaceOccluded(props.surfaceId)','');
+  const mutant=source.replace(' && !scopedOcclusion','');
   assert.notEqual(source,mutant);await assert.rejects(()=>scopedOracle(mutant),{code:'ERR_ASSERTION'});
+});
+
+test('scoped chrome shows a real native preview without mounting human canvas input',async()=>{
+  await withRoles(async({add,overlays})=>{
+    const image='data:image/png;base64,aGVsbG8=';
+    globalThis.metaviewerRoles.preview=async()=>({ok:true,image});
+    const f=await add('preview','human');
+    const all=n=>[n,...n.children.flatMap(all)];
+    const owner={};overlays.setSurface(owner,'preview',true);await tick();
+    assert.equal(all(f.root).find(n=>n.tag==='img')?.props.src,image);
+    assert.ok(!all(f.root).some(n=>n.tag==='canvas'),'human never gets the canvas input slot');
+    overlays.setSurface(owner,'preview',false);await tick();
+    assert.ok(!all(f.root).some(n=>n.tag==='img'),'preview is dropped when the native view returns');
+  });
 });
 test('scoped owners compose, rebind and release without changing global ownership',()=>{
   const coordinator=createOverlayCoordinator(),a={},b={};

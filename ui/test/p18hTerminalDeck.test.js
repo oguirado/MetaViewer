@@ -891,28 +891,14 @@ test('P18H TerminalDeckView component renders screen bar, popover profiles, Cust
   }
 });
 
-test('P18H App.vue mounts TerminalDeckView on More -> Terminal and hides capsule walls without revoking human views', () => {
+test('P18H terminal dock keeps live wall presentation and excludes idle dock from modal ownership', () => {
   const appSource = readText('../src/App.vue');
-  assert.ok(
-    appSource.includes('<UiButton role="menuitem" id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal"'),
-    'More menu must contain the Terminal item',
-  );
-  assert.ok(
-    appSource.includes('<TerminalDeckView :open="terminalDeckOpen"'),
-    'App.vue must mount TerminalDeckView when terminalDeckOpen is true',
-  );
-  assert.ok(
-    appSource.includes('<DesktopWorkspace v-else :hidden="creativeOpen || terminalDeckOpen"'),
-    'Entering the Terminal deck must hide the capsule wall (hide-not-revoke)',
-  );
-  assert.ok(
-    appSource.includes('<RoleSurface :presentation-active="desktopActive && !creativeOpen && !terminalDeckOpen"'),
-    'Entering the Terminal deck must deactivate RoleSurface presentation (hide-not-revoke) and restore it on exit',
-  );
-  assert.ok(
-    appSource.includes('(terminalOpen.value && !terminalDeckOpen.value)'),
-    'App.vue modalOpen must not hold data-mv-modal open while the full-screen Terminal Deck is idle',
-  );
+  assert.ok(appSource.includes('id="shell-terminal"') && appSource.includes('data-semantic-anchor="terminal/toggle"'));
+  assert.ok(appSource.includes('class="mv-terminal-dock"'));
+  assert.ok(appSource.includes(':hidden="creativeOpen"'));
+  assert.ok(appSource.includes('<RoleSurface :presentation-active="desktopActive && !creativeOpen"'));
+  assert.ok(!appSource.includes(':presentation-active="desktopActive && !creativeOpen && !terminalDeckOpen"'));
+  assert.ok(appSource.includes('(terminalOpen.value && !terminalDeckOpen.value)'));
 });
 
 test('P18H-R2-PTY: terminalHost and ptyUtility resolve packaged node-pty from <resources>/build-native/pty-runtime/node-pty and fail closed when absent (with mutant)', async (t) => {

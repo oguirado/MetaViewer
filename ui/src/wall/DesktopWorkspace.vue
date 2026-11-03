@@ -46,7 +46,7 @@ function announce() {
 /** @param {import("../../electron/desktopLayout.js").DesktopState} value */
 function cleanLayouts(value) {
   for (const view of VIEWS) for (const desktop of value.views[view].desktops) {
-    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid');
+    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid' || desktop.preset === 'grid-3x2');
   }
   return value;
 }
@@ -199,6 +199,8 @@ function setPreset(preset) {
   const result = walls.get(activeKey())?.setPreset(preset);
   if (!desktop || !result?.ok) return result ?? {ok:false,code:'ERR_NOT_READY'};
   desktop.preset = preset;
+  if (preset === 'grid-3x2') desktop.snapGrid = {cols:3,rows:2};
+  if (preset === 'grid') desktop.snapGrid = {cols:2,rows:2};
   return result;
 }
 // Transfer tokens are local ownership handoffs, never backend lifecycle verbs.

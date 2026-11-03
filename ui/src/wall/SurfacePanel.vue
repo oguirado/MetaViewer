@@ -360,7 +360,9 @@ const networkOpen=shallowRef(false);
 const chromeRoot = shallowRef(/** @type {HTMLElement|null} */ (null));
 const stateControlTarget = shallowRef(/** @type {Element|null} */ (null));
 const chromeHover = shallowRef(false), chromeFocus = shallowRef(false), chromeControl = shallowRef(false);
-const chromeExpanded = computed(() => chromeHover.value || chromeFocus.value || chromeControl.value || networkOpen.value);
+const chromeDragging = shallowRef(false);
+let chromePointerHeld = false;
+const chromeExpanded = computed(() => !chromeDragging.value && (chromeHover.value || chromeFocus.value || chromeControl.value || networkOpen.value));
 const chromeOverlays = /** @type {ReturnType<typeof import('../surfaces/overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
 const chromeOwner = {};
 /** @param {PointerEvent} event */
@@ -372,19 +374,38 @@ function chromeFocused(event) {
   chromeFocus.value = !!(/** @type {Element|null} */ (event.target))?.closest?.('.cuk-capsule-panel__header, .mv-tile-rail');
 }
 /** @param {KeyboardEvent} event */
-function chromeKey(event) { if (event.key === 'Control') chromeControl.value = event.type === 'keydown'; }
-function chromeBlur() { chromeControl.value = false; chromeFocus.value = false; chromeHover.value = false; }
+function chromeKey(event) { if (event.key === 'Control') chromeControl.value = event.type === 'keydown' && !chromePointerHeld; }
+/** Pointer movement with a held button is a drag, not a request for tools. */
+/** @param {PointerEvent} event */
+function chromeDragStart(event) {
+  chromePointerHeld = true;
+  if (!(/** @type {Element|null} */ (event.target))?.closest?.('button,input,select,textarea,a,[role="button"]')) chromeDragging.value = true;
+  chromeControl.value = false;
+}
+/** @param {PointerEvent} [event] */
+function chromeDragEnd(event) {
+  chromePointerHeld = false; chromeDragging.value = false;
+  chromeHover.value = !!(event?.target && chromeRoot.value?.contains?.(/** @type {Node} */ (event.target))
+    && (/** @type {Element} */ (event.target)).closest?.('.cuk-capsule-panel__header, .mv-tile-rail'));
+}
+function chromeBlur() { chromeDragEnd(); chromeControl.value = false; chromeFocus.value = false; }
 onMounted(() => {
   stateControlTarget.value = chromeRoot.value?.querySelector?.('.cuk-capsule-panel__actions') ?? null;
   globalThis.window?.addEventListener?.('keydown', chromeKey);
   globalThis.window?.addEventListener?.('keyup', chromeKey);
   globalThis.window?.addEventListener?.('blur', chromeBlur);
+  globalThis.window?.addEventListener?.('pointerdown', chromeDragStart, true);
+  globalThis.window?.addEventListener?.('pointerup', chromeDragEnd, true);
+  globalThis.window?.addEventListener?.('pointercancel', chromeDragEnd, true);
 });
 onBeforeUnmount(() => {
   chromeOverlays?.setSurface(chromeOwner, props.capsuleId, false);
   globalThis.window?.removeEventListener?.('keydown', chromeKey);
   globalThis.window?.removeEventListener?.('keyup', chromeKey);
   globalThis.window?.removeEventListener?.('blur', chromeBlur);
+  globalThis.window?.removeEventListener?.('pointerdown', chromeDragStart, true);
+  globalThis.window?.removeEventListener?.('pointerup', chromeDragEnd, true);
+  globalThis.window?.removeEventListener?.('pointercancel', chromeDragEnd, true);
 });
 
 const props = defineProps({
