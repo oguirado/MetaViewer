@@ -2576,7 +2576,12 @@ async fn connection_with_liveness(
     }
     // Removing the sender closes the bounded queue. A half-close still receives
     // its queued verdicts; a stalled reader cannot retain the writer forever.
-    if result.is_err()
+    let capture_terminal = result.as_ref().err().is_some_and(|error| {
+        error
+            .downcast_ref::<capture::CaptureTerminalFailure>()
+            .is_some()
+    });
+    if (result.is_err() && !capture_terminal)
         || tokio::time::timeout(Duration::from_secs(1), &mut writer_task)
             .await
             .is_err()
@@ -2606,6 +2611,98 @@ mod tests;
 
 #[cfg(test)]
 mod nv_regressions {
+
+    #[test]
+    fn v027_capture_storage_terminal_flushes_before_socket_closes() {
+        run(async {
+            let f = Fixture::new();
+            let uid = effective_uid().unwrap();
+            let socket = f.root.join("capture-flush.sock");
+            let listener = bind(&socket, uid).await.unwrap();
+            let mut state =
+                Server::open(f.server.config.clone(), &f.root.join("flush-state"), uid).unwrap();
+            state.capture.exports_recovered = true;
+            let server = Arc::new(Mutex::new(state));
+            let task = tokio::spawn(serve(listener, server.clone(), uid));
+            let mut stream = UnixStream::connect(&socket).await.unwrap();
+            write_frame(
+                &mut stream,
+                &f.envelope(
+                    Component::Ui,
+                    1,
+                    serde_json::to_value(&f.server.config.peers[2].hello).unwrap(),
+                ),
+            )
+            .await
+            .unwrap();
+            read_frame(&mut stream).await.unwrap().unwrap();
+            crate::journal::fail_next_append_with_torn_event_sidecar(&server.lock().unwrap().root);
+            let request = f.envelope(Component::Ui, 2, json!({"schema":"record_request/v0.2", "request_id":"storage-wire", "op":"ram_start", "params":{"surface_id":"surface-demo", "recording_id":"recording-storage", "ring_bytes":8388608, "max_fps":3}}));
+            write_frame(&mut stream, &request).await.unwrap();
+            let response = tokio::time::timeout(Duration::from_secs(2), read_frame(&mut stream))
+                .await
+                .unwrap()
+                .unwrap()
+                .expect("terminal reply before EOF");
+            let value = serde_json::to_value(response.body).unwrap();
+            assert_eq!(value["data"]["code"], "CAPTURE_REPLY");
+            let detail: Value =
+                serde_json::from_str(value["data"]["detail"].as_str().unwrap()).unwrap();
+            assert_eq!(detail["request_id"], "storage-wire");
+            assert_eq!(detail["reply"]["code"], "CAPTURE_UNAVAILABLE");
+            assert!(
+                tokio::time::timeout(Duration::from_secs(2), read_frame(&mut stream))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .is_none()
+            );
+            task.abort();
+            let _ = task.await;
+        });
+    }
+
+    #[test]
+    fn v027_capture_storage_failure_has_correlated_terminal_without_commit() {
+        let mut f = Fixture::new();
+        f.seed();
+        let _ui = f.attach(Component::Ui, 16);
+        let env = f.envelope(Component::Ui, 2, json!({"schema":"record_request/v0.2", "request_id":"storage-stop", "op":"ram_start", "params":{"surface_id":"surface-demo", "recording_id":"recording-storage", "ring_bytes":8388608, "max_fps":3}}));
+        let boundary = f
+            .server
+            .authority
+            .retain_witness(b"capture-boundary")
+            .unwrap();
+        f.server.capture.exports_recovered = true;
+        let mut frame: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/frame_ref.valid.json"
+        ))
+        .unwrap();
+        frame["width"] = 1.into();
+        frame["height"] = 1.into();
+        frame["sha256"] = sha256_hex(&[1, 2, 3]).into();
+        f.server
+            .capture
+            .frame(&serde_json::from_value(frame).unwrap(), vec![1, 2, 3], 0)
+            .unwrap();
+        let before = f.server.capture.clone();
+        crate::journal::fail_next_append_with_torn_event_sidecar(&f.server.root);
+        let Command::RecordRequest(request) = &env.body else {
+            panic!("record request");
+        };
+        assert!(f.server.capture_wire(0, &env, request, boundary).is_err());
+        assert_eq!(f.server.capture, before);
+        let terminal = f.server.connections[&env.from].terminal.lock().unwrap();
+        let value =
+            serde_json::to_value(&terminal.as_ref().expect("missing terminal diagnostic").body)
+                .unwrap();
+        assert_eq!(value["data"]["code"], "CAPTURE_REPLY");
+        let reply: Value = serde_json::from_str(value["data"]["detail"].as_str().unwrap()).unwrap();
+        assert_eq!(reply["request_id"], "storage-stop");
+        assert_eq!(reply["method"], "recordStart");
+        assert_eq!(reply["reply"]["code"], "CAPTURE_UNAVAILABLE");
+    }
+
     use super::*;
     use serde_json::{json, Value};
     use std::sync::atomic::{AtomicU64, Ordering};

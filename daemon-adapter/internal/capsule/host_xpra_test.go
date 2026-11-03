@@ -184,3 +184,88 @@ func TestHostXpraGroupChild(t *testing.T) {
 	}
 	_ = child.Wait()
 }
+
+func TestV027XdotoolRecoveryNamesMissingPackage(t *testing.T) {
+	state, bin := t.TempDir(), t.TempDir()
+	if err := os.Chmod(state, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"xpra", "Xvfb", "xauth"} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r, err := NewProcessRunner(bin, []string{"PATH=" + bin, "MV_SRF_STATE_DIR=" + state}, 4096, 1e9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = startHostXpra(context.Background(), r, "/absent/app", "srf-pg-hx-test", "human")
+	if err == nil || !strings.Contains(err.Error(), "apt install xpra xvfb xauth xdotool") {
+		t.Fatalf("missing actionable package: %v", err)
+	}
+}
+
+func TestV027HostProgramExitDuringWindowDiscovery(t *testing.T) {
+	for _, exited := range []bool{true, false} {
+		t.Run(map[bool]string{true: "exited", false: "slow-live"}[exited], func(t *testing.T) {
+			bin := t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "srf-host-window"), []byte("#!/bin/sh\nprintf '{\"windows\":[]}'\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			runner, err := NewProcessRunner(bin, []string{"PATH=" + os.Getenv("PATH")}, 4096, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sleep, err := exec.LookPath("sleep")
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := testManager(t, &scriptRunner{})
+			m.runner = runner
+			m.cfg.BinDir = bin
+			m.hostXpraStart = func(context.Context, *ProcessRunner, string, string, string) (*hostXpraProcess, error) {
+				anchor := exec.Command(sleep, "30")
+				anchor.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+				if e := anchor.Start(); e != nil {
+					return nil, e
+				}
+				start, _, _, e := processWitness(anchor.Process.Pid)
+				if e != nil {
+					t.Fatal(e)
+				}
+				server := exec.Command(sleep, "30")
+				if exited {
+					server = exec.Command(sleep, "0")
+				}
+				server.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: anchor.Process.Pid}
+				if e = server.Start(); e != nil {
+					t.Fatal(e)
+				}
+				if exited {
+					for {
+						_, _, state, e := processWitness(server.Process.Pid)
+						if e != nil || state == "Z" || state == "X" {
+							break
+						}
+						time.Sleep(time.Millisecond)
+					}
+				}
+				return &hostXpraProcess{anchor: anchor, server: server, start: start, root: t.TempDir(), view: t.TempDir()}, nil
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			m.mu.Lock()
+			_, err = m.createHostXpra(ctx, "demo", "surface-fast-exit", "v0.2", Profile{}, "/app", Geometry{W: 1, H: 1})
+			m.mu.Unlock()
+			if err == nil {
+				t.Fatal("windowless program admitted")
+			}
+			if exited && (ctx.Err() != nil || !strings.Contains(err.Error(), "exited")) {
+				t.Fatalf("did not detect early exit: %v, context: %v", err, ctx.Err())
+			}
+			if !exited && ctx.Err() == nil {
+				t.Fatalf("live program refused before discovery deadline: %v", err)
+			}
+		})
+	}
+}
