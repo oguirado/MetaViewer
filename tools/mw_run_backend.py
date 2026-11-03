@@ -749,6 +749,7 @@ class HostBackend:
         return tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
 
     def rebind(self, sensed, plan, remaining):
+        deadline = time.monotonic_ns() + remaining * 1_000_000
         observed = self.observe_for_rebind(remaining)
         fresh = self.perceive(observed)
         wall = wall_kind(dict(elements=fresh['ax']))
@@ -777,8 +778,33 @@ class HostBackend:
         # Reuse only the already retained identical pixel content; never spend
         # another native capture/file read between this binding and proposal.
         final = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)['frame_ref']
-        need(all(final[k] == latest[k] for k in ('surface_id', 'sha256', 'width', 'height')) and
-             final['generation'] >= latest['generation'], 'MW_REBIND_PIXELS')
+        # [TARGET, unit decision] Only the browser goal's verified focused key
+        # may bind either retained caret phase. Classify an unseen final phase
+        # before one more publication read; no pixel reads follow that read.
+        # Click/type and other owners keep the identical-final-pixels gate.
+        keys = ('surface_id', 'sha256', 'width', 'height')
+        if (getattr(self, 'rebind_caret_keys', False) and plan['action']['type'] == 'key' and
+                not all(final[k] == latest[k] for k in keys)):
+            alternate = self.retain(final)
+            old_pixels = Path(witness['artifact']).read_bytes()
+            new_pixels = Path(alternate['artifact']).read_bytes()
+            need(hashlib.sha256(old_pixels).hexdigest() == latest['sha256'] and
+                 hashlib.sha256(new_pixels).hexdigest() == final['sha256'], 'MW_FRAME_BINDING')
+            need(final['generation'] >= latest['generation'] and
+                 self.caret_only_change(latest, final, fresh['ax'], old_pixels, new_pixels),
+                 'MW_REBIND_PIXELS')
+            phases = [(latest, witness), (final, alternate)]
+            latest = final
+            budget = (deadline - time.monotonic_ns()) // 1_000_000
+            need(budget > 0, 'MW_STALE_FRAME_EXHAUSTED')
+            final = tools.observe(self.surface_id, client=self.client, timeout_ms=budget)['frame_ref']
+            matches = [(frame, proof) for frame, proof in phases
+                       if all(final[k] == frame[k] for k in keys)]
+            need(bool(matches), 'MW_REBIND_PIXELS')
+            witness = matches[0][1]
+        else:
+            need(all(final[k] == latest[k] for k in keys), 'MW_REBIND_PIXELS')
+        need(final['generation'] >= latest['generation'], 'MW_REBIND_PIXELS')
         fresh['frame_witness'] = dict(witness, generation=final['generation'])
         fresh['frame'] = final
         return fresh
