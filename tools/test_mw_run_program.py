@@ -1860,6 +1860,24 @@ finally:s.close()
                         program.run_moves(self.b,planner,target['name'],1,1000,text='hello')
                 core.assert_not_called()
 
+    def test_ocr_confusions_are_uncertified_and_diagnostics_bounded(self):
+        target = dict(box=[0, 0, 100, 100])
+        cases = [('LHOLA DESDE C3}', 'not_readable'),
+                 ('HOLA DESDE C8', 'not_readable'),
+                 ('H0LA DESDE C3', 'not_readable'),
+                 ('HOLA DESDE C3', 'exact'),
+                 ('WRONG INPUT ENTIRELY', 'mismatch'),
+                 (' OCTAVA', 'mismatch')]
+        for observed, expected in cases:
+            with self.subTest(observed=observed):
+                payload = dict(marks=[dict(x=0, y=0, w=100, h=100,
+                                          ocr_text=observed)])
+                self.assertEqual(program.classify_text_readback(payload, target,
+                    'HOLA DESDE C3', caret=True, focused_area=True), expected)
+                self.assertEqual(program.readback_text(payload, target), observed)
+        payload['marks'][0]['ocr_text'] = 'x' * 5000
+        self.assertEqual(len(program.readback_text(payload, target)), 4096)
+
     def test_ocr_readback_ignores_outside_labels_and_never_normalizes_mismatch(self):
         target=dict(box=[10,20,30,20])
         outside=dict(x=60,y=20,w=20,h=20,ocr_text='hello')

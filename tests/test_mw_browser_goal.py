@@ -128,6 +128,41 @@ class BrowserGoalTests(unittest.TestCase):
         self.assertEqual(moves[1]['text_gate']['status'], 'exact_native_readback')
         self.assertEqual(self.reads, ['native-editor', 'native-editor'])
 
+    def test_enter_terminal_failure_is_unverified_effect_not_pending_input(self):
+        self.args.text, self.args.key, self.args.steps = 'Música Ω', 'Enter', 3
+        original = self.propose
+        def settled(sensed, plan, timeout_ms):
+            result = original(sensed, plan, timeout_ms)
+            if plan['action']['type'] == 'key':
+                self.assertEqual(plan['expectation']['type'], 'changed_region')
+                raise goal.host.tools.VerificationFailed(dict(
+                    code='VERIFICATION_FAILED', detail='verification failed'))
+            return result
+        self.b.propose.side_effect = settled
+        with self.assertRaisesRegex(goal.host.OwnerRefused, 'MW_PROGRAM_NO_VISIBLE_EFFECT'):
+            goal.run_moves(self.b, self.planner, self.args)
+        self.assertEqual([a['type'] for a in self.inputs], ['click', 'type', 'key'])
+        self.assertEqual(len(self.b.moves), 2)
+        attempt = self.b.attempts[-1]
+        self.assertEqual(attempt['status'], 'key_effect_unverified')
+        self.assertIsNone(attempt['delivery_verified'])
+        self.assertFalse(attempt['effect_verified'])
+        self.assertTrue(Path(attempt['receipt_artifact']).is_file())
+
+    def test_enter_timeout_remains_pending_and_never_retries(self):
+        self.args.text, self.args.key, self.args.steps = 'Música Ω', 'Enter', 3
+        original = self.propose
+        def timeout(sensed, plan, timeout_ms):
+            result = original(sensed, plan, timeout_ms)
+            if plan['action']['type'] == 'key':
+                raise goal.host.tools.VerificationFailed(dict(status='timeout', verified=False))
+            return result
+        self.b.propose.side_effect = timeout
+        with self.assertRaises(goal.host.tools.VerificationFailed):
+            goal.run_moves(self.b, self.planner, self.args)
+        self.assertEqual(self.b.attempts[-1]['status'], 'dispatch_pending')
+        self.assertEqual(len(self.inputs), 3)
+
     def test_wrong_text_prevents_enter_and_preserves_delivered_receipt(self):
         self.args.text, self.args.key, self.args.steps = 'Música Ω', 'Enter', 3
         self.b.slot_text.side_effect = lambda row: self.args.text.swapcase()

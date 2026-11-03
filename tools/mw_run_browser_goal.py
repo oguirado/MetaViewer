@@ -233,6 +233,17 @@ def run_moves(backend, planner, args, marks_path=None):
         try:
             admitted = backend.propose(sensed, dict(action=action, expectation=expectation),
                                         remaining_budget(backend, args.timeout_ms))
+        except host.tools.VerificationFailed as error:
+            # [TARGET, unit decision] A terminal core failure is settled evidence,
+            # not dispatch_pending. It does not prove delivery or visible effect.
+            body = error.receipt
+            if action['type'] == 'key' and body.get('code') == 'VERIFICATION_FAILED':
+                attempt.update(status='key_effect_unverified', delivery_verified=None,
+                               effect_verified=False, settlement=body)
+                attempt['receipt_artifact'] = atomic_journal(
+                    backend.evidence / ('receipt-' + journal_id + '.json'), attempt)
+                raise host.OwnerRefused('MW_PROGRAM_NO_VISIBLE_EFFECT') from error
+            raise
         except host.tools.ToolRefusal as error:
             rows = getattr(backend, 'frame_attempts', [])
             if rows and rows[-1].get('status') == error.reason_code:

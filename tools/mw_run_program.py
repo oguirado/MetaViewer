@@ -11,6 +11,7 @@ explicit operator-asserted current focus; OCR absence is explicitly uncertified.
 import argparse
 from contextlib import contextmanager
 import copy
+from difflib import SequenceMatcher
 import json
 import os
 import re
@@ -461,16 +462,25 @@ def require_text_field(target):
     host.need(target.get('role') in ('field', 'textbox', 'entry', 'text_field'), 'MW_PROGRAM_TEXT_FIELD')
 
 
-def classify_text_readback(c2, target, text, *, caret=False, focused_area=False):
+def readback_text(c2, target):
+    """Bound user-window OCR diagnostics; never substitute the requested text."""
+    return observed_text(c2, target)[:4096]
+
+
+def observed_text(c2, target):
     """Use actual OCR only, never mark-N, model prose or the requested text."""
     x, y, w, h = target['box']
     marks = [m for m in (c2 or {}).get('marks', []) if
              x <= m['x'] + m['w'] / 2 < x + w and
              y <= m['y'] + m['h'] / 2 < y + h and m.get('ocr_text')]
     marks.sort(key=lambda m: (m['y'], m['x']))
-    if not marks:
+    return ' '.join(m['ocr_text'] for m in marks)
+
+
+def classify_text_readback(c2, target, text, *, caret=False, focused_area=False):
+    observed = observed_text(c2, target)
+    if not observed:
         return 'not_readable'
-    observed = ' '.join(m['ocr_text'] for m in marks)
     if observed == text:
         return 'exact'
     if focused_area:
@@ -484,6 +494,20 @@ def classify_text_readback(c2, target, text, *, caret=False, focused_area=False)
     # as its own OCR mark. Never normalize case, words or requested pipes.
     if caret and not text.endswith('|') and observed in (text + '|', text + ' |'):
         return 'exact'
+    # [TARGET, unit decision] Similarity is uncertainty, never certification.
+    # Compare literal, equal-word-count spans in the focused window. Short
+    # strings and changed punctuation/case alone retain strict disagreement.
+    wanted = text.split()
+    words = observed.split()
+    candidates = ([' '.join(words[i:i + len(wanted)])
+                   for i in range(len(words) - len(wanted) + 1)]
+                  if focused_area and wanted else [observed])
+    for candidate in candidates:
+        if (len(text) >= 8 and candidate.casefold() != text.casefold()
+                and any(word in candidate.split() for word in wanted)
+                and re.findall(r'[!?.;:]', candidate) == re.findall(r'[!?.;:]', text)
+                and SequenceMatcher(None, text, candidate, autojunk=False).ratio() >= 0.85):
+            return 'not_readable'
     return 'mismatch'
 
 
@@ -616,7 +640,9 @@ def dispatch_text(backend, sensed, target, text, timeout_ms, *, focused=False):
             attempt['readback_box'] = readback_target['box']
         pixels = read_text_pixels(backend, frame, readback_target, remaining_budget(backend, timeout_ms))
         attempt['readback_source'] = 'pixels_tsv' if pixels is not None else 'c2_marks'
-        readback = classify_text_readback(pixels if pixels is not None else backend.vision.last_c2_payload,
+        payload = pixels if pixels is not None else backend.vision.last_c2_payload
+        attempt['readback_text'] = readback_text(payload, readback_target)
+        readback = classify_text_readback(payload,
                                          readback_target, text, caret=focused, focused_area=focused)
         attempt['text_readback'] = backend.text_readback = readback
         host.need(readback != 'mismatch', 'MW_PROGRAM_TEXT_MISMATCH')
@@ -1173,6 +1199,8 @@ def run_entry(args):
                       frame_attempts=getattr(backend, 'frame_attempts', []))
         if text is not None:
             report['text_readback'] = getattr(backend, 'text_readback', None)
+            report['readback_text'] = next((a['readback_text'] for a in reversed(
+                getattr(backend, 'program_attempts', [])) if 'readback_text' in a), None)
         try:
             host.ReplayOwner.write(evidence / 'report.json', (json.dumps(report) + '\n').encode())
         except OSError:
