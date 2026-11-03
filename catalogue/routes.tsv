@@ -222,9 +222,12 @@ v026-ci-assets.md	changes/unreleased/v026-ci-assets.md
 v026-host-polish.md	changes/unreleased/v026-host-polish.md
 v026-host-xpra.md	changes/unreleased/v026-host-xpra.md
 v026kit-286e58a540a9	changes/unreleased/v026-kit-sidecars-2.md
+v027-display-pull.md	changes/unreleased/v027-display-pull.md
 v027doc-551a5a691436	changes/unreleased/v027-doc-commands-count.md
 v027-errors.md	changes/unreleased/v027-errors.md
 v027-firstrun.md	changes/unreleased/v027-firstrun.md
+v027-fix-b3.md	changes/unreleased/v027-fix-b3.md
+v027-fix-b4.md	changes/unreleased/v027-fix-b4.md
 v027-fix-u1.md	changes/unreleased/v027-fix-u1.md
 v027-fix-u2.md	changes/unreleased/v027-fix-u2.md
 v027-fix-u3.md	changes/unreleased/v027-fix-u3.md
@@ -239,6 +242,7 @@ v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-repo.md	changes/unreleased/v027-repo.md
 v027-review-fix-2.md	changes/unreleased/v027-review-fix-2.md
 v027-seams.md	changes/unreleased/v027-seams.md
+v027-verify-2.md	changes/unreleased/v027-verify-2.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
@@ -2123,6 +2127,7 @@ v026hos-e5825ac19a7e	ui/test/v026-host-polish.test.js
 v026hos-0989adc7fb8b	ui/test/v026-host-xpra.test.js
 v026kit-ed2db276dbdb	ui/test/v026-kit-sidecars.test.js
 v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
+v027bro-d687bba928a4	ui/test/v027-browser-handoff.test.js
 v027dec-4c1c105b1058	ui/test/v027-deck-triage.test.js
 v027fir-79fcc62bbe59	ui/test/v027-first-view-visual.js
 v027-first-view.html	ui/test/v027-first-view.html
