@@ -314,7 +314,7 @@ Click **`Identities`** in the top bar  to:
 Use the same bindings as the running app. Copy its **Copy env path** and replace
 this placeholder in a dedicated shell before the commands below:
 
-```bash
+```text
 export METAVIEWER_ATTACH='<copied-current.env-path>'
 set -a
 . "$METAVIEWER_ATTACH"
@@ -369,7 +369,7 @@ identity-store and dependency paths. Optional paths can be absent.
 Copy the absolute **Copy env path** before sourcing: sourcing changes
 `XDG_RUNTIME_DIR` to the app's private core runtime. Use a dedicated shell:
 
-```bash
+```text
 export METAVIEWER_ATTACH='<copied-current.env-path>'
 set -a
 . "$METAVIEWER_ATTACH"

@@ -70,7 +70,7 @@ assets from local artifacts run `python3 tools/build_release_assets.py --out-dir
 
 You can also verify the unpacked application bundle manifest by hand:
 
-```bash
+```text
 cd MetaViewer-linux-<arch>
 sha256sum -c ../MetaViewer-linux-<arch>.sha256
 ```
