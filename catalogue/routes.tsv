@@ -144,6 +144,7 @@ browser-goal.md	changes/unreleased/browser-goal.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 cipacka-468d8ecfdb15	changes/unreleased/ci-packaged-display-arm64.md
 cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
+compact-9378a8397e9e	changes/unreleased/compact-capsule-chrome.md
 compile-238480708e01	changes/unreleased/compiled-browser-entries.md
 desktop-hidden.md	changes/unreleased/desktop-hidden.md
 display-polish.md	changes/unreleased/display-polish.md
@@ -266,6 +267,7 @@ v027-window-close.md	changes/unreleased/v027-window-close.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
 v027win-bfdd59ead78f	changes/unreleased/v027-window-reuse-message.md
 v027-x64-evidence.md	changes/unreleased/v027-x64-evidence.md
+v028-copyfix.md	changes/unreleased/v028-copyfix.md
 v028-core-fix.md	changes/unreleased/v028-core-fix.md
 v028-docs-x64.md	changes/unreleased/v028-docs-x64.md
 v028-fit.md	changes/unreleased/v028-fit.md
@@ -1070,6 +1072,7 @@ ringmode.go	daemon-adapter/internal/capsule/ringmode.go
 ringmode_test.go	daemon-adapter/internal/capsule/ringmode_test.go
 role_test.go	daemon-adapter/internal/capsule/role_test.go
 shared_roots_test.go	daemon-adapter/internal/capsule/shared_roots_test.go
+copy_guard_test.go	daemon-adapter/internal/capsule/slots/copy_guard_test.go
 store.go	daemon-adapter/internal/capsule/slots/store.go
 store_test.go	daemon-adapter/internal/capsule/slots/store_test.go
 slots_bridge.go	daemon-adapter/internal/capsule/slots_bridge.go
@@ -2126,6 +2129,7 @@ nesting-c224ecae31d5	ui/test/nestingStartup.test.js
 netcopy-panel.test.js	ui/test/netcopy-panel.test.js
 operator-stubs.mjs	ui/test/operator-stubs.mjs
 originc-568d530772a3	ui/test/origin-contract.test.js
+overlay-e9a006de4470	ui/test/overlay-surface-scope.test.js
 p18mode-a22a0f963a40	ui/test/p18-modes-tiles.test.js
 p18orph-a0729c5e82a9	ui/test/p18-orphan-panels.test.js
 p18-package.test.js	ui/test/p18-package.test.js
