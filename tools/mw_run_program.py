@@ -1158,7 +1158,8 @@ def run_entry(args):
             # Its output must stay in private RAM, never in the source tree.
                 with marks_workspace() as marks:
                     backend.vision = VCorePerceptionAdapter(timeout=args.timeout_ms / 1000,
-                        verify_lock=True, marks_out=marks, ocr_marks=True)
+                        verify_lock=True, marks_out=marks, ocr_marks=True,
+                        tessdata_prefix=os.environ.get('TESSDATA_PREFIX'))
                     try:
                         planner = None
                         if args.goal != 'focused':

@@ -1522,6 +1522,7 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                  python: str = "python3",
                  marks_out: str | Path | None = None,
                  ocr_marks: bool = False,
+                 tessdata_prefix: str | None = None,
                  verify_lock: bool = False,
                  queue_cap: int = 2,
                  max_restarts: int = 1,
@@ -1562,8 +1563,8 @@ class VCorePerceptionAdapter(PerceptionAdapter):
                 self.extra_site_error = str(exc)
         self._spawn_env = _scrubbed_env(self.ve_root, extra_site=self.extra_site)
         # The OCR data location is not a secret; without it every mark loses its text.
-        if os.environ.get("TESSDATA_PREFIX"):
-            self._spawn_env["TESSDATA_PREFIX"] = os.environ["TESSDATA_PREFIX"]
+        if tessdata_prefix:
+            self._spawn_env["TESSDATA_PREFIX"] = tessdata_prefix
         self.marks_out = (_ram_marks_path(marks_out)
                           if marks_out is not None else None)
         self.ocr_marks = ocr_marks
