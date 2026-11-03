@@ -827,6 +827,17 @@ function onCreateCapsule(intent, settle) {
   }
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
+  if (body?.kind === 'vm') {
+    const valid = Object.keys(body).every(key => ['kind','type','placement'].includes(key))
+      && (body.type === undefined || body.type === 'create-capsule')
+      && (body.placement === undefined || ['tab','split','floating'].includes(body.placement));
+    void submitHost(async () => {
+      if (!valid) throw Object.assign(new Error('VM_SELECTOR_INVALID'),{code:'VM_SELECTOR_INVALID'});
+      if (!props.authorityHost?.createSurface) throw Object.assign(new Error('VM_UNAVAILABLE'),{code:'VM_UNAVAILABLE'});
+      return props.authorityHost.createSurface({kind:'vm'});
+    });
+    return;
+  }
   if (body?.kind === 'program' || body?.kind === 'host-program') {
     if (body.profileId || body.profile_id || body.choice?.profileId || body.choice?.profile_id) {
       const reason = 'Renderer cannot select a profile for a program capsule.';

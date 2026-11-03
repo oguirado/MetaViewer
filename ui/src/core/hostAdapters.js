@@ -2,7 +2,7 @@ import { createWallProjection } from './projection.js';
 import { buildAuthorityIntent, createWallIntentBuilders } from './intents.js';
 
 /** @typedef {{schema:'action_verdict/v0.2',proposal_id:string,core_seq:number,decision:'admitted'|'refused',reason_code?:string}} ActionVerdict */
-/** @typedef {{createSurface?:()=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
+/** @typedef {{createSurface?:(selector?:{kind:'vm'})=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
 /** @typedef {{command:string,args:readonly string[],cols:number,rows:number}} TerminalSpec */
 /** @typedef {{open?:(spec:TerminalSpec)=>Promise<{session:string}>,setEnabled?:(enabled:boolean)=>Promise<true>,close?:(spec:{session:string})=>Promise<unknown>}} TerminalPort */
 /** @typedef {{code:string,message:string,tone:'success'|'refusal'}} OutcomeRow */
@@ -41,8 +41,11 @@ export function createAuthorityAdapter(port) {
   const propose = typeof port?.propose === 'function' ? port.propose.bind(port) : null;
   const createSurface = typeof port?.createSurface === 'function' ? port.createSurface.bind(port) : null;
   return Object.freeze({
-    createSurface: createSurface ? async () => {
-      const reply = await createSurface();
+    createSurface: createSurface ? async (/** @type {{kind:'vm'}|undefined} */ selector = undefined) => {
+      if (selector !== undefined && (!selector || Reflect.ownKeys(selector).join(',') !== 'kind' || selector.kind !== 'vm')) {
+        throw Object.assign(new Error('VM_SELECTOR_INVALID'),{code:'VM_SELECTOR_INVALID'});
+      }
+      const reply = selector === undefined ? await createSurface() : await createSurface(selector);
       if (reply?.ok === true) return {code:'INTENT_ACKNOWLEDGED',message:'Request sent.',tone:/** @type {const} */ ('success')};
       const code = typeof reply?.code === 'string' ? reply.code : 'SURFACE_CREATE_FAILED';
       throw Object.assign(new Error(code), {code});

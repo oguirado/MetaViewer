@@ -20,6 +20,7 @@ import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { isForeignIdentity } from './identityProtection.js';
 import { MainError, observeSender, PRIVILEGED_ORIGIN, buildFirstSurfaceCreateRequest } from './main.js';
 import { createFrameReader } from './frameReader.js';
 import { createFramePort } from './framePort.js';
@@ -701,7 +702,7 @@ export function nestedIdentity(argv,env) {
   return {depth:flags.length ? Number(flags[0].slice(-1)) : null,self};
 }
 /** @param {any} options */
-export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,clipboard=null,profiles=new Map(),capsuleStates=new Map(),listIdentities=null,readFreeMemoryBytes=null,frames=null,frameDiag=null,now:clock=Date.now}) {
+export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv=process.argv.slice(1),terminal=null,clipboard=null,profiles=new Map(),capsuleStates=new Map(),listIdentities=null,readFreeMemoryBytes=null,frames=null,frameDiag=null,now:clock=Date.now,hostArch=process.arch}) {
   if (terminal?.request && terminal?.subscribe) terminal=createSideTerminalAdapter(terminal);
   const store = createSettingsStore(env);
   const destination = recordingDestination(env);
@@ -715,6 +716,48 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   if (!ownedProfiles.has('shell')) ownedProfiles.set('shell', { args: [] });
   let subscribed = false, enabled = false, disposed = false;
   let creatingCapsule = false;
+  const createVM = async () => {
+    if (identity.depth !== null || disposed) return refuse('DISPLAY_ONLY');
+    if (creatingCapsule) return refuse('SURFACE_CREATE_BUSY');
+    creatingCapsule = true;
+    let reserved = false;
+    let key = '';
+    try {
+      const {configuredVMProfiles, summarizeSurfaces, MAX_CAPSULES, parseMemAvailableBytes} = await (profilePickerModulePromise ??= import('./profilePicker.js'));
+      if (typeof listIdentities !== 'function') return refuse('VM_UNAVAILABLE');
+      const listed = await listIdentities();
+      if (!listed?.ok || !Array.isArray(listed.rows)) return refuse('VM_UNAVAILABLE');
+      const ids = new Set(listed.rows.filter((/** @type {any} */ row) => row?.browser === 'program').map((/** @type {any} */ row) => row.id));
+      const candidates = configuredVMProfiles(env, hostArch).filter(p => ids.has(p.id) && !isForeignIdentity(p.id));
+      if (candidates.length !== 1) return refuse('VM_UNAVAILABLE');
+      const selected = candidates[0];
+      key = `pending:${selected.id}`;
+      const free = typeof readFreeMemoryBytes === 'function' ? await readFreeMemoryBytes() : parseMemAvailableBytes(readFileSync('/proc/meminfo','utf8'));
+      // Revalidate synchronously after the final await, before reserving anything.
+      if (disposed || typeof env.MV_SRF_PROFILES !== 'string' || Buffer.byteLength(env.MV_SRF_PROFILES,'utf8') > 1048576) return refuse('VM_UNAVAILABLE');
+      const current = configuredVMProfiles(env, hostArch).filter(p => ids.has(p.id) && !isForeignIdentity(p.id));
+      if (current.length !== 1 || current[0].id !== selected.id || current[0].configuration !== selected.configuration) return refuse('VM_UNAVAILABLE');
+      const state = summarizeSurfaces(capsuleStates);
+      if (state.bound.has(selected.id)) return refuse('PROFILE_ALREADY_BOUND');
+      if (state.live >= MAX_CAPSULES) return refuse('CAPSULE_LIMIT_REACHED');
+      // [CITED: native VM admission] The separate native KVM/image checks remain mandatory.
+      if (!Number.isSafeInteger(free) || free < 16 * 1024 ** 3) return refuse('VM_RAM_ADMISSION_REFUSED');
+      capsuleStates.set(key,{profile_id:selected.id,state:'creating'}); reserved = true;
+      const reply = await core.request(selected.request);
+      if (reply?.schema === 'surface_event/v0.2' && reply.event === 'error') {
+        capsuleStates.delete(key); reserved = false;
+        return refuse(resolveCreateFailureCode(reply));
+      }
+      const surface = reply?.data?.surface;
+      if (disposed || reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created' || !surface
+          || surface.kind !== 'vm' || surface.profile_id !== selected.id || surface.state !== 'active'
+          || surface.control !== 'agent' || typeof surface.surface_id !== 'string'
+          || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(surface.surface_id)) return refuse('VM_CREATE_UNCERTAIN');
+      rememberCapsule(surface); reserved = false;
+      return {ok:true};
+    } catch { return refuse(reserved ? 'VM_CREATE_UNCERTAIN' : 'VM_UNAVAILABLE'); }
+    finally { creatingCapsule = false; }
+  };
   // [TARGET, unit decision] Main shares its boot reservation; frame states reconcile it.
   const rememberCapsule = (/** @type {any} */ state) => {
     if (!state || typeof state.surface_id !== 'string') return;
@@ -835,7 +878,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     selfCapsuleId: async () => identity.self,
     // [TARGET, unit decision] Browser creation has no action/frame authority.
     // Zero renderer arguments: profile and geometry remain host-owned.
-    createSurface: async () => {
+    createSurface: async (/** @type {any} */ selector) => {
+      if (selector !== undefined) {
+        if (!exactDataKeys(selector,'kind') || selector.kind !== 'vm') return refuse('VM_SELECTOR_INVALID');
+        return createVM();
+      }
       if (identity.depth !== null) return refuse('DISPLAY_ONLY');
       if (creatingCapsule) return refuse('SURFACE_CREATE_BUSY');
       const releaseCreation = acquireCapsuleCreation(capsuleStates);
@@ -1174,7 +1221,8 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
       ipcMain.handle(channel,/** @param {unknown} event @param {...any} args */ async (event,...args) => {
         if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
-        if (args.length !== arity) throw new Error('ARGS');
+        const vmCreate = name === 'createSurface' && args.length === 1 && exactDataKeys(args[0],'kind') && args[0].kind === 'vm';
+        if (args.length !== arity && !vmCreate) throw new Error('ARGS');
         if (arity && (JSON.stringify(args[0]) === undefined || Buffer.byteLength(typeof args[0] === 'string' ? args[0] : JSON.stringify(args[0]),'utf8') > WIRE_MAX_BYTES)) throw new Error('PAYLOAD');
         const result=await (['terminalOpen','terminalAttach','terminalResize','terminalClose'].includes(name)
           ? /** @type {any} */(fn)(args[0], /** @type {any} */(event).sender)

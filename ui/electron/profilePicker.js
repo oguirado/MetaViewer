@@ -428,3 +428,29 @@ export function createRefusalReason(code, missingId = 'mv-live-2') {
     : 'This request is unavailable. Please try again.';
 }
 
+
+/** VM creation uses an explicitly configured agent template, never browser defaults.
+ * @param {Record<string, any>} env @param {string} arch
+ * @returns {ReadonlyArray<ProfileEntry & {configuration:string}>}
+ */
+export function configuredVMProfiles(env, arch) {
+  if (arch !== 'arm64' || typeof env.MV_SRF_PROFILES !== 'string' || env.MV_SRF_PROFILES.length > MAP_BYTES_MAX) return [];
+  let rows;
+  try { rows = JSON.parse(env.MV_SRF_PROFILES); } catch { return []; }
+  if (!plain(rows)) return [];
+  const result = [];
+  for (const [id, raw] of Object.entries(rows)) {
+    if (!validId(id) || !plain(raw)) continue;
+    const w = raw.Width, h = raw.Height;
+    const mode = raw.default_mode || raw.role || 'agent';
+    if (raw.Kind !== 'vm' || raw.NativeKind !== 'vm' || raw.Program !== 'notepad-vm' || mode !== 'agent'
+        || typeof w !== 'number' || typeof h !== 'number' || !Number.isSafeInteger(w) || !Number.isSafeInteger(h)
+        || w < 1 || h < 1 || w > 8192 || h > 8192
+        || typeof raw.Display !== 'string' || !/^:[0-9]+$/.test(raw.Display)
+        || typeof raw.RAMRoot !== 'string' || !raw.RAMRoot.startsWith('/') || raw.RAMRoot.includes('\0')) continue;
+    result.push(Object.freeze({id, configuration:JSON.stringify(raw), request:Object.freeze({schema:'surface_request/v0.2',op:'create',
+      params:Object.freeze({kind:'vm',profile_id:id,geometry:Object.freeze({w,h})})})}));
+    if (result.length > MAX_CAPSULES) return [];
+  }
+  return Object.freeze(result);
+}
