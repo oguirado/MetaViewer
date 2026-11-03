@@ -622,6 +622,12 @@ export function createWallWorkspaceController(options = {}) {
    * Keep the minimum inside the actual cell instead of overlapping its neighbor.
    * @param {any} target @param {number} width @param {number} height */
   function fitAllocation(target,width,height) {
+    // DockviewPanel inherits setConstraints but does not consume its event.
+    // The group owns the nested grid's effective minimum, including floats.
+    (target.group ?? target).api?.setConstraints?.({
+      minimumWidth:Math.min(WALL_PANEL_MIN_WIDTH,width),
+      minimumHeight:Math.min(WALL_PANEL_MIN_HEIGHT,height),
+    });
     for (const panel of target.panels ?? [target]) panel.api?.setConstraints?.({
       minimumWidth:Math.min(WALL_PANEL_MIN_WIDTH,width),
       minimumHeight:Math.min(WALL_PANEL_MIN_HEIGHT,height),
@@ -822,6 +828,7 @@ export function createWallWorkspaceController(options = {}) {
         const rect = nextFloatingCell(api.width,api.height,floatingGrid(),occupied,profile ? savedCells?.()[profile] : null);
         fitAllocation(panel,rect.width,rect.height);
         /** @type {any} */ (api).addFloatingGroup(panel,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+        fitAllocation(panel.group,rect.width,rect.height);
         occupied.push(rect); inserted.push({id:tile.id,rect});
       }
       retainFloatingHome(api);

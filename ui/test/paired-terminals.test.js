@@ -41,7 +41,8 @@ test('paired header inventory rejects missing identity, capability and action gu
   const source=readFileSync(new URL('../src/wall/SurfacePanel.vue',import.meta.url),'utf8');
   assert.doesNotMatch(withoutPairedTerminalControl(source),/mv-tile-terminal-toggle/);
   for(const key of ['v-if=',':id=',':data-semantic-anchor=',':aria-label=',':aria-expanded=','@click.stop=']) {
-    assert.throws(()=>withoutPairedTerminalControl(source.replace(key,'removed=')),assert.AssertionError);
+    const control=source.match(/<button\b[^>]*class="mv-tile-terminal-toggle"[^>]*>[^<]*<\/button>/)[0];
+    assert.throws(()=>withoutPairedTerminalControl(source.replace(control,control.replace(key,'removed='))),assert.AssertionError);
   }
 });
 

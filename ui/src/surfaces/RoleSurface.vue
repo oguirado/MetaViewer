@@ -533,7 +533,7 @@ onBeforeUnmount(() => { stopOverlaySubscription?.(); stopNativeFocus?.(); overla
     <div ref="root" class="mv-role-viewport">
       <div v-if="previewOccluded && nativePreview" class="mv-native-preview" aria-label="Last native frame">
         <img :src="nativePreview" alt="Last native frame before opening tile tools" draggable="false">
-        <span>Last frame · tools open</span>
+        <span>Last frame · overlay open</span>
       </div>
       <!-- [TARGET, unit decision] Terminal canvas leaves layout: visibility:hidden still consumes the clipped viewport. -->
       <div v-if="role === 'agent' && hostWindow?.state !== 'lost'" :style="{visibility: (watching || hostWindow?.minimized || hostWindow?.state === 'lost') ? 'hidden' : undefined}" :inert="watching || Boolean(hostWindow?.minimized) || hostWindow?.state === 'lost'" class="mv-role-agent-canvas"><slot /></div>
@@ -567,7 +567,7 @@ onBeforeUnmount(() => { stopOverlaySubscription?.(); stopNativeFocus?.(); overla
 .mv-role-status { position:absolute; top:0; left:0; pointer-events:none; }
 .mv-native-preview { position:absolute; inset:0; z-index:1; pointer-events:none; }
 .mv-native-preview img { width:100%; height:100%; object-fit:fill; }
-.mv-native-preview span { position:absolute; right:4px; bottom:4px; padding:2px 4px; background:var(--cuk-semantic-surface-panel); color:var(--cuk-semantic-text-primary); font-size:11px; }
+.mv-native-preview span { position:absolute; right:4px; top:4px; padding:2px 4px; background:var(--cuk-semantic-surface-panel); color:var(--cuk-semantic-text-primary); font-size:11px; }
 .mv-role-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
 .mv-role-watch { display:flex; justify-content:flex-end; }
 .mv-role-compact-actions { display:none; }

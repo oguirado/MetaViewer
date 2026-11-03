@@ -23,6 +23,7 @@ import {createPairedTerminals} from './pairedTerminals.js';
 
 const props = defineProps({
   open: { type: Boolean, default: true },
+  compact: { type: Boolean, default: false },
   pairedTarget: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalBinding: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
@@ -34,7 +35,7 @@ const props = defineProps({
   closeGraceMs: { type: Number, default: undefined },
 });
 
-const emit = defineEmits(['update:open','pair-focus']);
+const emit = defineEmits(['update:open','pair-focus','request-dock']);
 
 class MvDeckTerminal extends Terminal {
   /** @param {any} options */
@@ -231,14 +232,15 @@ const activeScreenIndex = computed(() => deckState.value.activeScreenIndex);
 const activeScreen = computed(() => deckState.value.activeScreen);
 const focusedSlotId = computed(() => deckState.value.focusedSlotId);
 const focusedPair=computed(()=>{revision.value;return pairedTerminals.forSlot(focusedSlotId.value);});
-const workflowIdentity=computed(()=>focusedPair.value?.identityLine ?? pastedBootstrapText.value);
+const pairMatchesTarget=computed(()=>!props.compact || focusedPair.value?.surfaceId === props.pairedTarget?.surfaceId);
+const workflowIdentity=computed(()=>pairMatchesTarget.value ? focusedPair.value?.identityLine ?? pastedBootstrapText.value : '');
 watch(focusedPair,pair=>emit('pair-focus',pair?.surfaceId ?? null),{immediate:true});
 const pendingCloseSlotId = computed(() => deckState.value.pendingCloseSlotId);
 const launcherOpen = computed(() => deckState.value.launcherOpen);
 const toastMessage = computed(() => deckState.value.toastMessage);
 const errorCode = computed(() => deckState.value.errorCode);
 const errorMessage = computed(() => deckState.value.errorMessage);
-const gridColumns = computed(() => String(deckState.value.gridColumns));
+const gridColumns = computed(() => props.compact ? '1' : String(deckState.value.gridColumns));
 const profiles = computed(() => deckState.value.profiles);
 const allScreenSlots = computed(() => {
   const list = [];
@@ -250,7 +252,7 @@ const allScreenSlots = computed(() => {
       list.push({
         slot,
         screenIndex: sIdx,
-        onActiveScreen: sIdx === activeIdx,
+        onActiveScreen: sIdx === activeIdx && (!props.compact || (slot.id === focusedSlotId.value && pairMatchesTarget.value)),
       });
     }
   }
@@ -439,6 +441,7 @@ function syncTerminals() {
  */
 function onWindowKeyDown(event) {
   if (!props.open) return;
+  if (props.compact && ['new-shell','next-screen','prev-screen'].includes(matchDeckShortcut(event) ?? '')) emit('request-dock');
   if (pendingCloseSlotId.value) {
     if (event.key === 'Escape') controller.cancelPendingClose();
     else if (event.key === 'Tab') {
@@ -923,11 +926,13 @@ defineExpose({
   <div
     id="mv-terminal-deck"
     class="mv-terminal-deck"
+    :data-compact="String(compact)"
     data-semantic-anchor="terminal/deck/root"
     aria-label="Terminal workspace"
     @keydown="onWindowKeyDown"
   >
     <header class="mv-terminal-deck__bar" aria-label="Terminal operator bar">
+      <button v-if="compact" id="terminal-deck-open-full" data-semantic-anchor="terminal/open-dock" type="button" class="mv-terminal-deck__action-btn" @click="emit('request-dock')">Open full dock</button>
       <div class="mv-terminal-deck__screens" role="tablist" aria-label="Terminal screens">
         <div
           v-for="(screen, sIdx) in screens"
@@ -966,6 +971,7 @@ defineExpose({
 
       <div class="mv-terminal-deck__actions">
         <span
+          v-if="pairMatchesTarget"
           ref="bootstrapWrap"
           id="terminal-deck-bootstrap-panel"
           data-semantic-anchor="terminal/bootstrap/panel"

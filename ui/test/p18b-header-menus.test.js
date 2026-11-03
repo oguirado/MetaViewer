@@ -236,7 +236,9 @@ async function headerOracle(source) {
   const dock=source.match(/<UiButton label="Terminal" id="shell-terminal"[^\n]+/)?.[0];
   assert.ok(navigation && dock, 'navigation and dock actions remain reachable');
   const fragment=navigation+dock;
-  const Component=await compile(`<script setup>import {ref} from 'vue';const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
+  const dockToggle=source.match(/function toggleTerminalDock\(\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(dockToggle, 'drawer transition keeps the real dock handler');
+  const Component=await compile(`<script setup>import {ref} from 'vue';const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),terminalDockOpen=ref(false),terminalInDrawer=ref(false),terminalPreferDock=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');${dockToggle}</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
   const Button=vue.defineComponent({props:['label'],setup:(p,ctx)=>()=>vue.h('button',ctx.attrs,p.label)});
   const Host=vue.defineComponent({setup(){vue.getCurrentInstance().appContext.components.UiButton=Button;return()=>vue.h(Component);}});
   const live=mount(Host);
@@ -255,7 +257,7 @@ test('P18B mutant: omitting a moved action fails the navigation oracle',async()=
   assert.notEqual(source,mutant);await assert.rejects(()=>headerOracle(mutant),{code:'ERR_ASSERTION'});
 });
 test('P18B mutant: referencing a moved handler without calling it fails the navigation oracle',async()=>{
-  const source=read('../src/App.vue'),mutant=source.replace('@click="toggleTerminal()"','@click="void toggleTerminal"');
+  const source=read('../src/App.vue'),mutant=source.replace('@click="toggleTerminalDock()"','@click="void toggleTerminalDock"');
   assert.notEqual(source,mutant);await assert.rejects(()=>headerOracle(mutant),{code:'ERR_ASSERTION'});
 });
 

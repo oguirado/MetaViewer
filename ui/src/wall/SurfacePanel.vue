@@ -359,14 +359,23 @@ import './wall.css';
 const networkOpen=shallowRef(false);
 const chromeRoot = shallowRef(/** @type {HTMLElement|null} */ (null));
 const stateControlTarget = shallowRef(/** @type {Element|null} */ (null));
+const terminalDrawerHost = shallowRef(/** @type {HTMLElement|null} */ (null));
+let terminalDrawerObserver = /** @type {ResizeObserver|null} */ (null);
 const chromeHover = shallowRef(false), chromeFocus = shallowRef(false), chromeControl = shallowRef(false);
 const chromeDragging = shallowRef(false);
 let chromePointerHeld = false;
 const chromeExpanded = computed(() => !chromeDragging.value && (chromeHover.value || chromeFocus.value || chromeControl.value || networkOpen.value));
 const chromeOverlays = /** @type {ReturnType<typeof import('../surfaces/overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
 const chromeOwner = {};
-/** @typedef {{available:()=>boolean,isOpen:(id:string)=>boolean,toggle:(id:string)=>void}} CapsuleTerminal */
+/** @typedef {{available:()=>boolean,isOpen:(id:string)=>boolean,toggle:(id:string)=>void,inDrawer?:(id:string)=>boolean,registerDrawer?:(id:string,el:HTMLElement|null,box:{width:number,height:number,visible:boolean})=>void}} CapsuleTerminal */
 const capsuleTerminal = /** @type {CapsuleTerminal|null} */ (inject('capsuleTerminal', null));
+function publishTerminalDrawer() {
+  if (!capsuleTerminal?.registerDrawer) return;
+  const box=chromeRoot.value?.getBoundingClientRect?.();
+  capsuleTerminal?.registerDrawer?.(props.capsuleId,terminalDrawerHost.value,{
+    width:box?.width ?? 0,height:box?.height ?? 0,visible:!presentationHidden.value && surfaceHostVisible.value,
+  });
+}
 /** @param {PointerEvent} event */
 function chromePointer(event) {
   chromeHover.value = !!(/** @type {Element|null} */ (event.target))?.closest?.('.cuk-capsule-panel__header, .mv-tile-rail');
@@ -393,6 +402,11 @@ function chromeDragEnd(event) {
 function chromeBlur() { chromeDragEnd(); chromeControl.value = false; chromeFocus.value = false; }
 onMounted(() => {
   stateControlTarget.value = chromeRoot.value?.querySelector?.('.cuk-capsule-panel__actions') ?? null;
+  publishTerminalDrawer();
+  if (capsuleTerminal?.registerDrawer && chromeRoot.value && typeof globalThis.ResizeObserver === 'function') {
+    terminalDrawerObserver=new ResizeObserver(publishTerminalDrawer);
+    terminalDrawerObserver.observe(chromeRoot.value);
+  }
   globalThis.window?.addEventListener?.('keydown', chromeKey);
   globalThis.window?.addEventListener?.('keyup', chromeKey);
   globalThis.window?.addEventListener?.('blur', chromeBlur);
@@ -401,6 +415,8 @@ onMounted(() => {
   globalThis.window?.addEventListener?.('pointercancel', chromeDragEnd, true);
 });
 onBeforeUnmount(() => {
+  terminalDrawerObserver?.disconnect();
+  capsuleTerminal?.registerDrawer?.(props.capsuleId,null,{width:0,height:0,visible:false});
   chromeOverlays?.setSurface(chromeOwner, props.capsuleId, false);
   globalThis.window?.removeEventListener?.('keydown', chromeKey);
   globalThis.window?.removeEventListener?.('keyup', chromeKey);
@@ -616,6 +632,7 @@ watch(row, (current) => {
 }, { immediate: true });
 const drawable = computed(() => isDrawableRow(row.value));
 const surfaceHostVisible = computed(() => isSurfaceHostVisible(row.value));
+watch(() => [presentationHidden.value,surfaceHostVisible.value],publishTerminalDrawer,{flush:'post'});
 const uiPhase = shallowRef('idle');
 // Pending gestures settle only when the authority actually moves: the feed
 // re-issues row objects on every frame notice, so values (not identities)
@@ -682,6 +699,7 @@ function onActivateSurface() {
 </script>
 <template>
   <div class="mv-tile" :hidden="presentationHidden" :data-chrome-expanded="String(chromeExpanded)" :data-mv-window-hidden="String(presentationHidden)" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">
+  <div ref="terminalDrawerHost" class="mv-tile-terminal-drawer" :id="`tile-terminal-drawer-${props.capsuleId}`" :data-semantic-anchor="`capsule/${props.capsuleId}/terminal-drawer`" :aria-label="`Paired terminal for ${props.title}`" :hidden="!capsuleTerminal?.inDrawer?.(props.capsuleId)"></div>
   <Teleport :to="stateControlTarget || 'body'" :disabled="!stateControlTarget">
     <div class="mv-tile-state-controls" :hidden="!props.stateControls"><slot name="state-controls" :capabilities="props.stateControls" :on-action="onStateAction" /></div>
     <button v-if="!props.displayOnly && capsuleTerminal?.available()" type="button" class="mv-tile-terminal-toggle" :id="`tile-terminal-${props.capsuleId}`" :data-semantic-anchor="`capsule/${props.capsuleId}/terminal`" :aria-label="`Terminal for ${props.title}`" :aria-expanded="capsuleTerminal.isOpen(props.capsuleId)" :title="capsuleTerminal.isOpen(props.capsuleId) ? 'Hide paired terminal' : 'Open paired terminal'" @click.stop="capsuleTerminal.toggle(props.capsuleId)">›_</button>

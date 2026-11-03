@@ -448,3 +448,8 @@
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+.mv-terminal-deck[data-compact="true"] .mv-terminal-deck__screens,
+.mv-terminal-deck[data-compact="true"] .mv-terminal-deck__launcher-wrap { display:none; }
+.mv-terminal-deck[data-compact="true"] .mv-terminal-deck__bar { flex-wrap:wrap; }
+.mv-terminal-deck[data-compact="true"] .mv-terminal-deck__grid { min-height:0; }

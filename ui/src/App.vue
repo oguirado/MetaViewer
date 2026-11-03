@@ -198,13 +198,47 @@ const selectedFolded = computed(() => selectedSurface.value
 const selectedSurface = computed(() => rows.value.find(row => row.id === selectedCapsuleId.value) ?? rows.value[0] ?? null);
 const pairedTerminalTarget = shallowRef(/** @type {any} */ (null));
 const activeTerminalPair = ref(/** @type {string|null} */ (null));
+const terminalPreferDock = ref(false);
+const terminalDrawerHosts = shallowRef(/** @type {Record<string,{element:HTMLElement,width:number,height:number,visible:boolean}>} */ ({}));
+/** Keep the canvas geometry unchanged; only sufficiently tall, visible tiles
+ * receive a terminal overlay. Unknown geometry stays in the side dock.
+ * @param {any} target @param {Record<string,any>} hosts @param {boolean} open @param {boolean} preferDock */
+function pairedDrawerTarget(target, hosts, open, preferDock) {
+  const host=target && hosts[target.surfaceId];
+  return open && !preferDock && host?.visible && host.width >= 400 && host.height >= 600 ? host.element : null;
+}
+const terminalDrawerTarget = computed(() => pairedDrawerTarget(pairedTerminalTarget.value,terminalDrawerHosts.value,terminalDeckOpen.value,terminalPreferDock.value));
+const terminalInDrawer = computed(() => Boolean(terminalDrawerTarget.value));
+const terminalDockOpen = computed(() => terminalDeckOpen.value && !terminalInDrawer.value);
+const terminalDrawerOwner = {};
+watch(() => terminalInDrawer.value ? pairedTerminalTarget.value?.surfaceId : null, (id,previous) => {
+  if (previous) overlayCoordinator?.setSurface(terminalDrawerOwner,previous,false);
+  if (id) overlayCoordinator?.setSurface(terminalDrawerOwner,id,true);
+},{flush:'sync'});
+onBeforeUnmount(() => {if (pairedTerminalTarget.value) overlayCoordinator?.setSurface(terminalDrawerOwner,pairedTerminalTarget.value.surfaceId,false);});
+watch(activeTerminalPair,(id,previous) => {
+  if (previous && terminalInDrawer.value && id !== pairedTerminalTarget.value?.surfaceId) terminalPreferDock.value=true;
+});
+function toggleTerminalDock() {
+  if (terminalInDrawer.value) {terminalPreferDock.value=true;return;}
+  toggleTerminal();
+}
 provide('capsuleTerminal', {
   available: () => !nestedMode.displayOnly && typeof props.terminalBroker?.open === 'function',
   isOpen: (/** @type {string} */ id) => terminalDeckOpen.value && activeTerminalPair.value === id,
+  inDrawer: (/** @type {string} */ id) => terminalInDrawer.value && pairedTerminalTarget.value?.surfaceId === id,
+  registerDrawer(/** @type {string} */ id, /** @type {HTMLElement|null} */ element, /** @type {{width:number,height:number,visible:boolean}} */ geometry) {
+    const previous=terminalDrawerHosts.value[id];
+    if (previous?.element===element && previous?.width===geometry.width && previous?.height===geometry.height && previous?.visible===geometry.visible) return;
+    const next={...terminalDrawerHosts.value};
+    if (element) next[id]={element,...geometry}; else delete next[id];
+    terminalDrawerHosts.value=next;
+  },
   toggle(/** @type {string} */ id) {
     if (terminalDeckOpen.value && activeTerminalPair.value === id) { terminalOpen.value=false; return; }
     const row=rows.value.find(row=>row.id===id && row.backendLifecycle!=='destroyed' && row.backendLifecycle!=='lost');
     if (!row) return;
+    terminalPreferDock.value=false;
     if (!terminalDeckOpen.value) toggleTerminal();
     pairedTerminalTarget.value={surfaceId:row.id,profileId:row.profile_id,title:surfaceLabel(row)};
   },
@@ -1602,7 +1636,7 @@ onMounted(() => {
 });
 </script>
 <template>
-  <div class="metaviewer mv-shell" :data-wall-settled="String(settled)" :class="{ 'mv-shell--nested': nestedMode.displayOnly, 'mv-shell--navigation-open': railOpen, 'mv-shell--terminal-open': terminalDeckOpen }">
+  <div class="metaviewer mv-shell" :data-wall-settled="String(settled)" :class="{ 'mv-shell--nested': nestedMode.displayOnly, 'mv-shell--navigation-open': railOpen, 'mv-shell--terminal-open': terminalDockOpen }">
     <aside v-if="!nestedMode.displayOnly" class="mv-navigation" :class="{ 'mv-navigation--collapsed': !railOpen }" aria-label="Workspace navigation">
       <div class="mv-navigation-brand"><UiButton label="Navigation" id="shell/navigation/toggle" data-semantic-anchor="shell/navigation/toggle" type="button" :aria-expanded="railOpen" :aria-label="railOpen ? 'Collapse navigation' : 'Expand navigation'" @click="railOpen = !railOpen">☰</UiButton><strong v-if="railOpen">MetaViewer</strong></div>
       <div class="mv-navigation-scroll">
@@ -1719,10 +1753,10 @@ onMounted(() => {
 
       </main>
     </div>
-    <aside v-if="!nestedMode.displayOnly" class="mv-terminal-dock" :class="{ 'mv-terminal-dock--open': terminalDeckOpen }" aria-label="Terminal dock">
-      <UiButton label="Terminal" id="shell-terminal" data-semantic-anchor="terminal/toggle" class="mv-terminal-dock-toggle" type="button" :aria-expanded="terminalOpen" :aria-label="terminalDeckOpen ? 'Collapse terminal dock' : 'Open terminal dock'" @click="toggleTerminal()"><span aria-hidden="true">›_</span><span v-if="terminalDeckOpen">Terminal</span><span v-if="terminalDeckOpen" aria-hidden="true">×</span></UiButton>
-        <section v-if="!nestedMode.displayOnly" :hidden="!terminalDeckOpen" :inert="!terminalDeckOpen ? true : undefined" :aria-hidden="!terminalDeckOpen ? 'true' : undefined" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
-          <TerminalDeckView :open="terminalDeckOpen" :paired-target="pairedTerminalTarget" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @pair-focus="activeTerminalPair = $event" @update:open="terminalOpen = $event" />
+    <aside v-if="!nestedMode.displayOnly" class="mv-terminal-dock" :class="{ 'mv-terminal-dock--open': terminalDockOpen }" aria-label="Terminal dock">
+      <UiButton label="Terminal" id="shell-terminal" data-semantic-anchor="terminal/toggle" class="mv-terminal-dock-toggle" type="button" :aria-expanded="terminalOpen" :aria-label="terminalDockOpen ? 'Collapse terminal dock' : 'Open terminal dock'" @click="toggleTerminalDock()"><span aria-hidden="true">›_</span><span v-if="terminalDockOpen">Terminal</span><span v-if="terminalDockOpen" aria-hidden="true">×</span></UiButton>
+        <section v-if="!nestedMode.displayOnly" :hidden="!terminalDeckOpen || terminalInDrawer" :inert="!terminalDeckOpen ? true : undefined" :aria-hidden="!terminalDeckOpen || terminalInDrawer ? 'true' : undefined" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
+          <Teleport :to="terminalDrawerTarget || 'body'" :disabled="!terminalInDrawer"><TerminalDeckView :compact="terminalInDrawer" @request-dock="terminalPreferDock = true" :open="terminalDeckOpen" :paired-target="pairedTerminalTarget" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @pair-focus="activeTerminalPair = $event" @update:open="terminalOpen = $event" /></Teleport>
         </section>
     </aside>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">

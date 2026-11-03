@@ -1545,7 +1545,7 @@ test('V023-T1: deck hide and show keeps the same session id, preserves scrollbac
   );
   assert.ok(
     appSource.includes('v-if="!nestedMode.displayOnly"') &&
-      appSource.includes(':hidden="!terminalDeckOpen"') &&
+      appSource.includes(':hidden="!terminalDeckOpen || terminalInDrawer"') &&
       appSource.includes(':inert="!terminalDeckOpen ? true : undefined"'),
     'App.vue must keep the terminal deck mounted and hidden/inert when closed',
   );
@@ -2853,4 +2853,30 @@ test('terminal viewport resize fits retained contents without taking focus',asyn
     observer.cb([{target:node,contentRect:{width:0,height:0}}]);assert.equal(fits,beforeFit+2,'hidden viewport is not fitted');
   } finally {mounted.app.unmount();globalThis.ResizeObserver=previous;}
   assert.equal(observer.disconnected,true);
+});
+
+
+test('compact paired drawer never shows or dispatches the previous capsule while a new pair opens',async()=>{
+ const harness=createBrokerDouble();let finish,opens=0,disposed=0;
+ harness.broker.open=async()=>{if(++opens===2)return await new Promise(resolve=>{finish=resolve;});return {session:'drawer-a'};};
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){disposed++;}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{
+  '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){}}},
+  '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel,
+ });
+ const target=vue.ref({surfaceId:'surface-a',title:'Alpha'}),compact=vue.ref(true);let deck;
+ const Root={setup(){return ()=>vue.h(View,{ref:value=>{deck=value;},open:true,compact:compact.value,pairedTarget:target.value,terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage()});}};
+ const mounted=mountTree(Root);
+ const articles=()=>{const walk=n=>[...(n.tag==='article'?[n]:[]),...n.children.flatMap(walk)];return walk(mounted.root);};
+ try {
+  await tick();assert.equal(articles().filter(n=>!n.props.hidden).length,1);
+  target.value={surfaceId:'surface-b',title:'Beta'};await tick();assert.equal(typeof finish,'function');
+  assert.equal(articles().filter(n=>!n.props.hidden).length,0,'previous capsule terminal is not displayed under Beta');
+  assert.equal(mounted.findById('terminal-deck-bootstrap-panel'),null,'previous workflow binding is not actionable');
+  finish({session:'drawer-b'});await tick();assert.equal(articles().filter(n=>!n.props.hidden).length,1);
+  const sessions=deck.controller.state.screens.flatMap(s=>s.slots.map(t=>t.sessionId));
+  compact.value=false;await tick();assert.equal(articles().filter(n=>!n.props.hidden).length,2);
+  assert.deepEqual(deck.controller.state.screens.flatMap(s=>s.slots.map(t=>t.sessionId)),sessions);
+  assert.equal(opens,2);assert.equal(disposed,0,'moving to full dock retains both terminal instances');
+ } finally {mounted.app.unmount();}
 });
