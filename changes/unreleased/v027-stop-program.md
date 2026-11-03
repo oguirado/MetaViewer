@@ -1,0 +1,1 @@
+- Clean a stopped Program capsule frames from RAM: read program ownership before the app removes it.

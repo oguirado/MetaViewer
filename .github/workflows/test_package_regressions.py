@@ -7,6 +7,9 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import hashlib
+import tarfile
 import tempfile
 import textwrap
 import unittest
@@ -22,8 +25,9 @@ def source(name='package.yml'):
 
 
 def gate(text):
-    return textwrap.dedent(text.split('      - name: Execute gate and publish receipt\n')[1]
-                           .split('        run: |\n', 1)[1])
+    steps = yaml.safe_load(text)['jobs']['linux-package']['steps']
+    return next(step['run'] for step in steps
+                if step.get('name') == 'Execute gate and publish receipt')
 
 
 class PackageRegressions(unittest.TestCase):
@@ -39,11 +43,14 @@ class PackageRegressions(unittest.TestCase):
         yaml_steps = linux_package['steps']
         self.assertGreaterEqual(len(yaml_steps), 11)
         # No matrix member may skip any prerequisite step or the gate step.
+        gate_index = next(i for i, step in enumerate(yaml_steps)
+                          if step.get('name') == 'Execute gate and publish receipt')
+        self.assertEqual(gate_index, len(yaml_steps) - 3)
         for member in members:
             platform = member['platform']
-            for step in yaml_steps[:-1]:
+            for step in yaml_steps[:gate_index]:
                 self.assertNotIn('if', step, f'prerequisite step skipped or conditional for {platform}: {step}')
-            gate_step = yaml_steps[-1]
+            gate_step = yaml_steps[gate_index]
             self.assertEqual(gate_step.get('name'), 'Execute gate and publish receipt')
             self.assertEqual(gate_step.get('if'), 'always()',
                              f'gate step must run unconditionally via always() for {platform}')
@@ -58,10 +65,10 @@ class PackageRegressions(unittest.TestCase):
         self.assertIn('runner: ubuntu-24.04-arm\n            platform: arm64', job)
         steps = re.split(r'^      - ', job.split('    steps:\n', 1)[1], flags=re.M)[1:]
         self.assertEqual(len(steps), len(yaml_steps))
-        for step in steps[:-1]:
+        for step in steps[:gate_index]:
             self.assertIsNone(re.search(r'^        if: (.*)$', step, re.M), step)
-        gate_condition = re.search(r'^        if: (.*)$', steps[-1], re.M)
-        self.assertIsNotNone(gate_condition, steps[-1])
+        gate_condition = re.search(r'^        if: (.*)$', steps[gate_index], re.M)
+        self.assertIsNotNone(gate_condition, steps[gate_index])
         self.assertEqual(gate_condition[1], 'always()')
 
         for required in (
@@ -102,6 +109,96 @@ class PackageRegressions(unittest.TestCase):
         self.assertIn('METAVIEWER_MAIN_SMOKE_OK', body)
         self.assertLess(body.index(build_cmd), body.index(verify_cmd))
         self.assertLess(body.index(verify_cmd), body.index(smoke_cmd))
+
+    def assert_asset_upload(self, text):
+        workflow = yaml.safe_load(text)
+        self.assertEqual(workflow['permissions'], {'contents': 'read'})
+        steps = workflow['jobs']['linux-package']['steps']
+        verified, build, upload = steps[-3:]
+        self.assertEqual(verified['id'], 'package-verify')
+        self.assertEqual(verified['name'], 'Execute gate and publish receipt')
+        self.assertNotIn('continue-on-error', verified)
+        self.assertEqual(build['name'], 'Build public judge assets')
+        self.assertNotIn('continue-on-error', build)
+        for step in (build, upload):
+            self.assertEqual(step['if'], "success() && steps.package-verify.outcome == 'success'")
+        self.assertEqual(upload['uses'],
+                         'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02')
+        self.assertEqual(upload['with'], {
+            'name': 'metaviewer-judge-linux-${{ matrix.platform }}',
+            'path': ''.join('${{ runner.temp }}/metaviewer-judge-assets/' + name + '\n'
+                            for name in (
+                                'metaviewer-linux-${{ matrix.platform }}.tar.gz',
+                                'metaviewer-linux-${{ matrix.platform }}.tar.gz.sha256',
+                                'node-linux-${{ matrix.platform }}.tar.xz',
+                                'node-linux-${{ matrix.platform }}.tar.xz.sha256')),
+            'if-no-files-found': 'error', 'retention-days': 3, 'compression-level': 0,
+        })
+
+    def test_public_assets_upload_policy_and_negative_controls(self):
+        text = source()
+        self.assert_asset_upload(text)
+        for mutant in (
+            text.replace("success() && steps.package-verify.outcome == 'success'", 'always()'),
+            text.replace('retention-days: 3', 'retention-days: 90'),
+            text.replace('if-no-files-found: error', 'if-no-files-found: warn'),
+            text.replace('upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02',
+                         'upload-artifact@v4'),
+            text.replace('metaviewer-judge-assets/node-linux-${{ matrix.platform }}.tar.xz',
+                         'metaviewer-judge-assets/**'),
+            text.replace('        id: package-verify',
+                         '        continue-on-error: true\n        id: package-verify'),
+        ):
+            with self.assertRaises(AssertionError):
+                self.assert_asset_upload(mutant)
+
+    def test_public_asset_builder_contents_and_failures(self):
+        steps = yaml.safe_load(source())['jobs']['linux-package']['steps']
+        script = steps[-2]['run'].split("python3 - <<'PYEOF'\n", 1)[1].rsplit('PYEOF', 1)[0]
+        for arch in ('x64', 'arm64'):
+            for mode in ('valid', 'missing-app', 'missing-node', 'unsupported-arch'):
+                with self.subTest(arch=arch, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    packages = root / 'packages'
+                    app = packages / f'MetaViewer-linux-{arch}'
+                    app.mkdir(parents=True)
+                    if mode != 'missing-app':
+                        binary = app / 'metaviewer'
+                        binary.write_bytes(b'synthetic public app')
+                        binary.chmod(0o755)
+                    runtime = root / 'runtime'
+                    runtime.mkdir()
+                    if mode != 'missing-node':
+                        node = runtime / 'node'
+                        node.write_bytes(b'synthetic node runtime')
+                        node.chmod(0o755)
+                    # Private siblings must never be swept into upload assets.
+                    (packages / 'private-sentinel').write_text('private sibling')
+                    out = root / 'assets'
+                    env = dict(os.environ, PATH=str(runtime), MV_PKG_OUT=str(packages),
+                               ASSET_OUT=str(out), PLATFORM=arch if mode != 'unsupported-arch' else 'invalid')
+                    result = subprocess.run([sys.executable, '-c', script], cwd=ROOT,
+                                            env=env, capture_output=True, text=True, timeout=30)
+                    if mode != 'valid':
+                        self.assertNotEqual(result.returncode, 0)
+                        continue
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    names = (f'metaviewer-linux-{arch}.tar.gz', f'node-linux-{arch}.tar.xz')
+                    self.assertEqual(sorted(p.name for p in out.iterdir()),
+                                     sorted([*names, *(n + '.sha256' for n in names)]))
+                    for name in names:
+                        asset = out / name
+                        self.assertEqual((out / (name + '.sha256')).read_text(),
+                                         hashlib.sha256(asset.read_bytes()).hexdigest() + '  ' + name + '\n')
+                    with tarfile.open(out / names[0]) as archive:
+                        self.assertEqual(set(archive.getnames()),
+                                         {f'MetaViewer-linux-{arch}',
+                                          f'MetaViewer-linux-{arch}/metaviewer',
+                                          f'MetaViewer-linux-{arch}.sha256'})
+                    with tarfile.open(out / names[1]) as archive:
+                        self.assertEqual(archive.extractfile(f'node-v24-linux-{arch}/bin/node').read(),
+                                         b'synthetic node runtime')
+                        self.assertTrue(all(m.isfile() or m.isdir() for m in archive.getmembers()))
 
     def test_ARG_s_ci_1_admission(self):
         self.assert_admission(source())

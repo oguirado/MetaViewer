@@ -145,7 +145,7 @@ export function createOperatorFacade(transport) {
  * @property {() => Promise<string|null>} recordingDestination
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
- * @property {{createSurface:()=>Promise<any>,propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
+ * @property {{vmAvailable:()=>Promise<boolean>,createSurface:(selector?:{kind:'vm'})=>Promise<any>,propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
  * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>,onResult:(cb:(result:{surface_id:string,seq:number,ok:boolean,code:string|null})=>void)=>(()=>void)}} input
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{reportDiag:(diag:{rehashSkipped:number,rehashDone:number})=>Promise<true>}} frames
@@ -788,7 +788,7 @@ function assertSurfaceInputReply(reply, maxAccepted) {
 }
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
-  propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
+  vmAvailable:'authority.vmAvailable',propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
   terminalAttach:'side-terminal.attach',terminalResize:'side-terminal.resize',
   terminalClose:'side-terminal.close',terminalProviders:'side-terminal.providers',
@@ -804,7 +804,9 @@ function wireCall(channel,args) {
   const name=Object.entries(WIRE_NAMES).find(([,suffix]) => channel === `metaviewer:${suffix}`)?.[0];
   if (!name) throw new ContractError('CHANNEL','unknown domain channel');
   const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
-  if (!Array.isArray(args) || args.length !== arity) throw new ContractError('ARGS','wrong arity');
+  const vmCreate = name==='createSurface' && Array.isArray(args) && args.length===1 && args[0] && typeof args[0]==='object'
+    && !Array.isArray(args[0]) && Reflect.ownKeys(args[0]).join(',')==='kind' && /** @type {any} */(args[0]).kind==='vm';
+  if (!Array.isArray(args) || (args.length !== arity && !vmCreate)) throw new ContractError('ARGS','wrong arity');
   if (name==='intent' && args[0] !== null && typeof args[0] === 'object') {
     const checked = validateSurfaceInputBatch(args[0]);
     if (!checked.ok) throw new ContractError('PAYLOAD', checked.code);
@@ -1025,6 +1027,10 @@ function wireFacade(transport) {
       }
       return reply;
     }
+    if (name==='vmAvailable') {
+      if (typeof reply !== 'boolean') throw new ContractError('OUTCOME','VM availability');
+      return reply;
+    }
     if (name==='nestedDepth') {
       if (reply!==null && reply!==0 && reply!==1) throw new ContractError('OUTCOME','nested depth');return reply;
     }
@@ -1233,11 +1239,11 @@ function wireFacade(transport) {
         const first=qState.queue[0];
         const firstTypeOnly=first.batch.events.every((/** @type {any} */ev)=>ev.kind==='type');
         if (firstTypeOnly && qState.lastIpcAt>0) {
-          const elapsed=Date.now()-qState.lastIpcAt;
+          const elapsed=performance.now()-qState.lastIpcAt;
           if (elapsed<SURFACE_INPUT_TYPE_COALESCE_MS) {
             await new Promise(r=>globalThis.setTimeout(r,SURFACE_INPUT_TYPE_COALESCE_MS-elapsed));
           }
-          const now=Date.now();
+          const now=performance.now();
           qState.ipcStamps=qState.ipcStamps.filter(t=>now-t<1000);
           if (qState.ipcStamps.length>=50) {
             const waitMs=1005-(now-qState.ipcStamps[0]);
@@ -1300,7 +1306,7 @@ function wireFacade(transport) {
               events:Object.freeze(wireEvents.map(ev=>Object.freeze({...ev}))),
             });
         qState.inFlightMaxSeq=wireBatch.seq;
-        const invokeAt=Date.now();
+        const invokeAt=performance.now();
         qState.lastIpcAt=invokeAt;
         qState.ipcStamps=qState.ipcStamps.filter(t=>invokeAt-t<1000);
         qState.ipcStamps.push(invokeAt);
@@ -1429,6 +1435,8 @@ function wireFacade(transport) {
     },
   });
   api.authority=Object.freeze({
+    /** @param {...unknown} args */
+    vmAvailable:(...args)=>call('vmAvailable',args),
     /** @param {...unknown} args */
     createSurface:(...args)=>call('createSurface',args),
     /** @param {...unknown} args */

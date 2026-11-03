@@ -141,26 +141,20 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			lock.Lock()
 		}
 		replies, err := handler(ctx, in)
+		if lock != nil {
+			lock.Unlock()
+		}
 		if err != nil {
-			if lock != nil {
-				lock.Unlock()
-			}
 			fail(fmt.Errorf("dispatch: %w", err))
 			return
 		}
 		for _, reply := range replies {
 			if err = write(ctx, in, reply); err != nil {
-				if lock != nil {
-					lock.Unlock()
-				}
 				if ctx.Err() == nil {
 					fail(err)
 				}
 				return
 			}
-		}
-		if lock != nil {
-			lock.Unlock()
 		}
 	}
 	var wg sync.WaitGroup

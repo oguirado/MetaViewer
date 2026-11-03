@@ -74,6 +74,8 @@ class P18DProvisionTests(P18DToolFixture):
         super().setUp()
         for name in ['metadata', 'profiles', 'locks']:
             (self.root/name).mkdir(mode=0o700)
+        image = patch.object(mv, 'profile_image', return_value='opensuperficies-identity-browser-x64:0.1.1')
+        image.start(); self.addCleanup(image.stop)
         self.identity = 'p18d-test'
         self.target = self.root/'profiles'/self.identity
         self.target.mkdir(mode=0o700)
@@ -191,13 +193,13 @@ class P18DProvisionTests(P18DToolFixture):
                 self.tool.provision(self.identity)
         self.assertTrue(outside.is_dir())
 
-    def test_timeout_without_cid_never_removes_a_container_and_keeps_sudo_hint(self):
+    def test_timeout_without_cid_never_removes_a_container_and_keeps_docker_hint(self):
         with patch.object(mv.subprocess, 'run', side_effect=[mv.subprocess.TimeoutExpired('docker', 30), Mock(returncode=0)]) as run:
             with self.assertRaisesRegex(mv.Refused, 'PROFILE_NOT_PROVISIONED'):
                 self.tool.provision(self.identity)
             run.assert_called_once()
             self.assertIn('--cidfile',run.call_args.args[0])
-        self.assertIn('sudo install -d -m 0700 -o 10001 -g 10001', mv.HINTS['PROFILE_NOT_PROVISIONED'])
+        self.assertIn('Docker', mv.HINTS['PROFILE_NOT_PROVISIONED'])
 
     def test_delete_unsafe_path_preserves_store(self):
         self.target.rmdir()

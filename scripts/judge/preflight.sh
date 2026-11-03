@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MetaViewer judge preflight: read-only host checks with typed refusals.
 #
-# Usage: preflight.sh [--tier T0|T1|T2] [--phase static|all]
+# Usage: preflight.sh [--tier T0|T1|T2] [--phase static|all|display]
 #        preflight.sh --facts [--tier T]            (key=value host facts)
 #        preflight.sh --sysdep-packages [--tier T]  (missing apt packages, one line)
 #
@@ -29,12 +29,12 @@ set -o pipefail
 SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || exit 64
 
 usage() {
-    printf 'JUDGE_USAGE: preflight.sh [--tier T0|T1|T2] [--phase static|all] [--facts|--sysdep-packages] -- fix: use one of the documented options\n' >&2
+    printf 'JUDGE_USAGE: preflight.sh [--tier T0|T1|T2] [--phase static|all|display] [--facts|--sysdep-packages] -- fix: use one of the documented options\n' >&2
     exit 64
 }
 
 tier_valid() { case $1 in T0 | T1 | T2) return 0 ;; esac; return 1; }
-phase_valid() { case $1 in static | all) return 0 ;; esac; return 1; }
+phase_valid() { case $1 in static | all | display) return 0 ;; esac; return 1; }
 
 TIER=T1
 PHASE=all
@@ -93,6 +93,16 @@ if [ -x "$JUDGE_HOME/node/bin/node" ]; then
 else
     NODE_BIN=$(command -v node 2>/dev/null || printf '')
 fi
+
+
+# [TARGET, unit decision] Docker metadata may wait up to 120 seconds; image
+# load/save/pull/build may take 1800 seconds. Kill a stuck client after grace.
+# Environment overrides allow slower machines and offline deadline controls.
+bounded_docker() {
+    local limit=${MV_JUDGE_DOCKER_TIMEOUT:-120}
+    case ${1:-} in load | save | pull | build) limit=${MV_JUDGE_DOCKER_IMAGE_TIMEOUT:-1800} ;; esac
+    timeout --kill-after=5 "$limit" docker "$@"
+}
 
 # ------------------------------------------------------------------- helpers
 FAILS=0
@@ -192,7 +202,9 @@ chk_bundle_arch() {
         refuse JUDGE_BUNDLE_ARCH "the kit holds metaviewer-linux-$other.tar.gz but this host is $ARCHN" "download metaviewer-linux-$ARCHN.tar.gz from the release and place it in $ASSET_DIR"
         return
     fi
-    for f in "$APP_DIR/metaviewer" "$APP_DIR"/resources/bin/* "$SRF_BIN"/*; do
+    for f in "$APP_DIR/metaviewer" "$APP_DIR"/resources/bin/* "$SRF_BIN"/* \
+        "$JUDGE_HOME/deps/vision-engine/vision-runtime" \
+        "$JUDGE_HOME/deps/wender-agent/wender-runtime"; do
         [ -f "$f" ] || continue
         m=$(elf_machine "$f")
         [ -n "$m" ] || continue
@@ -233,15 +245,16 @@ chk_userns() {
 }
 
 chk_display() {
-    command -v xdpyinfo >/dev/null 2>&1 || return 0
     if [ -z "${DISPLAY:-}" ]; then # MUT:JUDGE_DISPLAY
         if [ -n "${WAYLAND_DISPLAY:-}" ]; then
-            refuse JUDGE_DISPLAY "Wayland-only session: DISPLAY is empty so there is no XWayland" "enable XWayland (WSLg provides it) or run under xvfb-run"
+            refuse JUDGE_DISPLAY "Wayland-only session: DISPLAY is empty so there is no reachable XWayland" "enable XWayland (WSLg provides it) and use a reachable desktop DISPLAY for the visible app; xvfb-run is only for headless install/smoke and supplies no visible desktop"
         else
-            refuse JUDGE_DISPLAY "DISPLAY is not set" "log in to a desktop session, enable XWayland/WSLg or run under xvfb-run"
+            refuse JUDGE_DISPLAY "DISPLAY is not set" "xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY)"
         fi
+    elif ! command -v xdpyinfo >/dev/null 2>&1; then
+        refuse JUDGE_DISPLAY "xdpyinfo is missing; display reachability is unverified" "sudo apt-get install -y x11-utils, then re-run doctor"
     elif ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-        refuse JUDGE_DISPLAY "the X server at DISPLAY=$DISPLAY is not reachable" "log in to a desktop session, enable XWayland/WSLg or run under xvfb-run"
+        refuse JUDGE_DISPLAY "the X server at DISPLAY=$DISPLAY is not reachable" "xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY)"
     fi
 }
 
@@ -284,6 +297,8 @@ chk_ram() {
     rec=$((floor + 4194304))
     if [ "$avail" -lt "$need" ]; then # MUT:JUDGE_RAM
         refuse JUDGE_RAM "MemAvailable is $(kib_mib "$avail") MiB [MEASURED], minimum $(kib_mib "$need") MiB [TARGET] needed (floor $(kib_mib "$floor") MiB + 512 MiB capsule reserve)" "close applications, add RAM, or (WSL2) raise memory= in .wslconfig"
+    elif [ "$avail" -lt 6291456 ]; then
+        note "warning (JUDGE_RAM): UI capsule creation is refused below 6144 MiB [CITED] MemAvailable (capsule RAM plus shared memory); close applications or add RAM before Add capsule"
     elif [ "$avail" -lt "$rec" ]; then
         note "warning (JUDGE_RAM): MemAvailable is $(kib_mib "$avail") MiB [MEASURED], below recommended $(kib_mib "$rec") MiB [TARGET] for multi-capsule runs; single capsule can run"
     fi
@@ -331,9 +346,9 @@ chk_docker_host() {
 chk_docker() {
     local ctx
     command -v docker >/dev/null 2>&1 || return 0 # JUDGE_SYSDEP reports it
-    if DOCKER_INFO=$(docker info --format '{{.SecurityOptions}}|{{.OperatingSystem}}|{{.DockerRootDir}}' 2>/dev/null); then : # MUT:JUDGE_DOCKER
+    if DOCKER_INFO=$(bounded_docker info --format '{{.SecurityOptions}}|{{.OperatingSystem}}|{{.DockerRootDir}}' 2>/dev/null); then : # MUT:JUDGE_DOCKER
     else
-        refuse JUDGE_DOCKER "'docker info' fails for this user" "sudo usermod -aG docker \$USER, then log out and in again (rootful Docker only)"
+        refuse JUDGE_DOCKER "'docker info' failed or timed out for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info"
         return
     fi
     DOCKER_ROOT=${DOCKER_INFO##*|}
@@ -343,9 +358,12 @@ chk_docker() {
             return
             ;;
     esac
-    ctx=$(docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null || printf '')
+    if ! ctx=$(bounded_docker context inspect --format '{{.Endpoints.docker.Host}}' 2>/dev/null); then
+        refuse JUDGE_DOCKER "Docker context inspection failed or timed out; local endpoint is unverified" "run docker context inspect; restore the local engine or run docker context use default, then retry"
+        return
+    fi
     case $ctx in
-        '' | unix://*) ;;
+        unix://?*) ;;
         *) refuse JUDGE_DOCKER "the active Docker endpoint '$ctx' is not a local unix socket" "docker context use default"; return ;;
     esac
     DOCKER_OK=1
@@ -369,7 +387,7 @@ chk_image() {
     local idver=0.1.1
     open_ready && idver=0.2.0
     for img in "opensuperficies-identity-browser-$ARCHN:$idver" "opensuperficies-program-host-$ARCHN:0.1.0" "opensuperficies-desktop-$ARCHN:1.1.0"; do
-        if docker image inspect "$img" >/dev/null 2>&1; then : # MUT:JUDGE_IMAGE
+        if bounded_docker image inspect "$img" >/dev/null 2>&1; then : # MUT:JUDGE_IMAGE
         else
             refuse JUDGE_IMAGE "image $img is not present" "bash scripts/judge/metaviewer-judge.sh install --capsules (loads the images from the kit)"
         fi
@@ -399,19 +417,47 @@ chk_net() {
     [ "$DOCKER_OK" = 1 ] || return 0
     open_ready && return 0
     # Legacy network: srf-idnet internal on 172.30.80.0/24 plus the running proxy.
-    net=$(docker network inspect srf-idnet --format '{{.Internal}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || printf '')
-    proxy=$(docker inspect --format '{{.State.Running}}' srf-egress-proxy 2>/dev/null || printf '')
+    net=$(bounded_docker network inspect srf-idnet --format '{{.Internal}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null || printf '')
+    proxy=$(bounded_docker inspect --format '{{.State.Running}}' srf-egress-proxy 2>/dev/null || printf '')
     if [ "$net" != "true 172.30.80.0/24 " ] || [ "$proxy" != true ]; then # MUT:JUDGE_NET
         refuse JUDGE_NET "legacy network srf-idnet or the srf-egress-proxy container is not ready" "bash scripts/judge/metaviewer-judge.sh install --capsules (ensures the scoped capsule network)"
     fi
 }
 
 chk_profile() {
-    local p="$STORE/profiles/$PROFILE_ID" st
-    st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
-    if [ "$st" != "700 10001" ]; then # MUT:JUDGE_PROFILE
-        refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo)"
+    local p st profile pool p2=mv-live-2 p3=mv-live-3 p4=mv-live-4
+    if [ -n "${MV_SRF_PROFILES:-}" ]; then
+        if ! pool=$(python3 -c '
+import json, re, sys
+try:
+    pool = json.loads(sys.argv[1])
+    if not isinstance(pool, dict) or not pool:
+        raise ValueError()
+    for name, spec in pool.items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name) or not isinstance(spec, dict):
+            raise ValueError()
+        if spec.get("Kind") == "browser" or spec.get("NativeKind") == "browser":
+            print(name)
+except (ValueError, TypeError):
+    sys.exit(2)
+' "$MV_SRF_PROFILES" 2>/dev/null); then
+            refuse JUDGE_PROFILE "MV_SRF_PROFILES is not a valid profile pool" "set a valid profile pool and provision its browser directories"
+            return
+        fi
+    else
+        [ "$PROFILE_ID" = "$p2" ] && p2=mv-live-1
+        [ "$PROFILE_ID" = "$p3" ] && p3=mv-live-1
+        [ "$PROFILE_ID" = "$p4" ] && p4=mv-live-1
+        pool=$(printf '%s\n' "$p2" "$p3" "$p4")
     fi
+    while IFS= read -r profile; do
+        [ -n "$profile" ] || continue
+        p="$STORE/profiles/$profile"
+        st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
+        if [ "$st" != "700 10001" ]; then # MUT:JUDGE_PROFILE
+            refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo)"
+        fi
+    done < <(printf '%s\n%s\n' "$PROFILE_ID" "$pool")
 }
 
 chk_ram_stale() {
@@ -435,12 +481,15 @@ chk_ram_stale() {
 }
 
 chk_disk() {
-    local need=15000000000 rec=30000000000 home_avail root_avail
+    local need=15000000000 rec=30000000000 home_avail root_avail install_avail
+    [ "$TIER" = T1 ] && need=2000000000 rec=2000000000
     home_avail=$(df_avail "$HOME_DIR" || printf 0)
+    install_avail=$(df_avail "$JUDGE_HOME" || printf 0)
+    [ "$install_avail" -lt "$home_avail" ] && home_avail=$install_avail
     root_avail=$home_avail
     [ -n "$DOCKER_ROOT" ] && root_avail=$(df_avail "$DOCKER_ROOT" || printf 0)
     if [ "$home_avail" -lt "$need" ] || [ "$root_avail" -lt "$need" ]; then # MUT:JUDGE_DISK
-        refuse JUDGE_DISK "free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], 15 GB [TARGET] minimum needed on both" "free disk space (docker system prune removes unused images)"
+        refuse JUDGE_DISK "free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], $(($need / 1000000000)) GB [TARGET] minimum needed on both" "df -h \"$JUDGE_HOME\"; free space on the install filesystem"
     elif [ "$home_avail" -lt "$rec" ] || [ "$root_avail" -lt "$rec" ]; then
         note "warning (JUDGE_DISK): free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], below recommended 30 GB [TARGET]"
     fi
@@ -469,26 +518,39 @@ if [ "$MODE" = facts ]; then
     exit 0
 fi
 
+# Optional host capability: absence never gates browser or container programs.
+host_missing=
+for host_tool in xpra Xvfb xauth xdotool; do
+    command -v "$host_tool" >/dev/null 2>&1 || host_missing="$host_missing $host_tool"
+done
+if [ -n "$host_missing" ]; then
+    note "optional capability (JUDGE_HOST_PROGRAM): Host program disabled: missing${host_missing}; install with: sudo apt-get install -y xpra xvfb xauth xdotool"
+fi
+
 run_checks() {
     local c
     for c in "$@"; do "chk_$c"; done
 }
 
 if [ "$PHASE" = static ]; then
-    run_checks os arch bundle_arch xdg shm
+    run_checks os arch bundle_arch xdg shm ram
     if [ "$TIER" = T2 ]; then
-        run_checks ram cpuset
+        run_checks cpuset
         chk_docker_host && { chk_docker; chk_docker_desktop; }
-        run_checks net disk
+        run_checks net
     fi
+    chk_disk
+elif [ "$PHASE" = display ]; then
+    chk_display
 else
     run_checks os arch node
-    if [ "$TIER" != T0 ]; then run_checks bundle_arch sysdep userns display xdg shm; fi
+    if [ "$TIER" != T0 ]; then run_checks bundle_arch sysdep userns display xdg shm ram; fi
     if [ "$TIER" = T2 ]; then
-        run_checks ram cpuset
+        run_checks cpuset
         chk_docker_host && { chk_docker; chk_docker_desktop; }
-        run_checks image net profile ram_stale disk
+        run_checks image net profile ram_stale
     fi
+    [ "$TIER" = T0 ] || chk_disk
 fi
 
 if [ "$FAILS" -gt 0 ]; then

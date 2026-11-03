@@ -1,5 +1,11 @@
 # Hackathon roadmap
 
+Historical pre-event plan: the dates and milestones below are targets, not
+completion receipts. The current candidate is **0.2.5** [CITED: `../VERSION`],
+with implemented runtime components and pending integration fragments. The planned
+seal below does not establish a released product. Use [README.md](../README.md),
+[CHANGELOG.md](../CHANGELOG.md) and [TESTING.md](TESTING.md) for current status.
+
 Release **0.1.1** [TARGET] is the pre-event documentation baseline:
 scaffold, design notes and the pre-existing work declaration. The build
 period starts at kickoff on **October 26, 2026** [CITED: operator schedule].
@@ -25,6 +31,6 @@ assumed.
 
 Version seals refer to planned release lines; the maintainer selects the exact
 SemVer patch, dates the changelog and creates tags only after the gates pass.
-This scaffold retains its current version until sealed. The maintainer alone
+In the historical plan, the scaffold retained its version until sealing. The maintainer alone
 pushes and submits. Scale thresholds come from recorded capacity measurements,
-which are currently AUSENTE - no inventar.
+which this plan does not supply: AUSENTE — no inventar.

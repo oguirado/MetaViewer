@@ -1,4 +1,6 @@
-import {test} from 'node:test';
+import {test,mock} from 'node:test';
+import fs from 'node:fs';
+import {syncBuiltinESMExports} from 'node:module';
 import assert from 'node:assert/strict';
 import {readFileSync,mkdtempSync,mkdirSync,writeFileSync,rmSync,symlinkSync,utimesSync,chmodSync,existsSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -7,6 +9,10 @@ import {createOperatorService,discoverHandoffPaths,HANDOFF_DISCOVERY} from '../e
 const record={schema:'metaviewer.handoff/v1',surface_id:'surface-1',step_index:7,reason:'captcha_wall',confidence:100,evidence_kinds:['ax_role_name']};
 const hex=n=>n.toString(16).padStart(32,'0');
 function home(t) {
+  // Other test processes create real RAM goals; this fixture tests configured roots.
+  const original=fs.opendirSync;
+  const probe=mock.method(fs,'opendirSync',(path,...args)=>path==='/dev/shm'?{readSync:()=>null,closeSync(){}}:original(path,...args));
+  syncBuiltinESMExports();t.after(()=>{probe.mock.restore();syncBuiltinESMExports();});
   const root=mkdtempSync(join(tmpdir(),'mv-esh-handoff-'));t.after(()=>rmSync(root,{recursive:true,force:true}));
   const runs=join(root,'metaviewer/runs');mkdirSync(runs,{recursive:true,mode:0o700});
   return {root,runs,env:{XDG_STATE_HOME:root}};

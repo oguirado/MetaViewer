@@ -46,7 +46,6 @@ CAPSULE = re.compile(r"srf-(?:id|pg|vm)-[a-z0-9][a-z0-9-]{0,39}\Z")
 REPO = Path(__file__).resolve().parent.parent
 # Native browser capsules own their profile as a fixed uid (surface.go:405).
 NATIVE_PROFILE_UID = 10001
-PROFILE_IMAGE = "opensuperficies-identity-browser-arm64:0.1.0"
 PROFILE_TIMEOUT = 15
 RESERVED_PREFIX = "mv-"
 FOREIGN_PREFIXES = ("srf-id-cuentas-", "srf-id-perplexity-", "srf-pg-")
@@ -55,13 +54,12 @@ PROTECTED_HOLDERS = frozenset({"srf-id-cuentas-1", "srf-id-perplexity-1", "srf-p
                                "srf-pg-metaviewer-1", "srf-egress-proxy", "n8n", "distil-box"})
 HINTS = {
     "PROFILE_MISSING": (
-        'profiles/<id> does not exist; run once: sudo install -d -m 0700 -o 10001 -g 10001 '
-        '"$SRF_IDENTITY_STORE_ROOT/profiles/<id>" (docs/INSTALL.md#identity-store)'
+        'Docker profile provisioning is required: profiles/<id> is missing; '
+        'retry identity creation after checking Docker and the installed judge images.'
     ),
     "PROFILE_NOT_PROVISIONED": (
-        'profiles/<id> must be a private 0700 directory owned by uid 10001 before login; '
-        'run once: sudo install -d -m 0700 -o 10001 -g 10001 '
-        '"$SRF_IDENTITY_STORE_ROOT/profiles/<id>" (docs/INSTALL.md#identity-store)'
+        'Docker profile provisioning failed: profiles/<id> must be private 0700 owned by uid 10001; '
+        'check Docker access and the installed judge images, then retry identity creation.'
     ),
     "RESERVED_ID": "ids beginning with mv- and the live profile id are reserved for the live surface",
     "LOGIN_IN_PROGRESS": "another login view owns this identity; close it first",
@@ -76,6 +74,29 @@ class Refused(Exception):
 class Parser(argparse.ArgumentParser):
     def error(self, message):
         raise Refused("INVALID_ARGUMENTS")
+
+
+def profile_image():
+    """[TARGET, unit decision] Use only locally installed judge images.
+
+    Match step_profile's architecture and versions; prefer the Open image when
+    installed, otherwise require the legacy judge image. No pulls or host sudo.
+    The caller's asynchronous Python child keeps Docker off Electron's thread.
+    """
+    arch = {"x86_64": "x64", "aarch64": "arm64"}.get(os.uname().machine)
+    if arch is None:
+        raise Refused("PROFILE_NOT_PROVISIONED")
+    for version in ("0.2.0", "0.1.1"):
+        image = "opensuperficies-identity-browser-" + arch + ":" + version
+        try:
+            result = subprocess.run(["docker", "image", "inspect", image],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=20, check=False)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise Refused("PROFILE_NOT_PROVISIONED") from exc
+        if result.returncode == 0:
+            return image
+    raise Refused("PROFILE_NOT_PROVISIONED")
 
 
 def checked_id(value):
@@ -329,6 +350,7 @@ class Identities:
                 raise Refused("IDENTITY_BOUND")
         else:
             self.show(identity)
+        image = profile_image()
         name = "mv-provision-" + identity + "-" + uuid.uuid4().hex[:12]
         receipts = self.root / "locks" / "profile-helpers"
         receipts.mkdir(mode=0o700, exist_ok=True)
@@ -345,7 +367,7 @@ class Identities:
         command = ["docker", "run", "--rm", "--pull=never", "--name", name, "--cidfile", str(cidfile),
                    "--network", "none", "--user", "0", "--entrypoint", "/bin/sh",
                    "--mount", "type=bind,src=" + str(target.parent) + ",dst=/profiles",
-                   PROFILE_IMAGE, "-c", script, "mv-profile-helper", identity]
+                   image, "-c", script, "mv-profile-helper", identity]
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, timeout=PROFILE_TIMEOUT, check=False)

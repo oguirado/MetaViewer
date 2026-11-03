@@ -1144,6 +1144,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'intent',
       'propose',
       'subscribeFrames',
+      'vmAvailable',
     ]);
     assert.deepEqual(Object.keys(api.frames), ['reportDiag']);
     assert.equal(invocations.length, 0);
