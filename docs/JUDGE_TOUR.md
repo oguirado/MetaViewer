@@ -235,7 +235,6 @@ observed field instead of `focused` if focus is not established. Known password
 fields refuse; do not use this flow for secrets. Program `--key` is unsupported.
 
 **Architecture:** arm64 — typed into gedit and read back once with OCR, not always exact; x64 — not verified live;
-no inventar.
 
 ## Wall stop: login or CAPTCHA
 
