@@ -660,6 +660,11 @@ async function onContextMenuPaste() {
   await controller.pasteClipboard(undefined, slotId);
 }
 
+/** @param {Event} event */
+function onBootstrapInput(event) {
+  if (!focusedPair.value) pastedBootstrapText.value = /** @type {HTMLInputElement} */ (event.target).value;
+}
+
 /**
  * @param {ClipboardEvent | { clipboardData?: { getData?: (type: string) => string }, preventDefault?: () => void, stopPropagation?: () => void }} [event]
  */
@@ -995,13 +1000,14 @@ defineExpose({
             @keydown="onBootstrapKeyDown"
             @click="onBootstrap"
           >🚀 Bootstrap</button>
-          <span role="status" aria-live="polite">
-            <template v-if="focusedPair">Paired with <strong :title="focusedPair.surfaceId">{{ focusedPair.title }}</strong> · Host shell.</template>
-            <template v-else>Paste Copy ID for AI here to select the capsule for workflow actions.
-              <template v-if="pastedBootstrapText">Selected capsule identity: <code>{{ pastedBootstrapText }}</code></template>
-              <template v-else>No capsule identity selected.</template>
-            </template>
-          </span>
+          <label class="mv-terminal-deck__identity-pill"
+            :title="focusedPair ? `Paired with ${focusedPair.title} · Host shell. ${workflowIdentity}` : 'Paste Copy ID for AI here to select the capsule for workflow actions.'">
+            <span>Capsule ID: <span v-if="!workflowIdentity">None</span></span>
+            <input id="terminal-deck-bootstrap-paste-target" data-semantic-anchor="terminal/bootstrap/identity"
+              :value="focusedPair?.surfaceId ?? pastedBootstrapText" :readonly="!!focusedPair" placeholder="Paste AI ID…"
+              :aria-label="focusedPair ? 'Paired capsule identity · Host shell' : 'Capsule identity for workflow actions'"
+              @input="onBootstrapInput" />
+          </label>
           <button
             v-for="action in [{kind:'automate',label:'Automate'}, {kind:'use-automation',label:'Use automation'}, {kind:'no-automation',label:'No automation'}]"
             :key="action.kind"

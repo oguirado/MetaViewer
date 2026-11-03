@@ -212,8 +212,9 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 `:101`, `mv-live-3` on `:102`, `mv-live-4` on `:103`):
 
 - Switch between **`Humans`** and **`Agents`** views (`Ctrl+Tab`), create virtual
-  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1 tile`, `2 side by side`,
-  `2×2`, `Focus + strip`, `Floating layout`).
+  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1` — one tile, `2` — two side by side,
+  `2×2`, `3×2`, `Focus` — focus + strip, `Float` — floating layout). The compact
+  controls retain descriptive accessible names and tooltips.
 - Click **`＋ Add capsule`** to launch an **`Identity browser`**, a Linux **`Program`**
   (inside `opensuperficies-program-host-<arch>:0.1.0`), **`Host program`**, or an X11
   **`Desktop window`**. Host program and Desktop window run on your computer and

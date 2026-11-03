@@ -2114,6 +2114,13 @@ test('V023-T2: right-click context menu renders Copy/Paste above deck, disables 
     await tick();
     const bootstrapPanel = mounted.findById('terminal-deck-bootstrap-panel');
     assert.equal(bootstrapPanel.props['data-pasted-slot-id'], exactSlotId);
+    const identityInput = mounted.findById('terminal-deck-bootstrap-paste-target');
+    assert.equal(identityInput.props.value, exactSlotId, 'compact pill preserves the complete pasted identity');
+    assert.equal(identityInput.props.placeholder, 'Paste AI ID…');
+    identityInput.props.onInput({target:{value:'edited-id'}});
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-bootstrap-paste-target').props.value, 'edited-id');
+
     assert.equal(mounted.vm.controller.state.lastPastedText, exactSlotId);
 
     // 8. Packaged Electron clipboard round-trip across authorityWire + preload contextBridge
@@ -2821,6 +2828,12 @@ test('paired terminal keeps newest requested capsule focused and retains hidden 
     waiting[1]({session:'pair-b'});await tick();
     const b=deck.controller.state.focusedSlotId;assert.ok(b);assert.equal(focus.at(-1),'surface-b');
     assert.equal(deck.controller.state.focusedSlotId,b,'latest Beta retains focus');
+    const pairedInput=mounted.findById('terminal-deck-bootstrap-paste-target');
+    assert.equal(pairedInput.props.value,'surface-b','pill shows the actual capsule id, not its workflow prompt');
+    assert.equal(pairedInput.props.readonly,true);
+    pairedInput.props.onInput({target:{value:'wrong-capsule'}});await tick();
+    assert.equal(mounted.findById('terminal-deck-bootstrap-paste-target').props.value,'surface-b');
+
     assert.match(mounted.textOf(mounted.root),/Beta.*Host shell/);
     open.value=false;await tick();open.value=true;await tick();
     assert.equal(waiting.length,2,'reopening retains the paired PTY');

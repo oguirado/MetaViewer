@@ -1683,12 +1683,12 @@ onMounted(() => {
       <template #nav><span hidden aria-hidden="true"></span></template><template #identity><span hidden aria-hidden="true"></span></template>
       <template #actions>
       <div v-if="!nestedMode.displayOnly" class="mv-tile-presets" aria-label="Tile layout presets">
-        <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1" :aria-pressed="activeDesktopPreset === 'single'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('single')" />
-        <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2" :aria-pressed="activeDesktopPreset === 'side-by-side'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('side-by-side')" />
+        <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1" title="1 tile" aria-label="1 tile" :aria-pressed="activeDesktopPreset === 'single'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('single')" />
+        <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2" title="2 side by side" aria-label="2 side by side" :aria-pressed="activeDesktopPreset === 'side-by-side'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('side-by-side')" />
         <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" :aria-pressed="activeDesktopPreset === 'grid'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid')" />
         <UiButton id="tile-preset-grid-3x2" data-semantic-anchor="wall/preset/grid-3x2" label="3×2" :aria-pressed="activeDesktopPreset === 'grid-3x2'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid-3x2')" />
-        <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus" :aria-pressed="activeDesktopPreset === 'focus-strip'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('focus-strip')" />
-        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Float" :aria-pressed="activeDesktopPreset === 'floating'" title="Float every tile in a cascaded window" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('floating')" />
+        <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus" title="Focus + strip" aria-label="Focus + strip" :aria-pressed="activeDesktopPreset === 'focus-strip'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('focus-strip')" />
+        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Float" aria-label="Floating layout" :aria-pressed="activeDesktopPreset === 'floating'" title="Float every tile in a cascaded window" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('floating')" />
         <details id="shell-grid-tools" class="mv-grid-tools"><summary id="shell-grid-tools-toggle" data-semantic-anchor="wall/grid-tools" aria-label="Custom grid" title="Custom grid">⋯</summary></details>
         <span v-if="presetError" role="status">{{ presetError }}</span>
       </div>
