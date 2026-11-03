@@ -1,4 +1,5 @@
 """Offline ordered regressions for judge admission and crash recovery."""
+import platform
 import json
 from pathlib import Path
 import sys
@@ -50,6 +51,13 @@ class JudgeFixJ1(unittest.TestCase):
         self.assertIn('Docker', line)
         self.assertIn('absence', line)
         self.assertNotIn('stop --container', self.sb.log('srf.log'))
+
+    def test_docker_unavailable_without_native_state_is_a_clean_stop(self):
+        self.install(capsules=True)
+        self.sb.put('docker_info_rc', '1\n')
+        result = self.sb.judge('stop')
+        self.assertEqual(result.rc, 0, result.text)
+        self.assertNotIn('Docker inventory unavailable', result.err)
 
     def test_failed_inventory_is_never_absence(self):
         self.install()
@@ -108,7 +116,7 @@ class JudgeFixJ1(unittest.TestCase):
                 self.sb.full_kit(t2=True)
                 make_tar(self.sb.assets / (component + '.tar.gz'), [
                     (component + '/', None, 0o755),
-                    (component + '/' + executable, elf(62), 0o755)])
+                    (component + '/' + executable, elf(183 if platform.machine() == 'x86_64' else 62), 0o755)])
                 self.sb.write_sums()
                 result = self.sb.judge('install', '--capsules', '--no-firewall')
                 self.assertEqual(result.rc, 2, result.text)

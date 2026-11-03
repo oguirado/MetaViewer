@@ -775,7 +775,8 @@ cmd_stop() {
             leaks=$((leaks + 1))
             printf 'JUDGE_STOP_LEAK: container %s is still present -- fix: docker rm -f %s\n' "$name" "$name" >&2
         done <<< "$inventory"
-    else
+    elif [ -n "$(find "$SHM/vqa-ramws/opensuperficies/os-cu-0" "$statedir" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1)" ]; then
+        # Without native state there is nothing to prove absent: an app-only install has no Docker.
         leaks=$((leaks + 1))
         printf 'JUDGE_STOP_LEAK: Docker inventory unavailable -- fix: restore Docker access, run docker info and retry stop; native absence is unverified\n' >&2
     fi

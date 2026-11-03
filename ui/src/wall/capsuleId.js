@@ -89,7 +89,7 @@ export function buildCapsuleReadyLine(input) {
     + 'then choose goal mode or stored-workflow mode with the operator. '
     + 'For browser goal mode (supported by the compiled kit), read tools/mw_run_browser_goal.md; '
     + 'from "$MV_OPERATOR_REPO/agents" run: '
-    + `python3 -m metaviewer_agents.mw_run --surface-kind browser --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1. `
+    + `\`python3 -m metaviewer_agents.mw_run --surface-kind browser --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1\`. `
     + 'For stored-workflow mode, which requires a compatible pinned checkout, run from the same directory: '
     + `python3 -m metaviewer_agents.mw_run --identity ${profileId} --site <site> --workflow <workflow> [--slot name=value]. `
     + 'Choose the site and workflow from MemoryWeb data only for stored-workflow mode. Read the single JSON result line and accept success only on rc 0 '

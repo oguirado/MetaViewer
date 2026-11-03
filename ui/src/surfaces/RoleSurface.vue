@@ -451,7 +451,9 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
   .mv-role-menu-host {
     display:contents;
   }
-  .mv-tile-size-controls, .mv-role-mode-badge, .mv-role-recording-paused { display:none; }
+  /* Who controls the tile and a paused recording stay visible: safety state never moves into a menu. */
+  .mv-tile-size-controls { display:none; }
+  .mv-role-mode-badge, .mv-role-recording-paused { font-size:11px; white-space:nowrap; }
   .mv-host-window-badge { font-size:0; flex:0 0 auto; }
   .mv-host-window-badge::after { content:"Not isolated"; font-size:11px; white-space:nowrap; }
   .mv-role-compact-actions { display:contents; }

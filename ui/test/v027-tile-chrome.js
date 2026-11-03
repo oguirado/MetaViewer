@@ -47,6 +47,7 @@ async function probe(){
         }
       }
       assert(rect(tile.querySelector('.mv-role-viewport')).height>rect(tile).height/2,`frame gets less than half the tile at ${w}`);
+      assert(visible(tile.querySelector('.mv-role-mode-badge')),`role hidden at ${w}`);
     }
     for(const button of tile.querySelectorAll('button')){
       if(!visible(button))continue;

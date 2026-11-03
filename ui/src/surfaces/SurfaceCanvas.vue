@@ -1355,6 +1355,5 @@ onBeforeUnmount(() => {
   .mv-surface__key { white-space:nowrap; }
   .mv-surface__guard { margin-left:0; flex:0 1 auto; overflow-wrap:normal; }
   .mv-surface__display-chip { flex:0 1 auto; overflow-wrap:normal; }
-  .mv-surface__state { display:none; }
 }
 </style>
