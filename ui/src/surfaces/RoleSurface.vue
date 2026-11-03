@@ -216,6 +216,7 @@ const hostWindow = ref(/** @type {any} */ (null));
 const lostAgentHostWindow = computed(() => hostWindow.value?.state === 'lost' && props.control === 'agent');
 let ended = false, notifiedEnd = false, resync = false;
 let transferring = false;
+let syncGeneration = 0;
 let alive = true, mounted = false, busy = false, signature = '', shown = true;
 const viewState = ref('closed'), hasConnected = ref(false);
 let timer = /** @type {ReturnType<typeof setInterval>|undefined} */ (undefined);
@@ -223,6 +224,7 @@ let timer = /** @type {ReturnType<typeof setInterval>|undefined} */ (undefined);
 const scrollCleanups = [];
 const wanted = () => role.value === 'human' || role.value === 'agent' && watching.value && props.control === 'agent';
 async function revoke() {
+  syncGeneration++;
   hiddenSessions?.remove(props.surfaceId);
   mounted = false; signature = ''; shown = true; hasConnected.value = false; viewState.value = 'closed';
   try { await api?.close(props.surfaceId); } catch { /* host window teardown also revokes */ }
@@ -232,9 +234,12 @@ async function sync() {
   if (!api || !alive || error.value || progress.value || resourceReleased.value) return;
   if (busy) { resync = true; return; }
   busy = true;
+  const generation = syncGeneration;
+  const current = () => alive && generation === syncGeneration && !progress.value && !ended;
   try {
     if (mounted || hostWindow.value) {
       const status = await api.status(props.surfaceId);
+      if (!current()) return;
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
       hostXpra.value = status.hostXpra === true;
       if (status.hostWindow !== undefined) {
@@ -267,6 +272,7 @@ async function sync() {
     if (!visible) {
       if (mounted && shown) {
         const reply = await api.visibility(props.surfaceId,false);
+        if (!current()) return;
         if (!reply.ok) throw Error(reply.code);
         shown = false;
       }
@@ -274,16 +280,19 @@ async function sync() {
     }
     if (mounted && !shown) {
       const reply = await api.visibility(props.surfaceId,true);
+      if (!current()) return;
       if (!reply.ok) throw Error(reply.code);
       shown = true;
     }
     if (mounted && floating.front) await api.raise?.(props.surfaceId);
+    if (!current()) return;
     const bounds = clipped.bounds;
     const next = JSON.stringify(bounds);
     if (mounted && next === signature) return;
     const attaching = !mounted;
     if (attaching) viewState.value = 'connecting';
     const reply = mounted ? await api.resize(props.surfaceId,bounds) : await api.mount(props.surfaceId,bounds);
+    if (!current()) return;
     if (!alive || !wanted()) { if (!transferring) await revoke(); return; }
     if (!reply.ok) throw Error(reply.code);
     mounted = true; signature = next; error.value = '';
@@ -294,7 +303,7 @@ async function sync() {
       if (reply.visible === false) { shown = false; resync = true; }
     }
     hiddenSessions?.update(props.surfaceId, true, releaseHiddenSession, isGeometricallyShown);
-  } catch (e) { error.value = /** @type {Error} */(e).message || 'XPRA_REFUSED'; await revoke(); }
+  } catch (e) { if (!current()) return; error.value = /** @type {Error} */(e).message || 'XPRA_REFUSED'; await revoke(); }
   finally {
     busy = false;
     if (resync && alive && !ended && !error.value && !progress.value) { resync = false; void sync(); }
@@ -368,7 +377,8 @@ async function lifecycle(operation) {
   progress.value = operation === 'switchMode' ? `Switching to ${role.value === 'human' ? 'agent' : 'human'}…` : 'Stopping capsule…';
   error.value = '';
   try {
-    while (busy && alive) await new Promise(resolve => setTimeout(resolve,10));
+    // [TARGET, unit decision] Fence pending sync before recovery; never wait on a stuck status.
+    syncGeneration++;
     await revoke();
     const completion = api[operation](props.surfaceId);
     // Agent departure can unmount this tile before the destroy/create reply.
@@ -408,9 +418,10 @@ onMounted(async () => {
   globalThis.window?.addEventListener?.('pointermove', onGeometryChange, true);
   globalThis.window?.addEventListener?.('resize', onGeometryChange);
   if (!api) return;
+  const generation = syncGeneration;
   try {
     const status = await api.status(props.surfaceId);
-    if (!alive) return;
+    if (!alive || generation !== syncGeneration || progress.value || ended) return;
     if (!['human','agent'].includes(status.role)) throw Error(status.code || 'CAPSULE_ROLE_UNPROVEN');
     hostXpra.value = status.hostXpra === true;
     if (status.hostWindow) {

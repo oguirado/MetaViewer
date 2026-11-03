@@ -268,6 +268,7 @@ let fpsFlushTimer = null;
 let fpsStallTimer = null;
 /** @type {number} */
 let lastObservedPresentCount = 0;
+let presentationBaselined = false;
 /** @type {string} */
 let lastObservedPresentedHandle = '';
 
@@ -436,6 +437,7 @@ function resetFpsState() {
   totalPaintedFrames = 0;
   lastFpsFlushAtMs = null;
   lastObservedPresentCount = 0;
+  presentationBaselined = false;
   lastObservedPresentedHandle = '';
   const initialCap = parseCaptureUsValue(props.captureUs) ?? parseCaptureUsValue(props.frameRef);
   if (initialCap !== null) latestCaptureUs = initialCap;
@@ -473,6 +475,12 @@ function checkSchedulerPresentation() {
     ? info.presentCount
     : 0;
   const handle = typeof info.lastPresentedHandle === 'string' ? info.lastPresentedHandle : '';
+  if (!presentationBaselined) {
+    presentationBaselined = true;
+    lastObservedPresentCount = presentCount;
+    lastObservedPresentedHandle = handle;
+    return;
+  }
   const capHint = parseCaptureUsValue(info);
   if (presentCount > lastObservedPresentCount) {
     const delta = presentCount - lastObservedPresentCount;
@@ -894,7 +902,7 @@ watch(() => props.inputEnabled, (enabled, previous) => {
 // MVUI32 lane I (R3-INPUT-1): a stream change closes the previous stream's
 // gate — input queued under the old stream is dropped, never dispatched.
 watch(() => props.streamId, (next, previous) => {
-  if (next !== previous) closeInputGate(props.surfaceId);
+  if (next !== previous) { activePress = null; closeInputGate(props.surfaceId); }
 });
 
 // MVUI30 lane L: the lost transition releases the scheduler binding, so no
@@ -926,6 +934,7 @@ function attachCanvas() {
     // its notice; the scheduler's identity check stays intact. Only the
     // legacy path (no router notice yet) uses the projection props.
     const identity = registeredIdentity;
+    if (!presentationBaselined) checkSchedulerPresentation();
     const result = scheduler.attachCanvas({ surfaceId: props.surfaceId,
       surfaceGeneration: identity !== null ? identity.surfaceGeneration : bindingNumber(props.generation),
       epoch: identity !== null ? identity.epoch : bindingNumber(props.epoch),

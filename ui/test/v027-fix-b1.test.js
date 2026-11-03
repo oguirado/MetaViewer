@@ -57,7 +57,7 @@ test('F08 delayed enable preserves the other canvas typing destination',()=>{
 
 function identityContext(extra={}) {
   return context(['openIdentity','invoke'].map(n=>identities[n]).join('\n'),{
-    isForeignIdentity:()=>false,busy:ref(false),error:ref(''),login:ref(false),pendingDelete:ref(''),
+    isForeignIdentity:()=>false,invocationGeneration:0,failedDelete:'',busy:ref(false),error:ref(''),login:ref(false),pendingDelete:ref(''),
     rows:ref([{id:'editor',browser:'program'}]),modes:ref([{profileId:'editor',currentMode:'agent',surfaceId:'existing',available:true,binary:'editor'}]),
     modeFor:()=>({surfaceId:'existing',currentMode:'agent',available:true,binary:'editor'}),
     identityErrorText:code=>`identity tool: ${code}`,emit:()=>{},props:{host:{}},roleApi:{},...extra,

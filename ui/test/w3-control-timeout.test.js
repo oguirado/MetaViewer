@@ -783,3 +783,20 @@ test('R3-T4-005: unrelated proposal and surface_input replies do not reset inten
   assert.equal(bindings.core.getStatus().availability, 'unavailable');
 });
 
+
+test('B5-26: correlated control refusal counts as reply progress between tolerated timeouts', async t => {
+ const f=await createControlFrameFixture(t,{shouldDropIntent:()=>true});
+ const bindings=await createMainBindings({...f});f.registerCleanup(()=>bindings.core.dispose());
+ f.send({schema:'surface_event/v0.2',event:'created',data:{surface:baseSurface}});
+ await waitFor(()=>bindings.core.getSurface?.('s1') || bindings.core.getHumanSurface?.('s1') || bindings.core.getStatus().availability==='live');
+ const intent=id=>bindings.core.request({op:'intent',json:JSON.stringify({schema:'ui_intent/v0.2',request_id:id,op:'take_control',params:{surface_id:'s1'}})});
+ // Seed progress, then consume its grace.
+ const seed=intent('l3-seed');await waitFor(()=>f.requests.some(r=>r.body.request_id==='l3-seed'));
+ f.send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...baseSurface,control:'human'}}});await seed;
+ await assert.rejects(intent('l3-timeout-1'),/CORE_TIMEOUT/);assert.equal(bindings.core.getStatus().availability,'live');
+ const refused=intent('l3-refusal');const rejection=assert.rejects(refused,/INTENT_REFUSED/);await waitFor(()=>f.requests.some(r=>r.body.request_id==='l3-refusal'));
+ f.send({schema:'action_verdict/v0.2',proposal_id:'l3-refusal',decision:'refused',reason_code:'POLICY',core_seq:100});await rejection;
+ await assert.rejects(intent('l3-timeout-2'),/CORE_TIMEOUT/);assert.equal(bindings.core.getStatus().availability,'live');
+ // With no further reply the next timeout must still close the silent peer.
+ await assert.rejects(intent('l3-timeout-3'),/CORE_TIMEOUT/);assert.equal(bindings.core.getStatus().availability,'unavailable');
+});

@@ -159,7 +159,7 @@ for (const kind of ['Program','Window']) test(`V027-CL05 Cancel waits for an in-
   const nodes=ast.filter(n=>n.type==='FunctionDeclaration' && [`confirm${kind}`,`cancel${kind}`].includes(n.id.name));
   let settle;
   const pending=new Promise(resolve=>{settle=resolve;}), events=[];
-  const ctx={buildCreateIntent,pendingIntent:{value:{kind:'program'}},
+  const ctx={choiceGeneration:0,buildCreateIntent,pendingIntent:{value:{kind:'program'}},
     programBinary:{value:'editor'},programRole:{value:'human'},
     selectedWindow:{value:{xid:1,witness:'a'.repeat(64),title:'Editor',program:'editor',width:800,height:600}},
     choosingProgram:{value:true},programError:{value:''},programBusy:{value:false},
