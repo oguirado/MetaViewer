@@ -148,7 +148,11 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
     child.once('close',(/** @type {number} */rc)=>{
       live.delete(terminate);clearTimeout(killTimer);
       try {
-        if(rc!==0)throw new Error(toolRefusedCode(stdout)??'IDENTITY_EXIT');
+        if(rc!==0) {
+          const code=toolRefusedCode(stdout)??'IDENTITY_EXIT';
+          throw Object.assign(new Error(code), ['PROFILE_NOT_PROVISIONED','PROFILE_MISSING'].includes(code)
+            ? {reason:'Docker profile provisioning failed; check Docker access and the installed judge images, then retry identity creation.'} : {});
+        }
         const reply=JSON.parse(stdout);
         if(!operatorKeys(reply,['schema','ok','result']) || reply.schema!=='metaviewer.identity/v1' || reply.ok!==true || (method==='login' && !opened))throw new Error('IDENTITY_REPLY');
         if(method==='delete') {if(!operatorKeys(reply.result,['deleted']) || reply.result.deleted!==v.id)throw new Error('IDENTITY_REPLY');finish(null,{ok:true});}
