@@ -564,12 +564,14 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const rows = [...reply.rows, ...hostRows.filter(row => !reply.rows.some((/** @type {any} */ r) => r.id === row.id))];
     return await Promise.all(rows.filter((/** @type {any} */ row) => row.browser === 'program' && !isForeignIdentity(row.id)).map(async (/** @type {any} */ row) => {
       // Older program identities have no saved binary: their id is the binary's name.
-      const entry = [...capsuleStates.values()].find(s => s.profile_id === row.id && !['destroyed','closed'].includes(s.state));
       let launch;
       try { launch = await savedPrograms.readLaunch(row.id); }
-      catch { return {profileId:row.id,kind:'program',hostXpra:false,available:false,
+      catch {
+        const entry = [...capsuleStates.values()].find(s => s.profile_id === row.id && !['destroyed','closed'].includes(s.state));
+        return {profileId:row.id,kind:'program',hostXpra:false,available:false,
         currentMode:entry?.state === 'lost' ? 'lost' : entry?.surface_id ? roleFor(entry) : 'closed',
         surfaceId:entry?.surface_id || null,busy:creating || transitions.has(row.id)}; }
+      const entry = [...capsuleStates.values()].find(s => s.profile_id === row.id && !['destroyed','closed'].includes(s.state));
       let binary = launch?.binary;
       if (!binary) {
         try { binary = resolveHostBinary(row.id, {...process.env, ...env}).path; }

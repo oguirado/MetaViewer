@@ -1967,19 +1967,30 @@ finally:s.close()
         args = SimpleNamespace(identity='alice', goal='Message', steps=1,
                                timeout_ms=1000, planner='muse', model_timeout_ms=1000)
         vision = Mock()
+        workspaces = []
         def adapter(**kwargs):
             marks = kwargs['marks_out']
             marks.write_bytes(b'fixture marks')
+            workspaces.append(marks)
             self.b.program_observations = [dict(c2=dict(marks_png=str(marks), marks=[]))]
             return vision
+        def moves(*args, **kwargs):
+            self.assertEqual(workspaces[0].read_bytes(), b'fixture marks')
+            self.assertTrue(workspaces[0].parent.is_dir())
+            self.assertEqual(self.b.program_observations[0]['c2']['marks_png'], str(workspaces[0]))
+            return []
         with patch.dict(host.os.environ, {'XDG_STATE_HOME': str(self.root)}), \
              patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
              patch.object(program, 'ProgramBackend', return_value=self.b), \
              patch.object(program, 'VCorePerceptionAdapter', side_effect=adapter), \
              patch.object(program, 'WenderSubprocessAdapter'), patch.object(program, 'MuseProgramPlanner'), \
-             patch.object(program, 'run_moves', return_value=[]), \
+             patch.object(program, 'run_moves', side_effect=moves), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             self.assertEqual(program.run_entry(args), 0)
+        self.assertEqual(len(workspaces), 1)
+        self.assertFalse(workspaces[0].exists())
+        self.assertFalse(workspaces[0].parent.exists())
+        self.assertEqual(self.b.program_observations[0]['c2']['marks_png'], str(workspaces[0]))
         result = json.loads(output.getvalue())
         c2 = json.loads(Path(result['report']).read_text())['observations'][0]['c2']
         self.assertNotIn('marks_png', c2)

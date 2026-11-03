@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {parse, compileScript} from '@vue/compiler-sfc';
 import {createTerminalDeckController, TERMINAL_REFUSAL_HINTS} from '../src/terminal/terminalDeckModel.js';
-import {formatMemoryRefusalReason} from '../electron/profilePicker.js';
+import {formatMemoryRefusalReason, createRefusalReason} from '../electron/profilePicker.js';
 import {showStartupFailure, MainError, PRIVILEGED_ORIGIN} from '../electron/main.js';
 import {installAuthorityWire, WIRE_CHANNELS} from '../electron/authorityWire.js';
 import {hostOutcomeFor} from '../src/core/hostAdapters.js';
@@ -75,9 +75,11 @@ test('F10 reopening a live saved program reveals its existing surface without cr
   await c.openIdentity('editor','human');assert.equal(creates,1);
 });
 test('F17 secondary identity refresh failure retains modes and announces unavailable status',async()=>{
+  let calls=0;
   const c=identityContext({props:{host:{identity:{list:async()=>({ok:true,rows:[{id:'editor',browser:'program'}]})}}},
-    metaviewerRoles:{choices:async()=>{throw Error('OFFLINE');}}});
+    metaviewerRoles:{choices:async()=>{calls++;throw Error('OFFLINE');}}});
   await c.invoke('list');
+  assert.equal(calls,1,'secondary refresh must actually fail');
   assert.equal(c.modes.value[0]?.surfaceId,'existing');
   assert.match(c.error.value,/unavailable|could not|OFFLINE/i);
 });
@@ -284,6 +286,11 @@ test('F28 active native window disappearing retains its own last title on the lo
   await c.pollNativeSurfaces();assert.equal(c.merged()[0].title,'Editor — notes');
   listed=[];base[0].backendLifecycle='lost';await c.pollNativeSurfaces();
   assert.equal(c.merged()[0].title,'Editor — notes');assert.equal(c.merged()[1].title,'other-profile');
+  assert.equal(c.merged()[0].hostWindow,undefined,'lost rows retain title only');
+  listed=[{schema:'metaviewer.role_surface/v0.3',role:'human',surface:{schema:'surface/v0.2',surface_id:'s1',profile_id:'hw-profile',state:'active',control:'human'}}];
+  base[0].backendLifecycle='active';await c.pollNativeSurfaces();
+  assert.equal(c.merged()[0].title,'hw-profile');assert.equal(c.merged()[0].hostWindow,undefined);
+  assert.equal(c.nativeWindowMetadata.size,0,'live rows without native host metadata release the retained title');
   base.splice(0,1);await c.pollNativeSurfaces();assert.equal(c.nativeWindowMetadata.size,0);
 });
 test('F29 sealed recording remains exportable after Stop even when relisting refuses',async()=>{
@@ -332,4 +339,49 @@ test('F59 closed parked display peer releases its stream, while temporary unbind
     router.bindSurface(spec);assert.equal(router.getStats().activeStreams,1);
     router.unbindSurface('s1');port.emit('close');assert.equal(router.getStats().activeStreams,0);assert.equal(closed,1);
   } finally {router.dispose();}
+});
+
+
+test('V027 program listing rechecks binding after saved launch settles',async()=>{
+  const source=read('../electron/roleHost.js');
+  const code=source.slice(source.indexOf('async function programs()'),source.indexOf('\n  /** @param {any} choice */',source.indexOf('async function programs()')));
+  for (const state of ['active','lost']) for (const corrupt of [false,true]) {
+    let settle;
+    const capsuleStates=new Map();
+    const c=context(code,{
+      listIdentities:async()=>({ok:true,rows:[{id:'editor',browser:'program'}]}),
+      savedPrograms:{hostProfiles:async()=>[],readLaunch:()=>new Promise((resolve,reject)=>{settle=()=>corrupt?reject(Error('CORRUPT')):resolve({binary:'editor'});})},
+      capsuleStates,isForeignIdentity:()=>false,roleFor:()=> 'agent',creating:false,transitions:new Set(),process:{env:{}},env:{},
+      resolveHostBinary:()=>{throw Error('UNAVAILABLE');},
+    });
+    const pending=c.programs();await tick();assert.equal(typeof settle,'function');
+    capsuleStates.set('s1',{surface_id:'s1',profile_id:'editor',state});settle();
+    const [row]=await pending;
+    assert.equal(row.surfaceId,'s1');assert.equal(row.currentMode,state==='lost'?'lost':'agent');
+    assert.equal(row.available,!corrupt);
+  }
+});
+
+test('V027 recording Stop replaces the active manifest row from a refresh race',async()=>{
+  const recording={id:'rec1',surface_id:'s1',frames:3,duration_ms:42,sealed:true,sha256:'a'.repeat(64)};
+  let stop,listCount=0;
+  const active={id:'rec1',kind:'recording',surface_id:'s1',phase:'recording',frames:1,duration_ms:0,sealed:false,created_ms:123};
+  const state=createCaptureState({
+    recordStart:async()=>({ok:true,recording_id:'rec1'}),recordStop:()=>new Promise(resolve=>{stop=resolve;}),
+    screenshot:async()=>({ok:false,code:'CAPTURE_UNAVAILABLE'}),
+    list:async()=>++listCount===1?{ok:true,rows:[active]}:{ok:false,code:'CAPTURE_UNAVAILABLE'},
+    subscribe:()=>()=>{},exportCapture:async()=>({ok:true,export:{id:'rec1',bytes:1,sha256:recording.sha256}}),
+  });
+  try {
+    await state.toggleRecord('s1');const pending=state.toggleRecord('s1');
+    await state.refresh('s1');assert.equal(state.rows[0].sealed,false);
+    stop({ok:true,recording});await pending;await tick();
+    assert.equal(state.rows.filter(r=>r.id==='rec1').length,1);
+    assert.equal(state.rows[0].sealed,true);assert.equal(state.rows[0].created_ms,123);
+    assert.equal((await state.exportCapture('rec1')).ok,true);
+  } finally {state.dispose();}
+});
+
+test('V027 profile picker setup refusal gives runtime doctor guidance',()=>{
+  assert.match(createRefusalReason('ADAPTER_SETUP'),/doctor --capsules/);
 });

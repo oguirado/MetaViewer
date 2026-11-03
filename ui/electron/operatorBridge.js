@@ -174,7 +174,6 @@ export const HANDOFF_DISCOVERY=Object.freeze({maxScan:4096,maxRuns:32,maxAgeMs:6
  * @param {Record<string,string|undefined>} env @param {number} nowMs @returns {string[]} */
 export function discoverHandoffPaths(env,nowMs) {
   const state=typeof env.MV_OPERATOR_STATE_HOME==='string' && env.MV_OPERATOR_STATE_HOME!==''?env.MV_OPERATOR_STATE_HOME:typeof env.XDG_STATE_HOME==='string' && env.XDG_STATE_HOME!==''?env.XDG_STATE_HOME:typeof env.HOME==='string' && env.HOME!==''?join(env.HOME,'.local/state'):'';
-  if(!isAbsolute(state) || resolve(state)!==state)return [];
   // [TARGET, unit decision] Browser goals may export XDG_STATE_HOME in a shell
   // after the app starts. Watch the documented goal/tour RAM namespaces too;
   // every final record still passes the descriptor-based private-file gate.
@@ -188,7 +187,7 @@ export function discoverHandoffPaths(env,nowMs) {
       }
     } finally {dir.closeSync();}
   }catch{/* RAM namespace unavailable: retain configured state discovery. */}
-  const candidates=[...roots].filter(x=>typeof x==='string').slice(0,HANDOFF_DISCOVERY.maxRuns)
+  const candidates=[...roots].filter(x=>typeof x==='string')
     .flatMap(root=>discoverRunHandoffs(/** @type {string} */(root),nowMs));
   /** @type {Map<string,{mtime:number,paths:string[]}>} */const runs=new Map();
   for(const path of candidates) {

@@ -408,6 +408,7 @@ export const CREATE_REFUSAL_REASONS = Object.freeze({
   SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
   SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
   DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
+  ADAPTER_SETUP: 'The surface runtime needs setup. Run bash scripts/judge/metaviewer-judge.sh doctor --capsules, then follow its guidance and restart MetaViewer.',
   ADAPTER_ERROR: 'The surface runtime could not open the capsule. Check that it is installed and configured, then choose Add capsule to try again. A core-only installation cannot run capsules.',
 });
 

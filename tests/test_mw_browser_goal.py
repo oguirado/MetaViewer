@@ -296,7 +296,47 @@ class BrowserGoalTests(unittest.TestCase):
                     self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN' if pending else expected)
                     report = json.loads(Path(result['report']).read_text())
                     self.assertIn(remedy, report['message'])
+                    if expected == 'MW_PROGRAM_MODEL_TIMEOUT':
+                        if pending:
+                            self.assertIn('do not retry', report['message'])
+                            self.assertIn('inspect', report['message'])
+                            self.assertNotIn('before dispatch', report['message'])
+                        else:
+                            self.assertIn('before dispatch', report['message'])
+                            self.assertIn('retry', report['message'])
                     self.b.propose.assert_not_called()
+
+
+class BrowserTimeoutRemedyTests(unittest.TestCase):
+    def test_v027_model_timeout_after_dispatch_never_recommends_retry(self):
+        for pending in (False, True):
+            with self.subTest(pending=pending), tempfile.TemporaryDirectory(dir='/dev/shm') as directory:
+                backend = SimpleNamespace(surface_id='fixture', wender=Path(directory),
+                    observe=Mock(), client=Mock(), attempts=[], moves=[])
+                def moves(*args):
+                    if pending:
+                        backend.attempts.append(dict(status='dispatch_pending'))
+                    raise goal.host.OwnerRefused('MW_PROGRAM_MODEL_TIMEOUT')
+                args = SimpleNamespace(goal='Operator Name', steps=1, timeout_ms=1000,
+                    text=None, key=None, planner='rules', model_timeout_ms=1000, identity='fixture')
+                with patch.object(goal, 'private_evidence_base', return_value=Path(directory)), \
+                     patch.object(goal.host, 'connect'), \
+                     patch.object(goal, 'BrowserGoalBackend', return_value=backend), \
+                     patch.object(goal, 'WenderSubprocessAdapter'), \
+                     patch.object(goal, 'run_moves', side_effect=moves), \
+                     contextlib.redirect_stdout(io.StringIO()) as output, \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(goal.run_entry(args), 5 if pending else 6)
+                result = json.loads(output.getvalue())
+                report = json.loads(Path(result['report']).read_text())
+                self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN' if pending else 'MW_PROGRAM_MODEL_TIMEOUT')
+                if pending:
+                    self.assertIn('do not retry', report['message'])
+                    self.assertIn('inspect', report['message'])
+                    self.assertNotIn('before dispatch', report['message'])
+                else:
+                    self.assertIn('before dispatch', report['message'])
+                    self.assertIn('retry', report['message'])
 
 
 if __name__ == '__main__':
