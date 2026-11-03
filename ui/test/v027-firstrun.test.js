@@ -7,13 +7,18 @@ import { hostOutcomeFor } from '../src/core/hostAdapters.js';
 
 test('boot and first-create dialogs name the failure and recovery without raw host diagnostics', () => {
   const dialogs = [];
-  const dialog = { showErrorBox: (title, content) => dialogs.push({ title, content }) };
+  const blocking = [];
+  const dialog = {
+    showErrorBox: (title, content) => { blocking.push(title); dialogs.push({ title, content }); },
+    showMessageBox: async options => { dialogs.push({ title: options.title, content: `${options.message}\n\n${options.detail}` }); },
+  };
   showStartupFailure(dialog, new MainError('ADAPTER_UNAVAILABLE', 'private diagnostic'), 'boot');
   showStartupFailure(dialog, new MainError('SURFACE_CREATE_TIMEOUT', 'private diagnostic'), 'create');
   assert.match(dialogs[0].content, /ADAPTER_UNAVAILABLE.*could not start/);
   assert.match(dialogs[0].content, /MV_SRF_BIN_DIR.*restart MetaViewer/);
   assert.match(dialogs[1].content, /SURFACE_CREATE_TIMEOUT.*first capsule/);
   assert.match(dialogs[1].content, /Identities.*Add capsule/);
+  assert.deepEqual(blocking, ['MetaViewer could not start'], 'a failed first capsule must not freeze the running app with a modal');
   for (const row of dialogs) assert.doesNotMatch(row.content, /private diagnostic/);
   assert.doesNotThrow(() => showStartupFailure({ showErrorBox() { throw Error('display unavailable'); } }, null, 'boot'));
   assert.doesNotThrow(() => showStartupFailure(null, null, 'create'));

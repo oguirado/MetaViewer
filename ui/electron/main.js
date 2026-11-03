@@ -69,8 +69,13 @@ export function showStartupFailure(dialog, error, phase) {
       ? 'The surface runtime could not start. Check the adapter installation and MV_SRF_BIN_DIR configuration, then restart MetaViewer. For a core-only wall, unset MV_SRF_BIN_DIR; capsules require the surface runtime.'
       : 'Check the installation and the startup error in the host logs, then restart MetaViewer.';
   try {
-    const handle = /** @type {{showErrorBox?:(title:string,content:string)=>void}|null} */ (dialog);
-    handle?.showErrorBox?.(title, `${code}: ${title}.\n\n${next}`);
+    const handle = /** @type {{showErrorBox?:(title:string,content:string)=>void,showMessageBox?:(options:object)=>Promise<unknown>}|null} */ (dialog);
+    // The app keeps running after a failed first capsule: a modal would freeze it until someone clicks.
+    if (phase === 'create') {
+      void handle?.showMessageBox?.({type:'warning', title, message:`${code}: ${title}.`, detail:next})?.catch?.(() => {});
+    } else {
+      handle?.showErrorBox?.(title, `${code}: ${title}.\n\n${next}`);
+    }
   } catch {
     /* stderr diagnostics and fail-closed cleanup still run if a dialog fails */
   }

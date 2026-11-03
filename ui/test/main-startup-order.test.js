@@ -181,7 +181,10 @@ async function createStubBootFixture(baseDir, options = {}) {
 
   const dialogs = [];
   const handles = {
-    dialog: { showErrorBox: (title, content) => dialogs.push({title, content}) },
+    dialog: {
+      showErrorBox: (title, content) => dialogs.push({title, content}),
+      showMessageBox: async options => { dialogs.push({title: options.title, content: `${options.message}\n\n${options.detail}`}); },
+    },
     app: {
       requestSingleInstanceLock: () => true,
       whenReady: async () => {
