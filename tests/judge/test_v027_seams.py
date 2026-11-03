@@ -20,6 +20,14 @@ from judge_sandbox import SRF_FAKE, Sandbox, make_tar
 from test_mutants import run_pair
 
 
+def stop_recorded_child(pid):
+    if type(pid) is not int or pid <= 1:
+        raise ValueError('unsafe child pid')
+    if os.getpgid(pid) == os.getpgrp():
+        raise ValueError('child shares caller process group')
+    os.kill(pid, signal.SIGTERM)
+
+
 class LauncherFlowRegressions(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -102,7 +110,7 @@ class LauncherFlowRegressions(unittest.TestCase):
         pidfile = self.sb.jh / 'run/metaviewer.pid'
         child = int(pidfile.read_text())
         pidfile.write_text('replacement-owner\n')
-        os.kill(child, signal.SIGTERM)
+        stop_recorded_child(child)
         process.communicate(timeout=20)
         self.assertEqual(process.returncode, 0)
         self.assertTrue(pidfile.exists(), 'exiting launcher removed replacement owner')
