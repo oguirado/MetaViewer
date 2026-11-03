@@ -1,0 +1,1 @@
+- Host program identities retain their launch type across restart and reopen. Desktop window input verifies the native acknowledgement against the attached window. Private Host programs fill their display without starting a desktop session. Tile menus wrap within narrow tiles, and desktop window controls explain who receives input and where Release hands control.

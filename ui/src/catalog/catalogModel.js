@@ -115,6 +115,11 @@ export const CATALOG_KINDS = Object.freeze([
     keywords: Object.freeze(['program', 'run', 'app']),
   }),
   Object.freeze({
+    kind: 'host-program', label: 'Host program', category: 'Programs',
+    description: 'Runs on your computer — not isolated.', opensAs: 'tab', footprint: '',
+    keywords: Object.freeze(['host', 'xpra', 'binary', 'browser']),
+  }),
+  Object.freeze({
     kind: 'desktop-window',
     label: 'Desktop window',
     category: 'Windows',
@@ -401,7 +406,7 @@ export function buildCreateIntent(input) {
     return Object.freeze({ ok: false, error: unknownKindRow(record.kind) });
   }
   const placement = resolveCatalogPlacement(record.placement);
-  if (record.kind === 'program') {
+  if (record.kind === 'program' || record.kind === 'host-program') {
     const binary = typeof record.binary === 'string' ? record.binary.trim() : '';
     if (binary.length === 0) {
       return Object.freeze({ ok: false, error: invalidIntentRow() });
@@ -413,7 +418,7 @@ export function buildCreateIntent(input) {
       ok: true,
       intent: Object.freeze({
         type: 'create-capsule',
-        kind: 'program',
+        kind: record.kind,
         placement,
         binary,
         ...(record.role !== undefined ? { role: record.role } : {}),

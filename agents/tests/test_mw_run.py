@@ -34,6 +34,34 @@ class EntryTests(unittest.TestCase):
                 mw_run.main(['--identity', 'alice', '--site', 'example', '--workflow', 'read', flag], runner=runner)
             runner.assert_not_called()
 
+    def test_program_text_and_browser_step_guards(self):
+        base = ['--identity', 'alice']
+        accepted = [
+            ['--surface-kind', 'program', '--goal', 'focused', '--text', 'hello', '--steps', '1'],
+            ['--surface-kind', 'program', '--goal', 'Message', '--text', 'hello', '--steps', '1'],
+            ['--goal', 'Message', '--text', 'hello', '--steps', '2'],
+            ['--goal', 'Message', '--text', 'hello', '--key', 'Enter', '--steps', '3'],
+        ]
+        for flags in accepted:
+            with self.subTest(flags=flags):
+                runner = Mock(return_value=0)
+                self.assertEqual(mw_run.main(base + flags, runner=runner), 0)
+                runner.assert_called_once()
+        rejected = [
+            ['--surface-kind', 'program', '--goal', 'focused'],
+            ['--surface-kind', 'program', '--goal', 'focused', '--text', 'hello', '--steps', '2'],
+            ['--surface-kind', 'program', '--goal', 'focused', '--text', 'hello', '--key', 'Enter'],
+            ['--goal', 'Message', '--text', 'hello', '--steps', '1'],
+            ['--goal', 'Message', '--text', 'hello', '--key', 'Enter', '--steps', '2'],
+            ['--goal', 'Message', '--key', 'Enter', '--steps', '3'],
+        ]
+        for flags in rejected:
+            with self.subTest(flags=flags):
+                runner = Mock()
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    mw_run.main(base + flags, runner=runner)
+                runner.assert_not_called()
+
     def test_home_profile_before_core(self):
         import tempfile
         host = host_module()

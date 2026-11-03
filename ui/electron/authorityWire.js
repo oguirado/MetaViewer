@@ -13,6 +13,7 @@
  * [TARGET, unit decision] Frozen settings/v0.2 is decoded separately, then
  * projected to host preferences; its limits do not change UI preference caps.
  */
+import { acquireCapsuleCreation } from './profilePicker.js';
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
 import { constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
@@ -324,6 +325,8 @@ export function validateSurfaceInputBatch(raw) {
   if (hasOverlongTypeText) {
     return { ok: false, code: 'SCHEMA' };
   }
+  // Opt-in diagnostics expose event kinds only, never typed text or key data.
+  if (process.env.MV_INPUT_DIAGNOSTICS === '1') console.debug(`METAVIEWER_INPUT_VALIDATED events=${events.map(event => event.kind).join(',')}`);
   return { ok: true, batch };
 }
 /** @param {unknown} value @returns {any} */
@@ -624,7 +627,7 @@ export function createSettingsStore(env) {
       subs.add(listener);
       return () => {
         subs?.delete(listener);
-        if (subs && subs.size === 0) settingsSubscriptions.delete(subKey);
+        if (subs && subs.size === 0 && settingsSubscriptions.get(subKey) === subs) settingsSubscriptions.delete(subKey);
       };
     },
     async load() {
@@ -718,7 +721,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     for (const [id, old] of capsuleStates) {
       if (old.profile_id === state.profile_id && id.startsWith('pending:')) capsuleStates.delete(id);
     }
-    if (state.state === 'destroyed' || state.state === 'lost') capsuleStates.delete(state.surface_id);
+    if (state.state === 'destroyed') capsuleStates.delete(state.surface_id);
     else capsuleStates.set(state.surface_id, state);
   };
   /** @type {number} */
@@ -765,11 +768,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     RAM_ADMISSION_REFUSED: 'Not enough free host memory to start another capsule (one capsule needs 6 GiB: 4 GiB RAM + 2 GiB shm). Close an open capsule or other applications and try again.',
     SURFACE_CREATE_BUSY: 'Another capsule is already starting. Wait for it to finish, then try again.',
     SURFACE_CREATE_TIMEOUT: 'Starting the capsule timed out before it became ready. Try again.',
-    SURFACE_CREATE_FAILED: 'The host could not start the capsule. Check the host logs and try again.',
+    SURFACE_CREATE_FAILED: 'The host could not start the capsule. If this is a core-only installation, install and configure the surface runtime, then restart MetaViewer. Otherwise check the host logs and choose Add capsule to try again.',
     SURFACE_CREATE_KIND_UNAVAILABLE: 'Only browser capsules can be created on this host.',
     SURFACE_CREATE_INVALID: 'The capsule create request was rejected as invalid. Please try again.',
     DISPLAY_ONLY: 'Nested walls are display-only and cannot open new capsules.',
-    ADAPTER_ERROR: 'The surface adapter refused the capsule create request. Please try again.',
+    ADAPTER_ERROR: 'The surface runtime could not open the capsule. Check that it is installed and configured, then choose Add capsule to try again. A core-only installation cannot run capsules.',
   };
   const resolveCreateFailureCode = (/** @type {any} */ replyOrError) => {
     const detail = replyOrError?.data?.detail ?? replyOrError?.message;
@@ -834,6 +837,8 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     createSurface: async () => {
       if (identity.depth !== null) return refuse('DISPLAY_ONLY');
       if (creatingCapsule) return refuse('SURFACE_CREATE_BUSY');
+      const releaseCreation = acquireCapsuleCreation(capsuleStates);
+      if (!releaseCreation) return refuse('SURFACE_CREATE_BUSY');
       creatingCapsule = true;
       /** @type {string | null} */ let key = null;
       try {
@@ -879,7 +884,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       } catch (error) {
         if (key !== null) capsuleStates.delete(key);
         return refuse(resolveCreateFailureCode(error));
-      } finally { creatingCapsule = false; }
+      } finally { creatingCapsule = false; releaseCreation(); }
     },
     propose: async (/** @type {string} */json) => {
       validateProposalBody(jsonObject(json)); return verdictReply(await core.request({op:'propose',json}));
@@ -1325,7 +1330,9 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         try { await stream.reader.closeReader(); } catch {}
         finally { stream.port.revokeFramePort('SHUTDOWN'); }
       }
-      streams.clear();terminal?.dispose?.();for(const channel of channels) ipcMain.removeHandler?.(channel);
+      streams.clear();
+      try { await terminal?.dispose?.(); }
+      finally { for(const channel of channels) ipcMain.removeHandler?.(channel); }
     },
   };
 }
