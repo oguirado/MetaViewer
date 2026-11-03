@@ -1654,6 +1654,7 @@ onMounted(() => {
         </section>
         <section v-if="!nestedMode.displayOnly" :hidden="!settingsOpen" class="mv-settings-screen" aria-label="Settings">
           <UiButton id="settings-back" data-semantic-anchor="settings/back" label="Back to wall" @click="settingsOpen = false" />
+          <p>MetaViewer · AGPL-3.0-only · <a id="settings-license-source" data-semantic-anchor="settings/license-source" href="https://github.com/oguirado/MetaViewer" target="_blank" rel="noopener noreferrer">Source</a></p>
           <MvSettingsPanel :settings-host="props.settingsHost ?? {}" v-model:density="density" :frames-port="props.framesPort ?? null" @scheme-change="onScheme" />
         </section>
         <section v-if="!nestedMode.displayOnly" :hidden="!terminalDeckOpen" :inert="!terminalDeckOpen ? true : undefined" :aria-hidden="!terminalDeckOpen ? 'true' : undefined" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
