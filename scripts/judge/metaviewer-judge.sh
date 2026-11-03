@@ -572,6 +572,9 @@ cmd_run() {
     tier=$(receipt_tier)
     case $tier in T1 | T2) TIER=$tier ;; *) fail JUDGE_NOT_INSTALLED "the receipt $RECEIPT has no valid tier" "bash $0 install [--capsules]" ;; esac
     if [ "$TIER" = T2 ] && [ "$(net_mode_now)" != open ]; then
+        # Static checks diagnose the Docker endpoint before any network repair.
+        # Full network readiness is checked after the repair, below.
+        pf_or_exit --tier "$TIER" --phase static
         say "ensuring the scoped capsule network"
         ensure_capsule_net
     fi
@@ -622,12 +625,26 @@ cmd_run() {
     mkdir -p "$JUDGE_HOME/run"
     env -i "${envv[@]}" "$APP_BIN" --ozone-platform=x11 &
     child=$!
-    printf '%s\n' "$child" >"$PIDFILE"
+    if ! printf '%s\n' "$child" >"$PIDFILE"; then
+        # A child without a published PID cannot be recovered by a later stop.
+        kill -TERM "$child" 2>/dev/null || true
+        local unwind=0
+        while kill -0 "$child" 2>/dev/null && [ "$unwind" -lt 10 ]; do
+            sleep 0.1
+            unwind=$((unwind + 1))
+        done
+        kill -KILL "$child" 2>/dev/null || true
+        wait "$child" 2>/dev/null || true
+        fail JUDGE_PIDFILE "cannot publish app pid in $PIDFILE; app child was stopped" "make $JUDGE_HOME/run writable and retry run"
+    fi
     trap 'kill -TERM "$child" 2>/dev/null' TERM INT HUP
     rc=0
-    while kill -0 "$child" 2>/dev/null; do
+    # Always collect the child status, including a child reaped before this probe.
+    # A trapped signal can interrupt wait while the child is still shutting down.
+    while :; do
         wait "$child"
         rc=$?
+        kill -0 "$child" 2>/dev/null || break
     done
     rm -f -- "$PIDFILE"
     return "$rc"
@@ -697,7 +714,9 @@ cmd_stop() {
         while IFS= read -r name; do
             [ -n "$name" ] || continue
             leaks=$((leaks + 1))
-            printf 'JUDGE_STOP_LEAK: admission record %s is still present -- fix: python3 tools/mv_ram_admission.py reclaim --dry-run\n' "$name" >&2
+            printf 'JUDGE_STOP_LEAK: admission record %s is still present -- fix: MV_RAM_ADMISSION_DIR=%q python3 %q reclaim --dry-run && MV_RAM_ADMISSION_DIR=%q python3 %q reclaim --apply\n' \
+                "$name" "$adm" "${MV_JUDGE_RAM_TOOL:-$KIT/tools/mv_ram_admission.py}" \
+                "$adm" "${MV_JUDGE_RAM_TOOL:-$KIT/tools/mv_ram_admission.py}" >&2
         done < <(find "$adm" -mindepth 1 -maxdepth 1 2>/dev/null)
     fi
     if [ "$leaks" -gt 0 ]; then # MUT:JUDGE_STOP_LEAK

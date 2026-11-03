@@ -407,11 +407,39 @@ chk_net() {
 }
 
 chk_profile() {
-    local p="$STORE/profiles/$PROFILE_ID" st
-    st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
-    if [ "$st" != "700 10001" ]; then # MUT:JUDGE_PROFILE
-        refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo)"
+    local p st profile pool p2=mv-live-2 p3=mv-live-3 p4=mv-live-4
+    if [ -n "${MV_SRF_PROFILES:-}" ]; then
+        if ! pool=$(python3 -c '
+import json, re, sys
+try:
+    pool = json.loads(sys.argv[1])
+    if not isinstance(pool, dict) or not pool:
+        raise ValueError()
+    for name, spec in pool.items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name) or not isinstance(spec, dict):
+            raise ValueError()
+        if spec.get("Kind") == "browser" or spec.get("NativeKind") == "browser":
+            print(name)
+except (ValueError, TypeError):
+    sys.exit(2)
+' "$MV_SRF_PROFILES" 2>/dev/null); then
+            refuse JUDGE_PROFILE "MV_SRF_PROFILES is not a valid profile pool" "set a valid profile pool and provision its browser directories"
+            return
+        fi
+    else
+        [ "$PROFILE_ID" = "$p2" ] && p2=mv-live-1
+        [ "$PROFILE_ID" = "$p3" ] && p3=mv-live-1
+        [ "$PROFILE_ID" = "$p4" ] && p4=mv-live-1
+        pool=$(printf '%s\n' "$p2" "$p3" "$p4")
     fi
+    while IFS= read -r profile; do
+        [ -n "$profile" ] || continue
+        p="$STORE/profiles/$profile"
+        st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
+        if [ "$st" != "700 10001" ]; then # MUT:JUDGE_PROFILE
+            refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo)"
+        fi
+    done < <(printf '%s\n%s\n' "$PROFILE_ID" "$pool")
 }
 
 chk_ram_stale() {
