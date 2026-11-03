@@ -248,6 +248,7 @@ v027-seams.md	changes/unreleased/v027-seams.md
 v027-verify-2.md	changes/unreleased/v027-verify-2.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
+v027win-9c20b1c75b6a	changes/unreleased/v027-window-close-2.md
 v027-window-close.md	changes/unreleased/v027-window-close.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
@@ -2169,6 +2170,7 @@ v027-tile-chrome.html	ui/test/v027-tile-chrome.html
 v027-tile-chrome.js	ui/test/v027-tile-chrome.js
 v027til-aec2d0c0bc3c	ui/test/v027-tile-chrome.test.js
 v027-u3c.test.js	ui/test/v027-u3c.test.js
+v027win-4af1694b2e2c	ui/test/v027-window-close-live-order.test.js
 v027win-4508650304ef	ui/test/v027-window-resize.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
