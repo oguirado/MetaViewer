@@ -1,0 +1,16 @@
+- V027-EM01: Quit through normal teardown when the main authority renderer exits unexpectedly.
+- V027-EM02: Prevent repeated quit events until the shared teardown completes.
+- V027-HB01: Refuse an expired capture without closing the host session; validate and ignore late replies.
+- V027-HP06: Attempt every owned view close and native program stop and report collected disposal failures.
+- V027-LP02: Allow later layout changes to retry a transient write failure while preserving invalid-load protection.
+- V027-AS01: Preserve the selected capsule when opening and dismissing Add.
+- V027-DP02: Acknowledge paint failures as refused deliveries so visible DISPLAY tiles can recover.
+- V027-ID01: Expose retained lost identity bindings and provide a guarded Stop lost capsule action.
+- V027-ID03: Preserve saved host-Xpra mode across Identities and App program opening.
+- V027-XP03: Preserve newer host focus choices while a writable native tile connects.
+- V027-CP02: Share creation admission across boot, browser and role bridges before asynchronous checks [TARGET, unit decision].
+- V027-CP03: Apply the interactive memory floor to boot creation and release its admission on settlement.
+- V027-EG03: Prevent stale settings cleanup from removing replacement subscriptions; cover the case in the isolated unit regression.
+- V027-EM06: Await terminal disposal before completing authority bridge teardown and remove handlers even on failure.
+- V027-HB05: Use monotonic time for typing coalescing and IPC rate windows so clock rollback cannot extend the throttle.
+- V027-HP03: Isolate unreadable or corrupt saved program sidecars during listing and mark affected native identity rows unavailable; strict per-program reads still refuse.

@@ -268,7 +268,12 @@ impl CoreState {
                     value["op"].as_str(),
                     Some("create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe")
                 ) || value["params"]["surface_id"].as_str().is_some_and(|id| {
-                    self.is_destroyed(id) || self.surfaces.get(id).is_some_and(|s| !s.live)
+                    // [TARGET, unit decision] Explicit Stop may retire a lost human
+                    // binding; this grants no input, frames or renewed liveness.
+                    self.is_destroyed(id)
+                        || self.surfaces.get(id).is_some_and(|s| {
+                            !s.live && (value["op"] != "destroy" || s.agent_controlled)
+                        })
                 }) || !valid_surface_create_policy(request)
                 {
                     out.reason = Some(Refusal::Policy);
@@ -425,7 +430,9 @@ impl CoreState {
             Input::Connect => {
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {
-                    p.unknown = true;
+                    // Only a durable Dispatch can have reached the executor.
+                    // Undispatched admissions remain cancellable without a receipt.
+                    p.unknown |= p.dispatched;
                 }
                 for s in self.surfaces.values_mut() {
                     s.refresh_after = Some(next);

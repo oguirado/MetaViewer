@@ -19,6 +19,8 @@
 mod launch;
 mod process;
 mod types;
+#[cfg(test)]
+mod v027_tests;
 pub use launch::environment_key_allowed;
 pub use types::*;
 
@@ -163,7 +165,11 @@ impl Supervisor {
                     SupervisorError::CleanupIncomplete
                 });
             }
-            tokio::time::sleep(self.limits.poll_interval).await;
+            let remaining = self
+                .limits
+                .startup_timeout
+                .saturating_sub(e.started.elapsed());
+            tokio::time::sleep(self.limits.poll_interval.min(remaining)).await;
         }
     }
 
@@ -391,7 +397,8 @@ impl Supervisor {
                     receipt.failures.push(SupervisorError::DeadlineExceeded);
                     break;
                 }
-                tokio::time::sleep(self.limits.poll_interval).await;
+                let remaining = until.saturating_duration_since(Instant::now());
+                tokio::time::sleep(self.limits.poll_interval.min(remaining)).await;
             }
             match p.finish() {
                 Ok(reaped) => receipt.reaped = reaped,

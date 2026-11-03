@@ -1,14 +1,20 @@
 # Pre-existing work declaration
 
-This document belongs to release **0.1.1** [TARGET], a documentation-only
-release published before the hackathon build period. The build period starts
-at kickoff on **October 26, 2026** [CITED: operator schedule]. Everything
-listed below predates the event: the v0.1 scaffold in this repository, the
-pre-event design and research notes, and the external private components the
-product integrates. The assembly units built during the event are listed at
-the end.
+## Current assembly and historical boundary
 
-## In-repository scaffold
+The current candidate is **0.2.5** [CITED: `../VERSION`]. This declaration
+separates the pre-event documentation baseline from the implemented assembly.
+Kickoff was **October 26, 2026** [CITED: operator schedule]. The historical
+baseline below describes **0.1.1** [CITED: git `ebc5546`]; statements about empty
+skeletons and TBD pins apply to that baseline, not the current tree.
+
+The assembly now contains runtime code in `core/src/`, `daemon-adapter/`,
+`agents/metaviewer_agents/`, and `ui/`, plus packaging, judge tooling and tests.
+See [CHANGELOG.md](../CHANGELOG.md), [pending fragments](../changes/unreleased/),
+and [README.md](../README.md) for current behavior and limits. Presence of code
+is not evidence of a live acceptance pass or event eligibility.
+
+## Historical in-repository scaffold
 
 Committed as `a01a420` on **2026-10-22** [CITED: git log], **49 files**
 [CITED: git show --stat]. Laws, contracts, schema tooling, tests, CI and
@@ -45,21 +51,21 @@ Committed as `e06d627` on **2026-10-25** [CITED: git log], **13 files**
 | `docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md` | Design notes from Holdings for the UI layer and capsule orchestrator |
 | `docs/research/` | **8** supporting files [CITED: tree]: acceptance review, terminal-workspace synthesis, UI seal decisions, research handoff, npm pins evidence, UI architecture report, **2** query logs |
 
-## External private components
+## Historical external private components
 
 These components predate the event, stay in their own private repositories,
-and are integrated through versioned contracts. They are pinned in
-`deps.lock` and never copied into this repository.
+and are integrated through versioned contracts. The following pins are historical [CITED: git `ebc5546:deps.lock`],
+not the current lock. Their source stays in separate repositories; packaging may
+include external runtime material subject to its own permission.
 
 | Component | Role | How MetaViewer consumes it |
 | --- | --- | --- |
-| wender-agent | AI input execution | Private repo `oguirado/wender-agent`, pin `v0.1.1` / `f24bda5` [CITED: deps.lock]; reached through versioned contracts only |
-| vision-engine | Perception: capture, change detection, localisation | Private repo `oguirado/vision-engine`, pin `v0.1.1` / `cff8f3a` [CITED: deps.lock]; reached through versioned contracts only |
-| OpenSuperficies | Isolated capsule backend (Go surface daemon) | Pins TBD in `deps.lock` [CITED: deps.lock]; reached through versioned contracts only |
+| wender-agent | AI input execution | Private repo `oguirado/wender-agent`, pin `v0.1.1` / `f24bda5` [CITED: git `ebc5546:deps.lock`]; reached through versioned contracts only |
+| vision-engine | Perception: capture, change detection, localisation | Private repo `oguirado/vision-engine`, pin `v0.1.1` / `cff8f3a` [CITED: git `ebc5546:deps.lock`]; reached through versioned contracts only |
+| OpenSuperficies | Isolated capsule backend (Go surface daemon) | Pins TBD in `deps.lock` [CITED: git `ebc5546:deps.lock`]; reached through versioned contracts only |
 | Shared capsule UI kit | Maintainer's UI kit for the wall: shell, capsules, overlay terminal (multislot in build) [CITED: docs/DEMO_RECURSIVE_SCRIPT.md] | Consumed as a compiled bundle; never copied |
 
-All pins are finalised in a `deps:` commit at the start of the build period
-[TARGET]. Per L2, a pin changes only in a commit whose message starts with
+The baseline planned to finalise pins in a `deps:` commit [TARGET, historical plan]. Per L2, a pin changes only in a commit whose message starts with
 `deps:` [CITED: LAWS.md].
 
 ## Pre-event planning with Meta models
@@ -85,12 +91,29 @@ these outputs stay in my private planning workspace and are not committed
 here; the context packs and research notes were inputs for the writers of
 the build period.
 
+## Current external pins
+
+These are integration pins, not evidence that each pinned revision predates kickoff.
+External components are pre-existing projects; the event-period changes in their
+private repositories are not established by this declaration. Their evaluation
+and redistribution rights are not granted by [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
+
+| Component | Version [CITED] | Commit [CITED] | Source |
+| --- | --- | --- | --- |
+| vision-engine | `v0.2.0` | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` | `deps.lock` |
+| wender-agent | `v0.3.0` | `96120967b435b72fc6d29635f3844dae140388a9` | `deps.lock` |
+| OpenSuperficies | `os-cu-w9-mv1` | `3cb86d752f38457b6730eefd235d4da4c4039721` | `deps.lock` |
+| capsule-ui-kit | `0.2.1` | `bf31bc201987206d16dbd88d93102f9d5ce026f9` | `ui/kit.lock.json` |
+
 ## Built during the event
 
-The hackathon product is the assembly of MetaViewer [TARGET]: the Rust
-authority core, the Go daemon adapter, the Python agent adapters, and the
-Electron/Vue wall, written during the event. None of these exists in the
-repository at this release: the component directories hold READMEs only
-[CITED: tree]. Planned runtime AI uses Meta models through the Meta Model
-API, plus any provider CLI the user chooses in the built-in terminal
-[TARGET; nothing implemented yet].
+The MetaViewer assembly implements the Rust authority core, Go daemon adapter,
+Python agent adapters and Electron/Vue wall. These were absent from the historical
+scaffold and now exist in the directories listed above [CITED: current tree;
+git `a01a420`, `e06d627`]. The claim concerns the product assembly; pre-event schema
+tooling and tests already contained executable code.
+
+Current integration includes observe/propose/verify, journal replay, capture,
+control handoff and the terminal. Host programs and attached desktop windows are
+not isolated; live display and external runtime prerequisites still apply.
+See [README.md](../README.md#isolation-and-evaluation-limits) for limitations.
