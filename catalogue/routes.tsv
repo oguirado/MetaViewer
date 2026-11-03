@@ -266,6 +266,9 @@ v027-window-close.md	changes/unreleased/v027-window-close.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
 v027win-bfdd59ead78f	changes/unreleased/v027-window-reuse-message.md
 v027-x64-evidence.md	changes/unreleased/v027-x64-evidence.md
+v028-docs-x64.md	changes/unreleased/v028-docs-x64.md
+v028-fit.md	changes/unreleased/v028-fit.md
+v028-tiles.md	changes/unreleased/v028-tiles.md
 vm-capsule-create.md	changes/unreleased/vm-capsule-create.md
 vm-microvm-roadmap.md	changes/unreleased/vm-microvm-roadmap.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
@@ -2201,6 +2204,11 @@ v027til-aec2d0c0bc3c	ui/test/v027-tile-chrome.test.js
 v027-u3c.test.js	ui/test/v027-u3c.test.js
 v027win-4af1694b2e2c	ui/test/v027-window-close-live-order.test.js
 v027win-4508650304ef	ui/test/v027-window-resize.test.js
+v028-fit-render.cjs	ui/test/v028-fit-render.cjs
+v028-fit.test.js	ui/test/v028-fit.test.js
+v028-tiles-visual.js	ui/test/v028-tiles-visual.js
+v028-tiles.html	ui/test/v028-tiles.html
+v028-tiles.test.js	ui/test/v028-tiles.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
 vmcapsu-38700e317c0c	ui/test/vm-capsule-open.test.js
 vmroles-63ae8c3ff1ea	ui/test/vm-role-status.test.js
