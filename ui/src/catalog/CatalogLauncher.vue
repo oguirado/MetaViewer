@@ -30,28 +30,30 @@ const emit = defineEmits(['update:visible', 'create', 'close']);
 
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
+const roleEdited = ref(false);
+const editedRoleChoice = ref('agent');
 const choosingProgram = ref(false), programBinary = ref(''), programRole = ref('human'), programError = ref(''), programBusy = ref(false);
 const choosingWindow = ref(false), windowSearch = ref(''), windowChoices = ref(/** @type {Array<{xid:number,witness:string,title:string,program:string,width:number,height:number}>} */ ([]));
 const windowChoiceXid = ref(0), windowError = ref(''), windowBusy = ref(false);
 const filteredWindows = computed(() => filterWindowCandidates(windowChoices.value, windowSearch.value));
-const selectedWindow = computed(() => windowChoices.value.find(w => w.xid === windowChoiceXid.value) || null);
+const selectedWindow = computed(() => filteredWindows.value.find(w => w.xid === windowChoiceXid.value) || null);
 let choiceGeneration = 0;
 watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
 const pendingIntent = ref(/** @type {any} */ (null));
 const profileChoices = ref(/** @type {Array<{role:string,profileId:string,available:boolean,currentMode?:string}>} */ ([]));
 const matchingProfiles = computed(() => profileChoices.value);
-watch(profileChoice, id => { roleChoice.value = profileChoices.value.find(p => p.profileId === id)?.role || 'agent'; });
+watch(profileChoice, id => { if (!roleEdited.value) roleChoice.value = profileChoices.value.find(p => p.profileId === id)?.role || 'agent'; });
 function confirmRole() {
   const profile = matchingProfiles.value.find(p => p.profileId === profileChoice.value);
-  if (/** @type {any} */ (profile)?.busy) return;
-  if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND' : 'NO_IDENTITY'; return; }
+  if (/** @type {any} */ (profile)?.busy) { roleError.value = 'SURFACE_CREATE_BUSY: A capsule is already starting. Wait for it to finish, then try again.'; return; }
+  if (!profile?.available) { roleError.value = profile ? 'PROFILE_ALREADY_BOUND: Check this identity in Identities and stop or reuse its existing capsule.' : 'NO_IDENTITY: Open Identities to add or check an available identity, then try Add capsule again.'; return; }
   emit('create', {...pendingIntent.value,choice:{role:roleChoice.value,profileId:profile.profileId}});
   choosingRole.value = false;
   emit('update:visible', false);
 }
 async function confirmProgram() {
   const result = buildCreateIntent({
-    kind: 'program',
+    kind: pendingIntent.value?.kind || 'program',
     placement: pendingIntent.value?.placement,
     binary: programBinary.value,
     ...(typeof programRole !== 'undefined' && programRole?.value ? { role: programRole.value } : {}),
@@ -96,6 +98,7 @@ async function confirmProgram() {
   }
 }
 function cancelProgram() {
+  if (programBusy.value) return;
   choosingProgram.value = false;
   programError.value = '';
   emit('update:visible', false);
@@ -153,6 +156,7 @@ async function confirmWindow() {
   }
 }
 function cancelWindow() {
+  if (windowBusy.value) return;
   if (typeof choosingWindow !== 'undefined') choosingWindow.value = false;
   if (typeof windowChoiceXid !== 'undefined') windowChoiceXid.value = 0;
   if (typeof windowError !== 'undefined') windowError.value = '';
@@ -182,8 +186,8 @@ function forwardVisible(value) {
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
-  if (payload?.type?.id === 'program') {
-    pendingIntent.value = { kind: 'program', placement: payload?.placement };
+  if (payload?.type?.id === 'program' || payload?.type?.id === 'host-program') {
+    pendingIntent.value = { kind: payload.type.id, placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
       programBinary.value = typeof payload?.binary === 'string' ? payload.binary : '';
       if (typeof programRole !== 'undefined') programRole.value = payload?.role === 'agent' ? 'agent' : 'human';
@@ -231,6 +235,7 @@ async function onCreate(payload) {
   if (!api || !['browser','identity-browser'].includes(result.intent.kind)) { emit('create', result.intent); return; }
   const generation = ++choiceGeneration;
   pendingIntent.value = result.intent; roleChoice.value = 'agent'; roleError.value = '';
+  if (typeof roleEdited !== 'undefined') roleEdited.value = false;
   profileChoices.value = []; profileChoice.value = '';
   choosingRole.value = true;
   try {
@@ -241,6 +246,7 @@ async function onCreate(payload) {
     profileChoice.value = matchingProfiles.value.find(p => p.available)?.profileId ?? '';
     roleChoice.value = profileChoices.value.find(p=>p.profileId === profileChoice.value)?.role || 'agent';
   } catch {if(!props.visible || generation !== choiceGeneration){choosingRole.value=false;return;}profileChoices.value = []; roleError.value = 'IDENTITY_LIST_UNAVAILABLE'; }
+  if (typeof roleEdited !== 'undefined' && roleEdited.value) roleChoice.value = editedRoleChoice.value;
 }
 
 function onClose() {
@@ -252,9 +258,9 @@ function onClose() {
 <template>
   <div v-if="choosingRole" class="mv-role-dialog" role="dialog" aria-modal="true" aria-label="Capsule role and identity">
     <h2>Capsule role and identity</h2>
-    <label>Role <select v-model="roleChoice" autofocus><option value="agent">Agent</option><option value="human">Human</option></select></label>
+    <label>Role <select v-model="roleChoice" autofocus @change="roleEdited = true; editedRoleChoice = roleChoice"><option value="agent">Agent</option><option value="human">Human</option></select></label>
     <label>Identity <select v-model="profileChoice"><option value="" disabled>Choose an available identity</option><option v-for="profile in matchingProfiles" :key="profile.profileId" :value="profile.profileId" :disabled="!profile.available">{{ profile.profileId }}{{ profile.available ? (profile.currentMode && profile.currentMode !== 'closed' ? ' — ' + profile.currentMode : '') : ' — unavailable' }}</option></select></label>
-    <p v-if="roleError" role="alert">{{ roleError }}</p>
+    <p v-if="roleError" role="alert">{{ roleError === 'IDENTITY_LIST_UNAVAILABLE' ? 'IDENTITY_LIST_UNAVAILABLE: Open Identities to check the identity list, then try Add capsule again.' : roleError }}</p>
     <button type="button" @click="confirmRole">Open capsule</button>
     <button type="button" @click="choosingRole = false; emit('update:visible', false)">Cancel</button>
   </div>
@@ -267,7 +273,8 @@ function onClose() {
     aria-modal="true"
     aria-label="Program capsule"
   >
-    <h2>Program</h2>
+    <h2>{{ pendingIntent?.kind === 'host-program' ? 'Host program' : 'Program' }}</h2>
+    <p v-if="pendingIntent?.kind === 'host-program'">Runs on your computer — not isolated. Browsers use a fresh temporary profile in RAM, never your personal profile.</p>
     <label for="shell/new-capsule/program-role">Role</label>
     <select
       id="shell/new-capsule/program-role"
@@ -304,6 +311,7 @@ function onClose() {
       id="shell/new-capsule/program-cancel"
       data-semantic-anchor="dialog/new-capsule/program-cancel"
       type="button"
+      :disabled="programBusy"
       @click="cancelProgram"
     >Cancel</button>
   </div>
@@ -376,6 +384,7 @@ function onClose() {
       id="shell/new-capsule/window-cancel"
       data-semantic-anchor="dialog/new-capsule/window-cancel"
       type="button"
+      :disabled="windowBusy"
       @click="cancelWindow"
     >Cancel</button>
   </div>

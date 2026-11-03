@@ -26,12 +26,17 @@ I verify MetaViewer across six overlapping layers:
 
 1. **The local eleven-leg gate** (`bash tools/gate.sh`) and its **self-test** (`bash tools/gate.sh --self-test`).
 2. **Live gates** against a real running capsule (`node tests/e2e/e2e1_slice/index.js --live`, `python3 tools/gate_g_ai.py --surface mv-live-1`).
-3. **End-to-end journeys** in real headless Electron (`tests/e2e/run.py`, `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files under `tests/e2e/*.test.js`, and `3` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack suites under `tests/e2e/test_*.py`).
+3. **End-to-end journeys** in real headless Electron (`tests/e2e/run.py`, `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files under `tests/e2e/*.test.js`, and `6` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack suites under `tests/e2e/test_*.py`).
 4. **Hosted CI and nightly/soak workflows** (`20` jobs across `6` workflows [MEASURED: job keys below `jobs:` in `.github/workflows/*.yml`], gated by `ci-required`; assembly is a separate pinned-component smoke workflow).
 5. **Mutation proofs, budget gate, and negative controls** (`tests/test_contract_mutants.py`, `agents/tests/run_mutant_harness.py`, `tests/supervisor/check_mutations.py`, `tools/budget_gate.py --self-test`, and `tools/gate.sh --self-test`).
 6. **External testers** (two independent external testers across three adversarial rounds).
 
-I measure source inventories on commit `5226718ae` [MEASURED: `git rev-parse --short HEAD`] (`977` commits [MEASURED: `git rev-list --count HEAD`], version `0.1.2` [MEASURED: `cat VERSION`]). I retain execution totals and pass results below as historical measurements recorded in this document at `a768a684` [CITED: prior document snapshot]; I do not claim those totals or live performance for this head. Current-head execution results are AUSENTE until rerun. Source counts and commands are verified separately.
+The current candidate is **0.2.4** [CITED: `../VERSION`]. E2E source inventories
+below are measured from this tree; execution totals and pass results attributed to
+`a768a684` are historical [CITED: prior document snapshot]. Those totals do not
+establish a pass or live performance for the current assembly. Run the full gate
+and its self-test before integration; run live acceptance separately. See
+[README.md](../README.md#isolation-and-evaluation-limits) for display and runtime limits.
 
 ---
 
@@ -112,11 +117,11 @@ In the measured live End-to-End slice (`live21`), `1` `[MEASURED]` live capsule 
 
 ### Inventory of E2E suites
 
-`tests/e2e/` contains `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files (`tests/e2e/*.test.js`) and `3` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack test files (`tests/e2e/test_*.py`).
+`tests/e2e/` contains `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files (`tests/e2e/*.test.js`) and `6` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack test files (`tests/e2e/test_*.py`).
 
-`tests/e2e/run.py` syncs `capsule-ui-kit` (`node tools/sync_kit.mjs`), builds the E2E bundle (`node tests/e2e/build.mjs`), globs all `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `sorted((ROOT / "tests/e2e").glob("*.test.js"))` files and runs them sequentially under `node --test --test-concurrency=1`, and then runs the cross-routing negative control (`MV_E2E_CROSS_ROUTE=1` on `tests/e2e/e2e1_wall.test.js`, verifying `is_cross_route_mutant_killed` on `"wall renders four tiles without cross-routing (AC-02)"` with `E2E_ROUTING`).
+`tests/e2e/run.py` syncs `capsule-ui-kit` (`node tools/sync_kit.mjs`), builds the E2E bundle (`node tests/e2e/build.mjs`), globs all `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `sorted((ROOT / "tests/e2e").glob("*.test.js"))` files and runs them sequentially under `node --test --test-concurrency=1`, and then runs the cross-routing negative control (`MV_E2E_CROSS_ROUTE=1` on `tests/e2e/e2e1_wall.test.js`, verifying `is_cross_route_mutant_killed` on `"wall renders four tiles without cross-routing (AC-02)"` with `E2E_ROUTING`).
 
-#### Node E2E journey files executed by `tests/e2e/run.py` (`37` files)
+#### Selected Node E2E journeys executed by `tests/e2e/run.py`
 
 1. `tests/e2e/ac02_oracle_regression.test.js` — AC-02 pixel oracle regression checks on rendered canvas surfaces.
 2. `tests/e2e/ac02_wall.test.js` — AC-02 wall pixel verification journey.
@@ -176,7 +181,7 @@ node tools/sync_kit.mjs /path/to/capsule-ui-kit
 
 #### Step 2: Run the full E2E orchestrator (`tests/e2e/run.py`)
 
-`tests/e2e/run.py` automatically syncs `capsule-ui-kit`, builds the E2E fixture bundle via `tests/e2e/build.mjs`, runs all `37` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `tests/e2e/*.test.js` suites under Xvfb, and then runs the `MV_E2E_CROSS_ROUTE=1` negative control on `tests/e2e/e2e1_wall.test.js`:
+`tests/e2e/run.py` automatically syncs `capsule-ui-kit`, builds the E2E fixture bundle via `tests/e2e/build.mjs`, runs all `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `tests/e2e/*.test.js` suites under Xvfb, and then runs the `MV_E2E_CROSS_ROUTE=1` negative control on `tests/e2e/e2e1_wall.test.js`:
 
 ```sh
 CAPSULE_UI_KIT_REPO=/path/to/capsule-ui-kit \

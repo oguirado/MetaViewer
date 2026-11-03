@@ -58,6 +58,33 @@ def provenance_faults(site_dir, workflow):
     return faults
 
 
+def packaged_runtime(repo, home):
+    """[TARGET, unit decision] Sealed installed files admit external user data.
+
+    Developer checkouts retain the original Git tracking/ignore gate.
+    """
+    packaged = not (repo / '.git').exists() and (repo / 'runtime.manifest.json').is_file()
+    if packaged:
+        try:
+            seal = json.loads((repo / 'runtime.manifest.json').read_text())
+            if (seal.get('schema') != 'metaviewer.operator-runtime/v1' or
+                    not isinstance(seal.get('files'), dict) or
+                    not {'deps.lock', 'VERSION', 'tools/mw_home_check.py'} <= set(seal['files']) or
+                    home.is_relative_to(repo)):
+                raise HomeError('MW_HOME_PATH')
+            for relative, expected in seal['files'].items():
+                file = repo / relative
+                if (Path(relative).is_absolute() or '..' in Path(relative).parts or
+                        file.is_symlink() or not file.is_file() or
+                        hashlib.sha256(file.read_bytes()).hexdigest() != expected):
+                    raise HomeError('MW_RUNTIME_HASH')
+        except HomeError:
+            raise
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            raise HomeError('MW_RUNTIME_HASH') from error
+    return packaged
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -72,7 +99,12 @@ def main(argv=None):
             raise HomeError("MW_HOME_GIT") from error
         home = canonical_home(resolve_home(repo, args.home))
 
+        packaged = packaged_runtime(repo, home)
+
         def tracked(path):
+            if packaged:
+                return path.is_relative_to(repo)
+
             selectors = {"memoryweb"}
             if path.is_relative_to(repo):
                 selectors.add(path.relative_to(repo).as_posix())
@@ -86,7 +118,7 @@ def main(argv=None):
 
         if tracked(home):
             raise HomeError("MW_HOME_TRACKED")
-        rc = git(repo, "check-ignore", "-q", "memoryweb/x")
+        rc = 0 if packaged else git(repo, "check-ignore", "-q", "memoryweb/x")
         if rc == 1:
             raise HomeError("MW_HOME_NOT_IGNORED")
         if rc != 0:

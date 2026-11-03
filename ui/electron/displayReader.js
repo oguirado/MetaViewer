@@ -10,6 +10,8 @@
  * tile, pauses while the tile is hidden or folded, reopens on generation or
  * inode changes, emits stale after 2 s without `capture_mono_ns` advancing,
  * and falls back to VERIFIED-only rendering when the ring file is absent.
+ * [TARGET, unit decision] Offer endpoints on guarded open before frame I/O; replacement demand
+ * permits one validated repaint without advancing capture liveness.
  *
  * @module displayReader
  */
@@ -199,13 +201,14 @@ function convertSlotToRgb24(slotBuf, spec) {
  *   surfaceId: string,
  *   uid: number,
  *   statfsFn: typeof nodeStatfs,
+ *   onOpened?: () => void,
  * }} params
  * @returns {Promise<
  *   | { ok: true, handle: import('node:fs/promises').FileHandle, stat: import('node:fs').Stats, path: string }
  *   | { ok: false, reason: string }
  * >}
  */
-export async function openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn }) {
+export async function openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn, onOpened }) {
   const effectiveUid =
     typeof uid === 'number' ? uid : typeof process.getuid === 'function' ? process.getuid() : -1;
   const effectiveStatfs = statfsFn ?? nodeStatfs;
@@ -341,6 +344,7 @@ export async function openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn
       }
       let sfs;
       try {
+        onOpened?.();
         sfs = await effectiveStatfs(ringPath);
       } catch {
         await fh.close().catch(() => {});
@@ -391,6 +395,7 @@ export async function openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn
  *   }) => void,
  *   onState?: (state: 'active' | 'stale' | 'absent', generation: string) => void,
  *   onRefusal?: (reason: string) => void,
+ *   onRingOpened?: () => void,
  *   onBeforeHeaderReRead?: (info: { seq: bigint, slotIndex: number }) => Promise<void> | void,
  * }} options
  */
@@ -432,6 +437,9 @@ export function createDisplayReader(options) {
   const onFrame = typeof options.onFrame === 'function' ? options.onFrame : null;
   const onState = typeof options.onState === 'function' ? options.onState : null;
   const onRefusal = typeof options.onRefusal === 'function' ? options.onRefusal : null;
+  function onOpened() {
+    if (!closed && visible) options.onRingOpened?.();
+  }
   const onBeforeHeaderReRead =
     typeof options.onBeforeHeaderReRead === 'function' ? options.onBeforeHeaderReRead : null;
 
@@ -449,6 +457,9 @@ export function createDisplayReader(options) {
   let lastCaptureMonoNs = null;
   /** @type {number | null} */
   let lastAdvanceAtMs = null;
+  // [TARGET, unit decision] A replacement endpoint needs one validated read,
+  // even for a static capture. Delivery demand never resets capture liveness.
+  let repaintRequested = false;
   /** @type {'absent' | 'active' | 'stale'} */
   let currentState = 'absent';
 
@@ -578,7 +589,7 @@ export function createDisplayReader(options) {
       }
 
       if (openHandle === null) {
-        const opened = await openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn });
+        const opened = await openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn, onOpened });
         if (!opened.ok) {
           if (opened.reason === DISPLAY_READER_REASONS.RING_ABSENT) {
             lastGeneration = null;
@@ -619,7 +630,7 @@ export function createDisplayReader(options) {
       if (lastGeneration !== null && h1.generation !== lastGeneration) {
         await closeHandle();
         reopens += 1;
-        const reopened = await openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn });
+        const reopened = await openGuardedRingFile({ runtimeDir, surfaceId, uid, statfsFn, onOpened });
         if (!reopened.ok) {
           if (reopened.reason !== DISPLAY_READER_REASONS.RING_ABSENT) {
             recordRefusal(reopened.reason);
@@ -665,6 +676,7 @@ export function createDisplayReader(options) {
       }
 
       if (
+        !repaintRequested &&
         lastGeneration === h1.generation &&
         lastSeq === h1.seq &&
         lastCaptureMonoNs === h1.captureMonoNs
@@ -717,15 +729,16 @@ export function createDisplayReader(options) {
       lastSeq = h1.seq;
       lastCaptureMonoNs = h1.captureMonoNs;
 
-      if (!monoAdvanced) {
+      if (!monoAdvanced && !repaintRequested) {
         checkStaleness(nowAfterRead);
         return { ok: false, reason: DISPLAY_READER_REASONS.UNCHANGED };
       }
 
-      lastAdvanceAtMs = nowAfterRead;
+      repaintRequested = false;
+      if (monoAdvanced) lastAdvanceAtMs = nowAfterRead;
       const rgbBytes = convertSlotToRgb24(scratchSlotBuf, h1);
       framesRead += 1;
-      transitionState('active');
+      if (monoAdvanced) transitionState('active');
       // Preserve the ring u64 identity across structured clone. UnixNano
       // generations exceed Number.MAX_SAFE_INTEGER in real tap sessions.
       const frame = Object.freeze({
@@ -743,6 +756,14 @@ export function createDisplayReader(options) {
           onFrame(frame);
         } catch {
           /* ignore consumer fault */
+        }
+      }
+      // Send stale after the replay so the renderer cannot treat delivery as
+      // proof of a new capture, including when this reader was already stale.
+      if (!monoAdvanced) {
+        const wasStale = currentState === 'stale';
+        if (checkStaleness(nowAfterRead) && wasStale && onState !== null) {
+          try { onState('stale', String(lastGeneration)); } catch { /* consumer fault */ }
         }
       }
       return { ok: true, frame };
@@ -856,6 +877,7 @@ export function createDisplayReader(options) {
     stop,
     setVisible,
     readOnce,
+    requestRepaint() { repaintRequested = true; },
     close,
     getInstrumentation,
   });
@@ -863,9 +885,8 @@ export function createDisplayReader(options) {
 
 /**
  * Host coordinator managing per-surface `displayReader` and `createDisplayPort`
- * instances in `hostBindings.js`. Allocates a `MessageChannel` only once a
- * surface has an active valid ring file, so VERIFIED-only surfaces incur zero
- * port transfers.
+ * instances in `hostBindings.js`. Offers a channel on guarded ring open;
+ * only validated reads can publish DISPLAY pixels on that channel.
  *
  * @param {{
  *   root: string,
@@ -1024,6 +1045,7 @@ export function createDisplayHost(options) {
     entry.announced = false; // advisory for unsolicited offers only
     entry.rendererVisible = true;
     entry.reader.setVisible(entry.hostVisible);
+    entry.reader.requestRepaint();
     ensurePortChannel(surfaceId);
     return true;
   }
@@ -1047,6 +1069,7 @@ export function createDisplayHost(options) {
         clock: options?.clock,
         setTimer: options?.setTimer,
         clearTimer: options?.clearTimer,
+        onRingOpened: () => { ensurePortChannel(surfaceId); },
         onFrame: (frame) => {
           const dp = ensurePortChannel(surfaceId);
           dp?.postDisplayFrame(frame);

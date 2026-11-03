@@ -23,8 +23,7 @@ product features may name their runtime dependencies without author attribution.
 
 ## Versions and tags
 
-Per L2, `VERSION` is the source of semantic versioning, initially **0.1.0**
-[CITED: VERSION]. Tags are `v<VERSION>`. Every tag requires a dated changelog
+Per L2, `VERSION` is the source of semantic versioning [CITED: `../LAWS.md` L2]. Tags are `v<VERSION>`. Every tag requires a dated changelog
 section with the exact version. An unreleased entry is acceptable before a tag;
 replace `unreleased` with the actual release date before tagging. Component pins
 belong in `deps.lock`; a commit changing a pin must use `deps:`.

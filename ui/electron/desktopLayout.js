@@ -54,7 +54,7 @@ export function validateDesktopState(state, validateLayout = (_layout) => false)
 }
 /** @param {DesktopState} state @param {string} view */
 export function addDesktop(state, view = state.activeView) {
-  const group = state.views[view], id = group.desktops.length + 1;
+  const group = state.views[view], id = group.next;
   if (group.desktops.length >= MAX_DESKTOPS_PER_VIEW || !number(id + 1)) throw Error('DESKTOP_LIMIT');
   group.next = id + 1; group.desktops.push({id,preset:null,layout:null}); group.active = id;
   return id;

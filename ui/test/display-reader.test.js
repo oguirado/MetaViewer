@@ -1474,6 +1474,86 @@ test('DISPLAY pull replaces lost ports, bounds requests, and parks unbound reade
   } finally { router.dispose(); for(const p of retired)p.close(); await host.dispose(); writer.close(); rt.cleanup(); }
 });
 
+test('DISPLAY pull announces the initial port before a delayed first ring read', async () => {
+  const rt = makeTmpfsRuntimeDir();
+  const writer = createFakeRingWriter({displayDir:rt.displayDir,surfaceId:'slow-pull',width:2,height:1});
+  const opened = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  const host = createDisplayHost({root:rt.xdgDir,statfs:async () => {
+    opened.resolve();
+    await release.promise;
+    return {type:0x01021994};
+  }});
+  const ports = [];
+  host.subscribePorts(({port}) => ports.push(port));
+  try {
+    writer.writeFrame(Buffer.alloc(6,7),1n,1n);
+    host.updateSurface({surface_id:'slow-pull',state:'active',visibility:'unfolded'});
+    host.setSubscribed(true);
+    await opened.promise;
+    assert.equal(ports.length,1,'initial offer must precede asynchronous ring I/O');
+    assert.equal(host.requestPort('slow-pull'),true);
+    assert.equal(ports.length,2,'pull must replace the lost initial offer even before the first frame');
+  } finally {
+    release.resolve();
+    for (const port of ports) port.close();
+    await host.dispose(); writer.close(); rt.cleanup();
+  }
+});
+
+test('DISPLAY pull replays a static frame after replacement without refreshing capture liveness', async () => {
+  const rt = makeTmpfsRuntimeDir();
+  const writer = createFakeRingWriter({displayDir:rt.displayDir,surfaceId:'static-pull',width:2,height:1});
+  const timers = new Map();
+  let nextTimer = 0, now = 0;
+  const host = createDisplayHost({root:rt.xdgDir,clock:()=>now,
+    setTimer:cb=>{timers.set(++nextTimer,cb);return nextTimer;},clearTimer:id=>timers.delete(id)});
+  const router = installDisplayPortRouter({target:null});
+  const firstFrame = Promise.withResolvers();
+  const retired = [];
+  let offers = 0;
+  host.subscribePorts(({surfaceId,port}) => {
+    if (++offers === 1) {
+      retired.push(port);
+      port.addEventListener('message',event=>{
+        if (event.data.kind === 'display_frame') firstFrame.resolve(event.data);
+      });
+      port.start();
+    } else router.receiveNotice({type:DISPLAY_PORT_NOTICE_TYPE,schema:DISPLAY_PORT_NOTICE_SCHEMA,surface_id:surfaceId},[port]);
+  });
+  const painted = [];
+  router.bindSurface({surfaceId:'static-pull',onFrame:frame=>{painted.push(frame);return true;}});
+  async function poll() {
+    // Drain the completed read's finally handler before advancing its fake timer.
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(timers.size,1,'exactly one scheduled reader poll');
+    const [id,callback] = [...timers][0]; timers.delete(id); callback();
+    // A port message is posted before the next poll is scheduled. Wait for both.
+    while (timers.size === 0) await new Promise(resolve=>setImmediate(resolve));
+    await new Promise(resolve=>setImmediate(resolve));
+  }
+  try {
+    writer.writeFrame(Buffer.from([1,2,3,4,5,6]),1n,1n);
+    host.updateSurface({surface_id:'static-pull',state:'active',visibility:'unfolded'});
+    host.setSubscribed(true);
+    const original = await firstFrame.promise;
+    assert.equal(painted.length,0);
+    assert.equal(host.requestPort('static-pull'),true);
+    now = 2500;
+    await poll();
+    assert.equal(painted.length,1,'replacement must paint the unchanged capture');
+    assert.equal(painted[0].seq,original.seq);
+    assert.equal(painted[0].captureMonoNs,original.captureMonoNs);
+    assert.deepEqual(painted[0].bytes,original.bytes);
+    assert.equal(host.getReaderInstrumentation('static-pull').state,'stale','replay is not a new capture');
+    await poll();
+    assert.equal(painted.length,1,'ordinary unchanged polls remain deduplicated');
+  } finally {
+    router.dispose(); for (const port of retired) port.close();
+    await host.dispose(); writer.close(); rt.cleanup();
+  }
+});
+
 test('DISPLAY router retries bind before subscription; unbind mutant fails', async () => {
   const source = readFileSync(new URL('../src/frames/displayPortRouter.js',import.meta.url),'utf8');
   async function exercise(install) {

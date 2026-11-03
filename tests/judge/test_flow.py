@@ -419,6 +419,21 @@ class TestRun(FlowCase):
         self.assertIn("JUDGE_DISPLAY", res.codes)
         self.assertFalse((self.sb.fake / "app_env.txt").exists())
 
+    def test_compiled_runtime_env_does_not_pretend_to_be_checkouts(self):
+        sc.installed(self.sb, t2=True)
+        self.sb.make_t2_ready()
+        for name, executable in [('wender-agent', 'wender-runtime'), ('vision-engine', 'vision-runtime')]:
+            path = self.sb.jh / 'deps' / name / executable
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('#!/bin/sh\nexit 0\n')
+            path.chmod(0o755)
+        self.ok(self.sb.judge('run'))
+        env = dict(line.split('=', 1) for line in (self.sb.fake / 'app_env.txt').read_text().splitlines() if '=' in line)
+        self.assertEqual(env['MV_WENDER_EXECUTABLE'], str(self.sb.jh / 'deps/wender-agent/wender-runtime'))
+        self.assertEqual(env['MV_VISION_EXECUTABLE'], str(self.sb.jh / 'deps/vision-engine/vision-runtime'))
+        self.assertNotIn('MV_WENDER_ROOT', env)
+        self.assertNotIn('VQA_VE_ROOT', env)
+
     def test_second_run_while_running_is_refused(self):
         sc.installed(self.sb)
         self.sb.spawn_run()
@@ -482,6 +497,17 @@ class TestStop(FlowCase):
         for what in ("container srf-id-left", "socket", "RAM entry", "admission record"):
             self.assertIn("JUDGE_STOP_LEAK: " + what, res.err)
         self.assertNotIn("JUDGE_STOP_CLEAN", res.out)
+
+    def test_stop_removes_ram_of_a_gone_capsule_and_keeps_a_live_one(self):
+        sc.installed(self.sb)
+        self.sb.put("containers", "srf-id-live\n")
+        ram = self.sb.shm / "vqa-ramws" / "opensuperficies" / "os-cu-0"
+        (ram / "srf-id-gone").mkdir(parents=True)
+        (ram / "srf-id-live").mkdir()
+        res = self.sb.judge("stop")
+        self.assertFalse((ram / "srf-id-gone").exists())
+        self.assertTrue((ram / "srf-id-live").exists())
+        self.assertIn("JUDGE_STOP_LEAK: RAM entry", res.err)
 
     def test_stop_stops_scoped_capsules_without_global_net_down(self):
         sc.installed(self.sb, t2=True)

@@ -1,0 +1,7 @@
+- Protect unsupported or unreadable terminal-deck storage from overwrite, and reject overflowing saved screens without truncating slots (V027-LP01, V027-LP04).
+- Recheck terminal capacity after broker attachment and close excess sessions before sending custom commands (V027-TD01).
+- Copy the pasted bootstrap capsule identity into workflow prompts while retaining prompt safety validation (V027-TD02).
+- Bound fallback output to a retained tail of 64 Ki UTF-16 code units per session [TARGET, unit decision] and delete it when slots close or the view unmounts (V027-TD05).
+- Refuse custom CLI launches without a writable session and close their opened shells (V027-TD07).
+- Clear busy-close confirmation on process exit (V027-TD03).
+- Drop V027-TD06 host-entry cleanup for exited injected-facade sessions to preserve the existing close lifecycle contract: closing naturally exited tiles does not issue another broker close.

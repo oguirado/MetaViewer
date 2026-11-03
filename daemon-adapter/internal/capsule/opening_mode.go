@@ -90,6 +90,7 @@ func (r *ProcessRunner) consumeOpeningRequest(profile string, target string) (st
 		Profile    string          `json:"profile_id"`
 		Mode       string          `json:"mode"`
 		HostBinary string          `json:"host_binary,omitempty"`
+		HostXpra   bool            `json:"host_xpra,omitempty"`
 		HostWindow *HostWindowSpec `json:"host_window,omitempty"`
 	}
 	if err := cli.ParseLine(raw, 2048, &q); err != nil {
@@ -97,6 +98,12 @@ func (r *ProcessRunner) consumeOpeningRequest(profile string, target string) (st
 	}
 	if q.Schema != "metaviewer.opening_mode/v0.3" || q.Profile != profile || (q.Mode != "human" && q.Mode != "agent") {
 		return "", "", nil, false, fault("configuration", "opening mode refused")
+	}
+	if target == "host-xpra" && !q.HostXpra {
+		return "", "", nil, false, nil
+	}
+	if q.HostXpra && target != "host-xpra" {
+		return "", "", nil, false, fault("configuration", "host-xpra opening requires host program target")
 	}
 	if target == "program" && q.HostWindow != nil && q.HostBinary == "" {
 		return "", "", nil, false, nil
@@ -218,4 +225,18 @@ func ResolveHostBinary(raw string, pathEnv string) (string, error) {
 		}
 	}
 	return "", fault("host_program_unavailable", "host_program_unavailable: "+trimmed+": not found in PATH")
+}
+
+func (r *ProcessRunner) ConsumeOpeningHostXpra(profile string) (string, string, error) {
+	mode, binary, window, found, err := r.consumeOpeningRequest(profile, "host-xpra")
+	if err != nil {
+		return "", "", err
+	}
+	if !found {
+		return "", "", nil
+	}
+	if binary == "" || window != nil {
+		return "", "", fault("configuration", "host-xpra binary required")
+	}
+	return binary, mode, nil
 }

@@ -1,0 +1,1 @@
+- Allow 30 s for the paste verify and text slot in the rehearsal workflow, matching its delivery budget.

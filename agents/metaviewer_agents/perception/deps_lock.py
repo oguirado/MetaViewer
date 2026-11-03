@@ -357,6 +357,10 @@ def resolve_locked_component(name: str, *, lock_path: str | Path | None = None) 
     wheel file fails closed with dirty_tree.
     """
     expected = _locked_commit(name, _LOCK_PATH if lock_path is None else Path(lock_path))
+    from .compiled import compiled_executable
+    executable = compiled_executable(name, lock_path=lock_path)
+    if executable is not None:
+        return executable.parent
     raw = os.environ.get(_ROOT_VARIABLES[name])
     if not raw or not raw.strip():
         raise DependencyLockError("unavailable", f"{_ROOT_VARIABLES[name]} is required")
