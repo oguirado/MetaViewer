@@ -94,7 +94,7 @@ FAKES = {
     "sysctl": '[ "$1" = -n ] && [ -f "$MV_FAKE_DIR/sysctl_$2" ] && { cat "$MV_FAKE_DIR/sysctl_$2"; exit 0; }\nexit 255\n',
     "ip": '[ "$1" = route ] && cat "$MV_FAKE_DIR/ip_route" 2>/dev/null\nexit 0\n',
     "xdpyinfo": 'exit "$(cat "$MV_FAKE_DIR/xdpyinfo_rc" 2>/dev/null || echo 0)"\n',
-    "python3": ('case "${1:-}" in */unpack_node.py) exec ' + shlex.quote(sys.executable) + ' "$@";; esac\n'
+    "python3": ('case "${1:-}" in -c|*/unpack_node.py) exec ' + shlex.quote(sys.executable) + ' "$@";; esac\n'
                 '[ "${1:-}" = -I ] && shift\nexec bash "$@"\n'),
     "apparmor_parser": 'echo "apparmor_parser $*" >> "$MV_FAKE_DIR/apparmor.log"\n',
     "iptables": "exit 0\n",
@@ -313,10 +313,13 @@ class Sandbox:
         ))
         self.put("network", "true 172.30.80.0/24 \n")
         self.put("proxy", "true\n")
-        store = self.home / "store" / "profiles" / "judge"
-        store.mkdir(parents=True, exist_ok=True)
-        store.chmod(0o700)
-        (self.fake / "owner.tbl").write_text(f"{store}|10001\n")
+        owners = []
+        for profile in ("judge", "mv-live-2", "mv-live-3", "mv-live-4"):
+            store = self.home / "store" / "profiles" / profile
+            store.mkdir(parents=True, exist_ok=True)
+            store.chmod(0o700)
+            owners.append(f"{store}|10001\n")
+        (self.fake / "owner.tbl").write_text("".join(owners))
 
     def install_profile(self):
         shutil.copyfile(JUDGE_SRC / "apparmor" / "metaviewer", self.apparmor / "metaviewer-judge")

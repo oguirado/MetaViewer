@@ -118,9 +118,10 @@ command and asking first (`--yes` answers for you in non-interactive runs). In o
    AppArmor userns profile only if Ubuntu restricts unprivileged user namespaces, and
    runs `--verify-install` and `--smoke` (ending with `METAVIEWER_MAIN_SMOKE_OK`).
 4. With `--capsules` (Tier 2): extracts `opensuperficies`, `vision-engine`, and
-   `wender-agent`; optionally installs the open-mode egress firewall (or falls back
-   to the `sudo`-free legacy Docker network `srf-idnet` if declined or passed
-   `--no-firewall`); loads `images-linux-<arch>.tar` into Docker; and provisions the
+   `wender-agent`; loads `images-linux-<arch>.tar` into Docker; then optionally
+   installs the open-mode egress firewall when the compatible browser image is
+   available (or falls back to the `sudo`-free legacy Docker network `srf-idnet`
+   if unavailable, declined, or passed `--no-firewall`); and provisions the
    profile directories (`judge` and `mv-live-1..mv-live-4`, mode `0700`, UID `10001`)
    **without `sudo`** via a local Docker bind-mount.
 5. Writes `judge_receipt.json` (architecture, core count, memory, versions, digests;
