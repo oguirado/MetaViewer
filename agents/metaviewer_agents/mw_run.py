@@ -23,7 +23,7 @@ caller never retries an input that may already have been delivered, while
 recording the expired deadline on the diagnostic field.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 import importlib.util
 import json
 import math
@@ -35,6 +35,8 @@ import stat
 import sys
 import time
 import uuid
+
+from metaviewer_agents.mw_refusals import RefusalOutput
 
 WALL_DEADLINE_CODE = 'MW_WALL_DEADLINE'
 WALL_DEADLINE_RC = 6
@@ -386,7 +388,7 @@ def main(argv=None, *, runner=None):
         runner = host.run_entry
     budget_s = resolve_wall_deadline_s(args)
     args.wall_deadline_mono_ns = time.monotonic_ns() + int(budget_s * 1e9)
-    with wall_deadline(budget_s):
+    with redirect_stdout(RefusalOutput(sys.stdout, sys.stderr)), wall_deadline(budget_s):
         try:
             return runner(args)
         except WallDeadlineError as error:
