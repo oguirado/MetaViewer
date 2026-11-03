@@ -2,3 +2,4 @@
 - Explain core-only capsule failures and guide new users through identities and the Humans and Agents views.
 - A failed first capsule shows a notice that does not freeze the running app.
 - A failed start exits after its notice instead of waiting on a modal.
+- The startup notice return type passes the type check.

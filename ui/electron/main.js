@@ -57,7 +57,7 @@ const bootedAdapters = new WeakSet();
  * @param {unknown} dialog Trusted Electron dialog handle.
  * @param {unknown} error Failure.
  * @param {'boot'|'create'} phase Startup phase.
- * @returns {Promise<void>|undefined} Settles when the notice closes.
+ * @returns {Promise<unknown>|undefined} Settles when the notice closes.
  */
 export function showStartupFailure(dialog, error, phase) {
   const rawCode = /** @type {{code?:unknown}|null} */ (error)?.code;
