@@ -229,6 +229,8 @@ type Manager struct {
 	identityDisplays []string
 	dynamicProfiles  map[string]bool
 	hostSeq          map[string]uint64
+	// Test seam for native startup; installed before any manager operation.
+	hostXpraStart func(context.Context, *ProcessRunner, string, string, string) (*hostXpraProcess, error)
 }
 
 var profileID = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
@@ -1078,11 +1080,23 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 			return nil, e
 		}
 	}
+	// A resident capture may have finalized this binding while the drain ran.
+	// Never restore the pre-drain copy or stop a proven-absent native again.
+	b = m.bindings[q.SurfaceID]
+	if b.Surface.State == "destroyed" {
+		m.releaseIdleIdentityProfile(b.Surface.ProfileID)
+		return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
+	}
 	if m.cfg.View != nil && m.views[b.Container] {
-		delete(m.views, b.Container)
 		m.mu.Unlock()
-		_ = m.cfg.View.Stop(ctx, b.Container)
+		err := m.cfg.View.Stop(ctx, b.Container)
 		m.mu.Lock()
+		if err != nil {
+			b.Surface.State = "lost"
+			m.bindings[q.SurfaceID] = b
+			return nil, err
+		}
+		delete(m.views, b.Container)
 	}
 	// Stop may have effects even without a usable receipt. Keep the binding lost
 	// until verified removal; never reopen input/capture after an uncertain stop.

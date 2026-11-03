@@ -465,6 +465,11 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		close(pipeCh)
 		wg.Wait()
 		t.cancel()
+		// Capture can enqueue a resident payload just before cancellation wins
+		// the publication handoff. Both stages are drained before releasing it.
+		if source, ok := s.source.(interface{ Forget(string) }); ok {
+			source.Forget(id)
+		}
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.tasks[id] == t {
