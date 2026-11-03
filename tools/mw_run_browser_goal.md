@@ -80,3 +80,17 @@ operator's pinned root. `MW_COMPILED_BROWSER_UNAVAILABLE` requires the checkout
 route described above. Some unexpected missing private modules can escape as a
 traceback without a JSON report; stop and provide the diagnostic to the operator.
 Stored `--site` / `--workflow` behavior is unchanged.
+
+[TARGET, unit decision] Optional Enter retains its real whole-surface change
+expectation. Both planners use this same path; a caret phase or another pixel
+change can satisfy it, while a page with no Enter effect can fail it. A prior
+Muse pass does not establish a different key implementation or form submission.
+A terminal core `VERIFICATION_FAILED` for Enter is now
+`MW_PROGRAM_NO_VISIBLE_EFFECT` (rc 6 [TARGET]), with a persisted
+`key_effect_unverified` attempt and no verified key move. It proves neither key
+delivery nor submission: the frozen error projection has no native input
+witness. `delivery_verified` remains null and `effect_verified` is false.
+A timeout or transport failure still means `INPUT_UNCERTAIN`; no key is retried.
+For a delivered no-op, effect verification is the unmet requirement, not proof
+of wrong input. This runner cannot certify delivery from the terminal error
+alone and therefore does not turn it into a successful action.

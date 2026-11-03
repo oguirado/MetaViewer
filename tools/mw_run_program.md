@@ -349,3 +349,18 @@ target measured retention, authentication and comparison over twenty calls:
 10.102 ms minimum, 11.227 ms median, 14.068 ms maximum [MEASURED]. This excludes
 publication acquisition, custody discovery and dispatch; runtime `frame_rebinds`
 provide acquisition and comparison timings for subsequent operator runs.
+
+[TARGET, unit decision] OCR similarity never certifies input. Literal exact words
+retain `exact`; near matches use `not_readable` and the existing explicit
+uncertified verdict. Similarity uses case-sensitive SequenceMatcher with
+`autojunk=False`, a threshold of 0.85 [TARGET], a minimum requested length of
+8 characters [TARGET], and at least one exact word. Focused mode compares
+contiguous spans with the requested word count. Case-only disagreement and
+new sentence punctuation retain mismatch. Wrong unrelated text still refuses.
+The report and attempt expose actual `readback_text`, capped at 4096 characters
+[TARGET]; missing readback is null.
+
+The supplied gedit RGB pair changes the title at rows 20–29, editor text at
+51–72 and status at 876–887 [MEASURED]. The bounding union consequently covers
+[33,20,1172,868] [MEASURED]. It is retained: absent a grounded focused-field
+boundary, selecting the editor band would assume which change is input.
