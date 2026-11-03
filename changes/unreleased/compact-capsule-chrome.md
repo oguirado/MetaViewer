@@ -1,0 +1,4 @@
+- Collapse capsule tools and frame witnesses into geometry-stable overlays, retaining visible isolation warnings and native-view occlusion.
+- Collapse authority activity by default and retain its bounded, accessible receipt list.
+- Reserve a capability-driven header slot for native state controls without rendering unsupported actions.
+- Scope tile chrome occlusion to its own native view while preserving global modal ownership and neighboring live views.

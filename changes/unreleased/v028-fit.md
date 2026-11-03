@@ -1,0 +1,1 @@
+- Fit capsules to their tile without black bars; the tile background fills any aspect difference, and the Interactive banner and footer stay readable when narrow.

@@ -43,7 +43,7 @@ const listId = mvActivityListDomId();
 const listAnchor = mvActivityListAnchor();
 const emptyText = MV_ACTIVITY_EMPTY_TEXT;
 
-const expanded = ref(true);
+const expanded = ref(false);
 const rows = computed(() => {
   const feed = Array.isArray(props.entries) ? props.entries : [];
   const normalized = [];
@@ -66,8 +66,9 @@ function toggle() {
     <div class="mv-activity__bar">
       <UiButton :id="toggleId" :data-semantic-anchor="toggleAnchor" label="Activity" :aria-expanded="expanded" @click="toggle" />
       <span class="mv-activity__count" aria-hidden="true">{{ countText }}</span>
+      <span v-if="!rows.length" class="mv-activity__empty">{{ emptyText }}</span>
     </div>
-    <ol v-if="expanded" :id="listId" class="mv-activity__list" :data-semantic-anchor="listAnchor" role="log" tabindex="0" :aria-label="listName">
+    <ol v-if="expanded && rows.length" :id="listId" class="mv-activity__list" :data-semantic-anchor="listAnchor" role="log" tabindex="0" :aria-label="listName">
       <li v-if="!rows.length" class="mv-activity__empty">{{ emptyText }}</li>
       <li v-for="entry in rows" :key="entry.seq" :id="mvActivityRowDomId(entry.seq)" class="mv-activity__row" :data-semantic-anchor="mvActivityRowAnchor(entry.seq)" :data-activity-type="entry.type" :data-activity-tone="entry.tone">{{ entry.text }}</li>
     </ol>
