@@ -172,6 +172,8 @@ export const HANDOFF_DISCOVERY=Object.freeze({maxScan:4096,maxRuns:32,maxAgeMs:6
 // [TARGET, unit decision] File age is checked against this Electron process,
 // not watcher installation or run-directory mtime. Older records need both the
 // adapter's exact surface binding and a currently running identity container.
+// spawnSync blocks the main thread for up to 2 s, so an unavailable witness is retried slowly.
+const HANDOFF_WITNESS_RETRY_MS=30000;
 const HANDOFF_SESSION_START=Date.now()-process.uptime()*1000;
 /** @param {NodeJS.ProcessEnv} env @returns {Map<string,number>|null} */
 function runningHandoffContainers(env) {
@@ -179,7 +181,8 @@ function runningHandoffContainers(env) {
   const reply=spawnSync('docker',['ps','--format','{{.Names}}'],options);
   if(reply.error || reply.status!==0)return null;
   const names=reply.stdout.trim().split('\n').filter(name=>/^srf-(id|pg)-[a-z0-9][a-z0-9-]{0,63}$/.test(name));
-  if(!names.length || names.length>HANDOFF_DISCOVERY.maxLatched)return null;
+  if(!names.length)return new Map();
+  if(names.length>HANDOFF_DISCOVERY.maxLatched)return null;
   const inspected=spawnSync('docker',['inspect','--format','{{.Name}} {{.State.Running}} {{.State.StartedAt}}',...names],options);
   if(inspected.error || inspected.status!==0)return null;
   /** @type {Map<string,number>} */const running=new Map();
@@ -201,10 +204,12 @@ function survivingHandoff(env,record,modified,containers) {
         && typeof b.run_id==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(b.run_id)
         && (b.container==='srf-id-'+b.profile_id || b.container==='srf-pg-'+b.profile_id);
       if(!valid)return null;
-      const started=containers()?.get(b.container);
-      // [TARGET, unit decision] Only a witnessed replacement is final. Missing,
-      // partial or unavailable binding/container evidence is retried on refresh.
-      return started===undefined?null:started<=modified;
+      const running=containers();
+      // [TARGET, unit decision] Docker answering is final: a container that is absent or
+      // was replaced cannot revive the wall. Only an unavailable witness is retried.
+      if(running===null)return undefined;
+      const started=running.get(b.container);
+      return started!==undefined && started<=modified;
     });
   }catch{return null;}
 }
@@ -277,6 +282,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
   const state=()=>({ok:true,rows:rows()});
   // Cache only definitive old-record rejection, never a transient witness failure.
   /** @type {Map<string,number>} */const rejectedOld=new Map();
+  /** @type {Map<string,number>} */const retryOldAt=new Map();
   function refresh() {
     let changed=false;
     /** @type {Map<string,number>|null|undefined} */let running;
@@ -285,6 +291,7 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
     for(const path of candidates) {
       if(latched.has(path))continue;
       try {if(rejectedOld.get(path)===fs.statSync(path).mtimeMs)continue;}catch{/* The read below reports it. */}
+      if((retryOldAt.get(path)??0)>now())continue;
       if(latched.size>=HANDOFF_DISCOVERY.maxLatched) {
         const spent=[...latched.entries()].find(([,x])=>x.acked);
         if(!spent)break;
@@ -296,7 +303,12 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
           const record=readPrivate(root,basename(path),st=>{modified=st.mtimeMs;});if(!validHandoff(record))throw new Error('HANDOFF_RECORD');
           if(modified<sessionStartedAt) {
             const verdict=survivingHandoff(env,record,modified,containers);
-            if(verdict!==true){if(verdict===false)rejectedOld.set(path,modified);return;}
+            if(verdict!==true) {
+              if(verdict===false)rejectedOld.set(path,modified);
+              // null is an unreadable binding, cheap to read again; undefined means docker blocked us.
+              else if(verdict===undefined)retryOldAt.set(path,now()+HANDOFF_WITNESS_RETRY_MS);
+              return;
+            }
           }
           let acked=false;
           try {const ack=readPrivate(root,basename(path)+'.ack.json');acked=operatorKeys(ack,['schema','surface_id','step_index']) && ack.schema==='metaviewer.handoff_ack/v1' && ack.surface_id===record.surface_id && ack.step_index===record.step_index;}catch{/* No proven ack: keep visible. */}

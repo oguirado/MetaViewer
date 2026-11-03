@@ -41,11 +41,28 @@ function fixture(t) {
 
 for (const fault of ['docker', 'binding']) test(`V027 K2 transient ${fault} failure does not permanently reject a surviving wall`, t => {
   const f=fixture(t);f.write();f.bind();
-  const service=f.service();
+  let clock=Date.now();
+  const service=f.service({now:()=>clock});
   if(fault==='docker') {
     f.probe.mock.mockImplementationOnce(()=>({status:1,stdout:'',stderr:''}));
   } else fs.writeFileSync(join(f.bindings,wall.surface_id+'.json'),'{');
   assert.deepEqual(service.refresh().rows,[]);
   f.bind();
+  if(fault==='docker') {
+    // An unavailable docker blocks the main thread: no second call inside the retry window.
+    const before=f.calls();
+    assert.deepEqual(service.refresh().rows,[]);
+    assert.equal(f.calls(),before);
+    clock+=30001;
+  }
   assert.deepEqual(service.refresh().rows,[wall]);
+});
+
+test('V027 K2 docker answering without the container is final, without asking again',t=>{
+  const f=fixture(t);f.write();f.bind();f.stop();
+  const service=f.service();
+  assert.deepEqual(service.refresh().rows,[]);
+  const first=f.calls();
+  for(let i=0;i<5;i++)assert.deepEqual(service.refresh().rows,[]);
+  assert.equal(f.calls(),first);
 });
