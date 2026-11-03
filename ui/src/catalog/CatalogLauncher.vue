@@ -34,7 +34,7 @@ const choosingProgram = ref(false), programBinary = ref(''), programRole = ref('
 const choosingWindow = ref(false), windowSearch = ref(''), windowChoices = ref(/** @type {Array<{xid:number,witness:string,title:string,program:string,width:number,height:number}>} */ ([]));
 const windowChoiceXid = ref(0), windowError = ref(''), windowBusy = ref(false);
 const filteredWindows = computed(() => filterWindowCandidates(windowChoices.value, windowSearch.value));
-const selectedWindow = computed(() => windowChoices.value.find(w => w.xid === windowChoiceXid.value) || null);
+const selectedWindow = computed(() => filteredWindows.value.find(w => w.xid === windowChoiceXid.value) || null);
 let choiceGeneration = 0;
 watch(() => props.visible,visible=>{if(!visible){choiceGeneration++;choosingRole.value=false;choosingProgram.value=false;programRole.value='human';programError.value='';choosingWindow.value=false;windowError.value='';windowChoiceXid.value=0;windowSearch.value='';}});
 const pendingIntent = ref(/** @type {any} */ (null));
@@ -51,7 +51,7 @@ function confirmRole() {
 }
 async function confirmProgram() {
   const result = buildCreateIntent({
-    kind: 'program',
+    kind: pendingIntent.value?.kind || 'program',
     placement: pendingIntent.value?.placement,
     binary: programBinary.value,
     ...(typeof programRole !== 'undefined' && programRole?.value ? { role: programRole.value } : {}),
@@ -96,6 +96,7 @@ async function confirmProgram() {
   }
 }
 function cancelProgram() {
+  if (programBusy.value) return;
   choosingProgram.value = false;
   programError.value = '';
   emit('update:visible', false);
@@ -153,6 +154,7 @@ async function confirmWindow() {
   }
 }
 function cancelWindow() {
+  if (windowBusy.value) return;
   if (typeof choosingWindow !== 'undefined') choosingWindow.value = false;
   if (typeof windowChoiceXid !== 'undefined') windowChoiceXid.value = 0;
   if (typeof windowError !== 'undefined') windowError.value = '';
@@ -182,8 +184,8 @@ function forwardVisible(value) {
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
-  if (payload?.type?.id === 'program') {
-    pendingIntent.value = { kind: 'program', placement: payload?.placement };
+  if (payload?.type?.id === 'program' || payload?.type?.id === 'host-program') {
+    pendingIntent.value = { kind: payload.type.id, placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
       programBinary.value = typeof payload?.binary === 'string' ? payload.binary : '';
       if (typeof programRole !== 'undefined') programRole.value = payload?.role === 'agent' ? 'agent' : 'human';
@@ -267,7 +269,8 @@ function onClose() {
     aria-modal="true"
     aria-label="Program capsule"
   >
-    <h2>Program</h2>
+    <h2>{{ pendingIntent?.kind === 'host-program' ? 'Host program' : 'Program' }}</h2>
+    <p v-if="pendingIntent?.kind === 'host-program'">Runs on your computer — not isolated. Browsers use a fresh temporary profile in RAM, never your personal profile.</p>
     <label for="shell/new-capsule/program-role">Role</label>
     <select
       id="shell/new-capsule/program-role"
@@ -304,6 +307,7 @@ function onClose() {
       id="shell/new-capsule/program-cancel"
       data-semantic-anchor="dialog/new-capsule/program-cancel"
       type="button"
+      :disabled="programBusy"
       @click="cancelProgram"
     >Cancel</button>
   </div>
@@ -376,6 +380,7 @@ function onClose() {
       id="shell/new-capsule/window-cancel"
       data-semantic-anchor="dialog/new-capsule/window-cancel"
       type="button"
+      :disabled="windowBusy"
       @click="cancelWindow"
     >Cancel</button>
   </div>

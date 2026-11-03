@@ -1,0 +1,2 @@
+- Add actionable stderr remedies for mw_run refusal results while preserving result fields, verdict codes, return values and existing diagnostics.
+- Cover local refusal codes by source scan, with negative controls and offline output compatibility checks for browser, browser-goal, program and deadline fallback paths.

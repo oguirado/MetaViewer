@@ -127,10 +127,11 @@ const barName = computed(() => {
 // every effective binding below is the legacy prop, so existing mounts
 // render exactly as before.
 const captureBound = computed(() => !!props.captureState);
-const captureEntry = computed(() => captureEntryFor(props.captureState, props.capsuleId));
+const captureEntry = computed(() => /** @type {(ReturnType<typeof captureEntryFor> & {screenshotPending?:boolean}) | null} */ (captureEntryFor(props.captureState, props.capsuleId)));
 const phaseEff = computed(() => (captureBound.value ? captureEntry.value?.phase : props.phase));
 const shotStateEff = computed(() => {
   if (!captureBound.value) return props.screenshotState;
+  if (captureEntry.value?.screenshotPending) return 'capturing';
   return captureEntry.value?.lastShot ? 'done' : 'idle';
 });
 const recordingsEff = computed(() => (captureBound.value

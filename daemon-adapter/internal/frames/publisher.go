@@ -32,10 +32,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"metaviewer/daemon-adapter/internal/capsule"
 )
@@ -100,12 +102,34 @@ type Publisher struct {
 	closed       bool
 	now          func() time.Time
 	sourceRead   func(int, string, string) ([]byte, error)
+	beforeLink   func() // deterministic directory-replacement regression seam
 }
 
 func (p *Publisher) addReleaseHook(fn func(string)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onRelease = append(p.onRelease, fn)
+}
+
+// linkPublishedFile commits only inside the directory descriptor already held
+// by the publisher, even if a group-writable producer parent is renamed.
+func linkPublishedFile(dir *os.File, from, to string) error {
+	src, err := syscall.BytePtrFromString(from)
+	if err != nil {
+		return err
+	}
+	dst, err := syscall.BytePtrFromString(to)
+	if err != nil {
+		return err
+	}
+	_, _, errno := syscall.Syscall6(syscall.SYS_LINKAT, dir.Fd(), uintptr(unsafe.Pointer(src)), dir.Fd(), uintptr(unsafe.Pointer(dst)), 0, 0)
+	runtime.KeepAlive(src)
+	runtime.KeepAlive(dst)
+	runtime.KeepAlive(dir)
+	if errno != 0 {
+		return errno
+	}
+	return nil
 }
 
 const (
@@ -674,7 +698,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	}
 	name := hex.EncodeToString(random) + ".rgb"
 	path := filepath.Join(p.outputPath, name)
-	info, se := os.Stat(p.outputPath)
+	info, se := os.Lstat(p.outputPath)
 	held, he := p.output.Stat()
 	if se != nil || he != nil || !os.SameFile(info, held) {
 		return Ref{}, false, stages, frameError()
@@ -683,7 +707,10 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	if unchanged {
 		lastPath := old.refs[len(old.refs)-1].RAMWSPath
 		if st, stErr := os.Lstat(lastPath); stErr == nil && st.Mode().IsRegular() && st.Size() == expectedBytes {
-			if os.Link(lastPath, path) == nil {
+			if p.beforeLink != nil {
+				p.beforeLink()
+			}
+			if linkPublishedFile(p.output, filepath.Base(lastPath), name) == nil {
 				linkedUnchanged = true
 			}
 		}
@@ -722,7 +749,10 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 			_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
 			return Ref{}, false, stages, frameError()
 		}
-		if e = os.Link(filepath.Join(p.outputPath, tempName), path); e != nil {
+		if p.beforeLink != nil {
+			p.beforeLink()
+		}
+		if e = linkPublishedFile(p.output, tempName, name); e != nil {
 			_ = syscall.Unlinkat(int(p.output.Fd()), tempName)
 			return Ref{}, false, stages, e
 		}
@@ -730,6 +760,13 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 			_ = syscall.Unlinkat(int(p.output.Fd()), name)
 			return Ref{}, false, stages, e
 		}
+	}
+	// The wire reference is a pathname. Refuse an observed replacement rather
+	// than returning a path which now resolves outside the held directory.
+	info, se = os.Lstat(p.outputPath)
+	if se != nil || !os.SameFile(info, held) {
+		_ = syscall.Unlinkat(int(p.output.Fd()), name)
+		return Ref{}, false, stages, frameError()
 	}
 	if isCancelled != nil && isCancelled() {
 		_ = syscall.Unlinkat(int(p.output.Fd()), name)

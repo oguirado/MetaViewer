@@ -145,8 +145,11 @@ func TestInputFailuresSettleWithProposal(t *testing.T) {
 					}
 					released := call("release_control", map[string]any{"surface_id": event.Data.Surface.SurfaceID})
 					var result struct{ Event string }
-					if len(released) != 1 || json.Unmarshal(released[0], &result) != nil || result.Event != "state_changed" {
+					if len(released) != 2 || json.Unmarshal(released[0], &result) != nil || result.Event != "state_changed" {
 						t.Fatalf("release refused: %s", released)
+					}
+					if json.Unmarshal(released[1], &result) != nil || result.Event != "frame_ready" {
+						t.Fatalf("release missing fresh frame: %s", released)
 					}
 				}
 			} else {

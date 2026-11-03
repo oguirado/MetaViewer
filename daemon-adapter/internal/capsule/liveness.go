@@ -52,7 +52,7 @@ func (m *Manager) monitorLiveness(ctx context.Context, ticks <-chan time.Time, e
 		m.mu.Lock()
 		active := make([]Binding, 0, len(m.bindings))
 		for id, b := range m.bindings {
-			if b.Surface.State == "active" && !m.destroying[id] && b.NativeKind != "host-window" {
+			if b.Surface.State == "active" && !m.destroying[id] && (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 				active = append(active, b)
 			} else {
 				delete(misses, id)

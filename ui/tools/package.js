@@ -2,7 +2,7 @@
 // [TARGET, unit decision] Deterministic Linux bundle with an owned real-core session.
 // Local archives are mandatory; packager never reaches its download branch.
 import { createHash, randomUUID } from 'node:crypto';
-import { createReadStream, closeSync, openSync, readFileSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
+import { createReadStream, closeSync, openSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeSync } from 'node:fs';
 import { once } from 'node:events';
 import * as fs from 'node:fs/promises';
 import { dirname, basename, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -571,7 +571,7 @@ export function validateAttachRecord(value) {
   const ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
   const SESSION = /^pkg-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   const PATHS = ['XDG_RUNTIME_DIR', 'MV_CORE_CONFIG', 'MV_SRF_BIN_DIR', 'MV_SRF_STATE_DIR',
-    'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY', 'MV_WENDER_ROOT', 'MV_MW_HOME', 'MV_OPERATOR_REPO',
+    'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY', 'MV_WENDER_ROOT', 'MV_WENDER_EXECUTABLE', 'MV_VISION_EXECUTABLE', 'VQA_VE_ROOT', 'MV_MW_HOME', 'MV_OPERATOR_REPO',
     'MV_MEMORYWEB_REPO'];
   const isPath = (/** @type {unknown} */ v) => typeof v === 'string' && v.length > 1 && v.length <= 4096 &&
     v.startsWith('/') && !/[\0\r\n]/.test(v);
@@ -602,7 +602,7 @@ export function validateAttachRecord(value) {
  * @param {{sessionId: string, pid: number, runtime: string, configPath: string, env: NodeJS.ProcessEnv}} input */
 export function buildAttachRecord({sessionId, pid, runtime, configPath, env}) {
   const optional = ['MV_SRF_BIN_DIR', 'MV_SRF_STATE_DIR', 'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY',
-    'MV_WENDER_ROOT', 'MV_MW_HOME', 'MV_OPERATOR_REPO', 'MV_MEMORYWEB_REPO'];
+    'MV_WENDER_ROOT', 'MV_WENDER_EXECUTABLE', 'MV_VISION_EXECUTABLE', 'VQA_VE_ROOT', 'MV_MW_HOME', 'MV_OPERATOR_REPO', 'MV_MEMORYWEB_REPO'];
   /** @type {Record<string, string>} */
   const out = {XDG_RUNTIME_DIR: runtime, MV_CORE_CONFIG: configPath, MV_SESSION_ID: sessionId};
   for (const name of optional) {
@@ -700,8 +700,32 @@ Source it in a subshell, because it points XDG_RUNTIME_DIR at the private runtim
 /** Files staged from the repository into resources/operator. main.js resolves the
  * identity tool here when packaged (PKG-FIX ID-01/B1); the RAM-admission reclaim
  * tool ships next to it (L-04). */
-export const OPERATOR_RESOURCES = Object.freeze(['docs/AGENT_ENTRY.md', 'docs/AUTOMATE_FROM_DEMO.md',
-  'tools/mv_identity.py', 'tools/mv_ram_admission.py']);
+export const OPERATOR_RESOURCES = Object.freeze([...new Set(['docs/AGENT_ENTRY.md', 'docs/AUTOMATE_FROM_DEMO.md',
+  'tools/mv_identity.py', 'tools/mv_ram_admission.py', 'deps.lock', 'VERSION',
+  'tests/e2e/e2e1_slice/live.py','agents/metaviewer_agents/mw_run.py',
+  'tools/mw_run_backend.py','tools/mw_run_program.py','tools/mw_program_muse.py',...publicRuntimeFiles(repo)])]);
+
+/** [TARGET, unit decision] Public runtime closure; private components remain external.
+ * @param {string} root */
+function publicRuntimeFiles(root) {
+  /** @param {string} directory @returns {string[]} */
+  const walk = directory => {
+    let entries;
+    try {entries=readdirSync(join(root,directory),{withFileTypes:true});}
+    catch(error) {
+      // Installed verification tools can run without a source tree. Packaging
+      // still copies the mandatory runtime entries above and refuses absence.
+      if(/** @type {NodeJS.ErrnoException} */(error).code==='ENOENT')return [];
+      throw error;
+    }
+    return entries.flatMap(entry => {
+      const path=join(directory,entry.name);
+      if(entry.isDirectory())return ['__pycache__','tests'].includes(entry.name)?[]:walk(path);
+      return entry.isFile() && /\.(py|json)$/.test(entry.name) && !entry.name.startsWith('test_') ? [path] : [];
+    });
+  };
+  return [...walk('agents/metaviewer_agents'),...walk('tools'),...walk('contracts/v0.2')].sort();
+}
 
 /** Packaged relative directory for the out-of-ASAR node-pty runtime (P18H-R2-PTY). */
 export const NODE_PTY_RUNTIME_REL_DIR = 'resources/build-native/pty-runtime/node-pty';
@@ -1287,6 +1311,9 @@ else if (process.argv.includes('--nested-depth=1')) {
       app.exit(1);
       return;
     }
+    // [TARGET, unit decision] Checkout override is optional in the installed app.
+    process.env.MV_OPERATOR_REPO ||= join(resourcesPath,'operator');
+    process.env.MV_MW_HOME ||= join(process.env.HOME || app.getPath('home'),'.local/share/metaviewer/memoryweb');
     const hostRuntime = process.env.XDG_RUNTIME_DIR;
     await preparePackagedAdmission(process.env);
     const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
@@ -2833,6 +2860,8 @@ export async function packageShell(env = process.env) {
       await fs.copyFile(join(repo,relative),join(operatorRoot,relative));
     }
     await fs.writeFile(join(operatorRoot,'ATTACH.md'),ATTACH_GUIDE);
+    const runtimeFiles=Object.fromEntries(await Promise.all(OPERATOR_RESOURCES.map(async path=>[path,await digest(join(operatorRoot,path))])));
+    await fs.writeFile(join(operatorRoot,'runtime.manifest.json'),JSON.stringify({schema:'metaviewer.operator-runtime/v1',files:runtimeFiles})+'\n');
     await stageNodePtyRuntime(built[0], architecture.arch, { env });
 
     await fs.copyFile(join(ui,'kit.lock.json'),join(built[0],'resources/kit.lock.json'));
@@ -2840,9 +2869,10 @@ export async function packageShell(env = process.env) {
 
 Run ./metaviewer to start the production UI with its bundled real core.
 Use --nested-depth=1 only for the separate display-only view.
-Automate from a demo requires MV_OPERATOR_REPO pointing to the operator-owned
-MetaViewer Git checkout with tools/mv_demo.py; configure the identity and
-MemoryWeb environment described in that checkout's docs/AUTOMATE_FROM_DEMO.md.
+Public agents and tools are bundled under resources/operator. MV_OPERATOR_REPO
+optionally overrides this runtime. Private compiled sidecars are supplied through
+MV_WENDER_EXECUTABLE and MV_VISION_EXECUTABLE with pinned distribution hashes.
+MemoryWeb user data defaults to the user data directory outside the app.
 Use MetaViewer copies the bundled resources/operator/docs/AGENT_ENTRY.md prompt.
 An external AI attaches to the running session through the pointer described in
 resources/operator/ATTACH.md. The identity tool used by Identities and Automate

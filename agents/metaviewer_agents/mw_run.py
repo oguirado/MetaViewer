@@ -2,7 +2,7 @@
 
 Program capsules: --surface-kind program --identity ID --goal TEXT --steps N.
 This mode records bounded verified visual clicks, with no task-completion claim.
-Browser mode remains the default and requires --site and --workflow.
+Browser mode accepts a goal, or a stored --site and --workflow.
 
 [TARGET, unit decision] Run-level wall deadline formula:
   budget_s = max(site.execution_policy.min_notice_s,
@@ -23,7 +23,7 @@ caller never retries an input that may already have been delivered, while
 recording the expired deadline on the diagnostic field.
 """
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 import importlib.util
 import json
 import math
@@ -35,6 +35,8 @@ import stat
 import sys
 import time
 import uuid
+
+from metaviewer_agents.mw_refusals import RefusalOutput
 
 WALL_DEADLINE_CODE = 'MW_WALL_DEADLINE'
 WALL_DEADLINE_RC = 6
@@ -183,7 +185,8 @@ def resolve_wall_deadline_s(args, *, env=None, home=None, repo_root=None,
     workflow_id = getattr(args, 'workflow', None)
     budget_s = float(ceiling_s)
     active_env = env if env is not None else getattr(os, 'environ', {})
-    if getattr(args, 'surface_kind', None) == 'program':
+    if (getattr(args, 'surface_kind', None) == 'program' or
+            getattr(args, 'goal', None) is not None):
         steps = _strict_nonneg_int(args.steps, minimum=1, maximum=16)
         action_ms = _strict_nonneg_int(args.timeout_ms, minimum=1, maximum=30000)
         model_ms = (_strict_nonneg_int(args.model_timeout_ms, minimum=1, maximum=240000)
@@ -340,6 +343,8 @@ def build_parser():
         parser.add_argument('--' + flag)
     parser.add_argument('--surface-kind', choices=('browser', 'program'), default='browser')
     parser.add_argument('--goal')
+    parser.add_argument('--text')
+    parser.add_argument('--key', choices=('Enter',))
     parser.add_argument('--steps', type=int, default=1)
     parser.add_argument('--timeout-ms', type=int, default=10000)
     parser.add_argument('--planner', choices=('rules', 'muse'), default='rules')
@@ -351,15 +356,29 @@ def build_parser():
 def main(argv=None, *, runner=None):
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.surface_kind == 'program':
+    if args.surface_kind == 'program' or args.goal is not None:
         if args.site is not None or args.workflow is not None or args.slot:
-            parser.error('program mode does not accept --site, --workflow or --slot')
+            parser.error('goal mode does not accept --site, --workflow or --slot')
+        if args.surface_kind == 'program' and args.key is not None:
+            parser.error('--key requires a browser goal')
         if not args.goal or not args.goal.strip() or not 1 <= args.steps <= 16 or not 1 <= args.timeout_ms <= 30000:
             parser.error('program mode requires --goal, --steps within 1..16 and --timeout-ms within 1..30000')
         if not 1 <= args.model_timeout_ms <= 240000:
             parser.error('--model-timeout-ms must be within 1..240000')
+        if args.text is not None and (not args.text or len(args.text.encode('utf-8')) > 65536):
+            parser.error('--text must contain between 1 and 65536 UTF-8 bytes')
+        if args.key is not None and args.text is None:
+            parser.error('--key requires explicit --text and verified readback')
+        if args.surface_kind == 'program':
+            if args.text is not None and args.steps != 1:
+                parser.error('program --text requires --steps 1')
+            if args.goal == 'focused' and args.text is None:
+                parser.error('program --goal focused requires --text')
+        if args.surface_kind != 'program' and args.text is not None and args.steps < (3 if args.key else 2):
+            parser.error('--steps must cover focus, type and optional key')
     elif (not args.site or not args.workflow or args.goal is not None or args.steps != 1 or
-          args.timeout_ms != 10000 or args.planner != 'rules' or args.model_timeout_ms != 120000):
+          args.timeout_ms != 10000 or args.planner != 'rules' or args.model_timeout_ms != 120000 or
+          args.text is not None or args.key is not None):
         parser.error('browser mode requires --site and --workflow; program options require --surface-kind program')
     if runner is None:
         path = Path(__file__).resolve().parents[2] / 'tools' / 'mw_run_backend.py'
@@ -369,7 +388,7 @@ def main(argv=None, *, runner=None):
         runner = host.run_entry
     budget_s = resolve_wall_deadline_s(args)
     args.wall_deadline_mono_ns = time.monotonic_ns() + int(budget_s * 1e9)
-    with wall_deadline(budget_s):
+    with redirect_stdout(RefusalOutput(sys.stdout, sys.stderr)), wall_deadline(budget_s):
         try:
             return runner(args)
         except WallDeadlineError as error:

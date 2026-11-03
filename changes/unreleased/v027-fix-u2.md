@@ -1,0 +1,10 @@
+- Select browser custody from active native leases while retaining ambiguity and replacement fences.
+- Recognize provider sign-in headings and labelled password walls before automation input.
+- Report native discovery timeouts through the structured run verdict.
+- Persist an absorbing human handoff when a wall appears during proposal rebind; preserve the pinned workflow journal verbatim.
+- Retry stale browser text readback within the remaining deadline without redispatching input, and read editable content only for the selected goal target.
+- Keep handoff persistence failures visible as human handoffs without claiming a saved artifact.
+- Preserve verified clicks when later typing fails; retain input uncertainty after delivered moves if evidence or later acquisition fails.
+- Refuse disk, symlinked, or public program evidence directories before connecting.
+- Identify missing invocation text slots without exposing their values.
+- Retain text verification failure payloads and correlate stale proposal dispositions with their dispatch artifacts.
