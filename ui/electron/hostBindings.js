@@ -264,6 +264,11 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const shutdown = (reason = acquireFail('HELLO_CLOSED')) => {
       clearTimeout(helloTimer); clearInterval(keepalive);
       if (disposed) return; disposed = true; live = false;
+      // [TARGET, unit decision] End every painted lifetime before transport
+      // teardown so renderer snapshots close WRITE and offer session recovery.
+      for (const state of surfaces.values()) {
+        if (state.state === 'active') publishState({...state, state:'lost'});
+      }
       stopSettings();
       void terminal.dispose();
       void display.dispose();
@@ -489,7 +494,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (['destroyed','lost'].includes(state.state)) {
           if (body.event === 'state_changed') publishState(state);
           display.removeSurface(state.surface_id);
-          surfaces.delete(state.surface_id);
+          // Keep lost identities available to the host-only Stop capability.
+          // Input and display gates still require active state.
+          if (state.state === 'lost') {
+            if (!surfaces.has(state.surface_id) && surfaces.size >= MAX_ITEMS) throw fail();
+            surfaces.set(state.surface_id,Object.freeze({...state}));
+          }
+          else surfaces.delete(state.surface_id);
           departed.delete(state.surface_id); departed.add(state.surface_id);
           if (departed.size > MAX_ITEMS) departed.delete(/** @type {string} */ (departed.values().next().value));
           surfaceInputQueues.delete(state.surface_id);
@@ -569,7 +580,9 @@ export async function createMainBindings({env = process.env, createMessageChanne
               continue;
             }
           } else if (['take_control','release_control','fold','unfold'].includes(item.body.op)) {
-            clearTimeout(item.timer);pending.delete(key);item.reject(new Error('INTENT_REFUSED'));continue;
+            const code = ['STALE_FRAME','SURFACE_NOT_AGENT_CONTROLLED','LOCKED_BY_OTHER','BUDGET_EXCEEDED','OUT_OF_BOUNDS','POLICY'].includes(body.reason_code)
+              ? body.reason_code : 'INTENT_REFUSED';
+            clearTimeout(item.timer);pending.delete(key);item.reject(Object.assign(new Error('INTENT_REFUSED'),{reason_code:code}));continue;
           } else continue;
         }
         const state = body.schema === 'surface_event/v0.2' && body.event === 'state_changed' ? body.data?.surface : null;

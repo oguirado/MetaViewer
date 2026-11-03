@@ -175,7 +175,7 @@ func startHostXpra(ctx context.Context, r *ProcessRunner, path, container, role 
 	for _, name := range []string{"xpra", "Xvfb", "xauth", "xdotool"} {
 		tools[name], err = ResolveHostBinary(name, r.SearchPath())
 		if err != nil {
-			return nil, fault("host_program_unavailable", "host_program_unavailable: "+name+" missing; install xpra xvfb xauth (apt install xpra xvfb xauth)")
+			return nil, fault("host_program_unavailable", "host_program_unavailable: "+name+" missing; install xpra xvfb xauth xdotool (apt install xpra xvfb xauth xdotool)")
 		}
 	}
 	if _, err = ResolveHostBinary(filepath.Join(r.root, "srf-host-window"), r.SearchPath()); err != nil {
@@ -297,6 +297,14 @@ func (m *Manager) createHostXpra(ctx context.Context, profile, id, version strin
 	var candidate *HostWindowSpec
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) && ctx.Err() == nil {
+		// The xpra child exits with its program. Keep its PID unreaped for
+		// cleanup, but stop discovery as soon as that witnessed child exits.
+		if process.server != nil && process.server.Process != nil {
+			_, _, state, probeErr := processWitness(process.server.Process.Pid)
+			if probeErr != nil || state == "Z" || state == "X" {
+				return nil, fault("host_program_unavailable", "host_program_unavailable: program exited before publishing an X11 window")
+			}
+		}
 		var observed *HostWindowSpec
 		out, e := m.executeRawHostWindow(ctx, p, append([]string{"list"}, HostWindowSessionArgs(process.display, process.authority)...), nil)
 		if e == nil {

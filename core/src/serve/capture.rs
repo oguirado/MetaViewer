@@ -12,6 +12,33 @@ use super::*;
 use crate::wire::payload::RecordRequest;
 use serde_json::{json, Value};
 
+#[derive(Debug)]
+struct CaptureStorageFailure(Error);
+impl std::fmt::Display for CaptureStorageFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "capture journal unavailable")
+    }
+}
+impl std::error::Error for CaptureStorageFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
+// Only this terminal-bearing error permits a bounded writer flush on retirement.
+#[derive(Debug)]
+pub(super) struct CaptureTerminalFailure(pub(super) Error);
+impl std::fmt::Display for CaptureTerminalFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "capture storage unavailable; restart session")
+    }
+}
+impl std::error::Error for CaptureTerminalFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref())
+    }
+}
+
 impl Server {
     fn capture_recover_exports(&mut self) -> Result<()> {
         if self.capture.exports_recovered {
@@ -123,7 +150,10 @@ impl Server {
         Ok(())
     }
     fn capture_journal(&mut self, boundary: Vec<Witness>, data: &Value) -> Result<()> {
-        let witness = self.authority.retain_witness(&serde_json::to_vec(data)?)?;
+        let witness = self
+            .authority
+            .retain_witness(&serde_json::to_vec(data)?)
+            .map_err(|error| CaptureStorageFailure(error.into()))?;
         let mut witnesses = boundary;
         witnesses.push(witness);
         let input = if data["reply"]["ok"] == false {
@@ -136,7 +166,9 @@ impl Server {
         } else {
             Input::SurfaceNotice
         };
-        self.authority.apply_with_witnesses(input, witnesses)?;
+        self.authority
+            .apply_with_witnesses(input, witnesses)
+            .map_err(|error| CaptureStorageFailure(error.into()))?;
         Ok(())
     }
     #[cfg(test)]
@@ -302,6 +334,53 @@ impl Server {
         Ok((reply, events))
     }
     pub(super) fn capture_wire(
+        &mut self,
+        now_ns: u64,
+        env: &Envelope,
+        request: &RecordRequest,
+        boundary: Witness,
+    ) -> Result<()> {
+        let Err(error) = self.capture_wire_inner(now_ns, env, request, boundary) else {
+            return Ok(());
+        };
+        if error.downcast_ref::<CaptureStorageFailure>().is_none() {
+            return Err(error);
+        }
+        // [TARGET, unit decision] A storage fault still ends this connection.
+        // Reserve a correlated refusal outside the failed journal, then let the
+        // writer flush it before closure. Prepared capture state stays uncommitted.
+        let raw = serde_json::to_value(request)?;
+        let method = match raw["op"].as_str() {
+            Some("ram_start") => "recordStart",
+            Some("ram_stop") => "recordStop",
+            Some("screenshot") => "screenshot",
+            Some("disk_start") => "export",
+            _ => return Err(error),
+        };
+        let request_id = &raw["request_id"];
+        let detail = serde_json::to_string(&json!({"request_id":request_id,"method":method,
+            "reply":{"ok":false,"code":"CAPTURE_UNAVAILABLE","request_id":request_id}}))?;
+        let body = serde_json::from_value(json!({"schema":"surface_event/v0.2","event":"error",
+            "data":{"surface_id":"capture","code":"CAPTURE_REPLY","detail":detail}}))?;
+        let terminal = self.outbound_at(
+            now_ns,
+            &env.from,
+            Command::SurfaceEvent(Box::new(body)),
+            "capture-unavailable",
+        )?;
+        if let Some(connection) = self.connections.get(&env.from) {
+            let mut slot = connection
+                .terminal
+                .lock()
+                .map_err(|_| invalid("poisoned terminal slot"))?;
+            if slot.is_none() {
+                *slot = Some(terminal);
+                return Err(CaptureTerminalFailure(error).into());
+            }
+        }
+        Err(error)
+    }
+    fn capture_wire_inner(
         &mut self,
         now_ns: u64,
         env: &Envelope,
