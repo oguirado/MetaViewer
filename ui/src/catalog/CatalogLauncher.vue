@@ -12,6 +12,7 @@ import { computed, ref, watch } from 'vue';
 import { NewCapsuleDialog } from '../../.kit/capsule-ui-kit/src/index-shell.js';
 import {
   CATALOG_KIND_IDS,
+  availableCatalogKindIds,
   buildCreateIntent,
   createInvokerFocus,
   filterWindowCandidates,
@@ -22,6 +23,7 @@ import {
 const props = defineProps({
   visible: { type: Boolean, default: false },
   kinds: { type: Array, default: () => [...CATALOG_KIND_IDS] },
+  vmAvailable: { type: Boolean, default: false },
   title: { type: String, default: 'Add capsule' },
   subtitle: { type: String, default: 'Choose a capsule kind to open in your wall' },
   emptyText: { type: String, default: 'No capsule kinds match this search.' },
@@ -169,7 +171,7 @@ function cancelWindow() {
   emit('update:visible', false);
 }
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
-const dialogTypes = computed(() => [...normalized.value.types]);
+const dialogTypes = computed(() => normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable).includes(type.id)));
 const catalogErrors = computed(() => normalized.value.errors);
 
 const invokerFocus = createInvokerFocus();

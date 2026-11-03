@@ -2,6 +2,8 @@
 /** [TARGET, unit decision] Host binding for the authority lane. Core requests use
  * {op:'propose'|'intent',json}; the core remains the admission authority. A trusted
  * frame source supplies reader/port capabilities; paths never cross IPC.
+ * [TARGET, unit decision] authority.vmAvailable is a read-only boolean query
+ * using configuredVMProfiles with the host architecture; no profiles cross IPC.
  * Side-terminal commands are host-owned profile IDs and exact argv matches.
  * Frame stream cap = 64 [TARGET, unit decision]; stream lifetimes follow the
  * existing port revocation/ACK deadlines and the main window's teardown.
@@ -34,6 +36,7 @@ export const WIRE_CHANNELS = Object.freeze({
   recordingDestination:'metaviewer:recording.destination', nestedDepth:'metaviewer:nested.depth',
   selfCapsuleId:'metaviewer:nested.self', propose:'metaviewer:authority.propose',
   intent:'metaviewer:authority.intent',
+  vmAvailable:'metaviewer:authority.vmAvailable',
   createSurface:'metaviewer:authority.createSurface',
   subscribeFrames:'metaviewer:authority.subscribe',
   unsubscribeFrames:'metaviewer:authority.unsubscribe',
@@ -878,6 +881,13 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     recordingDestination: async () => destinationToken,
     nestedDepth: async () => identity.depth,
     selfCapsuleId: async () => identity.self,
+    // [TARGET, unit decision] Read-only catalog availability, using the same
+    // host-owned architecture and template validation as VM creation.
+    vmAvailable: async () => {
+      if (identity.depth !== null) return false;
+      const {configuredVMProfiles} = await (profilePickerModulePromise ??= import('./profilePicker.js'));
+      return configuredVMProfiles(env, hostArch).length > 0;
+    },
     // [TARGET, unit decision] Browser creation has no action/frame authority.
     // Zero renderer arguments: profile and geometry remain host-owned.
     createSurface: async (/** @type {any} */ selector) => {

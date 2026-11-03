@@ -32,6 +32,8 @@ class JudgeFixL1(unittest.TestCase):
         try:
             out, err = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
+            if type(process.pid) is not int or process.pid <= 1 or os.getpgid(process.pid) == os.getpgrp():
+                raise ValueError('unsafe child process group')
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
             raise

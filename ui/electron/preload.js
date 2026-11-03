@@ -145,7 +145,7 @@ export function createOperatorFacade(transport) {
  * @property {() => Promise<string|null>} recordingDestination
  * @property {() => Promise<0|1|null>} nestedDepth
  * @property {() => Promise<string|null>} selfCapsuleId
- * @property {{createSurface:(selector?:{kind:'vm'})=>Promise<any>,propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
+ * @property {{vmAvailable:()=>Promise<boolean>,createSurface:(selector?:{kind:'vm'})=>Promise<any>,propose:(json:string)=>Promise<any>,intent:(json:string)=>Promise<true>,subscribeFrames:(cb:(frame:any)=>void)=>(()=>void)}} authority
  * @property {{send:(batch:any)=>Promise<{ok:true,accepted:number}|{ok:false,code:string}>,onResult:(cb:(result:{surface_id:string,seq:number,ok:boolean,code:string|null})=>void)=>(()=>void)}} input
  * @property {{screenshot:(req:any)=>Promise<any>,recordStart:(req:any)=>Promise<any>,recordStop:(req:any)=>Promise<any>,export:(req:any)=>Promise<any>,list:()=>Promise<any>,subscribe:(cb:(state:any)=>void)=>(()=>void)}} capture
  * @property {{reportDiag:(diag:{rehashSkipped:number,rehashDone:number})=>Promise<true>}} frames
@@ -788,7 +788,7 @@ function assertSurfaceInputReply(reply, maxAccepted) {
 }
 const WIRE_NAMES = Object.freeze({loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
-  propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
+  vmAvailable:'authority.vmAvailable',propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
   terminalAttach:'side-terminal.attach',terminalResize:'side-terminal.resize',
   terminalClose:'side-terminal.close',terminalProviders:'side-terminal.providers',
@@ -1025,6 +1025,10 @@ function wireFacade(transport) {
       if (typeof reply !== 'string' || reply.includes('\0') || utf8Bytes(reply) > IPC_BOUNDS.maxLayoutBytes) {
         throw new ContractError('OUTCOME','clipboard text');
       }
+      return reply;
+    }
+    if (name==='vmAvailable') {
+      if (typeof reply !== 'boolean') throw new ContractError('OUTCOME','VM availability');
       return reply;
     }
     if (name==='nestedDepth') {
@@ -1431,6 +1435,8 @@ function wireFacade(transport) {
     },
   });
   api.authority=Object.freeze({
+    /** @param {...unknown} args */
+    vmAvailable:(...args)=>call('vmAvailable',args),
     /** @param {...unknown} args */
     createSurface:(...args)=>call('createSurface',args),
     /** @param {...unknown} args */

@@ -320,3 +320,7 @@ The x64 kit supplies browser image `0.1.1`. If a binary advertises Open and the
 firewall witness is present, preflight requires `0.2.0` and refuses that image set.
 The installer detects this before offering a new firewall. Retagging `0.1.1` would not establish Open support; the upstream source disables
 Open for its default image. Use a legacy-only kit without an active Open witness, or obtain a compatible Open kit.
+
+## ARM64 VM preview
+
+The ARM64 Linux VM capsule is a preview for ARM64 hosts with KVM and a configured template. It is not offered on x64; judges on x64 lose nothing from the supported judging flow. See [VM roadmap](../VM_MICROVM_ROADMAP.md) for the current scope and evidence limits.

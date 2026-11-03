@@ -139,6 +139,14 @@ export const CATALOG_KINDS = Object.freeze([
  */
 export const CATALOG_KIND_IDS = Object.freeze(CATALOG_KINDS.map((entry) => entry.kind));
 
+/** Static descriptors stay closed; runtime availability defaults to hidden.
+ * @param {unknown} [vmAvailable]
+ * @returns {ReadonlyArray<string>}
+ */
+export function availableCatalogKindIds(vmAvailable = false) {
+  return Object.freeze(CATALOG_KIND_IDS.filter(kind => kind !== 'vm' || vmAvailable === true));
+}
+
 /** @type {ReadonlyMap<string, Readonly<CatalogKind>>} */
 const BY_KIND = new Map(CATALOG_KINDS.map((entry) => [entry.kind, entry]));
 

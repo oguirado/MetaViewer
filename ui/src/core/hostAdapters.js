@@ -2,7 +2,7 @@ import { createWallProjection } from './projection.js';
 import { buildAuthorityIntent, createWallIntentBuilders } from './intents.js';
 
 /** @typedef {{schema:'action_verdict/v0.2',proposal_id:string,core_seq:number,decision:'admitted'|'refused',reason_code?:string}} ActionVerdict */
-/** @typedef {{createSurface?:(selector?:{kind:'vm'})=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
+/** @typedef {{vmAvailable?:()=>Promise<boolean>,createSurface?:(selector?:{kind:'vm'})=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
 /** @typedef {{command:string,args:readonly string[],cols:number,rows:number}} TerminalSpec */
 /** @typedef {{open?:(spec:TerminalSpec)=>Promise<{session:string}>,setEnabled?:(enabled:boolean)=>Promise<true>,close?:(spec:{session:string})=>Promise<unknown>}} TerminalPort */
 /** @typedef {{code:string,message:string,tone:'success'|'refusal'}} OutcomeRow */
@@ -39,8 +39,14 @@ export function verdictRow(value) {
 export function createAuthorityAdapter(port) {
   const intent = typeof port?.intent === 'function' ? port.intent.bind(port) : null;
   const propose = typeof port?.propose === 'function' ? port.propose.bind(port) : null;
+  const vmAvailable = typeof port?.vmAvailable === 'function' ? port.vmAvailable.bind(port) : null;
   const createSurface = typeof port?.createSurface === 'function' ? port.createSurface.bind(port) : null;
   return Object.freeze({
+    // [TARGET, unit decision] Absent, failed or malformed host answers hide VM.
+    vmAvailable: async () => {
+      try { return vmAvailable ? await vmAvailable() === true : false; }
+      catch { return false; }
+    },
     createSurface: createSurface ? async (/** @type {{kind:'vm'}|undefined} */ selector = undefined) => {
       if (selector !== undefined && (!selector || Reflect.ownKeys(selector).join(',') !== 'kind' || selector.kind !== 'vm')) {
         throw Object.assign(new Error('VM_SELECTOR_INVALID'),{code:'VM_SELECTOR_INVALID'});
