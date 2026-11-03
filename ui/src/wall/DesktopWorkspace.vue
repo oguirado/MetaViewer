@@ -310,6 +310,7 @@ defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,appl
         v-bind="$attrs" :hidden="!isActive(view,desktop.id)" :data-desktop="key"
         :intent-builders="/** @type {any} */ (intentBuilders)" :control-registry="controlRegistry" :scheduler="scheduler" :tile-scheduler="/** @type {any} */ (tileScheduler)"
         :scope="scope" :default-profile="adapter(view,desktop.id).defaultProfile" :storage="adapter(view,desktop.id).storage"
+        :snap-grid="desktop.snapGrid" @custom-layout="desktop.preset = null" @snap-grid-change="desktop.snapGrid = $event"
         :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
         @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">

@@ -64,7 +64,10 @@ type ViewBackend interface {
 }
 
 type Config struct {
-	BinDir string
+	// [TARGET, unit decision] Reserved launcher identity from MV_SRF_LIVE_PROFILE.
+	SlotLiveProfile string
+	Slots           SlotStore
+	BinDir          string
 	// NetModes is trusted startup knowledge; absence preserves legacy argv/env.
 	NetModes                    []string
 	Profiles                    map[string]Profile
@@ -211,6 +214,8 @@ type InputEvidence struct {
 	GroundTruth       *GroundTruth          `json:"ground_truth,omitempty"`
 }
 type Manager struct {
+	slots            SlotStore
+	slotInitErr      error
 	mu               sync.Mutex
 	cfg              Config
 	runner           cli.Runner
@@ -403,6 +408,11 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	cfg.Profiles = copyProfiles
 	m := &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool), lostDone: make(map[string]chan struct{}), dynamicProfiles: make(map[string]bool), hostSeq: make(map[string]uint64)}
 	m.configureIdentityTemplate()
+	if err := m.initSlots(); err != nil {
+		// Slot custody failure disables this feature without stopping unrelated capture.
+		m.slots = nil
+		m.slotInitErr = err
+	}
 	return m, nil
 }
 func withinRAM(path string) bool {

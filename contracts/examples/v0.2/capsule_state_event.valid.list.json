@@ -1,0 +1,18 @@
+{
+  "schema": "capsule_state_event/v0.2",
+  "operation_id": "slot-op-1",
+  "op": "list",
+  "profile_id": "profile-demo",
+  "slot_id": "slot-demo",
+  "event": "completed",
+  "generation": 1,
+  "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "slots": [
+    {
+      "slot_id": "slot-one",
+      "name": "slot-one",
+      "saved_at": "2026-11-03T12:00:00Z",
+      "generation": 1
+    }
+  ]
+}
