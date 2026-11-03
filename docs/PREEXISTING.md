@@ -95,8 +95,11 @@ the build period.
 
 These are integration pins, not evidence that each pinned revision predates kickoff.
 External components are pre-existing projects; the event-period changes in their
-private repositories are not established by this declaration. Their evaluation
-and redistribution rights are not granted by [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
+private repositories are not established by this declaration. MetaViewer source is
+licensed under [AGPL-3.0-only](../LICENSE). The separate proprietary programs
+`wender-agent`, `vision-engine` and `OpenSuperficies` are fully private; `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only`. [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md) grants judges
+limited evaluation permission for supplied compiled external components, without
+granting redistribution rights in those components.
 
 | Component | Version [CITED] | Commit [CITED] | Source |
 | --- | --- | --- | --- |

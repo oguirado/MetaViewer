@@ -6,8 +6,8 @@ After installation, follow the [Judge tour](docs/JUDGE_TOUR.md) with your AI.
 
 Start with the [documentation index](docs/README.md), the
 [pre-existing work declaration](docs/PREEXISTING.md), and the
-[evaluation permission](NOTICE-EVALUATION.md). The permission covers MetaViewer
-only; external proprietary components require their own authorization.
+[licensing and external component notice](NOTICE-EVALUATION.md). MetaViewer is
+licensed under [AGPL-3.0-only](LICENSE); `wender-agent`, `vision-engine` and `OpenSuperficies` are fully private.
 
 For a fresh Linux judge machine, follow [Judge Quickstart](docs/JUDGE_QUICKSTART.md).
 Fetch verified assets with `python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules`,
@@ -254,8 +254,8 @@ The runtime product assembly was built during the event; the v0.1 scaffold (incl
 
 ## Evaluation by hackathon judges
 
-The licensor (the maintainer, `oguirado`) permits the hackathon judges to install and evaluate MetaViewer for the purpose of judging. This permission is stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); the [LICENSE](LICENSE) text is unchanged. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md) and give [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) to their own AI to configure and explain the full program.
+MetaViewer may be used, modified and redistributed under [AGPL-3.0-only](LICENSE). The licensor (the maintainer, `oguirado`) separately permits hackathon judges to install, run and evaluate the supplied compiled external components for judging, as stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); this grants no redistribution rights in those components. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md) and give [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) to their own AI to configure and explain the full program.
 
 ## License
 
-MetaViewer is licensed under the [PolyForm Strict License 1.0.0](LICENSE). The external components it integrates (`wender-agent`, `vision-engine`, `OpenSuperficies`, and `capsule-ui-kit`) are proprietary and are not covered by this license.
+MetaViewer is licensed under the [GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0-only`). The separate proprietary programs `wender-agent`, `vision-engine` and `OpenSuperficies` are fully private and are not covered by this license; `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only`. See [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md) for the additional permission to run and convey MetaViewer with external components and the limited evaluation permission for their compiled forms.

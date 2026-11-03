@@ -1332,13 +1332,15 @@ def validate_manifests(root, environment=None):
     expected = {
         'Cargo.toml': {
             'workspace': {'resolver': '2', 'members': ['core'], 'package': {
-                'version': version, 'edition': '2021', 'publish': False, 'rust-version': '1.97'}},
+                'version': version, 'edition': '2021', 'publish': False, 'rust-version': '1.97',
+                'license': 'AGPL-3.0-only'}},
             'profile': {'release': {'overflow-checks': True}}},
         'core/Cargo.toml': {'package': {'name': 'metaviewer-core', **{
-            key: {'workspace': True} for key in ('version', 'edition', 'publish', 'rust-version')}},
+            key: {'workspace': True} for key in ('version', 'edition', 'publish', 'rust-version', 'license')}},
             },
         'agents/pyproject.toml': {'project': {'name': 'metaviewer-agents', 'version': version,
-                                            'requires-python': '>=3.11', 'dependencies': []}},
+                                            'requires-python': '>=3.11', 'dependencies': [],
+                                            'license': {'text': 'AGPL-3.0-only'}}},
     }
     for name, wanted in expected.items():
         actual = tomllib.loads((root / name).read_text())
@@ -1367,7 +1369,7 @@ def validate_manifests(root, environment=None):
                 'package.json: package script drift')
     wanted = {'name': 'metaviewer-ui', 'version': version, 'private': True,
                         'type': 'module', 'main': 'electron/main.js', 'engines': {'node': '>=24'},
-                        'scripts': SCRIPTS}
+                        'license': 'AGPL-3.0-only', 'scripts': SCRIPTS}
     require(json.dumps(package, sort_keys=True) == json.dumps(wanted, sort_keys=True),
             'package.json: metadata drift')
     validate_release_locks(root, version)

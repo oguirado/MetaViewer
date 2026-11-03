@@ -156,7 +156,7 @@ retain their own schema discriminator.
 
 ## Capture and integration seams
 
-I assemble MetaViewer with OpenSuperficies, vision-engine, and wender-agent in separate repositories. I treat the exact commits in `deps.lock` as authoritative; its version fields are release labels, not assertions that the locked commits equal tags. I have not measured live performance at the current pins. I scope earlier results to [historical live evidence](../README.md#historical-live-evidence).
+I assemble MetaViewer with OpenSuperficies, vision-engine, and wender-agent in separate repositories. Those three repositories are proprietary and fully private; MetaViewer's own source is `AGPL-3.0-only`. I treat the exact commits in `deps.lock` as authoritative; its version fields are release labels, not assertions that the locked commits equal tags. I have not measured live performance at the current pins. I scope earlier results to [historical live evidence](../README.md#historical-live-evidence).
 
 I use persistent `vadapt.vserve` when available, accepting the hello only with `describe`/`frame_raw`, affirmative `raw_shm`/`frame_raw`, and a boolean `ring` capability; on persistent failure I fall back to one-shot `vadapt.cu_describe` [CITED: `agents/metaviewer_agents/perception/vcore.py`]. I use `wender.plan.cli` through the pipe-only `{observation, element_table, goal}` boundary; Wender proposes a plan and MetaViewer admits and dispatches the action [CITED: `agents/metaviewer_agents/wender_bridge.py`]. I require that planner in assembly CI (`--require-planner`) [CITED: `.github/workflows/assembly.yml`].
 

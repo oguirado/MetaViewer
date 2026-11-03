@@ -17,6 +17,10 @@ each browser session or Linux program inside its own container (`OpenSuperficies
 with its own virtual X11 display and streams the live surface into
 an interactive tiled canvas.
 
+MetaViewer's source is `AGPL-3.0-only`. `wender-agent`, `vision-engine` and
+`OpenSuperficies` are proprietary and fully private: only their compiled forms are
+supplied, for evaluation, as stated in [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
+
 A person and an AI work side by side on the same wall:
 
 - **Human role (`Role: human`)**: The person logs into a site, solves 2FA/CAPTCHAs,

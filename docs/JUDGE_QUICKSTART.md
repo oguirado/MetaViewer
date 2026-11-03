@@ -24,10 +24,13 @@ No GPU or CPU pinning is required. Minimums: see [Hardware](#hardware).
 
 ## 0. Licence
 
-MetaViewer is licensed under the PolyForm Strict License 1.0.0 ([LICENSE](../LICENSE)),
-which does not permit distribution or modification. The licensor permits hackathon
-judges to install and evaluate MetaViewer for judging, as stated in
-[NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md). Do not redistribute the kit.
+MetaViewer source may be used, modified and redistributed under AGPL-3.0-only
+([LICENSE](../LICENSE)). The separate proprietary programs `wender-agent`,
+`vision-engine` and `OpenSuperficies` are fully private; `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only`. The licensor permits hackathon judges to install, run and evaluate the
+supplied compiled external components for judging, as stated in
+[NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md). Do not redistribute the compiled
+external components in the kit; this restriction does not prevent redistribution
+of MetaViewer source under the AGPL.
 
 ## 1. Release assets and verification
 

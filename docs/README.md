@@ -6,7 +6,7 @@
 
 - [Project status and limits](../README.md): what exists and what remains unmeasured.
 - [Pre-existing work](PREEXISTING.md): historical scaffold and current integration pins.
-- [Evaluation permission](../NOTICE-EVALUATION.md): MetaViewer permission; external components are excluded.
+- [Licensing and external component notice](../NOTICE-EVALUATION.md): MetaViewer source is AGPL-3.0-only; compiled external components have limited judge evaluation permission.
 - [Judge Quickstart](JUDGE_QUICKSTART.md): asset verification, host doctor, installation and live wall.
 - [Offline fixture](JUDGES.md): hosted simulation, requiring a locally available locked Wender checkout.
 

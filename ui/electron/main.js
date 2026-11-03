@@ -1,6 +1,9 @@
 // @ts-check
 'use strict';
 
+// [TARGET, unit decision] The Settings legal link uses shell.openExternal
+// through an exact repository-URL exception; all new windows remain denied.
+
 // [TARGET, unit decision] Keep main imports inert when host seams are absent.
 // This closed diagnostic vocabulary mirrors hostBindings without eagerly loading it.
 const BINDING_ACQUISITION_CAUSES = Object.freeze([
@@ -686,9 +689,10 @@ function assertHandleObject(value, label) {
  * is total and default-deny.
  * @param {unknown} win Alleged window with webContents.on/setWindowOpenHandler.
  * @param {unknown} session Alleged session with permission handlers.
+ * @param {((url: string) => Promise<void>) | undefined} openSource Fixed source-link opener.
  * @returns {MainAttachSummary} Frozen summary of attached handlers.
  */
-export function attachWindowPolicy(win, session) {
+export function attachWindowPolicy(win, session, openSource = undefined) {
   const wrec = assertHandleObject(win, 'win');
   const contents = assertHandleObject(wrec.webContents, 'win.webContents');
   if (typeof contents.on !== 'function' || typeof contents.setWindowOpenHandler !== 'function') {
@@ -701,7 +705,7 @@ export function attachWindowPolicy(win, session) {
   // Bound receivers: Electron exposes these as prototype methods that
   // read `this`. Never destructure them; every call below is a method
   // call on the same handle object so the receiver is preserved.
-  const webContents = /** @type {{ on: (eventName: string, listener: Function) => unknown, setWindowOpenHandler: (handler: () => {action: string}) => unknown }} */ (
+  const webContents = /** @type {{ on: (eventName: string, listener: Function) => unknown, setWindowOpenHandler: (handler: (details?: {url?: string}) => {action: string}) => unknown }} */ (
     /** @type {unknown} */ (contents)
   );
   const sess = /** @type {{ setPermissionRequestHandler: (handler: Function) => unknown, setPermissionCheckHandler: (handler: Function) => unknown }} */ (
@@ -709,7 +713,14 @@ export function attachWindowPolicy(win, session) {
   );
   webContents.setWindowOpenHandler(
     /** @returns {{action: string}} */
-    () => ({ action: decideWindowOpen('') }),
+    // [TARGET, unit decision] Reuse shell.openExternal for the exact legal source
+    // URL only; never navigate the privileged renderer or accept arbitrary URLs.
+    (details) => {
+      if (details?.url === 'https://github.com/oguirado/MetaViewer' && openSource) {
+        void openSource(details.url).catch(() => {});
+      }
+      return { action: decideWindowOpen('') };
+    },
   );
   webContents.on(
     'will-navigate',
@@ -2587,7 +2598,10 @@ export async function bootProductionMain(handles) {
   try {
     const winRec = /** @type {{webContents?: unknown}} */ (/** @type {unknown} */ (built));
     const contentsRec = assertHandleObject(winRec.webContents, 'win.webContents');
-    attachWindowPolicy(built, contentsRec.session);
+    attachWindowPolicy(built, contentsRec.session, async (url) => {
+      const { shell } = await import('electron');
+      await shell.openExternal(url);
+    });
     // [TARGET, unit decision] Convey the admitted nested-depth signal through
     // the native document user agent before preload runs, without host globals.
     if (retail.nested && typeof contentsRec.setUserAgent === 'function') {
