@@ -771,6 +771,9 @@ except OSError:
 
 cmd_stop() {
     local pid waited=0 leaks=0 name f ram adm inventory programs
+    local statedir="${MV_SRF_STATE_DIR:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf}"
+    # The app removes its opening receipts as it exits: read them before stopping it.
+    programs=$(owned_programs "$statedir" 2>/dev/null) || programs=
     pid=$(running_pid)
     if [ -n "$pid" ]; then
         kill -TERM "$pid" 2>/dev/null
@@ -786,8 +789,6 @@ cmd_stop() {
         say "no running MetaViewer process"
     fi
     remove_owned_pid "$pid"
-    local statedir="${MV_SRF_STATE_DIR:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf}"
-    programs=$(owned_programs "$statedir" 2>/dev/null) || programs=
     if [ -x "$SRF_BIN/srf-identity-surface" ] && command -v docker >/dev/null 2>&1 &&
         bounded_docker info >/dev/null 2>&1 &&
         inventory=$(bounded_docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then

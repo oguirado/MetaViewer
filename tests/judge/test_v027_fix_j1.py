@@ -97,6 +97,14 @@ class JudgeFixJ1(unittest.TestCase):
         self.assertTrue(foreign.exists())
         self.assertNotIn('rm -rf', result.err)
 
+    def test_program_ownership_is_read_before_the_app_exits(self):
+        # Measured on x64: the app removes its receipts as it exits, so reading them
+        # afterwards left a stopped Program's RAM frames reported as a leak.
+        script = (Path(__file__).resolve().parents[2] / 'scripts/judge/metaviewer-judge.sh').read_text()
+        body = script[script.index('cmd_stop() {'):]
+        self.assertLess(body.index('programs=$(owned_programs'), body.index('pid=$(running_pid)'))
+        self.assertEqual(body[:body.index('\n}\n')].count('owned_programs'), 1)
+
     def test_untrusted_program_receipt_does_not_authorize_stop_or_cleanup(self):
         self.install(capsules=True)
         receipt = self.program_receipt()
