@@ -1371,7 +1371,7 @@ const mergedRows = () => {
   const ids = new Set(base.map(row => row.id));
   return [...base.map(row => {
     const native = nativeRows.value.find(item => item.id === row.id && item.hostWindow)
-      || (typeof nativeWindowMetadata !== 'undefined' ? nativeWindowMetadata.get(row.id) : undefined);
+      || (row.backendLifecycle === 'lost' && typeof nativeWindowMetadata !== 'undefined' ? nativeWindowMetadata.get(row.id) : undefined);
     return native ? {...row,title:native.title,hostWindow:native.hostWindow} : row;
   }),...nativeRows.value.filter(row => !ids.has(row.id))];
 };
@@ -1407,8 +1407,8 @@ async function pollNativeSurfaces() {
       backendLifecycle:s.state,generation:null,visibility:s.visibility,control:s.control,display:s.display,geometry:s.geometry,
       attachmentState:'live',refusal:null}));
     if (typeof nativeWindowMetadata !== 'undefined') {
-      for (const row of next) if (row.hostWindow) nativeWindowMetadata.set(row.id,row);
-      const retained = new Set([...next, ...(baseFeed.getProjection()?.rows || []).filter(row => row.backendLifecycle !== 'destroyed')].map(row => row.id));
+      for (const row of next) if (row.hostWindow) nativeWindowMetadata.set(row.id,{title:row.title});
+      const retained = new Set([...next.filter(row => row.hostWindow), ...(baseFeed.getProjection()?.rows || []).filter(row => row.backendLifecycle === 'lost')].map(row => row.id));
       for (const id of nativeWindowMetadata.keys()) if (!retained.has(id)) nativeWindowMetadata.delete(id);
     }
     if (!availabilityChanged && JSON.stringify(next) === JSON.stringify(nativeRows.value)) return;
