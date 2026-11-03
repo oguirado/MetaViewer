@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # MetaViewer judge preflight: read-only host checks with typed refusals.
 #
-# Usage: preflight.sh [--tier T0|T1|T2] [--phase static|all]
+# Usage: preflight.sh [--tier T0|T1|T2] [--phase static|all|display]
 #        preflight.sh --facts [--tier T]            (key=value host facts)
 #        preflight.sh --sysdep-packages [--tier T]  (missing apt packages, one line)
 #
@@ -29,12 +29,12 @@ set -o pipefail
 SELF_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P) || exit 64
 
 usage() {
-    printf 'JUDGE_USAGE: preflight.sh [--tier T0|T1|T2] [--phase static|all] [--facts|--sysdep-packages] -- fix: use one of the documented options\n' >&2
+    printf 'JUDGE_USAGE: preflight.sh [--tier T0|T1|T2] [--phase static|all|display] [--facts|--sysdep-packages] -- fix: use one of the documented options\n' >&2
     exit 64
 }
 
 tier_valid() { case $1 in T0 | T1 | T2) return 0 ;; esac; return 1; }
-phase_valid() { case $1 in static | all) return 0 ;; esac; return 1; }
+phase_valid() { case $1 in static | all | display) return 0 ;; esac; return 1; }
 
 TIER=T1
 PHASE=all
@@ -233,15 +233,16 @@ chk_userns() {
 }
 
 chk_display() {
-    command -v xdpyinfo >/dev/null 2>&1 || return 0
     if [ -z "${DISPLAY:-}" ]; then # MUT:JUDGE_DISPLAY
         if [ -n "${WAYLAND_DISPLAY:-}" ]; then
             refuse JUDGE_DISPLAY "Wayland-only session: DISPLAY is empty so there is no XWayland" "enable XWayland (WSLg provides it) or run under xvfb-run"
         else
-            refuse JUDGE_DISPLAY "DISPLAY is not set" "log in to a desktop session, enable XWayland/WSLg or run under xvfb-run"
+            refuse JUDGE_DISPLAY "DISPLAY is not set" "xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY)"
         fi
+    elif ! command -v xdpyinfo >/dev/null 2>&1; then
+        refuse JUDGE_DISPLAY "xdpyinfo is missing; display reachability is unverified" "sudo apt-get install -y x11-utils, then re-run doctor"
     elif ! xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
-        refuse JUDGE_DISPLAY "the X server at DISPLAY=$DISPLAY is not reachable" "log in to a desktop session, enable XWayland/WSLg or run under xvfb-run"
+        refuse JUDGE_DISPLAY "the X server at DISPLAY=$DISPLAY is not reachable" "xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY)"
     fi
 }
 
@@ -284,6 +285,8 @@ chk_ram() {
     rec=$((floor + 4194304))
     if [ "$avail" -lt "$need" ]; then # MUT:JUDGE_RAM
         refuse JUDGE_RAM "MemAvailable is $(kib_mib "$avail") MiB [MEASURED], minimum $(kib_mib "$need") MiB [TARGET] needed (floor $(kib_mib "$floor") MiB + 512 MiB capsule reserve)" "close applications, add RAM, or (WSL2) raise memory= in .wslconfig"
+    elif [ "$avail" -lt 6291456 ]; then
+        note "warning (JUDGE_RAM): UI capsule creation is refused below 6144 MiB [CITED] MemAvailable (capsule RAM plus shared memory); close applications or add RAM before Add capsule"
     elif [ "$avail" -lt "$rec" ]; then
         note "warning (JUDGE_RAM): MemAvailable is $(kib_mib "$avail") MiB [MEASURED], below recommended $(kib_mib "$rec") MiB [TARGET] for multi-capsule runs; single capsule can run"
     fi
@@ -407,11 +410,39 @@ chk_net() {
 }
 
 chk_profile() {
-    local p="$STORE/profiles/$PROFILE_ID" st
-    st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
-    if [ "$st" != "700 10001" ]; then # MUT:JUDGE_PROFILE
-        refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo)"
+    local p st profile pool p2=mv-live-2 p3=mv-live-3 p4=mv-live-4
+    if [ -n "${MV_SRF_PROFILES:-}" ]; then
+        if ! pool=$(python3 -c '
+import json, re, sys
+try:
+    pool = json.loads(sys.argv[1])
+    if not isinstance(pool, dict) or not pool:
+        raise ValueError()
+    for name, spec in pool.items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", name) or not isinstance(spec, dict):
+            raise ValueError()
+        if spec.get("Kind") == "browser" or spec.get("NativeKind") == "browser":
+            print(name)
+except (ValueError, TypeError):
+    sys.exit(2)
+' "$MV_SRF_PROFILES" 2>/dev/null); then
+            refuse JUDGE_PROFILE "MV_SRF_PROFILES is not a valid profile pool" "set a valid profile pool and provision its browser directories"
+            return
+        fi
+    else
+        [ "$PROFILE_ID" = "$p2" ] && p2=mv-live-1
+        [ "$PROFILE_ID" = "$p3" ] && p3=mv-live-1
+        [ "$PROFILE_ID" = "$p4" ] && p4=mv-live-1
+        pool=$(printf '%s\n' "$p2" "$p3" "$p4")
     fi
+    while IFS= read -r profile; do
+        [ -n "$profile" ] || continue
+        p="$STORE/profiles/$profile"
+        st=$(stat -c '%a %u' -- "$p" 2>/dev/null || printf '')
+        if [ "$st" != "700 10001" ]; then # MUT:JUDGE_PROFILE
+            refuse JUDGE_PROFILE "profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}')" "bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo)"
+        fi
+    done < <(printf '%s\n%s\n' "$PROFILE_ID" "$pool")
 }
 
 chk_ram_stale() {
@@ -435,12 +466,15 @@ chk_ram_stale() {
 }
 
 chk_disk() {
-    local need=15000000000 rec=30000000000 home_avail root_avail
+    local need=15000000000 rec=30000000000 home_avail root_avail install_avail
+    [ "$TIER" = T1 ] && need=2000000000 rec=2000000000
     home_avail=$(df_avail "$HOME_DIR" || printf 0)
+    install_avail=$(df_avail "$JUDGE_HOME" || printf 0)
+    [ "$install_avail" -lt "$home_avail" ] && home_avail=$install_avail
     root_avail=$home_avail
     [ -n "$DOCKER_ROOT" ] && root_avail=$(df_avail "$DOCKER_ROOT" || printf 0)
     if [ "$home_avail" -lt "$need" ] || [ "$root_avail" -lt "$need" ]; then # MUT:JUDGE_DISK
-        refuse JUDGE_DISK "free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], 15 GB [TARGET] minimum needed on both" "free disk space (docker system prune removes unused images)"
+        refuse JUDGE_DISK "free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], $(($need / 1000000000)) GB [TARGET] minimum needed on both" "df -h \"$JUDGE_HOME\"; free space on the install filesystem"
     elif [ "$home_avail" -lt "$rec" ] || [ "$root_avail" -lt "$rec" ]; then
         note "warning (JUDGE_DISK): free space is $((home_avail / 1000000000)) GB at home and $((root_avail / 1000000000)) GB at the Docker root [MEASURED], below recommended 30 GB [TARGET]"
     fi
@@ -469,26 +503,35 @@ if [ "$MODE" = facts ]; then
     exit 0
 fi
 
+# Optional host capability: absence never gates browser or container programs.
+if ! command -v xpra >/dev/null 2>&1; then
+    note 'optional capability (JUDGE_HOST_PROGRAM): Host program disabled: xpra is absent; install with: apt install xpra'
+fi
+
 run_checks() {
     local c
     for c in "$@"; do "chk_$c"; done
 }
 
 if [ "$PHASE" = static ]; then
-    run_checks os arch bundle_arch xdg shm
+    run_checks os arch bundle_arch xdg shm ram
     if [ "$TIER" = T2 ]; then
-        run_checks ram cpuset
+        run_checks cpuset
         chk_docker_host && { chk_docker; chk_docker_desktop; }
-        run_checks net disk
+        run_checks net
     fi
+    chk_disk
+elif [ "$PHASE" = display ]; then
+    chk_display
 else
     run_checks os arch node
-    if [ "$TIER" != T0 ]; then run_checks bundle_arch sysdep userns display xdg shm; fi
+    if [ "$TIER" != T0 ]; then run_checks bundle_arch sysdep userns display xdg shm ram; fi
     if [ "$TIER" = T2 ]; then
-        run_checks ram cpuset
+        run_checks cpuset
         chk_docker_host && { chk_docker; chk_docker_desktop; }
-        run_checks image net profile ram_stale disk
+        run_checks image net profile ram_stale
     fi
+    [ "$TIER" = T0 ] || chk_disk
 fi
 
 if [ "$FAILS" -gt 0 ]; then

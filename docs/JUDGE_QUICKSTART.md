@@ -1,5 +1,7 @@
 # MetaViewer — Judge Quickstart
 
+After installation, follow the [Judge tour](JUDGE_TOUR.md) with your AI.
+
 This page takes a hackathon judge from a clean Linux machine (such as an 8-core,
 16 GiB RAM x64 laptop) to a running MetaViewer wall with live browser and program
 capsules.
@@ -12,8 +14,9 @@ capsules.
 - Full build and environment reference: [INSTALL.md](INSTALL.md).
 - Operator walkthrough: [USER_GUIDE.md](USER_GUIDE.md).
 
-Supported: Linux `x86_64` (`x64`) or `aarch64` (`arm64`) — Ubuntu 24.04 LTS or
-Debian 12/13 recommended; Windows 11 through WSL2 + WSLg with rootful Docker Engine
+Supported architecture: Linux `x86_64` (`x64`) or `aarch64` (`arm64`). The verified
+host is Ubuntu 24.04 LTS. Debian 12/13 is a candidate platform and emits an
+unverified-host warning. Windows 11 uses WSL2 + WSLg with rootful Docker Engine
 inside the Ubuntu distro (Docker Desktop is not supported). macOS is not supported.
 No GPU or CPU pinning is required. Minimums: see [Hardware](#hardware).
 
@@ -33,14 +36,32 @@ The judge kit uses the release assets in `assets/` (verified against
 | --- | --- | --- |
 | `SHA256SUMS` | T1 & T2 | Authoritative SHA-256 digests for every release asset |
 | `metaviewer-linux-<x64\|arm64>.tar.gz` | T1 & T2 | Packaged `MetaViewer-linux-<arch>/` bundle and `MetaViewer-linux-<arch>.sha256` [CITED: `docs/INSTALL.md`] |
-| `node-linux-<x64\|arm64>.tar.xz` | T1 & T2 | Node.js `>= 24` runtime (`*/bin/node`), extracted only when host `node` is missing or `< 24` |
+| `node-linux-<x64\|arm64>.tar.xz` | T1 & T2 | Node.js `>= 24` runtime (`*/bin/node` plus npm when included), extracted only when host `node` is missing or `< 24` |
 | `opensuperficies-linux-<x64\|arm64>.tar.gz` | T2 | `opensuperficies/bin/srf*` binaries and `opensuperficies/firewall/` |
 | `images-linux-<x64\|arm64>.tar` | T2 | `docker save` archive containing `opensuperficies-identity-browser-<arch>:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, and `opensuperficies-desktop-<arch>:1.1.0` |
 | `vision-engine.tar.gz` | T2 | `vision-engine/` at the commit pinned in `deps.lock` |
 | `wender-agent.tar.gz` | T2 | `wender-agent/` at the commit pinned in `deps.lock` |
 
-Download or place the assets for the architecture printed by `uname -m` (`aarch64` is
-`arm64`, `x86_64` is `x64`) into `assets/`. A kit for the wrong architecture is
+From a fresh clone, fetch the assets in one command (Python is required):
+
+```bash
+# Complete directory supplied by the release maintainer; add --capsules for T2.
+python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules
+# Or an explicit HTTPS release asset base URL with an independently obtained digest:
+python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
+```
+
+Set these variables to the actual directory or published release URL and manifest digest
+supplied by the maintainer. A publicly accessible complete release is **AUSENTE — no inventar**
+in the provided evidence; the command refuses incomplete or corrupt sets. Do not assume
+that a GitHub Actions artifact is a published release. CI currently exports app and Node
+assets with `SHA256SUMS` for T1 only; T2 also needs the private component and image assets
+built by the maintainer. Checksums protect integrity, not publisher authenticity.
+The explicit fetch command authorizes the transfer; install still asks before downloading
+missing assets. No install begins until the fetch command has verified the selected set.
+
+Fetch maps the architecture printed by `uname -m` (`aarch64` to `arm64`,
+`x86_64` to `x64`) and writes verified files into `assets/`. A kit for the wrong architecture is
 refused (`JUDGE_BUNDLE_ARCH` / `PKG_ARCH_MISMATCH`). Maintainers building the release
 assets from local artifacts run `python3 tools/build_release_assets.py --out-dir ./assets ...`
 (see [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md#3-release-assets-and-building-them-locally)).
@@ -57,14 +78,21 @@ described in [INSTALL.md](INSTALL.md#extract-and-verify-the-sha-256-manifest)).
 ## 2. Check your machine (no changes made)
 
 ```bash
-bash scripts/judge/metaviewer-judge.sh doctor
-bash scripts/judge/metaviewer-judge.sh doctor --capsules
+bash scripts/judge/preflight.sh --tier T2 --phase static
 ```
+
+This host-only check is also available as
+`bash scripts/judge/metaviewer-judge.sh doctor --capsules --before-install`.
 
 Every refusal is printed as `JUDGE_<CODE>: <problem> -- fix: <command>` and exits
 with code `2`. Non-fatal resource advisories on smaller laptops are printed as
 `JUDGE_NOTE: warning (JUDGE_<CODE>): ...` without blocking execution. Fix any
-refusals and re-run until `doctor` prints `JUDGE_DOCTOR_OK tier=<T1|T2>`.
+host refusals and re-run. `--before-install` checks host requirements only and does
+not require installed images, profiles or proxy state. Missing tools are installed by
+`install`; Docker access, host resources and session ownership still need attention.
+After installation run `bash scripts/judge/metaviewer-judge.sh doctor --capsules`
+(or omit `--capsules` for T1). Full doctor checks the installed runtime and should then
+print `JUDGE_DOCTOR_OK tier=<T1|T2>`. T0 uses the separate fixture below.
 
 | Tier | What you get |
 | --- | --- |
@@ -84,15 +112,16 @@ bash scripts/judge/metaviewer-judge.sh install --capsules
 `install` stops at the first refusal and never runs `sudo` without printing the exact
 command and asking first (`--yes` answers for you in non-interactive runs). In order:
 
-1. Runs static preflight checks.
+1. Runs static preflight checks, including T1 RAM and disk floors.
 2. Installs any missing Ubuntu/Debian system packages after your confirmation.
-3. Extracts `metaviewer-linux-<arch>.tar.gz` with `tar --no-same-owner`, loads the
+3. Checks the display before app extraction; then extracts `metaviewer-linux-<arch>.tar.gz` with `tar --no-same-owner`, loads the
    AppArmor userns profile only if Ubuntu restricts unprivileged user namespaces, and
    runs `--verify-install` and `--smoke` (ending with `METAVIEWER_MAIN_SMOKE_OK`).
 4. With `--capsules` (Tier 2): extracts `opensuperficies`, `vision-engine`, and
-   `wender-agent`; optionally installs the open-mode egress firewall (or falls back
-   to the `sudo`-free legacy Docker network `srf-idnet` if declined or passed
-   `--no-firewall`); loads `images-linux-<arch>.tar` into Docker; and provisions the
+   `wender-agent`; loads `images-linux-<arch>.tar` into Docker; then optionally
+   installs the open-mode egress firewall when the compatible browser image is
+   available (or falls back to the `sudo`-free legacy Docker network `srf-idnet`
+   if unavailable, declined, or passed `--no-firewall`); and provisions the
    profile directories (`judge` and `mv-live-1..mv-live-4`, mode `0700`, UID `10001`)
    **without `sudo`** via a local Docker bind-mount.
 5. Writes `judge_receipt.json` (architecture, core count, memory, versions, digests;
@@ -118,17 +147,44 @@ rootful socket and refuses `DOCKER_HOST` / `DOCKER_CONTEXT`.
 sudo usermod -aG docker "$USER"
 ```
 
-Log out and back in, then re-run `doctor --capsules`.
+Log out and back in, then re-run `doctor --capsules --before-install`. On WSL, close the distro, run `wsl --shutdown` from Windows and reopen it.
 
 ### Capsule network (tier T2 only)
 
-The default capsule network mode is **Open**: public internet only, with no LAN access
-and no host services. Open needs one host firewall step (`srf-open-egress.service`)
-that requires root. `install --capsules` shows the exact firewall script and runs it
-with `sudo` only after you confirm once. If you decline, pass `--no-firewall`, or run
-with the `0.1.1` offline browser image, `install --capsules` automatically falls back
-to the **legacy** Docker bridge network (`srf-idnet`) with zero `sudo` steps. Details:
-[INSTALL.md](INSTALL.md#capsule-network).
+The installer loads the shipped image archive before offering the Open firewall step.
+Open requires the actual `opensuperficies-identity-browser-<arch>:0.2.0` image
+[CITED: `scripts/judge/preflight.sh`]; retagging the legacy image is not sufficient.
+If that image is unavailable, the installer selects legacy and does not install a
+firewall. An existing active Open witness with no matching image refuses with
+`JUDGE_IMAGE`; obtain a compatible kit. With the Open image present, install offers
+the exact administrator script; declining it or passing `--no-firewall` retains the
+legacy fallback unless an Open firewall witness already exists.
+
+**The legacy network reaches no public site today.** The shipped empty policy grants
+no destinations. A running browser capsule is not evidence of working public browsing.
+Arbitrary public browsing requires a compatible Open image and firewall; this kit does
+not invent wildcard approvals or silently change proxy policy.
+
+### Headless installation
+
+The install smoke needs an X server. On a headless host, install the display tools and
+wrap the entire install (retain `--capsules` only for T2):
+
+```text
+sudo apt-get install -y xvfb xauth x11-utils
+```
+
+```bash
+xvfb-run -a bash scripts/judge/metaviewer-judge.sh install --capsules
+xvfb-run -a bash scripts/judge/metaviewer-judge.sh doctor --capsules
+```
+
+For interactive judging, run from a reachable desktop DISPLAY, XWayland or WSLg.
+Xvfb supplies a virtual display; it does not provide a visible remote desktop.
+The source checkout's package verifier may also need `npm ci` in `ui`; the official
+Node archive contains npm, and the launcher preserves it. A Node-only asset or host
+Node without npm refuses `JUDGE_NPM` when those dependencies are needed. The fetch
+command itself does not install npm packages.
 
 ## 4. Run
 
@@ -140,15 +196,17 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 `:101`, `mv-live-3` on `:102`, `mv-live-4` on `:103`):
 
 - Switch between **`Humans`** and **`Agents`** views (`Ctrl+Tab`), create virtual
-  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`Single`, `Side by side`,
-  `Grid`, `Focus + strip`, `Floating`).
+  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1 tile`, `2 side by side`,
+  `2×2`, `Focus + strip`, `Floating layout`).
 - Click **`＋ Add capsule`** to launch an **`Identity browser`**, a Linux **`Program`**
   (inside `opensuperficies-program-host:0.1.0`), or capture an X11 **`Desktop window`**.
-- Log into a site in human mode, click **`Mark as logged in`** to hand the capsule to
-  agent mode, watch live read-only, or click **`Take control (emergency)`**.
+- Log into a site in human mode and click **`Mark as logged in`** to save its login
+  status. Then choose **`Switch to agent mode`** separately to hand the capsule to
+  the agent; watch live read-only, or click **`Take control (emergency)`**.
 - Click **`ID`** (**`Copy ID for AI`**), open **`More ▾ -> Terminal`**, click
-  **`🚀 Bootstrap`**, or open **`More ▾ -> Use MetaViewer`** to connect an AI CLI.
-- Record a workflow and run **`More ▾ -> Automate from a demo`** (or `mw_run`).
+  **`🚀 Bootstrap`**, or click the top-bar **`Use MetaViewer`** button to connect an AI CLI.
+- Record a workflow and run `mw_run` from the terminal. There is no
+  **`Automate from a demo`** menu action.
   Full step-by-step instructions: [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md).
 
 ## 5. Stop
@@ -157,9 +215,9 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 bash scripts/judge/metaviewer-judge.sh stop
 ```
 
-Stops the MetaViewer process and any running `srf-*` capsules, reclaims stale RAM
-admission reservations, and prints `JUDGE_STOP_CLEAN` only if no `srf-*` container,
-socket, or RAM directory is left behind.
+Stops the MetaViewer process and scoped capsules and checks stale RAM admission
+reservations. The shared `srf-egress-proxy` remains running; `JUDGE_STOP_CLEAN`
+excludes that proxy. Other capsule, socket or RAM leftovers are reported.
 
 ## Windows (WSL2)
 
@@ -187,6 +245,32 @@ Full table and sources: [INSTALL.md](INSTALL.md#hardware). Designed for a standa
 
 ## Troubleshooting
 
+The app includes public Python agents, tools, dependency locks and contracts in
+`resources/operator` [TARGET, unit decision]. Python remains a host prerequisite.
+`MV_OPERATOR_REPO` optionally selects a developer checkout; an installed runtime
+uses sealed public files and keeps MemoryWeb data outside the app directory.
+
+For the source-free Linux x64 kit, the judge launcher sets
+`MV_WENDER_EXECUTABLE` to `deps/wender-agent/wender-runtime` and
+`MV_VISION_EXECUTABLE` to `deps/vision-engine/vision-runtime` under its install
+directory. These paths are also exported in the app attachment environment.
+The public compiled lock pins every binary, shared library and schema and binds
+the distribution to the source commit in `deps.lock`. Missing files, modified
+hashes and unpinned additions refuse before execution. Checkout mode retains
+the existing `MV_WENDER_ROOT` / `VQA_VE_ROOT` provenance verification.
+
+The supplied compiled export supports program planning and perception. Stored
+browser workflows and browser goal state acquisition still need private APIs
+from a verified checkout and refuse `MW_COMPILED_BROWSER_UNAVAILABLE` or
+`MW_COMPILED_WORKFLOW_UNAVAILABLE` with this export. This limitation does not
+prevent displaying browser capsules. Arm64 compiled private assets are absent.
+The version labels in `deps.lock` are retained even where release tags disagree.
+
+Host program is optional. Preflight reports `xpra` absence with the install line
+`apt install xpra`; the Host program dialog refuses with that reason. Browser
+capsules and programs inside containers remain available. The kit never
+installs this optional host package automatically.
+
 | Code | Meaning and fix |
 | --- | --- |
 | `PKG_ARCH_MISMATCH` | Kit for the wrong architecture; download the other one |
@@ -196,3 +280,28 @@ Full table and sources: [INSTALL.md](INSTALL.md#hardware). Designed for a standa
 
 Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_admission.go`,
 `daemon-adapter/internal/capsule/egress_policy.go`, `ui/electron/terminalHost.js`].
+
+### Legacy kit proxy setup
+
+The sudo-free fallback calls the kit's `srf-identity-surface net up` with
+`--proxy-bin` pointing to the kit's `srf-egress-proxy`. The launcher selects the
+proxy entrypoint, internal network and bridge attachment and verifies
+`EGRESS_PROXY_READY`; it refuses an existing incompatible proxy without replacing it.
+Private metadata lives under `$MV_JUDGE_HOME/network`: separate `policy/`,
+`registry/` and `audit/` directories (mode `0700`), with policy and registry files
+at `0600`. The x64 source runs the proxy with the CLI caller's UID/GID, so these
+files stay owned by the judge user. Profile directories still use Docker to
+provision the browser UID separately. Run passes this same registry to capsules.
+
+The initial `policy/policy.json` uses `browserid.proxy-policy/v1` with empty
+`approved`, `denied` and `connect_ports` collections. It grants no destinations.
+Existing policy files are retained. This upstream schema supports exact capsule
+IDs and normalized hosts only: public browsing requires explicit `approved`
+entries and HTTPS `connect_ports` entries for each capsule and host. Leave
+`private_targets` absent to retain LAN/host blocking. Arbitrary public browsing
+is not available through this policy schema; no wildcard policy is implied.
+
+The x64 kit supplies browser image `0.1.1`. If a binary advertises Open and the
+firewall witness is present, preflight requires `0.2.0` and refuses that image set.
+The installer detects this before offering a new firewall. Retagging `0.1.1` would not establish Open support; the upstream source disables
+Open for its default image. Use a legacy-only kit without an active Open witness, or obtain a compatible Open kit.

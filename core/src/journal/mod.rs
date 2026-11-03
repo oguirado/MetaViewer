@@ -23,8 +23,10 @@
 //! MAX_VERIFIED_WITNESS_CACHE = 256).
 //! [TARGET, unit decision] Journal close/shutdown and Drop flush any pending
 //! group-commit batch, close the worker channel, and join the background sync
-//! worker (bounded wait SYNC_WORKER_JOIN_TIMEOUT = 5 s, logging errors) so no
-//! file is written or renamed after close/drop returns.
+//! worker (bounded wait SYNC_WORKER_JOIN_TIMEOUT = 5 s, logging errors).
+//! [TARGET, unit decision] If storage I/O outlives Drop's deadline, abort further
+//! publication and detach the worker; its WriterFile guard fences recovery until
+//! the syscall returns and the worker exits. Successful close still joins.
 //! [TARGET, unit decision] Unchanged-frame fast path in journal verify: when a
 //! frame's advertised digest equals the last committed digest for the same
 //! surface in the same session root and epoch with strictly advancing generation
@@ -50,6 +52,9 @@ use std::path::{Component, Path, PathBuf};
 pub mod anchor;
 mod sha256;
 pub use sha256::{sha256_hex, StreamingSha256};
+
+#[cfg(test)]
+mod v027_tests;
 
 // [TARGET, unit decision] Group-commit window for frame witness/record fsyncs.
 // Non-frame transitions and Journal drop flush synchronously before proceeding.
@@ -1639,6 +1644,26 @@ fn verify_witness(root: &Path, w: &Witness) -> Result<(), JournalError> {
     }
     Ok(())
 }
+// [TARGET, unit decision] Failed initialization rolls back only the directory
+// this create call exclusively made. Keep the writer lock through rollback so
+// recovery cannot open a valid-looking checkpoint while cleanup removes it.
+struct CreationGuard {
+    root: PathBuf,
+    _writer: Option<std::sync::Arc<WriterFile>>,
+    armed: bool,
+}
+impl Drop for CreationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let result = fs::remove_dir_all(&self.root)
+                .map_err(|_| JournalError::Io)
+                .and_then(|()| sync_dir(self.root.parent().ok_or(JournalError::Invalid)?));
+            if let Err(error) = result {
+                eprintln!("journal create rollback failed: {error}");
+            }
+        }
+    }
+}
 impl Journal {
     pub fn create(state_dir: &Path, state: &CoreState) -> Result<Self, JournalError> {
         if !safe_component(&state.session_id) || state.core_seq != 0 {
@@ -1677,6 +1702,11 @@ impl Journal {
             .mode(0o700)
             .create(&root)
             .map_err(|_| JournalError::Io)?;
+        let mut creation = CreationGuard {
+            root: root.clone(),
+            _writer: None,
+            armed: true,
+        };
         for name in ["events", "artifacts"] {
             fs::DirBuilder::new()
                 .mode(0o700)
@@ -1707,10 +1737,12 @@ impl Journal {
             .and_then(|_| file.write_all(b"\n"))
             .and_then(|_| file.sync_all())
             .map_err(|_| JournalError::Io)?;
+        let file = std::sync::Arc::new(file);
+        creation._writer = Some(file.clone());
         let now = std::time::Instant::now();
         let journal = Self {
             root,
-            file: std::sync::Arc::new(file),
+            file,
             count: 0,
             bytes: header.len() as u64 + 1,
             tail: ZERO.into(),
@@ -1753,6 +1785,7 @@ impl Journal {
         for parent in created_state_parents {
             sync_dir_traced(&parent, &journal.root, "state-parent")?;
         }
+        creation.armed = false;
         Ok(journal)
     }
     fn closure(&self) -> Checkpoint {
@@ -2598,7 +2631,10 @@ impl Journal {
                         self.sync_worker = Some(worker);
                         return Err(JournalError::Io);
                     }
-                    break;
+                    // A storage syscall cannot be cancelled by joining its thread.
+                    // The worker owns a WriterFile Arc, so detaching retains the
+                    // exclusive archive lock until it observes abort and exits.
+                    return Err(JournalError::Io);
                 }
                 let rem = deadline.saturating_duration_since(now);
                 let (new_st, _) = worker

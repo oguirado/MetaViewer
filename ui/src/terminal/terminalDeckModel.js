@@ -1,3 +1,4 @@
+import { assertSafeWorkflowPrompt, workflowPrompt } from './workflowPrompts.js';
 /**
  * OpenFresnel-style Terminal Deck model and controller for MetaViewer (P18h).
  *
@@ -95,8 +96,8 @@ const CANONICAL_PROVIDER_LABELS = Object.freeze({
  * @type {Readonly<Record<string, string>>}
  */
 export const TERMINAL_REFUSAL_HINTS = Object.freeze({
-  TERMINAL_UNAVAILABLE: 'Terminal support is unavailable in this package; verify the bundled node-pty native runtime and retry.',
-  NATIVE_ABSENT: 'Terminal native runtime is missing; stage node-pty in build-native/pty-runtime/node-pty and retry.',
+  TERMINAL_UNAVAILABLE: 'Terminal support is unavailable. Repair or reinstall the MetaViewer package, restart it, then open a terminal again.',
+  NATIVE_ABSENT: 'Terminal support is missing from this installation. Repair or reinstall the MetaViewer package and restart it.',
   TERMINAL_DISABLED: 'Enable terminal access before opening a terminal session.',
   COMMAND_NOT_ALLOWED: 'Select an admitted terminal profile from the launcher and try again.',
   SESSION_LIMIT: 'Close an existing terminal session to free a broker slot, then retry.',
@@ -115,7 +116,7 @@ export const TERMINAL_REFUSAL_HINTS = Object.freeze({
   TERMINAL_BROKER_UNAVAILABLE: 'The terminal broker is not connected in this view; retry after host initialization.',
   TERMINAL_LAUNCH_UNAVAILABLE: 'Terminal launch is currently busy or disabled; wait for the active launch to settle and retry.',
   TERMINAL_ACCESS_UNAVAILABLE: 'Terminal opt-in access could not be enabled; check host permissions and retry.',
-  TERMINAL_ATTACH_FAILED: 'The terminal session opened but its MessagePort could not be attached across the preload bridge.',
+  TERMINAL_ATTACH_FAILED: 'The terminal connection failed. Close this terminal and open another; if it fails again, repair or reinstall MetaViewer and restart it.',
   TERMINAL_SESSION_UNAVAILABLE: 'The terminal session transport is unavailable or has already closed; open a new session.',
   TERMINAL_UNKNOWN_SESSION: 'The requested terminal session is no longer active on the host; open a new session.',
   TERMINAL_BINDING_REFUSED: 'The terminal session port binding was refused; open a new terminal session.',
@@ -489,8 +490,8 @@ export function deserializeDeckState(raw) {
     const screenMatch = /^screen-(\d+)$/.exec(screenId);
     if (screenMatch) maxScreenNum = Math.max(maxScreenNum, Number(screenMatch[1]));
     const allRawSlots = Array.isArray(rawScreen.slots) ? rawScreen.slots : [];
-    if (allRawSlots.length > 16) return null;
-    const rawSlots = allRawSlots.slice(0, MAX_SLOTS_PER_SCREEN);
+    if (allRawSlots.length > MAX_SLOTS_PER_SCREEN) return null;
+    const rawSlots = allRawSlots;
     /** @type {DeckSlot[]} */
     const slots = [];
     for (const rawSlot of rawSlots) {
@@ -637,10 +638,15 @@ export function createTerminalDeckController(options = {}) {
   let toastTimer = /** @type {ReturnType<typeof setTimeout>|null} */ (null);
   let disposed = false;
 
+  let storageProtected = false;
   const restored = (() => {
     try {
-      return options.storage ? deserializeDeckState(options.storage.getItem(TERMINAL_DECK_STORAGE_KEY)) : null;
+      const raw = options.storage?.getItem(TERMINAL_DECK_STORAGE_KEY);
+      const saved = deserializeDeckState(raw);
+      storageProtected = raw != null && !saved;
+      return saved;
     } catch {
+      storageProtected = true;
       return null;
     }
   })();
@@ -779,7 +785,7 @@ export function createTerminalDeckController(options = {}) {
   }
 
   function persist() {
-    if (!options.storage) return;
+    if (!options.storage || storageProtected) return;
     try {
       const json = serializeDeckState({
         screens,
@@ -903,6 +909,7 @@ export function createTerminalDeckController(options = {}) {
       }
       return;
     }
+    if (pendingCloseSlotId === found.slot.id) pendingCloseSlotId = null;
     found.slot.status = 'exited';
     found.slot.busy = false;
     if (!cleanExit) {
@@ -1135,6 +1142,20 @@ export function createTerminalDeckController(options = {}) {
     return null;
   }
 
+  /** @param {string} sessionId */
+  function claimNewSlotScreen(sessionId) {
+    const screen = resolveTargetScreenForNewSlot();
+    if (screen) return screen;
+    void closeSessionOnBroker(sessionId);
+    const error = Object.assign(new Error('SESSION_LIMIT: All terminal screens are full.'), { code: 'SESSION_LIMIT' });
+    const formatted = formatTerminalRefusal(error);
+    errorCode = formatted.code;
+    errorMessage = formatted.message;
+    launcherOpen = false;
+    notify();
+    throw error;
+  }
+
   function dismissError() {
     if (!errorCode && !errorMessage) return;
     errorCode = '';
@@ -1225,7 +1246,7 @@ export function createTerminalDeckController(options = {}) {
       return existing.slot;
     }
 
-    const screen = resolveTargetScreenForNewSlot() ?? screens[activeScreenIndex];
+    const screen = claimNewSlotScreen(sessionId);
     const slotId = `slot-${nextSlotSeq++}`;
     /** @type {DeckSlot} */
     const slot = {
@@ -1308,10 +1329,23 @@ export function createTerminalDeckController(options = {}) {
       notify();
       throw error;
     }
-    const commandBytes = Array.from(encoder.encode(`${commandText}\n`));
-    writeSessionBytes(sessionId, commandBytes);
-
     const existing = launchOpts.reuseSlotId ? findSlot(launchOpts.reuseSlotId) : null;
+    if (!existing && !hasCapacityForNewSlot()) claimNewSlotScreen(sessionId);
+    const commandBytes = Array.from(encoder.encode(`${commandText}\n`));
+    try {
+      if (typeof sessionFacade?.write !== 'function' && !directPortFacades.has(sessionId)) {
+        throw Object.assign(new Error('TERMINAL_SESSION_UNAVAILABLE: Custom command could not be sent.'), { code: 'TERMINAL_SESSION_UNAVAILABLE' });
+      }
+      writeSessionBytes(sessionId, commandBytes);
+    } catch (error) {
+      await closeSessionOnBroker(sessionId);
+      const formatted = formatTerminalRefusal(error);
+      errorCode = formatted.code;
+      errorMessage = formatted.message;
+      launcherOpen = false;
+      notify();
+      throw error;
+    }
     if (existing) {
       const prevSessionId = existing.slot.sessionId;
       if (prevSessionId && prevSessionId !== sessionId) {
@@ -1453,6 +1487,7 @@ export function createTerminalDeckController(options = {}) {
     const found = findSlot(slotId);
     if (!found) return { closed: false };
     const { slot } = found;
+    if (slot.sessionId && closingSessions.has(slot.sessionId)) return { closed: false };
     const isBusy = slot.status === 'running' && slot.busy !== false;
 
     if (isBusy && closeOpts.force !== true) {
@@ -1588,7 +1623,7 @@ export function createTerminalDeckController(options = {}) {
    *
    * @returns {Promise<{ ok: boolean, text: string, toast: string }>}
    */
-  async function bootstrap() {
+  async function bootstrap(promptText = AGENT_ENTRY_PROMPT) {
     if (toastTimer !== null) {
       clearTimeout(toastTimer);
       toastTimer = null;
@@ -1603,13 +1638,17 @@ export function createTerminalDeckController(options = {}) {
 
     if (clip && typeof clip.writeText === 'function') {
       try {
-        await clip.writeText(AGENT_ENTRY_PROMPT);
+        if (promptText === AGENT_ENTRY_PROMPT) {
+          await clip.writeText(AGENT_ENTRY_PROMPT);
+        } else {
+          await clip.writeText(promptText);
+        }
         copied = true;
       } catch {
         copied = false;
       }
     }
-    if (opEntry && typeof opEntry.copy === 'function') {
+    if (promptText === AGENT_ENTRY_PROMPT && opEntry && typeof opEntry.copy === 'function') {
       try {
         const res = await opEntry.copy();
         if (res && typeof res === 'object' && /** @type {{ ok?: unknown }} */ (res).ok === true) {
@@ -1635,7 +1674,7 @@ export function createTerminalDeckController(options = {}) {
         }
       }, toastDurationMs);
     }
-    return { ok: copied, text: AGENT_ENTRY_PROMPT, toast: toastMessage };
+    return { ok: copied, text: promptText, toast: toastMessage };
   }
 
   /**
@@ -1969,6 +2008,9 @@ export function createTerminalDeckController(options = {}) {
     switchScreen,
     focusSlot,
     bootstrap,
+    copyWorkflowPrompt: (/** @type {string} */ kind, /** @type {string} */ identityLine = '') => bootstrap(assertSafeWorkflowPrompt(
+      workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => identityLine || '<operator-pasted capsule identity line>'),
+    )),
     dismissError,
     handleKeyDown,
     writeSessionBytes,

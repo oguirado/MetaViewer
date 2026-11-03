@@ -174,6 +174,34 @@ export const HANDOFF_DISCOVERY=Object.freeze({maxScan:4096,maxRuns:32,maxAgeMs:6
  * @param {Record<string,string|undefined>} env @param {number} nowMs @returns {string[]} */
 export function discoverHandoffPaths(env,nowMs) {
   const state=typeof env.MV_OPERATOR_STATE_HOME==='string' && env.MV_OPERATOR_STATE_HOME!==''?env.MV_OPERATOR_STATE_HOME:typeof env.XDG_STATE_HOME==='string' && env.XDG_STATE_HOME!==''?env.XDG_STATE_HOME:typeof env.HOME==='string' && env.HOME!==''?join(env.HOME,'.local/state'):'';
+  // [TARGET, unit decision] Browser goals may export XDG_STATE_HOME in a shell
+  // after the app starts. Watch the documented goal/tour RAM namespaces too;
+  // every final record still passes the descriptor-based private-file gate.
+  const roots=new Set([state,env.XDG_STATE_HOME,join('/dev/shm/vqa-cu',`metaviewer-program-${process.getuid?.()}`)]);
+  try {
+    const dir=fs.opendirSync('/dev/shm');
+    try {
+      for(let i=0;i<HANDOFF_DISCOVERY.maxScan;i++) {
+        const entry=dir.readSync();if(!entry)break;
+        if(entry.isDirectory() && /^metaviewer-(goal|tour)\.[A-Za-z0-9]+$/.test(entry.name))roots.add(join('/dev/shm',entry.name));
+      }
+    } finally {dir.closeSync();}
+  }catch{/* RAM namespace unavailable: retain configured state discovery. */}
+  const candidates=[...roots].filter(x=>typeof x==='string')
+    .flatMap(root=>discoverRunHandoffs(/** @type {string} */(root),nowMs));
+  /** @type {Map<string,{mtime:number,paths:string[]}>} */const runs=new Map();
+  for(const path of candidates) {
+    const dir=dirname(path);
+    try {
+      if(!runs.has(dir))runs.set(dir,{mtime:fs.lstatSync(dir).mtimeMs,paths:[]});
+      runs.get(dir)?.paths.push(path);
+    }catch{/* Raced removal. */}
+  }
+  return [...runs.entries()].sort((a,b)=>b[1].mtime-a[1].mtime||(a[0]<b[0]?-1:1))
+    .slice(0,HANDOFF_DISCOVERY.maxRuns).flatMap(([,run])=>run.paths);
+}
+/** @param {string} state @param {number} nowMs @returns {string[]} */
+function discoverRunHandoffs(state,nowMs) {
   if(!isAbsolute(state) || resolve(state)!==state)return [];
   const runs=join(state,'metaviewer/runs');
   /** @type {{name:string,mtime:number}[]} */const found=[];
@@ -190,7 +218,9 @@ export function discoverHandoffPaths(env,nowMs) {
     }
   }catch{return [];}
   finally {try{dir?.closeSync();}catch{/* Already closed. */}}
-  return found.sort((a,b)=>b.mtime-a.mtime||(a.name<b.name?-1:1)).slice(0,HANDOFF_DISCOVERY.maxRuns).map(x=>join(runs,x.name,HANDOFF_DISCOVERY.fileName));
+  return found.sort((a,b)=>b.mtime-a.mtime||(a.name<b.name?-1:1)).slice(0,HANDOFF_DISCOVERY.maxRuns)
+    .flatMap(x=>[HANDOFF_DISCOVERY.fileName,'browser-goal.handoff.json'].map(name=>join(runs,x.name,name)))
+    .filter(path=>{try{return fs.lstatSync(path).isFile();}catch{return false;}});
 }
 /** @param {any} options */
 export function createOperatorService({env=process.env,runIdentity,buttons,notify=()=>{},now=Date.now}) {
