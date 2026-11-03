@@ -160,6 +160,19 @@ function onScheme(next) { scheme.value = next === 'mv-dark' ? 'mv-dark' : 'mv-li
 const nestedMode = resolveNestedMode(props.nestedHost ?? (props.fixture?.key === 'nested'
   ? { getNestedDepth: () => 1, getSelfCapsuleId: () => null } : null));
 const launcherOpen = ref(props.fixture?.ui.launcherOpen === true);
+// [TARGET, unit decision] Recheck host availability for every catalog opening.
+// Invalidate outstanding reads on close or host replacement.
+const vmAvailable = ref(false);
+watch(() => [launcherOpen.value, props.authorityHost], async (_, __, onCleanup) => {
+  let current = true;
+  onCleanup(() => { current = false; });
+  vmAvailable.value = false;
+  if (!launcherOpen.value) return;
+  try {
+    const available = await props.authorityHost?.vmAvailable?.();
+    if (current) vmAvailable.value = available === true;
+  } catch { /* Missing or failed availability leaves VM hidden. */ }
+}, { immediate: true, flush: 'sync' });
 const railOpen = ref(false);
 const settingsOpen = ref(props.fixture?.screen === 'settings');
 const creativeOpen = ref(props.fixture?.key === 'creative');
@@ -1709,7 +1722,7 @@ onMounted(() => {
       </div>
     </div>
     <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :open-program="createProgramCapsule" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
-    <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" @create="onCreateCapsule" />
+    <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" :vm-available="vmAvailable" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>
 </template>

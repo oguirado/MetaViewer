@@ -10,14 +10,14 @@ import {createPreloadFacade} from '../electron/preload.js';
 import {createAuthorityAdapter} from '../src/core/hostAdapters.js';
 
 const profile={Kind:'vm',NativeKind:'vm',Program:'notepad-vm',Width:1280,Height:900,Display:':100',RAMRoot:'/dev/shm/synthetic-vm',default_mode:'agent'};
-async function fixture(t,{rows={guest:profile},identities=[{id:'guest',browser:'program'}],memory=async()=>32*1024**3,states=new Map(),surfaceId='surface-created'}={}){
+async function fixture(t,{rows={guest:profile},identities=[{id:'guest',browser:'program'}],memory=async()=>32*1024**3,states=new Map(),surfaceId='surface-created',hostArch='arm64'}={}){
   const dir=await mkdtemp(join(tmpdir(),'vm-create-'));const handlers=new Map(),calls=[];
   const env={XDG_CONFIG_HOME:dir,MV_SRF_PROFILES:JSON.stringify(rows)};
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
   const contents={id:9,mainFrame:frame,isDestroyed:()=>false,send(){},postMessage(){}};
   const event={sender:contents,senderFrame:frame};
   let reply=async request=>({schema:'surface_event/v0.2',event:'created',data:{surface:{schema:'surface/v0.2',surface_id:surfaceId,profile_id:request.params.profile_id,kind:request.params.kind,state:'active',control:'agent',visibility:'unfolded',display:':100',geometry:request.params.geometry}}});
-  const wire=installAuthorityWire({ipcMain:{handle:(name,fn)=>handlers.set(name,fn),removeHandler:name=>handlers.delete(name)},contents,env,argv:[],capsuleStates:states,hostArch:'arm64',
+  const wire=installAuthorityWire({ipcMain:{handle:(name,fn)=>handlers.set(name,fn),removeHandler:name=>handlers.delete(name)},contents,env,argv:[],capsuleStates:states,hostArch,
     listIdentities:async()=>({ok:true,rows:identities}),readFreeMemoryBytes:memory,
     core:{request:async request=>{calls.push(request);return reply(request);}}});
   t.after(async()=>{await wire.dispose();await rm(dir,{recursive:true,force:true});});
@@ -25,10 +25,10 @@ async function fixture(t,{rows={guest:profile},identities=[{id:'guest',browser:'
   return {env,states,calls,handlers,event,contents,wire,api:api.authority,adapter:createAuthorityAdapter(api.authority),respond:fn=>{reply=fn;}};
 }
 
-test('VM uses only existing facade methods and channel with closed acknowledgement',async t=>{
+test('VM facade keeps a closed create acknowledgement',async t=>{
   const f=await fixture(t);
-  assert.deepEqual(Object.keys(f.api).sort(),['createSurface','intent','propose','subscribeFrames']);
-  assert.equal(Object.keys(WIRE_CHANNELS).length,12);
+  assert.deepEqual(Object.keys(f.api).sort(),['createSurface','intent','propose','subscribeFrames','vmAvailable']);
+  assert.equal(Object.keys(WIRE_CHANNELS).length,13);
   assert.deepEqual(await f.api.createSurface({kind:'vm'}),{ok:true});
   assert.deepEqual(f.calls,[{schema:'surface_request/v0.2',op:'create',params:{kind:'vm',profile_id:'guest',geometry:{w:1280,h:900}}}]);
   assert.equal((await f.api.createSurface({kind:'vm'})).ok,false);assert.equal(f.calls.length,1);
@@ -147,4 +147,77 @@ test('App cold VM create goes through existing adapter without new dialog or opt
   open({type:'create-capsule',kind:'vm',placement:'tab'});await Promise.all(jobs);
   assert.equal(f.calls.length,1);assert.equal(f.calls[0].params.kind,'vm');
   assert.equal(f.states.get('surface-created').kind,'vm');
+});
+
+
+test('catalog offers VM only for configured ARM64; direct x64 creation still refuses', async t => {
+  const { availableCatalogKindIds } = await import('../src/catalog/catalogModel.js');
+  const base = ['identity-browser', 'program', 'host-program', 'desktop-window'];
+  for (const [hostArch, rows, offered] of [['x64', {guest:profile}, false], ['arm64', {}, false], ['arm64', {guest:profile}, true]]) {
+    await t.test(`${hostArch} configured=${Object.keys(rows).length > 0}`, async t => {
+      const f = await fixture(t, {hostArch, rows});
+      assert.deepEqual(availableCatalogKindIds(await f.adapter.vmAvailable()), offered ? [...base, 'vm'] : base);
+      assert.equal(f.calls.length, 0, 'availability never creates a surface');
+      if (hostArch === 'x64') {
+        assert.deepEqual(await f.api.createSurface({kind:'vm'}), {ok:false, code:'VM_UNAVAILABLE'});
+        assert.equal(f.calls.length, 0);
+      }
+    });
+  }
+});
+
+
+test('VM availability fails closed across absent, failed and malformed hosts', async () => {
+  const { availableCatalogKindIds } = await import('../src/catalog/catalogModel.js');
+  for (const port of [null, {}, {vmAvailable:async()=>{throw Error('unavailable');}}, ...[undefined, null, 1, 'true', {ok:true}].map(value=>({vmAvailable:async()=>value}))]) {
+    assert.equal(availableCatalogKindIds(await createAuthorityAdapter(port).vmAvailable()).includes('vm'), false);
+  }
+  for (const reply of [undefined, null, 1, 'true', {ok:true}]) {
+    const facade = createPreloadFacade({transport:{invoke:async()=>reply},bridge:{exposeInMainWorld(){}}});
+    await assert.rejects(facade.authority.vmAvailable(), /VM availability/);
+    assert.equal(await createAuthorityAdapter(facade.authority).vmAvailable(), false);
+  }
+  const facade = createPreloadFacade({transport:{invoke:async()=>true},bridge:{exposeInMainWorld(){}}});
+  await assert.rejects(async()=>facade.authority.vmAvailable('extra'), /arity/);
+});
+
+test('App refreshes availability on opening and rejects stale replies; launcher defaults hidden', async () => {
+  const {ref, watch, computed} = await import('vue');
+  const {availableCatalogKindIds, CATALOG_KIND_IDS, normalizeCatalogEntries} = await import('../src/catalog/catalogModel.js');
+  const app = await readFile(new URL('../src/App.vue', import.meta.url), 'utf8');
+  const start = app.indexOf('const vmAvailable = ref(false);');
+  const end = app.indexOf("}, { immediate: true, flush: 'sync' });", start);
+  assert.ok(start >= 0 && end > start);
+  const launcherOpen = ref(false);
+  let resolve;
+  const props = {authorityHost:{vmAvailable:()=>new Promise(done=>{resolve=done;})}};
+  const available = vm.runInNewContext(app.slice(start, end + "}, { immediate: true, flush: 'sync' });".length) + '\nvmAvailable;', {ref, watch, props, launcherOpen});
+  assert.equal(available.value, false);
+  launcherOpen.value = true;
+  assert.equal(available.value, false);
+  launcherOpen.value = false;
+  resolve(true); await new Promise(done=>setImmediate(done));
+  assert.equal(available.value, false, 'closed launcher ignores a late positive answer');
+  launcherOpen.value = true;
+  resolve(true); await new Promise(done=>setImmediate(done));
+  assert.equal(available.value, true);
+  launcherOpen.value = false;
+  props.authorityHost.vmAvailable = async()=>{throw Error('offline');};
+  launcherOpen.value = true; await new Promise(done=>setImmediate(done));
+  assert.equal(available.value, false);
+  launcherOpen.value = false;
+  props.authorityHost = null;
+  launcherOpen.value = true; await new Promise(done=>setImmediate(done));
+  assert.equal(available.value, false);
+  assert.match(app, /<CatalogLauncher[^>]*:vm-available="vmAvailable"/);
+
+  const launcher = await readFile(new URL('../src/catalog/CatalogLauncher.vue', import.meta.url), 'utf8');
+  assert.match(launcher, /vmAvailable: \{ type: Boolean, default: false \}/);
+  const expression = launcher.match(/const dialogTypes = computed\(\(\) => (.+)\);/)[1];
+  for (const vmAvailable of [undefined, false, true]) {
+    for (const kinds of [CATALOG_KIND_IDS, CATALOG_KIND_IDS.map(kind=>({kind}))]) {
+      const types = vm.runInNewContext(expression, {normalized:{value:normalizeCatalogEntries(kinds)}, availableCatalogKindIds, props:{vmAvailable}});
+      assert.deepEqual([...types].map(type=>type.id), [...availableCatalogKindIds(vmAvailable)]);
+    }
+  }
 });
