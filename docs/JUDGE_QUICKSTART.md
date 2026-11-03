@@ -54,8 +54,8 @@ python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules -
 ```
 
 Set these variables to the actual directory or published release URL and manifest digest
-supplied by the maintainer. A publicly accessible complete release is **AUSENTE — no inventar**
-in the provided evidence; the command refuses incomplete or corrupt sets. Do not assume
+supplied by the maintainer. A publicly accessible complete release has not been established
+by the supplied evaluation evidence; the command refuses incomplete or corrupt sets. Do not assume
 that a GitHub Actions artifact is a published release. CI currently exports app and Node
 assets with `SHA256SUMS` for T1 only; T2 also needs the private component and image assets
 built by the maintainer. Checksums protect integrity, not publisher authenticity.
@@ -70,12 +70,14 @@ assets from local artifacts run `python3 tools/build_release_assets.py --out-dir
 
 You can also verify the unpacked application bundle manifest by hand:
 
-```text
-sha256sum -c MetaViewer-linux-<arch>.sha256
+```bash
+cd MetaViewer-linux-<arch>
+sha256sum -c ../MetaViewer-linux-<arch>.sha256
 ```
 
-(run from the directory that contains the extracted `MetaViewer-linux-<arch>/` tree, as
-described in [INSTALL.md](INSTALL.md#extract-and-verify-the-sha-256-manifest)).
+Start in the directory containing the extracted tree; replace `<arch>` with `x64`
+or `arm64`. The checksum command runs inside the bundle, as described in
+[INSTALL.md](INSTALL.md#extract-and-verify-the-sha-256-manifest).
 
 ## 2. Check your machine (no changes made)
 
@@ -201,7 +203,9 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
   desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1 tile`, `2 side by side`,
   `2×2`, `Focus + strip`, `Floating layout`).
 - Click **`＋ Add capsule`** to launch an **`Identity browser`**, a Linux **`Program`**
-  (inside `opensuperficies-program-host:0.1.0`), or capture an X11 **`Desktop window`**.
+  (inside `opensuperficies-program-host-<arch>:0.1.0`), **`Host program`**, or an X11
+  **`Desktop window`**. Host program and Desktop window run on your computer and
+  are not isolated. Replace `<arch>` with `x64` or `arm64` for the installed image.
 - Log into a site in human mode and click **`Mark as logged in`** to save its login
   status. Then choose **`Switch to agent mode`** separately to hand the capsule to
   the agent; watch live read-only, or click **`Take control (emergency)`**.
@@ -261,17 +265,18 @@ the distribution to the source commit in `deps.lock`. Missing files, modified
 hashes and unpinned additions refuse before execution. Checkout mode retains
 the existing `MV_WENDER_ROOT` / `VQA_VE_ROOT` provenance verification.
 
-The supplied compiled export supports program planning and perception. Stored
-browser workflows and browser goal state acquisition still need private APIs
-from a verified checkout and refuse `MW_COMPILED_BROWSER_UNAVAILABLE` or
-`MW_COMPILED_WORKFLOW_UNAVAILABLE` with this export. This limitation does not
-prevent displaying browser capsules. Arm64 compiled private assets are absent.
+The pinned Linux x64 compiled export supports program planning, perception and
+browser goals with rules or Muse. Stored browser workflows still need private
+APIs from a verified checkout and refuse `MW_COMPILED_WORKFLOW_UNAVAILABLE`
+in compiled mode. Live results are limited to the architecture table in
+[Judge tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
+Arm64 compiled private assets are absent.
 The version labels in `deps.lock` are retained even where release tags disagree.
 
-Host program is optional. Preflight reports `xpra` absence with the install line
-`apt install xpra`; the Host program dialog refuses with that reason. Browser
-capsules and programs inside containers remain available. The kit never
-installs this optional host package automatically.
+Host program is optional and requires `xpra`, `Xvfb`, `xauth`, and `xdotool`.
+Install the missing tools with `sudo apt-get install -y xpra xvfb xauth xdotool`,
+then retry. Browser capsules and programs inside containers remain available.
+The kit never installs these optional host packages automatically.
 
 | Code | Meaning and fix |
 | --- | --- |

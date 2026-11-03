@@ -4,9 +4,8 @@ Give this single file to your own AI (or read it directly) so it can install,
 configure, verify, operate, and explain every feature of MetaViewer on a standard
 Linux desktop or laptop.
 
-Every command, button label, environment variable, and refusal code in this guide is
-verified against the repository source code (`scripts/judge/`, `ui/`,
-`daemon-adapter/`, `tools/`, and `agents/metaviewer_agents/`).
+This guide describes the repository interfaces. Live verification is limited to
+the architecture support table in [Judge tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
 
 ---
 
@@ -178,7 +177,8 @@ arrangement:
 ## 6. Adding Capsules: Browser, Program, and Desktop Window
 
 Click **`＋ Add capsule`** in the top bar (or **`＋ Add capsule`** inside an empty
-desktop). The dialog offers three tabs:
+desktop). The dialog also offers Host program, which runs on your computer and
+is not isolated. The other launch choices are:
 
 ### A. `Identity browser` (`kind: "browser"`)
 
@@ -253,13 +253,14 @@ tile's **`⋮`** menu).
 Clicking **`ID`** / **`Copy ID for AI`** copies a single line to the clipboard and
 shows a toast banner at the top of the window:
 
-- For a browser capsule with an identity:
-  `capsule_id=<uuid> identity=<profile_id>`
-- For a capsule without an identity:
-  `capsule_id=<uuid>`
+- With an identity, the line begins `MetaViewer capsule <surface-id> (identity <profile-id>).`
+  It continues with operating instructions. The surface ID is not a UUID requirement.
+- Without an identity, the line begins `MetaViewer capsule <surface-id>.` and says
+  no usable identity was reported; it supplies no runnable command.
 
 Paste that line directly into your AI terminal or prompt so the AI knows the exact
-`capsule_id` and `identity` to target.
+surface ID and identity to target. Use the identity with `mw_run --identity`;
+do not substitute the surface ID.
 
 ---
 
@@ -277,11 +278,11 @@ AI CLIs right alongside your capsules.
 
 ### Launching Terminals and `🚀 Bootstrap`
 
-- **`🚀 Bootstrap`**: When a screen has no tabs, click **`🚀 Bootstrap`** (or use
-  the **`Bootstrap:`** bar at the bottom of the drawer to pick a provider and
-  optional API key, then click **`Launch`**). Bootstrap starts a shell with
-  `METAVIEWER_AGENT_ENTRY` pointing to `docs/AGENT_ENTRY.md` and prints the live
-  attachment coordinates so an AI CLI immediately knows how to use MetaViewer.
+- **`🚀 Bootstrap`** copies the public entry prompt to the clipboard. The toast
+  says **`Copied`** or **`Copy unavailable`**. Paste the prompt into your chosen AI.
+  Bootstrap does not create a shell or export environment variables. The separate
+  provider **`Launch`** control starts the selected CLI; source the app attachment
+  in the shell used for operator commands as described below.
 - **`＋ New terminal`**: Opens the new-terminal modal with three presets:
   - **`Shell`** (`$SHELL` or `/bin/bash`)
   - **`Agy`** (`agy`)
@@ -310,27 +311,41 @@ Click **`Identities`** in the top bar  to:
 
 ### From the CLI (`tools/mv_identity.py`)
 
-Operators can also manage identities from a terminal (requires `--store-root` and
-`--memoryweb-home` on separate directories):
+Use the same bindings as the running app. Copy its **Copy env path** and replace
+this placeholder in a dedicated shell before the commands below:
+
+```bash
+export METAVIEWER_ATTACH='<copied-current.env-path>'
+set -a
+. "$METAVIEWER_ATTACH"
+set +a
+: "${MV_SRF_BIN_DIR:?attachment must supply native binaries}"
+: "${SRF_IDENTITY_STORE_ROOT:?attachment must supply the identity store}"
+: "${MV_MW_HOME:?attachment must supply the separate MemoryWeb home}"
+cd "${MV_OPERATOR_REPO:?attachment must supply the public operator tree}"
+```
+
+An explicitly selected alternative store is separate from the app's identities.
+For the app's store, retain these exported values:
 
 ```bash
 # List identities
-python3 tools/mv_identity.py list \
-  --store-root "$HOME/.local/share/srf-identity-store" \
-  --memoryweb-home "$HOME/.local/share/metaviewer-memoryweb"
+python3 tools/mv_identity.py \
+  --store-root "$SRF_IDENTITY_STORE_ROOT" \
+  --memoryweb-home "$MV_MW_HOME" list
 
 # Create and auto-provision a browser identity (sudo-free via Docker)
-python3 tools/mv_identity.py create \
-  --store-root "$HOME/.local/share/srf-identity-store" \
-  --memoryweb-home "$HOME/.local/share/metaviewer-memoryweb" \
+python3 tools/mv_identity.py \
+  --store-root "$SRF_IDENTITY_STORE_ROOT" \
+  --memoryweb-home "$MV_MW_HOME" create \
   --id work-demo \
   --label "Work Demo" \
   --domains "example.com"
 
 # Check status (lease, profile provisioning, login reservation)
-python3 tools/mv_identity.py status \
-  --store-root "$HOME/.local/share/srf-identity-store" \
-  --memoryweb-home "$HOME/.local/share/metaviewer-memoryweb" \
+python3 tools/mv_identity.py \
+  --store-root "$SRF_IDENTITY_STORE_ROOT" \
+  --memoryweb-home "$MV_MW_HOME" status \
   --id work-demo
 ```
 
@@ -344,56 +359,60 @@ Click **`Use MetaViewer`** in the top bar to open the attachment modal:
   read `docs/AGENT_ENTRY.md` and `$XDG_RUNTIME_DIR/metaviewer/attach/current.env`.
 - **`Copy env path`**: Copies the path to `$XDG_RUNTIME_DIR/metaviewer/attach/current.env`.
 
-While MetaViewer is running, it maintains two live discovery files in
-`$XDG_RUNTIME_DIR/metaviewer/attach/`:
+While MetaViewer is running, it publishes owner-only `current.env` and
+`current.json` in the host runtime's `metaviewer/attach/` directory. The JSON
+schema is `metaviewer.attach/v1`, with `schema`, `session_id`, `pid`,
+`core_socket`, `boot_profile`, and `env`. The shell file exports `env`, including
+`MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`, and `MV_SESSION_ID`, plus available native,
+identity-store and dependency paths. Optional paths can be absent.
 
-- `current.env` (shell `export` lines: `MV_ATTACH_SOCKET`, `MV_ATTACH_PID`,
-  `MV_ATTACH_WORKSPACE`, `MV_ATTACH_ENTRY_DOC`)
-- `current.json` (JSON equivalent with `schema_version: "0.2"`)
-
-Any external AI in any terminal can attach and list or control capsules by sourcing
-`current.env`:
+Copy the absolute **Copy env path** before sourcing: sourcing changes
+`XDG_RUNTIME_DIR` to the app's private core runtime. Use a dedicated shell:
 
 ```bash
-. "$XDG_RUNTIME_DIR/metaviewer/attach/current.env"
+export METAVIEWER_ATTACH='<copied-current.env-path>'
+set -a
+. "$METAVIEWER_ATTACH"
+set +a
+cd "${MV_OPERATOR_REPO:?attachment must supply the public operator tree}"
 ```
 
-Every IPC envelope sent to `$MV_ATTACH_SOCKET` is a single JSON line (`version: "0.2"`).
-For example, to list active capsules (`capsule.list`) from Python:
+To list one page of surfaces, use the shipped core tool client with the trusted
+registration in `MV_CORE_CONFIG`. If several agent peers exist, set
+`MV_AGENT_INSTANCE` to the operator-selected registered instance; never guess it.
+This example does not create or control a capsule:
 
 ```bash
-python3 - <<'PY'
-import json, os, socket, time, uuid
+PYTHONPATH=agents python3 - <<'PY'
+import json, os
+from pathlib import Path
+from metaviewer_agents import mvctl
 
-env_file = os.path.join(os.environ["XDG_RUNTIME_DIR"], "metaviewer", "attach", "current.env")
-cfg = {}
-with open(env_file, encoding="utf-8") as f:
-    for line in f:
-        if line.startswith("export ") and "=" in line:
-            k, v = line[len("export "):].strip().split("=", 1)
-            cfg[k] = v.strip("'")
-
-req = {
-    "version": "0.2",
-    "id": str(uuid.uuid4()),
-    "type": "capsule.list",
-    "ts_ns": time.time_ns(),
-    "payload": {},
-}
-with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-    s.connect(cfg["MV_ATTACH_SOCKET"])
-    s.sendall((json.dumps(req) + "\n").encode("utf-8"))
-    reply = json.loads(s.makefile().readline())
-print(json.dumps(reply, indent=2))
+with open(os.environ["MV_CORE_CONFIG"], encoding="utf-8") as source:
+    config = json.load(source)
+agents = [peer for peer in config["peers"]
+          if peer["endpoint"]["component"] == "agent"]
+selected = os.environ.get("MV_AGENT_INSTANCE")
+if selected:
+    agents = [peer for peer in agents if peer["endpoint"]["instance"] == selected]
+if len(agents) != 1:
+    raise SystemExit("Select exactly one registered MV_AGENT_INSTANCE")
+raise SystemExit(mvctl.run([
+    "list", "--socket", str(Path(os.environ["XDG_RUNTIME_DIR"]) / "metaviewer/core.sock"),
+    "--session-id", config["session_id"],
+    "--agent-instance", agents[0]["endpoint"]["instance"],
+    "--core-instance", config["core"]["endpoint"]["instance"],
+    "--limit", "16", "--timeout-ms", "5000",
+    "--max-line-bytes", "65536", "--max-reply-bytes", "65536",
+]))
 PY
 ```
 
-To act on a browser capsule (`Role: agent`), send `capsule.act` with:
-
-- `capsule_id`: the target UUID (from `capsule.list` or **`Copy ID for AI`**)
-- `actor`: `"agent"`
-- `action`: `"navigate"` (`url`), `"click"` (`x`, `y`, `button`), `"type"` (`text`),
-  `"key"` (`key`), `"scroll"` (`dx`, `dy`), or `"wait"` (`ms`)
+The result can contain `next_cursor`; pass it as `--cursor` for the next page.
+Observation and actions use the existing `mv_tool_call/v0.2` protocol through
+`mvctl` or `mw_run`, including core admission and verification. For an existing
+Agent capsule, use the goal commands below with its copied identity. Do not
+send invented raw capsule commands to the core socket.
 
 ---
 
@@ -504,11 +523,12 @@ steps flag. Omit Enter and use `--steps 2` [TARGET] for focus and typing only.
 Exact native text readback gates Enter. Never combine goal mode with stored
 `--site`, `--workflow` or `--slot` flags. Vision cross-checking is not implemented.
 
-Until the compiled browser build lands, this branch returns
-`MW_COMPILED_BROWSER_UNAVAILABLE` for compiled Wender with either planner. Obtain
-a verified `deps.lock` checkout as `MV_WENDER_ROOT` and unset
-`MV_WENDER_EXECUTABLE` in the subshell, or wait for that build. Never bypass the
-refusal. Program compiled support does not establish browser support.
+The pinned Linux x64 compiled runtime supports browser goals with rules or
+Muse through the goal runner. Stored browser workflows remain restricted and
+refuse `MW_COMPILED_WORKFLOW_UNAVAILABLE` in compiled mode; use a verified
+checkout matching `deps.lock` for those. Dependency validation still applies;
+compiled support does not admit a wrong-architecture or modified binary. See the
+Judge tour architecture table for the supplied live results.
 
 ### F. Programs and Host program (`--surface-kind program`)
 
@@ -527,23 +547,28 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
   --goal 'Exact observed element name' --steps 1
 ```
 
-This requests one click [TARGET]; programs do not accept text/key input. Both
+This requests one click. Programs also accept operator-supplied `--text` with
+`--steps 1`, using `--goal focused` only for an already focused field, or a unique
+observed field name for focus and typing. Program `--key` is unsupported. Text
+readback is `exact`, `mismatch`, or `not_readable`; mismatch refuses and
+not_readable remains explicitly uncertified. Both
 goal lanes require owned private RAM evidence under `/dev/shm`, without symlink
 ancestors. Keep the output report/receipt paths and inspect them before shutdown.
 
 | Result / rc [CITED: goal runner `run_entry` functions and `mw_run.py` (`main`)] | Next action |
 | --- | --- |
 | `BROWSER_BOUNDED_ACTIONS_VERIFIED` or `PROGRAM_BOUNDED_ACTIONS_VERIFIED` / `0` | Check receipts and fresh visible outcome; verified actions do not prove goal completion. |
+| `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` / `0` | Text was sent but could not be read back; inspect the report and editor. This is not certified success. |
 | argparse error / `2` | Fix syntax or action budget before running. |
 | `HUMAN_HANDOFF` / `4` (browser) | Person takes control, resolves login/CAPTCHA, releases control and observes the new state before a fresh goal. |
 | `INPUT_UNCERTAIN` / `5` | Stop; inspect dispatch/receipt/report evidence with the operator. Never automatically retry. |
 | refusal / `6` | Inspect the named verdict and earlier moves; repair the precondition before a fresh run. |
 
-`MW_PROGRAM_CONTROL` requires **Release control** and verified agent control.
+`MW_PROGRAM_CONTROL` requires **Switch to agent mode** for a Human-role capsule,
+or **Release control** after takeover of an Agent capsule; verify agent control.
 `MW_RUN_ATTACH`/`MW_RUN_CONFIG` requires the current app attachment.
 `MW_PROGRAM_RAM_REQUIRED`/`MW_PRIVATE_OUTPUT` requires the private RAM setup.
 `MW_PROGRAM_GOAL_UNGROUNDED` requires a unique observed target.
-`MW_COMPILED_BROWSER_UNAVAILABLE` requires the browser checkout route above.
 A traceback without JSON also requires stopping and operator inspection.
 
 ---
@@ -564,9 +589,9 @@ When explaining MetaViewer to a user or judge, state these boundaries clearly:
    Browser goal runs need no stored workflow, but require an exact visible control
    name and grounded input; they support clicks, verified text and optional Enter.
    Login walls and CAPTCHA require the person (rc `4` [CITED: tools/mw_run_browser_goal.md]).
-   Program and Host program runs admit clicks only; typing into programs and
-   automation of Desktop window capsules are unsupported. The program lane has
-   been demonstrated on a Mines move, not arbitrary applications. Explicit
+   Program and Host program runs admit clicks and bounded operator text with
+   readback; program key input and automation of Desktop window capsules are
+   unsupported. Live program results are limited to the Judge tour table. Explicit
    `--planner muse` sends marks to a provider. A verified action is not a finished
    goal. Browser role switches currently recreate the capsule and can lose the
    open page; preserved profile login state does not prove page continuity.

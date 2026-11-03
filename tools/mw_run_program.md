@@ -104,8 +104,9 @@ supplies the adapter's private binding; identity-store and native-admin
 configuration are unnecessary. The legacy container-backed host-exec lane also
 requires the adapter witness for the same public surface and native run; an
 unrelated active lease cannot provide custody. The command does not create a
-capsule or attach an arbitrary desktop window. Programs admit clicks only:
-`--text` and `--key` refuse. Goal mode cannot use `--site`, `--workflow` or `--slot`.
+capsule or attach an arbitrary desktop window. Programs admit clicks and bounded
+operator-supplied `--text` as described above; program `--key` remains unsupported.
+Goal mode cannot use `--site`, `--workflow` or `--slot`.
 
 Evidence defaults to a private subtree beneath `/dev/shm/vqa-cu`. An explicit
 `XDG_STATE_HOME` must resolve inside `/dev/shm`, with owned mode-0700 directories
@@ -123,12 +124,14 @@ mark-bound clicks authorized by the same custody gate are admitted.
 
 | Result / rc [CITED: `tools/mw_run_program.py` (`run_entry`), `agents/metaviewer_agents/mw_run.py` (`main`)] | Meaning | Next action |
 | --- | --- | --- |
-| `PROGRAM_BOUNDED_ACTIONS_VERIFIED` / `0` | Bounded clicks verified, not task completion. | Check receipts and fresh visible outcome before choosing another goal. |
-| argparse error / `2` | Invalid command; no run. | Correct flags; programs accept no text/key input. |
+| `PROGRAM_BOUNDED_ACTIONS_VERIFIED` / `0` | Bounded actions verified, including exact readback for text; not task completion. | Check receipts and fresh visible outcome before choosing another goal. |
+| `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` / `0` | Text was sent but readback is not_readable; explicitly uncertified. | Inspect the editor and retained evidence; do not treat the exit code as text verification. |
+| argparse error / `2` | Invalid command; no run. | Correct flags and budget; program key input is unsupported. |
 | `INPUT_UNCERTAIN` / `5` | Delivery/settlement unknown, possibly after earlier moves. | Stop and inspect report, intent, dispatch and receipts with the operator; never automatically retry. |
 | refusal / `6` | A named precondition or planner gate failed; earlier moves may exist. | Read `verdict_code` and inspect evidence before repairing the cause. |
 
-`MW_PROGRAM_CONTROL`: press **Release control** on the tile, verify
+`MW_PROGRAM_CONTROL`: use **Switch to agent mode** for a Human-role capsule or
+**Release control** after takeover of an Agent capsule; verify
 `control:'agent'`, then inspect the current target before running again.
 `MW_PROGRAM_GOAL_UNGROUNDED`: choose a unique name in the actual fresh observation.
 `MW_RUN_ATTACH`/`MW_RUN_CONFIG`: recopy the running app attachment.
@@ -265,14 +268,13 @@ baseline remains historical evidence; it is not a new acceptance claim for these
 unexported builtins. The existing producer is unchanged. Only host-xpra and legacy
 host-exec programs with actual exported custody are candidates for new live checks.
 
-The existing Wender bridge only admits custody-bound clicks. It cannot currently
-plan and deliver a text-editing step in gedit. Wender's model client can emit text
-actions, but connecting that interface requires a reviewed focus/custody bridge;
-this lane does not bypass the restriction. Admitted text/key custody and semantic
-text verification for this program path: **ABSENT — do not invent**. Native
-window focus alone does not establish focused-editor custody, and the current
-program receipt path supplies RGB evidence rather than the semantic text witness
-required by `text_present`. Pixel changes cannot certify intended editor text.
+Wender selects custody-bound clicks; program text comes explicitly from the
+operator, using the focused or named-field modes above. Native window focus
+alone does not establish focused-editor custody. Text certification requires
+exact OCR readback; pixel changes alone cannot certify intended editor text.
+Unreadable text remains explicitly uncertified, and readable mismatch refuses.
+Key input is unsupported. Live results are limited to the architecture table in
+[Judge tour](../docs/JUDGE_TOUR.md#architecture-support-at-this-snapshot).
 
 If a newer same-surface publication changes after planning, the final rebind
 retains and authenticates both RGB frames and compares every RGB byte inside
