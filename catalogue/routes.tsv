@@ -248,6 +248,7 @@ v027-seams.md	changes/unreleased/v027-seams.md
 v027-verify-2.md	changes/unreleased/v027-verify-2.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
+v027-window-close.md	changes/unreleased/v027-window-close.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
 vm-open-path-held.md	changes/unreleased/vm-open-path-held.md
@@ -996,6 +997,7 @@ text_input_test.go	daemon-adapter/internal/capsule/text_input_test.go
 textcap_test.go	daemon-adapter/internal/capsule/textcap_test.go
 v027_fix_k1_test.go	daemon-adapter/internal/capsule/v027_fix_k1_test.go
 v027_triage_test.go	daemon-adapter/internal/capsule/v027_triage_test.go
+window_close_test.go	daemon-adapter/internal/capsule/window_close_test.go
 window_resize_test.go	daemon-adapter/internal/capsule/window_resize_test.go
 runner.go	daemon-adapter/internal/cli/runner.go
 runner_test.go	daemon-adapter/internal/cli/runner_test.go
@@ -1083,6 +1085,7 @@ subscri-c23a6160df7a	daemon-adapter/internal/frames/subscriptions_test.go
 v027fix-a3bd265b0251	daemon-adapter/internal/frames/v027_fix_k1_test.go
 v027tri-ab1ca1942408	daemon-adapter/internal/frames/v027_triage_test.go
 vm_pair_test.go	daemon-adapter/internal/frames/vm_pair_test.go
+windowc-2fe281116e97	daemon-adapter/internal/frames/window_close_test.go
 windowr-55ca1914206b	daemon-adapter/internal/frames/window_resize_test.go
 ipc-bounds_test.go	daemon-adapter/internal/ipc/bounds_test.go
 client.go	daemon-adapter/internal/ipc/client.go
