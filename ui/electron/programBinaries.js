@@ -36,8 +36,11 @@ export function programBinaries(directory) {
       const rows = [];
       for (const file of files.sort()) {
         if (!/^[a-z0-9][a-z0-9-]{0,63}\.json$/.test(file)) continue;
-        const id = file.slice(0,-5), launch = await this.readLaunch(id);
-        if (launch?.hostXpra) rows.push({id,browser:'program'});
+        const id = file.slice(0,-5);
+        try {
+          const launch = await this.readLaunch(id);
+          if (launch?.hostXpra) rows.push({id,browser:'program'});
+        } catch { /* A refused sidecar cannot suppress unrelated valid programs. */ }
       }
       return rows;
     },

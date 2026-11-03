@@ -1,3 +1,4 @@
+import { acquireCapsuleCreation } from './profilePicker.js';
 import { programBinaries } from './programBinaries.js';
 import { isForeignIdentity } from './identityProtection.js';
 import { hostKeyboardLayout } from './keyboardLayout.js';
@@ -386,13 +387,13 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const locks = new Set();
   const epochs = new Map();
   let creating = false, disposed = false;
-  /** @param {string} surfaceId */
-  const authoritative = surfaceId => {
+  /** @param {string} surfaceId @param {boolean} [allowLost] */
+  const authoritative = (surfaceId, allowLost = false) => {
     pruneProgramProfiles();
     if (!id(surfaceId)) throw refuse('SURFACE_UNKNOWN');
-    const s = core.getHumanSurface?.(surfaceId);
+    const s = core.getHumanSurface?.(surfaceId) ?? (allowLost ? capsuleStates.get(surfaceId) : undefined);
     if (s && isForeignIdentity(s.profile_id)) throw refuse('IDENTITY_PROTECTED');
-    if (!s || s.state !== 'active' || !allProfiles().some(p => p.id === s.profile_id)) throw refuse('SURFACE_UNKNOWN');
+    if (!s || (s.state !== 'active' && !(allowLost && s.state === 'lost')) || !allProfiles().some(p => p.id === s.profile_id)) throw refuse('SURFACE_UNKNOWN');
     return s;
   };
   /** @param {string} surfaceId */
@@ -544,7 +545,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     return await Promise.all(browserProfiles().filter(p=>!isForeignIdentity(p.id) && !programProfiles.has(p.id) && !windowProfiles.has(p.id)).map(async p => {
       const entry = [...capsuleStates.values()].find(s => s.profile_id === p.id && !['destroyed','closed'].includes(s.state));
       return {profileId:p.id,role:roleOf(p.id),defaultMode:roleOf(p.id),available:names.has(p.id),
-        currentMode:entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
+        currentMode:entry?.state === 'lost' ? 'lost' : entry?.surface_id ? roleFor(entry) : 'closed', surfaceId:entry?.surface_id || null,
         lastLogin:await markers.read(p.id),busy:bound.has(p.id) && !entry?.surface_id};
     }));
   }
@@ -557,7 +558,9 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     const rows = [...reply.rows, ...hostRows.filter(row => !reply.rows.some((/** @type {any} */ r) => r.id === row.id))];
     return await Promise.all(rows.filter((/** @type {any} */ row) => row.browser === 'program' && !isForeignIdentity(row.id)).map(async (/** @type {any} */ row) => {
       // Older program identities have no saved binary: their id is the binary's name.
-      const launch = await savedPrograms.readLaunch(row.id);
+      let launch;
+      try { launch = await savedPrograms.readLaunch(row.id); }
+      catch { return {profileId:row.id,kind:'program',hostXpra:false,available:false,currentMode:'closed',surfaceId:null,busy:false}; }
       let binary = launch?.binary;
       if (!binary) {
         try { binary = resolveHostBinary(row.id, {...process.env, ...env}).path; }
@@ -854,7 +857,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if ([...windowProfiles.values()].some(w => w.surfaceId === surfaceId)) {
       return await detachWindow(surfaceId);
     }
-    const surface = authoritative(surfaceId);
+    const surface = authoritative(surfaceId, true);
     await close(surfaceId);
     if (typeof core.stopSurface !== 'function') throw refuse('CAPSULE_STOP_UNAVAILABLE');
     const reply = await core.stopSurface(surfaceId);
@@ -895,7 +898,8 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (programProfiles.has(choice.profileId) || windowProfiles.has(choice.profileId)) throw refuse('NO_IDENTITY');
     const surface = [...capsuleStates.values()].find(s => s.profile_id === choice.profileId && s.state !== 'destroyed');
     if (surface) {
-      if (!surface.surface_id || surface.state !== 'active') throw refuse('PROFILE_ALREADY_BOUND');
+      if (!surface.surface_id) throw refuse('PROFILE_ALREADY_BOUND');
+      if (surface.state !== 'active') return {ok:false,code:'PROFILE_ALREADY_BOUND',surfaceId:surface.surface_id,currentMode:surface.state,requestedMode:choice.role};
       if (roleFor(surface) !== choice.role) return {ok:false,code:'PROFILE_ALREADY_BOUND',surfaceId:surface.surface_id,currentMode:roleFor(surface),requestedMode:choice.role};
       return {ok:true,reused:true,surfaceId:surface.surface_id,role:choice.role};
     }
@@ -909,7 +913,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
       : op === 'visibility' ? 'op,schema,surfaceId,visible' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
+    const needsCreation = ['create','open','create-program','create-window','switch'].includes(op);
+    const releaseCreation = needsCreation ? acquireCapsuleCreation(capsuleStates) : null;
     try {
+      if (needsCreation && !releaseCreation) throw refuse('SURFACE_CREATE_BUSY');
       if (op === 'choices') return await choices();
       if (op === 'programs') return await programs();
       if (op === 'list-windows') return await listHostWindowChoices();
@@ -956,7 +963,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       const code = typeof /** @type {any} */ (error)?.code === 'string' ? /** @type {any} */ (error).code : 'XPRA_REFUSED';
       const reason = typeof /** @type {any} */ (error)?.reason === 'string' ? /** @type {any} */ (error).reason : undefined;
       return reason ? {ok:false,code,reason} : {ok:false,code};
-    }
+    } finally { releaseCreation?.(); }
   };
   ipcMain.handle(CHANNEL,handler);
   const parentSession = window.webContents.session;
@@ -970,18 +977,30 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     }
   },100);
   timer.unref?.();
-  window.once('closed', () => { void dispose(); });
-  window.webContents.once?.('render-process-gone', () => { void dispose(); });
-  async function dispose() {
-    if (disposed) return;
-    disposed = true; clearInterval(timer);
-    ipcMain.removeHandler(CHANNEL);
-    try { parentSession.unregisterPreloadScript(preloadId); } catch { /* closed window */ }
-    await Promise.all([...new Set([...sessions.keys(),...failedSessions.keys()])].map(close));
-    for (const program of programProfiles.values()) {
-      if (program.hostXpra && program.surfaceId) await core.stopSurface?.(program.surfaceId);
-    }
-    epochs.clear(); openingRoles.clear(); programProfiles.clear(); windowProfiles.clear();
+  const disposeFromEvent = () => { void dispose().catch(() => {
+    console.info('METAVIEWER_ROLE_DISPOSE_FAILED');
+  }); };
+  window.once('closed', disposeFromEvent);
+  window.webContents.once?.('render-process-gone', disposeFromEvent);
+  /** @type {Promise<void> | null} */
+  let disposal = null;
+  function dispose() {
+    if (disposal) return disposal;
+    disposal = (async () => {
+      disposed = true; clearInterval(timer);
+      ipcMain.removeHandler(CHANNEL);
+      try { parentSession.unregisterPreloadScript(preloadId); } catch { /* closed window */ }
+      const results = await Promise.allSettled([...new Set([...sessions.keys(),...failedSessions.keys()])].map(close));
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []);
+      for (const program of programProfiles.values()) {
+        if (program.hostXpra && program.surfaceId) {
+          try { await core.stopSurface?.(program.surfaceId); } catch (error) { failures.push(error); }
+        }
+      }
+      epochs.clear(); openingRoles.clear(); programProfiles.clear(); windowProfiles.clear();
+      if (failures.length) throw new AggregateError(failures, 'ROLE_DISPOSE_FAILED');
+    })();
+    return disposal;
   }
   return Object.freeze({dispose});
 }

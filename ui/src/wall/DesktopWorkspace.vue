@@ -59,7 +59,7 @@ function persist() {
       dirty = false;
       await props.storage.writeAtomic(JSON.stringify(cleanLayouts(JSON.parse(JSON.stringify(state.value)))));
     }
-  }).catch(error => {readOnly = true; emit('layout-error',error); throw error;}).finally(() => {
+  }).catch(error => {emit('layout-error',error); throw error;}).finally(() => {
     saving = null;
     if (dirty && alive && !readOnly) void persist().catch(() => {});
   });

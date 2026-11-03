@@ -535,7 +535,7 @@ export function installDisplayPortRouter(options = {}) {
             postAck(port, surfaceId, payload.seq, 'PRESENTED');
           } else {
             diagnostic(surfaceId, 'REFUSED', 'PAINT_FAILED');
-            postAck(port, surfaceId, payload.seq, 'HIDDEN');
+            postAck(port, surfaceId, payload.seq, 'REFUSED');
           }
           return;
         }

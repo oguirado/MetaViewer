@@ -2004,16 +2004,28 @@ export function buildFirstSurfaceCreateRequest(envRec) {
  * @param {{
  *   onCreated?: (surface: unknown) => void,
  *   onFailure?: (error: unknown) => void,
- * }} [onSettled] Optional settlement callbacks for boot reservation and notice delivery.
+ * }} onSettled Settlement callbacks for boot reservation and notice delivery.
+ * @param {Map<string,any>} states Shared host capsule state.
+ * @param {(() => Promise<number|null> | number|null) | undefined} readFreeMemoryBytes
+ * @param {Pick<typeof import('./profilePicker.js'),'acquireCapsuleCreation'|'CAPSULE_MEMORY_LIMIT_BYTES'|'parseMemAvailableBytes'>} admission
  * @returns {Promise<void>}
  */
-async function requestFirstSurfaceCreate(core, envRec, onSettled) {
+async function requestFirstSurfaceCreate(core, envRec, onSettled, states, readFreeMemoryBytes, admission) {
+  const {acquireCapsuleCreation, CAPSULE_MEMORY_LIMIT_BYTES, parseMemAvailableBytes} = admission;
   const timeoutMs = FIRST_SURFACE_CREATE_TIMEOUT_MS;
   console.log('METAVIEWER_SURFACE_CREATE_PENDING');
   const request = buildFirstSurfaceCreateRequest(envRec);
   /** @type {ReturnType<typeof setTimeout> | null} */
   let timer = null;
+  const releaseCreation = acquireCapsuleCreation(states);
   try {
+    if (!releaseCreation) throw Object.assign(Error('SURFACE_CREATE_BUSY'), {code:'SURFACE_CREATE_BUSY'});
+    let freeBytes = null;
+    try { freeBytes = typeof readFreeMemoryBytes === 'function'
+      ? await readFreeMemoryBytes() : parseMemAvailableBytes(readFileSync('/proc/meminfo','utf8')); } catch { /* fail closed */ }
+    if (!Number.isSafeInteger(freeBytes) || freeBytes === null || freeBytes < CAPSULE_MEMORY_LIMIT_BYTES) {
+      throw Object.assign(Error('RAM_ADMISSION_REFUSED'), {code:'RAM_ADMISSION_REFUSED'});
+    }
     const reply = await Promise.race([
       core.request(request),
       new Promise((_, reject) => {
@@ -2100,6 +2112,7 @@ async function requestFirstSurfaceCreate(core, envRec, onSettled) {
     if (timer !== null) {
       clearTimeout(timer);
     }
+    releaseCreation?.();
   }
 }
 
@@ -2518,6 +2531,7 @@ export async function bootProductionMain(handles) {
         adapterStatus.availability === 'live' &&
         adapterStatus.handshakeSeen === true
       ) {
+        const admission = await import('./profilePicker.js');
         const bootProfile = buildFirstSurfaceCreateRequest(envRec).params.profile_id;
         const pendingKey = `pending:${bootProfile}`;
         capsuleStates.set(pendingKey, {profile_id:bootProfile,state:'creating'});
@@ -2546,7 +2560,7 @@ export async function bootProductionMain(handles) {
               pendingBootCreateError = error;
             }
           },
-        });
+        }, capsuleStates, /** @type {any} */ (typed.wire)?.readFreeMemoryBytes, admission);
       }
     }
   }
@@ -2760,19 +2774,20 @@ export async function bootProductionMain(handles) {
     }
   }
   let quitting = false;
+  let quitReady = false;
   try {
     app.on('will-quit', (event) => {
-      if (quitting) {
-        return;
-      }
-      quitting = true;
-      console.info('METAVIEWER_QUIT reason=will-quit');
+      if (quitReady) return;
       try {
         /** @type {{preventDefault: () => void}} */ (/** @type {unknown} */ (event)).preventDefault();
       } catch {
         /* prevent best-effort */
       }
+      if (quitting) return;
+      quitting = true;
+      console.info('METAVIEWER_QUIT reason=will-quit');
       void dispose().finally(() => {
+        quitReady = true;
         try {
           app.quit();
         } catch {
@@ -2784,6 +2799,8 @@ export async function bootProductionMain(handles) {
       app.on('render-process-gone', (_event, _contents, details) => {
         const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
         console.info(`METAVIEWER_PROCESS_GONE kind=renderer reason=${reason}`);
+        // A crashed authority renderer cannot safely retain an interactive window.
+        if (_contents === contentsHandle && !unwound && !quitting) app.quit();
       });
       app.on('child-process-gone', (_event, details) => {
         const reason = typeof details?.reason === 'string' && /^[a-z-]{1,32}$/.test(details.reason) ? details.reason : 'unknown';
