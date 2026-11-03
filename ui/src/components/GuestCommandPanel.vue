@@ -1,22 +1,24 @@
 <script setup>
 import {computed,ref} from 'vue';
 import {gcSnapshot,gcAction} from '../../electron/guestCommandValues.js';
-const props=defineProps({snapshot:{type:Object,required:true}});
-const emit=defineEmits(['action']);
+const props=defineProps({snapshot:{type:Object,required:true},rewind:{type:Object,default:null},rewindPanel:{type:[Object,Function],default:null}});
+const emit=defineEmits(['action','rewind-action']);
 const command=ref('uname -m'),cwd=ref('');
 const state=computed(()=>gcSnapshot(props.snapshot)?props.snapshot:{available:false,busy:false,canCancel:false,uncertain:true,code:'INVALID_STATE',session:null,stdout:'',stderr:''}),session=computed(()=>state.value.session);
 const target=()=>({workload_id:session.value?.workload_id,generation:session.value?.generation});
 const runAction=()=>({op:'run',...target(),command_utf8:command.value,cwd:cwd.value,stdin_b64:'',timeout_ms:30000});
-const canRun=computed(()=>session.value?.phase==='ready'&&!state.value.uncertain&&!state.value.busy&&gcAction(runAction()));
+const rewindAllows=computed(()=>!props.rewind?.available||!props.rewind.busy&&!props.rewind.uncertain&&(!props.rewind.session||props.rewind.session.phase==='ready'));
+const canRun=computed(()=>rewindAllows.value&&session.value?.phase==='ready'&&!state.value.uncertain&&!state.value.busy&&gcAction(runAction()));
 function run(){if(canRun.value)emit('action',runAction());}
 function cancel(){if(state.value.canCancel)emit('action',{op:'cancel',...target(),job_id:session.value.job.job_id});}
-function stop(){if(session.value?.ownership==='held'&&!session.value.controls?.stop)emit('action',{op:'stop',...target()});}
+function stop(){if(session.value?.ownership==='held'&&!session.value.controls?.stop)emit('action',{op:'stop',...(props.rewind?.stop_target??target())});}
 </script>
 <template>
  <section class="guest-command-panel" aria-labelledby="guest-command-title" data-semantic-anchor="capsule/microvm/commands">
-  <header><div><small>ARM64 MicroVM</small><h2 id="guest-command-title">Guest commands</h2></div><strong>{{ state.uncertain?'Outcome unknown':session?.phase??'Creating' }}</strong></header>
+  <header><div><small>ARM64 MicroVM</small><h2 id="guest-command-title">Guest commands</h2></div><strong>{{ state.uncertain?'Outcome unknown':rewind?.session?.phase??session?.phase??'Creating' }}</strong></header>
   <p>Commands run inside the guest. This is a command log, not an interactive terminal.</p>
   <p role="status" aria-live="polite">{{ session?.ownership==='released'?'Stopped — native closure confirmed.':state.uncertain?'Ownership retained. Stop to reconcile the workload.':'Owned by this session.' }}</p>
+  <component :is="rewindPanel" v-if="rewindPanel" :snapshot="rewind" :guest="state" @action="emit('rewind-action',$event)" />
   <form @submit.prevent="run"><label for="guest-command">Command</label><textarea id="guest-command" v-model="command" rows="3" spellcheck="false" :disabled="!canRun && state.busy" /><label for="guest-cwd">Working directory (relative to guest workspace)</label><input id="guest-cwd" v-model="cwd" :disabled="state.busy" placeholder="Workspace root" /><button type="submit" :disabled="!canRun">Run command</button></form>
   <div class="controls"><button type="button" :disabled="!state.canCancel" @click="cancel">Cancel command</button><button type="button" :disabled="session?.ownership!=='held'||session?.controls?.stop" @click="stop">Stop capsule</button></div>
   <h3>Standard output</h3><pre data-testid="guest-stdout">{{ state.stdout }}</pre><h3>Standard error</h3><pre data-testid="guest-stderr">{{ state.stderr }}</pre>

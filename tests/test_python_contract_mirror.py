@@ -120,7 +120,7 @@ class PythonContractMirrorTests(unittest.TestCase):
     def test_every_canonical_schema_matches_python(self):
         paths = sorted((ROOT / "contracts/v0.2").glob("*.schema.json"))
         self.assertTrue(paths, "canonical contracts must exist")
-        ipc_only = {"surface_input.schema.json"}
+        ipc_only = set()
         envelope_paths = [path for path in paths if path.name not in ipc_only]
         self.assertEqual({path.name for path in paths}, set(_RAW_V02_FILES) | ipc_only)
         self.assertEqual({path.name for path in envelope_paths}, set(_RAW_V02_FILES))
@@ -163,31 +163,25 @@ class PythonContractMirrorTests(unittest.TestCase):
     def test_inlined_frame_blocks_match_canonical_frame_ref(self):
         canonical_frame = _RAW_V02_FILES["frame_ref.schema.json"]
         tool_result = _RAW_V02_FILES["mv_tool_result.schema.json"]
-        inlined_frames = []
-        for branch in tool_result["oneOf"]:
-            props = branch.get("properties", {})
-            obs_props = props.get("observation", {}).get("properties", {})
-            if "frame_ref" in obs_props:
-                inlined_frames.append(obs_props["frame_ref"])
-            receipt_props = props.get("receipt", {}).get("properties", {})
-            if "after_frame" in receipt_props:
-                inlined_frames.append(receipt_props["after_frame"])
-        self.assertEqual(len(inlined_frames), 2)
-        for frame_block in inlined_frames:
-            self.assertEqual(frame_block, canonical_frame)
+        # Canonical tool results now share a closed frame definition by $ref.
+        self.assertEqual(tool_result["$defs"]["frame"], canonical_frame)
+        self.assertEqual(tool_result["$defs"]["observation"]["properties"]["frame_ref"],
+                         {"$ref": "#/$defs/frame"})
+        self.assertEqual(tool_result["$defs"]["receipt_verified"]["properties"]["after_frame"],
+                         {"$ref": "#/$defs/frame"})
 
     def test_local_ref_sibling_constraint_drift_is_detected(self):
         terminal_path = ROOT / "contracts/v0.2/terminal_session.schema.json"
         canonical = json.loads(terminal_path.read_text(encoding="utf-8"))
         mirror = _V02_FILES["terminal_session.schema.json"]
-        self.assertEqual(normalized(canonical, canonical), normalized(mirror, mirror))
+        self.assertEqual(normalized(canonical, canonical, terminal_path.name), normalized(mirror, mirror, terminal_path.name))
 
         # Mutate local $ref in nullable_id (where target #/$defs/id has maxLength 128)
         # by adding a stricter sibling maxLength 127.
         mutant = copy.deepcopy(canonical)
         mutant["$defs"]["nullable_id"]["oneOf"][0]["maxLength"] = 127
-        norm_mutant = normalized(mutant, mutant)
-        self.assertNotEqual(norm_mutant, normalized(mirror, mirror))
+        norm_mutant = normalized(mutant, mutant, terminal_path.name)
+        self.assertNotEqual(norm_mutant, normalized(mirror, mirror, terminal_path.name))
 
         # Neither target (128) nor sibling (128) may overwrite a stricter 127 bound.
         stricter_sibling = {

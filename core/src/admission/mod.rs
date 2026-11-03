@@ -145,6 +145,19 @@ pub enum Input {
         surface_id: String,
         profile_id: String,
     },
+    RewindRequest {
+        request: crate::wire::rewind::RewindRequest,
+        caller: Endpoint,
+        agent: Endpoint,
+        received_ns: u64,
+        enabled: bool,
+    },
+    RewindEvent {
+        notice: crate::wire::rewind::RewindEvent,
+        executor_epoch: u64,
+    },
+    RewindUncertain,
+
     GuestCommandRequest {
         request: crate::wire::guest_command::GuestCommandRequest,
         caller: Endpoint,
@@ -254,6 +267,8 @@ pub struct CoreState {
     pub headless: crate::headless::State,
     #[serde(default, skip_serializing_if = "crate::guest_command::State::is_empty")]
     pub guest_command: crate::guest_command::State,
+    #[serde(default, skip_serializing_if = "crate::rewind_flow::State::is_empty")]
+    pub rewind: crate::rewind_flow::State,
     pub surfaces: BTreeMap<String, Surface>,
     /// Surface keys; display conflicts are checked against every leased surface.
     pub leases: BTreeMap<String, String>,
@@ -300,6 +315,7 @@ impl CoreState {
             remaining_budget: budget,
             headless: crate::headless::State::default(),
             guest_command: crate::guest_command::State::default(),
+            rewind: crate::rewind_flow::State::default(),
             surfaces: BTreeMap::new(),
             leases: BTreeMap::new(),
             pending: BTreeMap::new(),
@@ -527,6 +543,62 @@ impl CoreState {
             control_ready: false,
         };
         match input {
+            Input::RewindRequest {
+                request,
+                caller,
+                agent,
+                received_ns,
+                enabled,
+            } => {
+                if !enabled
+                    || self.remaining_budget == 0
+                    || self
+                        .rewind
+                        .submit(
+                            request,
+                            &self.guest_command,
+                            caller,
+                            agent,
+                            &self.session_id,
+                            *received_ns,
+                        )
+                        .is_err()
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else {
+                    self.remaining_budget -= 1;
+                }
+            }
+            Input::RewindEvent {
+                notice,
+                executor_epoch,
+            } => {
+                if *executor_epoch != self.epoch || self.rewind.observe(notice).is_err() {
+                    out.reason = Some(Refusal::Policy);
+                } else if notice.0["event"] == "completed"
+                    && !self.rewind.stopping
+                    && self
+                        .rewind
+                        .session
+                        .as_ref()
+                        .is_some_and(|s| s["phase"] == "ready")
+                {
+                    if let (Some(t), Some(g)) =
+                        (&self.rewind.target, self.guest_command.session.as_mut())
+                    {
+                        g["generation"] = serde_json::json!(t.generation);
+                        g["job"] = serde_json::Value::Null;
+                        g["controls"] = serde_json::json!({"cancel":null,"stop":null});
+                        g["phase"] = serde_json::json!("ready");
+                    }
+                    self.guest_command.unknown = false;
+                    self.guest_command.stdout.clear();
+                    self.guest_command.stderr.clear();
+                    self.guest_command.run_id = None;
+                    self.guest_command.run_params = None;
+                }
+            }
+            Input::RewindUncertain => self.rewind.mark_unknown(),
             Input::GuestCommandRequest {
                 request,
                 caller,
@@ -535,10 +607,12 @@ impl CoreState {
                 received_ns,
             } => {
                 let cleanup = matches!(request.0["op"].as_str(), Some("cancel" | "stop"));
-                if (!cleanup && self.remaining_budget == 0)
-                    || self
-                        .guest_command
-                        .submit(
+                let mut candidate_gc = self.guest_command.clone();
+                let result = self
+                    .rewind
+                    .prepare_stop(&request.0, &mut candidate_gc)
+                    .and_then(|_| {
+                        candidate_gc.submit(
                             request,
                             caller,
                             agent,
@@ -548,22 +622,38 @@ impl CoreState {
                                 || self.headless.held
                                 || self.has_unclosed_graphical_custody(),
                         )
-                        .is_err()
+                    });
+                if (!cleanup && (self.remaining_budget == 0 || !self.rewind.allows_command()))
+                    || result.is_err()
                 {
                     out.reason = Some(Refusal::Policy);
-                } else if !cleanup {
-                    self.remaining_budget -= 1;
+                } else {
+                    self.guest_command = candidate_gc;
+                    if request.0["op"] == "stop" {
+                        self.rewind.begin_stop();
+                    }
+                    if !cleanup {
+                        self.remaining_budget -= 1;
+                    }
                 }
             }
             Input::GuestCommandEvent {
                 notice,
                 executor_epoch,
             } => {
-                if *executor_epoch != self.epoch || self.guest_command.observe(notice).is_err() {
+                if *executor_epoch != self.epoch
+                    || self.rewind.stale_gc(&notice.0)
+                    || self.guest_command.observe(notice).is_err()
+                {
                     out.reason = Some(Refusal::Policy);
+                } else if notice.0["event"] == "stopped" {
+                    self.rewind.gc_stopped(&notice.0["session"]);
                 }
             }
-            Input::GuestCommandUncertain => self.guest_command.uncertain(),
+            Input::GuestCommandUncertain => {
+                self.guest_command.uncertain();
+                self.rewind.mark_unknown();
+            }
             Input::GuestCommandRefused { request_id } => {
                 if self.guest_command.rejected.len() < 256 {
                     self.guest_command.rejected.insert(request_id.clone());
@@ -863,6 +953,7 @@ impl CoreState {
             Input::Connect => {
                 self.headless.uncertain();
                 self.guest_command.uncertain();
+                self.rewind.mark_unknown();
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {
                     // Only a durable Dispatch can have reached the executor.

@@ -27,6 +27,7 @@ import { setKitScheme } from 'capsule-ui-kit/theme';
 import WallWorkspace from './wall/WallWorkspace.vue';
 import DesktopWorkspace from './wall/DesktopWorkspace.vue';
 import {guestWorkloadTile,validGuestWorkloadTile} from './wall/guestWorkloadTile.js';
+import {rewindSnapshot as validRewindSnapshot} from '../electron/rewindValues.js';
 import {capsuleCapabilitiesValid} from '../electron/guestCommandValues.js';
 import {createDesktopState, desktopRows, MAX_DESKTOPS_PER_VIEW} from '../electron/desktopLayout.js';
 import SurfaceCanvas from './surfaces/SurfaceCanvas.vue';
@@ -63,6 +64,8 @@ let entryTimer=/** @type {ReturnType<typeof setTimeout>|undefined} */(undefined)
 onBeforeUnmount(()=>clearTimeout(entryTimer));
 async function copyEntry(){clearTimeout(entryTimer);entryMessage.value='';try{const result=await (/** @type {any} */(globalThis).metaviewer?.operator)?.entry.copy();entryMessage.value=result?.ok?'Copied':'Copy unavailable';}catch{entryMessage.value='Copy unavailable';}entryTimer=setTimeout(()=>{entryMessage.value='';},2000);}
 const props = defineProps({
+  rewindHost: {type:Object,default:null},
+  rewindPanel: {type:[Object,Function],default:null},
   guestCommandHost: { type: Object, default: null },
   guestCommandPanel: { type: [Object,Function], default: null },
   headlessHost: { type: Object, default: null },
@@ -181,6 +184,14 @@ const validSnapshot=(/** @type {any} */ s)=>s && typeof s==='object' && Object.k
   && typeof s.available==='boolean' && typeof s.busy==='boolean' && typeof s.uncertain==='boolean' && Number.isSafeInteger(s.revision) && s.revision>=0;
 const guestCommandSnapshot=ref(/** @type {any} */ ({available:false,busy:false,canCancel:false,code:null,revision:0,session:null,uncertain:false,stdout:'',stderr:''}));
 const guestCommandOpen=ref(false);
+const rewindSnapshot=ref(/** @type {any} */({available:false,busy:false,code:null,revision:0,session:null,uncertain:false,point_ages_ms:{},stop_target:null}));
+watch(()=>props.rewindHost,(host,_,cleanup)=>{
+ let active=true;
+ const accept=(/** @type {any} */value)=>{if(active&&validRewindSnapshot(value)&&value.revision>=rewindSnapshot.value.revision)rewindSnapshot.value=value;};
+ const stop=host?.subscribe?.(accept);void host?.status?.().then(accept).catch(()=>{});cleanup(()=>{active=false;stop?.();});
+},{immediate:true});
+async function requestRewind(/** @type {any} */action){try{const value=await props.rewindHost?.request?.(action);if(validRewindSnapshot(value)&&value.revision>=rewindSnapshot.value.revision)rewindSnapshot.value=value;}catch{rewindSnapshot.value={...rewindSnapshot.value,uncertain:true,code:'OUTCOME_UNKNOWN'};}}
+
 const arm64Capabilities=ref(/** @type {any} */ (null));
 const guestWorkloadTiles=computed(()=>{const tile=guestWorkloadTile(guestCommandSnapshot.value);return tile?[tile]:[];});
 watch(()=>props.guestCommandHost,(host,_,cleanup)=>{
@@ -1820,7 +1831,7 @@ onMounted(() => {
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
-          <template #workload="{workload}"><component :is="guestCommandPanel" v-if="guestCommandPanel" :snapshot="workload.snapshot" @action="guestCommandAction" /></template>
+          <template #workload="{workload}"><component :is="guestCommandPanel" v-if="guestCommandPanel" :snapshot="workload.snapshot" :rewind="rewindSnapshot" :rewind-panel="rewindPanel" @action="guestCommandAction" @rewind-action="requestRewind" /></template>
           <template #surface="{ surface, capsuleId, desktopActive }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
             <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @stored-data="openStoredData" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">

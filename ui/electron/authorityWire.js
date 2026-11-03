@@ -16,6 +16,7 @@ import { stateRequest, stateEvent } from './preload.js';
  * [TARGET, unit decision] Frozen settings/v0.2 is decoded separately, then
  * projected to host preferences; its limits do not change UI preference caps.
  */
+import {rewindAction} from './rewindValues.js';
 import {gcAction} from './guestCommandValues.js';
 import {arm64CapsuleStatusSync} from './guestCommandProfile.js';
 import {validAction} from './headlessValues.js';
@@ -59,7 +60,8 @@ const CLIPBOARD_CHANNELS = Object.freeze({
   clipboardRead:'metaviewer:clipboard.readText',
 });
 export const GUEST_COMMAND_CHANNELS=Object.freeze({guestCommandCapabilities:'metaviewer:guest-command.capabilities',guestCommandStatus:'metaviewer:guest-command.status',guestCommandRequest:'metaviewer:guest-command.request'});
-const ALL_WIRE_CHANNELS = Object.freeze({...GUEST_COMMAND_CHANNELS,...WIRE_CHANNELS, ...HEADLESS_CHANNELS, ...SIDE_TERMINAL_CHANNELS, ...CLIPBOARD_CHANNELS});
+export const REWIND_CHANNELS=Object.freeze({rewindStatus:'metaviewer:rewind.status',rewindRequest:'metaviewer:rewind.request'});
+const ALL_WIRE_CHANNELS = Object.freeze({...REWIND_CHANNELS,...GUEST_COMMAND_CHANNELS,...WIRE_CHANNELS, ...HEADLESS_CHANNELS, ...SIDE_TERMINAL_CHANNELS, ...CLIPBOARD_CHANNELS});
 export const SURFACE_INPUT_CHANNEL = WIRE_CHANNELS.intent;
 export const WIRE_MAX_BYTES = 256 * 1024;
 export const INTENT_OPS = Object.freeze({
@@ -872,6 +874,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     }
     return {ok:false,code:wireCode};
   };
+  const stopRewind=core.rewind?.status?.().available===true?core.rewind.subscribe((/** @type {any} */ snapshot)=>{if(identity.depth===null)contents.postMessage('metaviewer:rewind.state',snapshot);}):()=>{};
   const stopGuestCommand=core.guestCommand?.status?.().available===true?core.guestCommand.subscribe((/** @type {any} */ snapshot)=>{if(identity.depth===null)contents.postMessage('metaviewer:guest-command.state',snapshot);}):()=>{};
   const stopHeadless = (core.headless?.status?.().available === true ? core.headless.subscribe((/** @type {any} */ snapshot) => {
     if (identity.depth === null) contents.postMessage('metaviewer:headless.state',snapshot);
@@ -897,6 +900,8 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       const body=stateRequest(request);
       return stateEvent(await core.request({op:'capsule-state',request:body}));
     },
+    rewindStatus:async()=>identity.depth===null&&core.rewind?core.rewind.status():{available:false,busy:false,code:'UNAVAILABLE',revision:0,session:null,uncertain:false,point_ages_ms:{},stop_target:null},
+    rewindRequest:async(/** @type {any} */action)=>{if(identity.depth!==null||!core.rewind||!rewindAction(action))throw Error('BAD_REQUEST');return core.rewind.request(action);},
     guestCommandCapabilities: capsuleCapabilities,
     guestCommandStatus: async()=>identity.depth===null&&core.guestCommand?core.guestCommand.status():{available:false,busy:false,canCancel:false,code:'UNAVAILABLE',revision:0,session:null,uncertain:false,stdout:'',stderr:''},
     guestCommandRequest: async(/** @type {any} */ action)=>{if(identity.depth!==null||!core.guestCommand||!gcAction(action))throw Error('BAD_REQUEST');return core.guestCommand.request(action);},
@@ -1269,7 +1274,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         continue;
       }
       const channel=ALL_WIRE_CHANNELS[/** @type {keyof typeof ALL_WIRE_CHANNELS} */(name)];
-      const arity=['slotRequest','guestCommandRequest','headlessRequest','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
+      const arity=['slotRequest','rewindRequest','guestCommandRequest','headlessRequest','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
       ipcMain.handle(channel,/** @param {unknown} event @param {...any} args */ async (event,...args) => {
         if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
         const vmCreate = name === 'createSurface' && args.length === 1 && exactDataKeys(args[0],'kind') && args[0].kind === 'vm';
@@ -1418,7 +1423,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     inputPartialSeq,
     inputPartialApplied,
     notifyCreateRefusal: (/** @type {any} */ failure) => refuse(resolveCreateFailureCode(failure)),
-    async dispose() { stopGuestCommand(); stopHeadless(); disposed=true; subscribed=false; stopFrames(); stopCadence();
+    async dispose() { stopRewind(); stopGuestCommand(); stopHeadless(); disposed=true; subscribed=false; stopFrames(); stopCadence();
       knownSurfaces.clear();
       inputRateWindow.clear();
       inputLastSeq.clear();

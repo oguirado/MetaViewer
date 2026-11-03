@@ -19,8 +19,15 @@ struct History {
     requests: BTreeSet<String>,
     jobs: BTreeSet<String>,
     stopping: bool,
+    #[cfg(feature = "rewind-profile")]
+    prefix: Option<String>,
 }
 impl History {
+    fn group_name(&self, index: usize) -> Result<JobName> {
+        #[cfg(feature = "rewind-profile")]
+        if let Some(prefix) = &self.prefix { return JobName::new(&format!("{prefix}_{index}")); }
+        JobName::new(&format!("job_{index}"))
+    }
     fn request(&mut self, id: &str) -> Result<()> {
         if self.requests.len() >= 256 || !self.requests.insert(id.into()) {
             return Err(refused("request reused or history exhausted"));
@@ -152,7 +159,7 @@ fn request(
             let index = history.job(m.text("job_id")?)?;
             let group = groups.create(
                 a,
-                &JobName::new(&format!("job_{index}"))?,
+                &history.group_name(index)?,
                 Limits::new(128 << 20, 64, 256 << 20)?,
             )?;
             t.reset_counts()?;
@@ -368,6 +375,74 @@ pub fn serve(a: &GuestAuthority, nonce: String, end: u64) -> Result<()> {
     if result.is_err() {
         emergency(a, &mut active, end);
     }
+    result
+}
+/// Rewind-only transport loss cleanup. Unlike emergency(), every witness is required.
+#[cfg(feature = "rewind-profile")]
+fn rewind_drain(a: &GuestAuthority, active: &mut Option<Job>, groups: &JobCgroups) -> Result<()> {
+    if let Some(j) = active.as_mut() {
+        j.child.terminate(a, j.status.is_some())?;
+        j.group.kill_descendants(a)?;
+    }
+    let until = bootstrap::now_ms()?.checked_add(1000).ok_or_else(|| refused("cleanup clock"))?;
+    loop {
+        let (rows, no_children) = supervision::reap_available(a)?;
+        if let Some(j) = active.as_mut() {
+            for row in rows { if row.pid == j.child.pid() { j.status = Some(row.status); } }
+            if !j.stdout_eof { j.stdout_eof = spawn::drain(a, &j.child.stdout, false, &mut j.output)?; }
+            if !j.stderr_eof { j.stderr_eof = spawn::drain(a, &j.child.stderr, true, &mut j.output)?; }
+            if j.status.is_some() && no_children && j.group.empty(a)? && j.stdout_eof && j.stderr_eof && groups.quiescent(a)? {
+                *active = None;
+                return Ok(());
+            }
+        } else if no_children && groups.quiescent(a)? { return Ok(()); }
+        if bootstrap::now_ms()? >= until { return Err(refused("rewind cleanup unknown")); }
+        unsafe { libc::usleep(1000); }
+    }
+}
+#[cfg(feature = "rewind-profile")]
+pub(crate) enum RewindEnd { Disconnected, Stopped }
+/// All returns require guest-child/cgroup/pipe closure; errors are fatal, never reconnectable.
+#[cfg(feature = "rewind-profile")]
+pub(crate) fn serve_rewind(
+    a: &GuestAuthority, mut t: Transport, binding: &crate::rewind::Binding,
+    jail: &Jail, groups: &mut JobCgroups, counter: &mut crate::rewind::Counter,
+) -> Result<RewindEnd> {
+    a.check()?;
+    if !groups.quiescent(a)? || !supervision::reap_available(a)?.1 { return Err(refused("rewind admission not quiescent")); }
+    let mut active = None;
+    let mut history = History { prefix: Some(format!("rw_{}", binding.epoch)), ..History::default() };
+    let mut stop = None;
+    let mut ready = false;
+    let result = (|| loop {
+        counter.tick(bootstrap::now_ms()?)?;
+        t.flush(a)?;
+        if active.as_ref().is_some_and(|j: &Job| j.terminal_queued) && t.idle() { active = None; }
+        if let Some(j) = active.as_mut() { step_job(a, &mut t, j, bootstrap::now_ms()?)?; }
+        if history.stopping && active.is_none() && t.idle() {
+            let m = t.event("stopping", json!({"request_id":stop}))?;
+            t.enqueue(&m, &[], None)?;
+            while !t.idle() { t.flush(a)?; t.wait(a)?; }
+            return Ok(RewindEnd::Stopped);
+        }
+        let frame = match t.receive(a) {
+            Ok(frame) => frame,
+            Err(e) if e.to_string() == "connection EOF" => return Ok(RewindEnd::Disconnected),
+            Err(e) => return Err(e),
+        };
+        if let Some(frame) = frame {
+            if !ready {
+                binding.matches_hello(&frame.metadata)?;
+                t.ready()?;
+                ready = true;
+            } else {
+                request(a, &mut t, frame, jail, groups, &mut active, &mut history, &mut stop, u64::MAX - 10000)?;
+            }
+        }
+        t.wait(a)?;
+    })();
+    // Even protocol failures must close the exact owned child. Do not swallow an unknown cleanup.
+    rewind_drain(a, &mut active, groups)?;
     result
 }
 #[cfg(test)]

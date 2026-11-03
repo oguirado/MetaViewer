@@ -53,6 +53,7 @@ mod capture;
 mod guest_command;
 mod headless;
 mod layout;
+mod rewind;
 mod timings;
 mod tools;
 
@@ -195,6 +196,7 @@ fn adapter_input_refusal(detail: &str) -> Refusal {
 /// One serialization point for all authority transitions and publication.
 pub struct Server {
     config: Config,
+    rewind_enabled: bool,
     authority: Authority,
     root: PathBuf,
     replay: ReplayTable,
@@ -443,6 +445,7 @@ impl Server {
         let capture = crate::record::capture::Host::with_serial(authority.state().core_seq);
         let frame_timings = timings::Writer::start(root.join("artifacts/frame_timings.jsonl"));
         Ok(Self {
+            rewind_enabled: std::env::var("MV_REWIND_ENABLED").ok().as_deref() == Some("1"),
             frame_timings,
             frame_clock: None,
             config,
@@ -1346,6 +1349,12 @@ impl Server {
                     .sender
                     .clone();
                 return self.send_at(now_ns, &sender, env.body.clone());
+            }
+            (Component::Ui | Component::Agent, Command::RewindRequest(request)) => {
+                return self.rewind_request(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::RewindEvent(event)) => {
+                return self.rewind_event(now_ns, &env, event, epoch, boundary);
             }
             (Component::Ui | Component::Agent, Command::GuestCommandRequest(request)) => {
                 return self.guest_command_request(now_ns, &env, request, boundary);

@@ -58,6 +58,9 @@ impl Server {
         boundary: Witness,
     ) -> Result<()> {
         self.poll_guest_command_at(now)?;
+        if r.0["op"] == "run" && !self.authority.state().rewind.allows_command() {
+            return self.guest_command_refused(now, env, r, "BUSY", boundary);
+        }
         let agent = self.agent()?;
         let daemon = self
             .config
@@ -73,6 +76,14 @@ impl Server {
         let other = self.authority.state().has_unclosed_graphical_custody()
             || self.authority.state().headless.held;
         let mut preview = self.authority.state().guest_command.clone();
+        if let Err(code) = self
+            .authority
+            .state()
+            .rewind
+            .prepare_stop(&r.0, &mut preview)
+        {
+            return self.guest_command_refused(now, env, r, code, boundary);
+        }
         if let Err(code) = preview.submit(r, &env.from, &agent, &env.session_id, now, other) {
             return self.guest_command_refused(now, env, r, code, boundary);
         }
@@ -109,6 +120,15 @@ impl Server {
         boundary: Witness,
     ) -> Result<()> {
         self.poll_guest_command_at(now)?;
+        if self.authority.state().rewind.stale_gc(&e.0) {
+            return self.refuse_at(
+                now,
+                &env.from,
+                &env.msg_id,
+                Refusal::Policy,
+                self.authority.state().core_seq,
+            );
+        }
         let receivers = self.guest_command_receivers()?;
         let out = self.authority.apply_with_witnesses(
             Input::GuestCommandEvent {
@@ -143,6 +163,7 @@ impl Server {
         Ok(())
     }
     pub(super) fn poll_guest_command_at(&mut self, now: u64) -> Result<()> {
+        self.poll_rewind_at(now)?;
         if self.authority.state().guest_command.expired(now) {
             self.mark_guest_command_unknown(now)?;
         }

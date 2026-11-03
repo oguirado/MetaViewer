@@ -1,8 +1,8 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {gcAction,gcValid} from './guestCommandValues.js';
 /** One host actor for the authenticated guest-command stream. No native execution. */
-/** @param {{send:(v:any)=>void,available:()=>boolean,ownerId:string,sessionId:string,timeoutMs?:number}} options */
-export function createGuestCommandHost({send,available,ownerId,sessionId,timeoutMs=65000}) {
+/** @param {{send:(v:any)=>void,available:()=>boolean,ownerId:string,sessionId:string,timeoutMs?:number,commandAllowed?:()=>boolean,stopTarget?:()=>any,cancelAvailable?:()=>boolean}} options */
+export function createGuestCommandHost({send,available,ownerId,sessionId,timeoutMs=65000,commandAllowed=()=>true,stopTarget=()=>null,cancelAvailable=()=>true}) {
  /** @type {any} */ let session=null;
  /** @type {string|null} */ let code=null;
  /** @type {string|null} */ let createId=null;
@@ -12,7 +12,7 @@ export function createGuestCommandHost({send,available,ownerId,sessionId,timeout
  let decoders={stdout:new TextDecoder(),stderr:new TextDecoder()},indices={stdout:0,stderr:0},counts={stdout:0,stderr:0},hashes={stdout:createHash('sha256'),stderr:createHash('sha256')};
  const pending=new Map(),seen=new Set(),listeners=new Set();
  const copy=(/** @type {any} */ v)=>structuredClone(v);
- const status=()=>copy({available:!closed&&available(),busy:pending.size>0,canCancel:[...pending.values()].some(p=>p.body.op==='run'&&p.accepted)&&![...pending.values()].some(p=>['cancel','stop'].includes(p.body.op))&&!uncertain&&!session?.controls?.cancel&&!session?.controls?.stop,code,revision,session,uncertain,stdout,stderr});
+ const status=()=>copy({available:!closed&&available(),busy:pending.size>0,canCancel:cancelAvailable()&&[...pending.values()].some(p=>p.body.op==='run'&&p.accepted)&&![...pending.values()].some(p=>['cancel','stop'].includes(p.body.op))&&!uncertain&&!session?.controls?.cancel&&!session?.controls?.stop,code,revision,session,uncertain,stdout,stderr});
  const publish=()=>{revision++;const s=status();for(const f of listeners){try{f(copy(s));}catch{listeners.delete(f);}}return s;};
  const settle=(/** @type {any} */ p)=>{clearTimeout(p.timer);pending.delete(p.body.request_id);p.resolve(publish());};
  const lose=()=>{uncertain=true;code='OUTCOME_UNKNOWN';if(session?.ownership==='held'){session={...session,phase:'uncertain',job:session.job&&['running','cancelling'].includes(session.job.state)?{...session.job,state:'unknown'}:session.job};}const old=[...pending.values()];pending.clear();const snapshot=publish();for(const p of old){clearTimeout(p.timer);p.resolve(snapshot);}return snapshot;};
@@ -22,12 +22,14 @@ export function createGuestCommandHost({send,available,ownerId,sessionId,timeout
   if(!gcAction(action))throw Error('BAD_REQUEST');
   if(closed||!available()){code='UNAVAILABLE';return publish();}
   const op=action.op;
-  if(op==='create' ? consumed : !session || session.ownership!=='held' || action.workload_id!==session.workload_id || action.generation!==session.generation){code='OUT_OF_ORDER';return publish();}
-  if(op==='run'&&(uncertain||session.phase!=='ready'||pending.size)){code='BUSY';return publish();}
+  const cleanupTarget=op==='stop'?stopTarget():null;
+  const expected=cleanupTarget??session;
+  if(op==='create' ? consumed : !session || session.ownership!=='held' || action.workload_id!==expected.workload_id || action.generation!==expected.generation){code='OUT_OF_ORDER';return publish();}
+  if(op==='run'&&(!commandAllowed()||uncertain||session.phase!=='ready'||pending.size)){code='BUSY';return publish();}
   if(op==='cancel'&&(!status().canCancel||action.job_id!==session.job?.job_id)){code='BUSY';return publish();}
   if(op==='stop'&&[...pending.values()].some(p=>p.body.op==='stop')){code='BUSY';return publish();}
   const id='request-'+randomUUID();
-  const params=op==='create'?{profile_id:'guest-command-arm64-v1'}:{workload_id:session.workload_id,generation:session.generation,...(op==='run'?{job_id:'job-'+randomUUID(),command_utf8:action.command_utf8,cwd:action.cwd,stdin_b64:action.stdin_b64,timeout_ms:action.timeout_ms}:op==='cancel'?{job_id:action.job_id}:{})};
+  const params=op==='create'?{profile_id:'guest-command-arm64-v1'}:{workload_id:expected.workload_id,generation:expected.generation,...(op==='run'?{job_id:'job-'+randomUUID(),command_utf8:action.command_utf8,cwd:action.cwd,stdin_b64:action.stdin_b64,timeout_ms:action.timeout_ms}:op==='cancel'?{job_id:action.job_id}:{})};
   const body={schema:'guest_command_request/v0.2',request_id:id,op,params};
   if(!gcValid('guest_command_request.schema.json',body))throw Error('BAD_REQUEST');
   if(op==='create'){consumed=true;createId=id;reservation=token(id);}
@@ -49,7 +51,8 @@ export function createGuestCommandHost({send,available,ownerId,sessionId,timeout
  function receive(event){
   if(!gcValid('guest_command_event.schema.json',event)||event.owner_id!==ownerId||event.reservation_id!==reservation||seen.has(event.event_id)||seen.size>=8192)throw Error('GUEST_COMMAND_PROTOCOL');
   const p=pending.get(event.request_id),s=event.session,kind=event.event;
-  if(s&&(s.owner_id!==ownerId||session&&(s.workload_id!==session.workload_id||s.generation!==session.generation)))throw Error('GUEST_COMMAND_OWNER');
+  const cleanupRebind=p?.body.op==='stop'&&['accepted','outcome_unknown','stopped'].includes(kind)&&s?.generation===p.body.params.generation&&s?.workload_id===p.body.params.workload_id;
+  if(s&&(s.owner_id!==ownerId||session&&(s.workload_id!==session.workload_id||s.generation!==session.generation&&!cleanupRebind)))throw Error('GUEST_COMMAND_OWNER');
   // Create may fail before the core can provide a workload tuple. Keep the consumed intent.
   if(kind==='outcome_unknown'&&event.request_id===createId&&event.data.op==='create'&&s===null&&session===null&&(p?.body.op==='create'||uncertain)){seen.add(event.event_id);lose();return;}
   // An idle native failure is a resource update on the original create, not a rewritten job.
@@ -89,5 +92,11 @@ export function createGuestCommandHost({send,available,ownerId,sessionId,timeout
   session=copy(s);seen.add(event.event_id);
   if(p&&['ready','job_finished','stopped'].includes(kind)){if(kind==='stopped')uncertain=false;settle(p);}else if(p?.body.op==='cancel'&&kind==='accepted')settle(p);else publish();
  }
- return Object.freeze({status,request,receive,disconnect(){closed=true;lose();},subscribe(/** @type {(s:any)=>void} */ cb){listeners.add(cb);cb(status());return()=>listeners.delete(cb);}});
+ /** @param {any} next @param {number} priorGeneration */
+ function commitRewind(next,priorGeneration){
+  if(!session||pending.size||next?.phase!=='ready'||next.ownership!=='held'||next.owner_id!==ownerId||next.workload_id!==session.workload_id||!Number.isSafeInteger(next.generation)||!Number.isSafeInteger(priorGeneration)||priorGeneration<session.generation||next.generation!==priorGeneration+1)throw Error('GUEST_COMMAND_REWIND');
+  session={...session,generation:next.generation,phase:'ready',job:null,controls:{cancel:null,stop:null}};
+  uncertain=false;code=null;stdout='';stderr='';publish();
+ }
+ return Object.freeze({status,request,receive,commitRewind,disconnect(){closed=true;lose();},subscribe(/** @type {(s:any)=>void} */ cb){listeners.add(cb);cb(status());return()=>listeners.delete(cb);}});
 }

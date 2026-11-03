@@ -46,6 +46,50 @@ fn refusal_vocabulary_is_frozen() {
 
 const NON_ENVELOPE_SCHEMA_PREFIXES: &[&str] = &["surface_input"];
 
+const LEGACY_BODIES: &[&str] = &[
+    "surface",
+    "frame_ref",
+    "surface_request",
+    "surface_event",
+    "observation",
+    "action_proposal",
+    "action_verdict",
+    "action_receipt",
+    "hello",
+    "capsule_meta",
+    "ui_intent",
+    "catalog_entry",
+    "terminal_session",
+    "record_request",
+    "record_event",
+    "settings",
+    "mv_tool_call",
+    "mv_tool_result",
+    "session_record",
+    "capsule_state_request",
+    "capsule_state_event",
+];
+const CAPSULE_BODIES: &[&str] = &[
+    "headless_request",
+    "headless_event",
+    "guest_command_request",
+    "guest_command_event",
+];
+const REWIND_BODIES: &[&str] = &["rewind_request", "rewind_event"];
+fn family(prefix: &str) -> Option<&'static str> {
+    if prefix == "envelope" || LEGACY_BODIES.contains(&prefix) {
+        Some("envelope")
+    } else if prefix == "capsule_envelope" || CAPSULE_BODIES.contains(&prefix) {
+        Some("capsule_envelope")
+    } else if prefix == "rewind_envelope" || REWIND_BODIES.contains(&prefix) {
+        Some("rewind_envelope")
+    } else {
+        None
+    }
+}
+
+// These host-only metadata schemas use regexes intentionally outside the wire
+// scalar vocabulary. Exercise the unchanged canonical validator, not a skip.
 fn canonical_metadata_valid(prefix: &str, raw: &[u8]) -> Result<bool, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
@@ -142,6 +186,25 @@ fn check_frozen_example(
         }
         return Ok(ExampleDisposition::EmbeddedChecked { valid });
     }
+    let metadata = match prefix {
+        "rewind_session" => Some(
+            serde_json::from_slice::<metaviewer_core::wire::rewind::RewindSession>(raw).map(|_| ()),
+        ),
+        "rewind_point" => Some(
+            serde_json::from_slice::<metaviewer_core::wire::rewind::RewindPoint>(raw).map(|_| ()),
+        ),
+        "rewind_guest_reset" => Some(
+            serde_json::from_slice::<metaviewer_core::wire::rewind::RewindGuestReset>(raw)
+                .map(|_| ()),
+        ),
+        _ => None,
+    };
+    if let Some(checked) = metadata {
+        if checked.is_ok() != valid {
+            return Err(format!("{name}: metadata validity mismatch {checked:?}"));
+        }
+        return Ok(ExampleDisposition::EmbeddedChecked { valid });
+    }
     if matches!(
         prefix,
         "capsule_capabilities" | "capsule_resource_inventory"
@@ -151,7 +214,9 @@ fn check_frozen_example(
         }
         return Ok(ExampleDisposition::EmbeddedChecked { valid });
     }
-    if !matches!(prefix, "envelope" | "capsule_envelope") && !envelope_bodies.contains(prefix) {
+    let family = family(prefix)
+        .ok_or_else(|| format!("unrecognized schema prefix {prefix:?} in fixture {name}"))?;
+    if prefix != family && !envelope_bodies.contains(prefix) {
         return Err(format!(
             "unrecognized schema prefix {prefix:?} in fixture {name}"
         ));
@@ -159,26 +224,17 @@ fn check_frozen_example(
     let value: serde_json::Value =
         serde_json::from_slice(raw).map_err(|err| format!("{name}: {err}"))?;
     let mut env = base.clone();
-    if matches!(prefix, "envelope" | "capsule_envelope") {
+    if prefix == family {
         env = value;
     } else {
-        if [
-            "headless_request",
-            "headless_event",
-            "guest_command_request",
-            "guest_command_event",
-        ]
-        .contains(&prefix)
-        {
-            env["schema"] = "capsule_envelope/v0.2".into();
-        }
+        env["schema"] = format!("{family}/v0.2").into();
         env["body"] = value;
     }
     let result = decode_envelope(&serde_json::to_string(&env).unwrap());
     if result.is_ok() != valid {
         return Err(format!("{name}: expected valid={valid}, got {result:?}"));
     }
-    if matches!(prefix, "envelope" | "capsule_envelope") {
+    if prefix == family {
         Ok(ExampleDisposition::EnvelopeChecked { valid })
     } else {
         Ok(ExampleDisposition::BodyChecked {
@@ -191,80 +247,42 @@ fn check_frozen_example(
 #[test]
 fn all_frozen_body_examples_and_negative_controls() {
     let base: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
-    let envelope_schema: serde_json::Value =
-        serde_json::from_str(include_str!("../../contracts/v0.2/envelope.schema.json")).unwrap();
-    let mut envelope_bodies: std::collections::BTreeSet<String> = envelope_schema
-        .pointer("/properties/body/oneOf")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|branch| {
-            branch["$ref"]
-                .as_str()
-                .unwrap()
-                .trim_end_matches(".schema.json")
-                .to_string()
-        })
-        .collect();
-    let legacy_expected: std::collections::BTreeSet<String> = [
-        "surface",
-        "frame_ref",
-        "surface_request",
-        "surface_event",
-        "observation",
-        "action_proposal",
-        "action_verdict",
-        "action_receipt",
-        "hello",
-        "capsule_meta",
-        "ui_intent",
-        "catalog_entry",
-        "terminal_session",
-        "record_request",
-        "record_event",
-        "settings",
-        "mv_tool_call",
-        "mv_tool_result",
-        "session_record",
-        "capsule_state_request",
-        "capsule_state_event",
-    ]
-    .into_iter()
-    .map(str::to_string)
-    .collect();
-    assert_eq!(envelope_bodies, legacy_expected);
-    let capsule_schema: serde_json::Value = serde_json::from_str(include_str!(
-        "../../contracts/v0.2/capsule_envelope.schema.json"
-    ))
-    .unwrap();
-    let capsule_bodies: std::collections::BTreeSet<String> = capsule_schema
-        .pointer("/properties/body/oneOf")
-        .unwrap()
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| {
-            v["$ref"]
-                .as_str()
-                .unwrap()
-                .trim_end_matches(".schema.json")
-                .to_string()
-        })
-        .collect();
-    assert_eq!(
-        capsule_bodies,
-        [
-            "headless_request",
-            "headless_event",
-            "guest_command_request",
-            "guest_command_event"
-        ]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
-    );
-    envelope_bodies.extend(capsule_bodies);
+    let mut envelope_bodies = std::collections::BTreeSet::new();
+    for (schema, expected) in [
+        (
+            include_str!("../../contracts/v0.2/envelope.schema.json"),
+            LEGACY_BODIES,
+        ),
+        (
+            include_str!("../../contracts/v0.2/capsule_envelope.schema.json"),
+            CAPSULE_BODIES,
+        ),
+        (
+            include_str!("../../contracts/v0.2/rewind_envelope.schema.json"),
+            REWIND_BODIES,
+        ),
+    ] {
+        let schema: serde_json::Value = serde_json::from_str(schema).unwrap();
+        let actual: std::collections::BTreeSet<String> = schema
+            .pointer("/properties/body/oneOf")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                v["$ref"]
+                    .as_str()
+                    .unwrap()
+                    .trim_end_matches(".schema.json")
+                    .to_string()
+            })
+            .collect();
+        assert_eq!(actual, expected.iter().map(|v| v.to_string()).collect());
+        envelope_bodies.extend(actual);
+    }
+    assert_eq!(LEGACY_BODIES.len(), 21);
+    assert_eq!(CAPSULE_BODIES.len(), 4);
+    assert_eq!(REWIND_BODIES.len(), 2);
     let directory =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/examples/v0.2");
     let mut valid_body_prefixes = std::collections::BTreeSet::new();
@@ -660,6 +678,91 @@ fn body_known_family_version_mismatch_is_unknown_version() {
         &typeless_obj_constraint,
         &typeless_obj_constraint
     ));
+}
+
+#[test]
+fn closed_families_and_metadata_cannot_cross_wire() {
+    let base: serde_json::Value = serde_json::from_str(&fixture()).unwrap();
+    for (name, bodies) in [
+        ("envelope", LEGACY_BODIES),
+        ("capsule_envelope", CAPSULE_BODIES),
+        ("rewind_envelope", REWIND_BODIES),
+    ] {
+        for body in bodies {
+            let raw = std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("../contracts/examples/v0.2/{body}.valid.json")),
+            )
+            .unwrap();
+            let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+            for tag in ["envelope", "capsule_envelope", "rewind_envelope"] {
+                let mut env = base.clone();
+                env["schema"] = format!("{tag}/v0.2").into();
+                env["body"] = value.clone();
+                assert_eq!(
+                    decode_envelope(&env.to_string()).is_ok(),
+                    tag == name,
+                    "{body} in {tag}"
+                );
+            }
+        }
+    }
+    for helper in [
+        "headless_session",
+        "guest_command_session",
+        "guest_transport_metadata",
+        "rewind_session",
+        "rewind_point",
+        "rewind_guest_reset",
+        "capsule_capabilities",
+        "capsule_resource_inventory",
+    ] {
+        let value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(format!("../contracts/examples/v0.2/{helper}.valid.json")),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        for tag in ["envelope", "capsule_envelope", "rewind_envelope"] {
+            let mut env = base.clone();
+            env["schema"] = format!("{tag}/v0.2").into();
+            env["body"] = value.clone();
+            assert!(
+                decode_envelope(&env.to_string()).is_err(),
+                "helper {helper} in {tag}"
+            );
+        }
+    }
+}
+
+#[test]
+fn reset_metadata_entropy_predicate_matches_closed_contract() {
+    use metaviewer_core::wire::rewind::RewindGuestReset;
+    let value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/rewind_guest_reset.valid.request.json"
+    ))
+    .unwrap();
+    for entropy in [
+        "0".repeat(128),
+        "F".repeat(128),
+        "1".repeat(127),
+        "1".repeat(129),
+        format!("{}g", "1".repeat(127)),
+    ] {
+        let mut bad = value.clone();
+        bad["entropy"] = entropy.into();
+        assert!(serde_json::from_value::<RewindGuestReset>(bad).is_err());
+    }
+    for entropy in [
+        format!("{}1", "0".repeat(127)),
+        format!("f{}", "0".repeat(127)),
+    ] {
+        let mut good = value.clone();
+        good["entropy"] = entropy.into();
+        assert!(serde_json::from_value::<RewindGuestReset>(good).is_ok());
+    }
 }
 
 #[test]

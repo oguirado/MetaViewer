@@ -757,7 +757,7 @@ function publicRuntimeFiles(root) {
       return entry.isFile() && /\.(py|json)$/.test(entry.name) && !entry.name.startsWith('test_') ? [path] : [];
     });
   };
-  return [...walk('agents/metaviewer_agents'),...walk('tools'),...walk('contracts/v0.2'),...walk('daemon-adapter/guest_command_runtime'),'daemon-adapter/tools/guest_command_runner.py'].sort();
+  return [...walk('agents/metaviewer_agents'),...walk('tools'),...walk('contracts/v0.2'),...walk('daemon-adapter/guest_command_runtime'),...walk('daemon-adapter/rewind_runtime'),'daemon-adapter/tools/guest_command_runner.py','daemon-adapter/tools/rewind_runner.py'].sort();
 }
 
 /** Packaged relative directory for the out-of-ASAR node-pty runtime (P18H-R2-PTY). */
@@ -1100,10 +1100,11 @@ export async function createPackagedBootLifecycle(options = {}) {
 /** Host-only agent binding for the fixed MicroVM mode; ordinary launches remain random.
  * @param {NodeJS.ProcessEnv} env @returns {Promise<string|null>} */
 export async function headlessAgentInstance(env) {
-  const guest=env.MV_GUEST_COMMAND_ONLY==='1'||env.MV_ARM64_CAPSULES==='1';
+  const rewind=env.MV_REWIND_ENABLED==='1';
+  const guest=rewind||env.MV_GUEST_COMMAND_ONLY==='1'||env.MV_ARM64_CAPSULES==='1';
   if(guest && env.MV_HEADLESS_ONLY!==undefined && env.MV_HEADLESS_ONLY!=='')throw Error('GUEST_COMMAND_AGENT_BINDING');
   if(!guest && env.MV_HEADLESS_ONLY!=='1')return null;
-  const path=guest?env.MV_GUEST_COMMAND_PROFILE:env.MV_HEADLESS_PROFILE,instance=guest?env.MV_GUEST_COMMAND_AGENT_INSTANCE:env.MV_HEADLESS_AGENT_INSTANCE;
+  const path=rewind?env.MV_REWIND_PROFILE:guest?env.MV_GUEST_COMMAND_PROFILE:env.MV_HEADLESS_PROFILE,instance=rewind?env.MV_REWIND_AGENT_INSTANCE:guest?env.MV_GUEST_COMMAND_AGENT_INSTANCE:env.MV_HEADLESS_AGENT_INSTANCE;
   if(!path || !isAbsolute(path) || !instance || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(instance))throw Error('HEADLESS_AGENT_BINDING');
   if(await fs.realpath(path)!==path)throw Error('HEADLESS_AGENT_BINDING');
   const before=await fs.lstat(path,{bigint:true});
@@ -1117,7 +1118,7 @@ export async function headlessAgentInstance(env) {
     const buf=Buffer.alloc(65537),{bytesRead}=await f.read(buf,0,buf.length,0);
     if(bytesRead!==Number(st.size) || !same(st,await f.stat({bigint:true})) || !same(st,await fs.lstat(path,{bigint:true})) || await fs.realpath(path)!==path)throw Error('HEADLESS_AGENT_BINDING');
     const profile=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(buf.subarray(0,bytesRead)));
-    if(Object.keys(profile).sort().join(',')!=='config_template,controller_relative,files,guardian_unit,owner_id,python,python_prefix,runner,runtime_root,schema,state_root' || typeof profile.python_prefix!=='string' || !isAbsolute(profile.python_prefix) || await fs.realpath(profile.python_prefix)!==profile.python_prefix || !(await fs.stat(profile.python_prefix)).isDirectory() || profile.schema!==(guest?'mv-guest-command-host/v1':'mv-headless-host/v1') || profile.config_template?.schema!==(guest?'guest-command-host-config/v1':'mc06-host-config/v1') || profile.config_template?.runtime_admitted!==true || profile.config_template?.owner_id!==profile.owner_id || profile.owner_id!=='actor-'+createHash('sha256').update('agent:'+instance).digest('hex'))throw Error('HEADLESS_AGENT_BINDING');
+    if(Object.keys(profile).sort().join(',')!=='config_template,controller_relative,files,guardian_unit,owner_id,python,python_prefix,runner,runtime_root,schema,state_root' || typeof profile.python_prefix!=='string' || !isAbsolute(profile.python_prefix) || await fs.realpath(profile.python_prefix)!==profile.python_prefix || !(await fs.stat(profile.python_prefix)).isDirectory() || profile.schema!==(rewind?'mv-rewind-host/v1':guest?'mv-guest-command-host/v1':'mv-headless-host/v1') || profile.config_template?.schema!==(rewind?'rewind-host-config/v1':guest?'guest-command-host-config/v1':'mc06-host-config/v1') || profile.config_template?.runtime_admitted!==true || profile.config_template?.owner_id!==profile.owner_id || profile.owner_id!=='actor-'+createHash('sha256').update('agent:'+instance).digest('hex'))throw Error('HEADLESS_AGENT_BINDING');
     return instance;
   } finally {await f.close();}
 }
@@ -1129,7 +1130,7 @@ export async function headlessAgentInstance(env) {
  * @param {Record<string,string>} helperPins
  */
 export async function arm64CapsuleSessionPlan(env,arch,appPath,operatorRoot,expectedCommit,helperPins) {
-  if(arch!=='arm64' || env.MV_ARM64_CAPSULES==='1')return null;
+  if(arch!=='arm64' || env.MV_ARM64_CAPSULES==='1' || env.MV_REWIND_ENABLED==='1')return null;
   const home=env.XDG_DATA_HOME || (env.HOME?join(env.HOME,'.local/share'):null);
   if(!home)return null;
   if(!isAbsolute(home)||resolve(home)!==home)throw Error('ARM64_SETUP_LOCATION');

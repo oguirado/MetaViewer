@@ -1,9 +1,19 @@
 use metaviewer_core::{
-    guest_command::{prepare_exec, reservation_id, State},
+    guest_command::{decode64, prepare_exec, reservation_id, State},
     wire::guest_command::{GuestCommandEvent, GuestCommandRequest},
     Component, Endpoint,
 };
 use serde_json::{json, Value};
+
+#[test]
+fn base64_limits_preserve_boundaries_without_integer_overflow() {
+    assert_eq!(decode64("eA==", 1).unwrap(), b"x");
+    assert!(decode64("eA==", 0).is_err());
+    assert!(decode64("eAAA", 1).is_err());
+    assert_eq!(decode64("eA==", usize::MAX).unwrap(), b"x");
+    assert!(decode64("", 0).unwrap().is_empty());
+}
+
 fn ep(c: Component) -> Endpoint {
     Endpoint {
         component: c,

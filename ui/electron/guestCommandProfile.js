@@ -3,8 +3,10 @@ import {constants,realpathSync,statSync,lstatSync,openSync,fstatSync,readSync,cl
 /** Protected host metadata; actual artifact admission remains with the daemon.
  * @param {NodeJS.ProcessEnv} env @param {string} [arch] @returns {string|null} */
 export function guestCommandProfileOwnerSync(env,arch=process.arch) {
-  const path=env.MV_GUEST_COMMAND_PROFILE;
-  const normal=env.MV_ARM64_CAPSULES==='1' && !env.MV_GUEST_COMMAND_ONLY && !env.MV_HEADLESS_ONLY;
+  const rewind=env.MV_REWIND_ENABLED==='1';
+  if(rewind&&(env.MV_GUEST_COMMAND_ONLY||env.MV_HEADLESS_ONLY))return null;
+  const path=rewind?env.MV_REWIND_PROFILE:env.MV_GUEST_COMMAND_PROFILE;
+  const normal=(env.MV_ARM64_CAPSULES==='1'||rewind&&env.MV_REWIND_ONLY==='1') && !env.MV_GUEST_COMMAND_ONLY && !env.MV_HEADLESS_ONLY;
   const legacy=env.MV_GUEST_COMMAND_ONLY==='1' && !env.MV_HEADLESS_ONLY && !env.MV_ARM64_CAPSULES;
   if((!normal && !legacy) || arch!=='arm64' || !path || !isAbsolute(path) || normalize(path)!==path || path.startsWith('//'))return null;
   let fd;
@@ -22,8 +24,8 @@ export function guestCommandProfileOwnerSync(env,arch=process.arch) {
     const p=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length)));
     if(!p || Object.keys(p).sort().join(',')!=='config_template,controller_relative,files,guardian_unit,owner_id,python,python_prefix,runner,runtime_root,schema,state_root'
       || typeof p.python_prefix!=='string' || !isAbsolute(p.python_prefix) || realpathSync(p.python_prefix)!==p.python_prefix || !statSync(p.python_prefix).isDirectory()
-      || p.schema!=='mv-guest-command-host/v1' || !/^actor-[0-9a-f]{64}$/.test(p.owner_id)
-      || p.config_template?.schema!=='guest-command-host-config/v1' || p.config_template?.runtime_admitted!==true
+      || p.schema!==(rewind?'mv-rewind-host/v1':'mv-guest-command-host/v1') || !/^actor-[0-9a-f]{64}$/.test(p.owner_id)
+      || p.config_template?.schema!==(rewind?'rewind-host-config/v1':'guest-command-host-config/v1') || p.config_template?.runtime_admitted!==true
       || p.config_template?.owner_id!==p.owner_id)return null;
     return p.owner_id;
   } catch {return null;} finally {if(fd!==undefined)closeSync(fd);}
@@ -47,7 +49,7 @@ export function arm64CapsuleStatusSync(env,arch=process.arch) {
  if(!supported)return fallback;
  const raw=env.MV_ARM64_CAPSULE_STATUS;
  if(raw===undefined||raw===''){
-  if(env.MV_GUEST_COMMAND_ONLY==='1'&&guestCommandProfileOwnerSync(env,arch)!==null)fallback.microvm={available:true,reason:''};
+  if((env.MV_GUEST_COMMAND_ONLY==='1'||env.MV_REWIND_ENABLED==='1')&&guestCommandProfileOwnerSync(env,arch)!==null)fallback.microvm={available:true,reason:''};
   return fallback;
  }
  try {

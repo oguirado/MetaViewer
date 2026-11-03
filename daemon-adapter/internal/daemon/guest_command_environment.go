@@ -120,13 +120,14 @@ func guestCommandOnlyRuntimeFromEnv(load func() (guestCommandOwner, error)) (Run
 		if !welcomed {
 			return nil, errors.New("guest-command hello required")
 		}
-		if request.Schema == "guest_command_request/v0.2" {
+		if request.Schema == "guest_command_request/v0.2" || request.Schema == "rewind_request/v0.2" {
 			stream, ok := ctx.Value(streamKey{}).(streamSession)
 			if !ok || stream.emit == nil {
 				return nil, errors.New("guest command streaming session required")
 			}
 			return owner.Handle(ctx, in.Body, in.SessionID, func(body json.RawMessage) error {
 				out := in
+				out.Schema = ipc.EnvelopeSchema(body)
 				out.From, out.To = out.To, out.From
 				out.Body = body
 				b, e := json.Marshal(out)

@@ -455,6 +455,21 @@ class ToolClient:
         self._frame_subscriptions = set()
         self._frames = {}
 
+    @property
+    def guest_commands(self):
+        """Claim the existing entered agent channel; never create a native guest."""
+        from .guest_command import GuestCommandSession
+        if self._guest_claim is None:
+            return GuestCommandSession.claim(self, observe_owned=True)
+        if not isinstance(self._guest_claim, GuestCommandSession):
+            raise ClientError('busy', 'another IO owner holds the channel')
+        return self._guest_claim
+
+    @property
+    def rewind(self):
+        """REWIND helper on the same guest-command IO pump."""
+        return self.guest_commands.rewind
+
     def _accept_frame_event(self, body):
         """Retain only validated frames/lifecycle notices for registered surfaces."""
         from .tools import ToolValidationError, _check_frame, _check_surface

@@ -113,6 +113,11 @@ impl JobCgroups {
             issued: BTreeSet::new(),
         })
     }
+    #[cfg(feature = "rewind-profile")]
+    pub(crate) fn quiescent(&self, authority: &GuestAuthority) -> Result<bool> {
+        authority.check()?;
+        populated_zero(&read_control(self.jobs.as_raw_fd(), "cgroup.events")?)
+    }
     pub fn create(
         &mut self,
         authority: &GuestAuthority,

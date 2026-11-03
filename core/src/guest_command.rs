@@ -26,7 +26,7 @@ pub fn reservation_id(session: &str, request: &str) -> String {
 /// Strict standard base64: padding and unused low bits must be canonical.
 pub fn decode64(s: &str, limit: usize) -> Result<Vec<u8>, &'static str> {
     need(
-        s.len() % 4 == 0 && s.len() <= ((limit + 2) / 3) * 4,
+        s.len().is_multiple_of(4) && s.len() / 4 <= limit.div_ceil(3),
         "INVALID",
     )?;
     let mut out = Vec::new();

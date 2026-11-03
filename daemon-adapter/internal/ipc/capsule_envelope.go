@@ -10,6 +10,8 @@ func EnvelopeSchema(body json.RawMessage) string {
 	}
 	if json.Unmarshal(body, &h) == nil {
 		switch h.Schema {
+		case "rewind_request/v0.2", "rewind_event/v0.2":
+			return "rewind_envelope/v0.2"
 		case "headless_request/v0.2", "headless_event/v0.2", "guest_command_request/v0.2", "guest_command_event/v0.2":
 			return "capsule_envelope/v0.2"
 		}

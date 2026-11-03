@@ -118,10 +118,14 @@ class GuestOperation:
 class GuestCommandSession:
     """Claim an entered ToolClient. Explicit close never means guest closure."""
     @classmethod
-    def claim(cls, client):
-        return cls(client)
+    def claim(cls, client, *, observe_owned=False):
+        return cls(client, observe_owned=observe_owned)
 
-    def __init__(self, client):
+    def __init__(self, client, *, observe_owned=False):
+        self._observe_owned = observe_owned
+        self._rewind = None
+        self._retired_generations = set()
+        self._ready_notice = threading.Event()
         self.client = client
         self._lock = threading.RLock()
         self._queue = queue.Queue(maxsize=8)
@@ -151,6 +155,59 @@ class GuestCommandSession:
             client.active._io_owner = -1
         self._thread = threading.Thread(target=self._pump, name='mv-guest-command', daemon=True)
         self._thread.start()
+
+    @property
+    def rewind(self):
+        with self._lock:
+            if self._rewind is None:
+                from .rewind import RewindSession
+                self._rewind = RewindSession(self)
+            return self._rewind
+
+    def _commit_rewind(self, snapshot):
+        if self._session is None or snapshot['owner_id'] != self._owner or snapshot['workload_id'] != self._session['workload_id'] or snapshot['phase'] != 'ready' or snapshot['ownership'] != 'held':
+            raise GuestCommandError('invalid rewind commitment')
+        if self._run is not None or any(not o.done() for o in self._ops.values()):
+            raise GuestCommandError('pending guest operation during rewind commitment')
+        old=self._session['generation'];new=snapshot['generation']
+        if new < old:raise GuestCommandError('rewind generation regression')
+        if new != old:self._retired_generations.add(old)
+        self._session=copy.deepcopy(self._session)
+        self._session.update(generation=new,phase='ready',job=None,controls={'cancel':None,'stop':None})
+        self._binding=tuple(self._session[k] for k in ('workload_id','generation','owner_id','profile_id','backend','isa'))
+        self._uncertain=False
+
+    def _rewind_stop_target(self):
+        if self._rewind is None:return
+        target=self._rewind.target
+        if target is None or self._session is None:return
+        if target['workload_id']!=self._session['workload_id'] or target['generation']<self._session['generation']:
+            raise GuestCommandError('invalid rewind cleanup target')
+        if target['generation']!=self._session['generation']:self._retired_generations.add(self._session['generation'])
+        self._session['generation']=target['generation']
+        self._binding=tuple(self._session[k] for k in ('workload_id','generation','owner_id','profile_id','backend','isa'))
+
+    def _adopt_passive(self,e):
+        if not self._observe_owned or e['event']!='accepted':return None
+        op=e['data']['op'];incoming=e['session']
+        if op=='create':
+            if self._create_attempted or incoming is None:raise GuestCommandError('foreign create')
+            if e['reservation_id']!=_reservation(self.client.session_id,e['request_id']):raise GuestCommandError('foreign create reservation')
+            params={'profile_id':'guest-command-arm64-v1'}
+        elif self._binding is not None and op in ('run','cancel','stop'):
+            if op=='stop':self._rewind_stop_target()
+            params={k:self._session[k] for k in ('workload_id','generation')}
+            if op in ('run','cancel'):params['job_id']=incoming['job']['job_id']
+        else:return None
+        operation=GuestOperation({'schema':'guest_command_request/v0.2','request_id':e['request_id'],'op':op,'params':params},None)
+        operation.sent=True;operation._pump_thread=self._thread
+        if len(self._ops)>=256:raise GuestCommandError('observer history exhausted')
+        self._ops[operation.request_id]=operation
+        if op=='create':self._create_attempted=True;self._create=operation;self._reservation=e['reservation_id']
+        if op=='run':
+            if self._run is not None:raise GuestCommandError('overlapping observed job')
+            self._run=operation
+        return operation
 
     @property
     def session(self):
@@ -206,7 +263,7 @@ class GuestCommandSession:
         """Return immediately; Cancel becomes available only after accepted."""
         _command(command, cwd, stdin); _timeout(timeout_ms)
         with self._lock:
-            if self._closed or self._uncertain or self._halt.is_set() or self._session is None or self._session['phase'] != 'ready' or self._run is not None:
+            if self._closed or self._uncertain or self._halt.is_set() or self._session is None or self._session['phase'] != 'ready' or self._run is not None or self._rewind is not None and not self._rewind.command_allowed():
                 raise GuestCommandError('guest is not ready for another command')
             if self._job_attempts >= 64:
                 raise GuestCommandError('job attempt limit reached')
@@ -241,6 +298,7 @@ class GuestCommandSession:
                 raise GuestCommandError('no connected immutable guest identity to stop')
             if any(o.op == 'stop' and not o._future.done() and not o.unknown for o in self._ops.values()):
                 raise GuestCommandError('stop already pending')
+            self._rewind_stop_target()
             params = {k: self._session[k] for k in ('workload_id', 'generation')}
             operation = self._submit('stop', params, timeout_ms)
         return operation.result()
@@ -262,6 +320,7 @@ class GuestCommandSession:
             if not op._future.done():
                 op.unknown = True; op.deadline = None
                 op._future.set_exception(GuestCommandUnknown(reason))
+        if self._rewind is not None:self._rewind._failed(reason)
         # Previously completed jobs remain intact; no synthetic result or closure.
 
     def _issue(self, operation):
@@ -310,15 +369,23 @@ class GuestCommandSession:
             raise GuestCommandError('replayed core sequence')
         self._last_seq = envelope['seq']
         e = envelope['body']
+        if e.get('schema') == 'rewind_event/v0.2':
+            if self._rewind is None:raise GuestCommandError('unclaimed rewind family')
+            self._rewind._handle(e);return
         if e.get('schema') != 'guest_command_event/v0.2':
             raise GuestCommandError('unexpected body on exclusive guest channel')
         if e['event_id'] in self._events or len(self._events) >= 8192:
             raise GuestCommandError('event replay or capacity')
         self._events.add(e['event_id'])
+        if self._reservation is None and self._observe_owned and e['event']=='accepted' and e['data']['op']=='create' and e['owner_id']==self._owner:
+            self._adopt_passive(e)
         if e['owner_id'] != self._owner or e['reservation_id'] != self._reservation:
             raise GuestCommandError('foreign owner/reservation')
         op = self._ops.get(e['request_id'])
+        if op is None:op=self._adopt_passive(e)
         kind, data, incoming = e['event'], e['data'], e['session']
+        if incoming is not None and self._binding is not None and incoming['workload_id']==self._binding[0] and incoming['owner_id']==self._owner and incoming['generation'] in self._retired_generations:
+            return  # Consumed transport sequence; never settle an old-generation operation.
         idle_unknown = kind == 'outcome_unknown' and op is self._create and not any(not o._future.done() for o in self._ops.values())
         if op is None or not op.sent or op._future.done() and not idle_unknown and not (kind == 'outcome_unknown' and op.unknown) and not (kind == 'stopped' and op.op == 'stop' and op.unknown) and not (op.op == 'cancel' and op._accepted.is_set()):
             raise GuestCommandError('unknown or terminal request correlation')
@@ -326,6 +393,8 @@ class GuestCommandSession:
             identity = tuple(incoming[k] for k in ('workload_id', 'generation', 'owner_id', 'profile_id', 'backend', 'isa'))
             if incoming['owner_id'] != self._owner or identity[3:] != ('guest-command-arm64-v1', 'firecracker', 'aarch64'):
                 raise GuestCommandError('foreign guest identity')
+            if self._binding is not None and identity != self._binding and incoming['generation'] in self._retired_generations and incoming['workload_id']==self._binding[0]:
+                return
             if self._binding is not None and identity != self._binding:
                 raise GuestCommandError('guest tuple changed')
             if self._binding is None and op.op != 'create':
@@ -385,6 +454,7 @@ class GuestCommandSession:
             if op is not self._create or not op._accepted.is_set() or incoming['phase'] != phase or incoming['job'] is not None or incoming['jobs_started'] != 0:
                 raise GuestCommandError('invalid ready')
             self._session = copy.deepcopy(incoming)
+            self._ready_notice.set()
             op._future.set_result(copy.deepcopy(incoming)); op.deadline = None
             return
         if kind in ('output', 'job_finished'):
@@ -427,6 +497,7 @@ class GuestCommandSession:
             if self._run is not None and not self._uncertain:
                 raise GuestCommandError('stopped before job terminal')
             self._session = copy.deepcopy(incoming); self._closed = True
+            if self._rewind is not None:self._rewind._closed()
             if not op._future.done():op._future.set_result(copy.deepcopy(incoming))
             self._halt.set(); return
         raise GuestCommandError('unsupported guest event')
@@ -447,6 +518,7 @@ class GuestCommandSession:
                     if envelope is None:break
                     with self._lock:self._handle(envelope)
                 with self._lock:
+                    if self._rewind is not None:self._rewind._poll(time.monotonic())
                     if any(not o._future.done() and o.deadline is not None and time.monotonic() >= o.deadline for o in self._ops.values()):
                         self._fail('operation deadline expired; no replay')
                 self._wake.wait(0.005); self._wake.clear()

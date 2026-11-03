@@ -16,3 +16,6 @@ pub mod bootstrap;
 pub mod dispatch;
 pub mod transport;
 pub mod wire;
+
+#[cfg(feature = "rewind-profile")]
+pub mod rewind;

@@ -139,6 +139,9 @@ func verifyGuardian(ctx context.Context, p *Profile) error {
 	return nil
 }
 func serviceArgs(p *Profile, attempt, unit string) []string {
+	if p.Rewind {
+		return []string{"--user", "--quiet", "--pipe", "--wait", "--collect", "--service-type=exec", "--unit=" + unit, "--slice=newton-ia.slice", "--property=MemoryHigh=6G", "--property=MemoryMax=8G", "--property=MemorySwapMax=0", "--property=CPUQuota=200%", "--property=TasksMax=256", "--property=UMask=0077", "--property=TimeoutStopSec=5", "--property=KillMode=control-group", "--property=Restart=no", "--property=BindsTo=" + p.GuardianUnit, "--property=After=" + p.GuardianUnit, "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", filepath.Join(attempt, "python"), "-I", "-B", filepath.Join(attempt, "runner.py"), attempt}
+	}
 	return []string{"--user", "--quiet", "--pipe", "--wait", "--collect", "--service-type=exec", "--unit=" + unit, "--slice=newton-ia.slice",
 		"--property=MemoryMax=512M", "--property=MemorySwapMax=0", "--property=CPUQuota=100%", "--property=TasksMax=64",
 		"--property=RuntimeMaxSec=180", "--property=TimeoutStopSec=5", "--property=KillMode=control-group", "--property=Restart=no",

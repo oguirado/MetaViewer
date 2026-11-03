@@ -27,6 +27,7 @@ type SchemaPolicy struct {
 	config   Config
 	envelope *schemaNode
 	capsule  *schemaNode
+	rewind   *schemaNode
 }
 
 var _ Policy = (*SchemaPolicy)(nil)
@@ -256,7 +257,19 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return nil, statErr
 	}
-	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot}, nil
+	var rewindRoot *schemaNode
+	if _, statErr := fs.ReadFile(source, "rewind_envelope.schema.json"); statErr == nil {
+		rewindRoot, err = resolve("rewind_envelope.schema.json", "")
+		if err != nil {
+			return nil, err
+		}
+		if rewindRoot.kind != "object" || !rewindRoot.closed || rewindRoot.props["schema"] == nil || rewindRoot.props["schema"].constant != "rewind_envelope/v0.2" || rewindRoot.props["body"] == nil || len(rewindRoot.props["body"].choices) != 2 {
+			return nil, errors.New("closed rewind envelope contract required")
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return nil, statErr
+	}
+	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot}, nil
 }
 func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 	var e Envelope
@@ -285,6 +298,8 @@ func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 		selected = p.envelope
 	case "capsule_envelope/v0.2":
 		selected = p.capsule
+	case "rewind_envelope/v0.2":
+		selected = p.rewind
 	default:
 		return e, errors.New("unknown envelope discriminator")
 	}

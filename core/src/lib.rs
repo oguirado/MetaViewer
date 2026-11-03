@@ -12,6 +12,7 @@ pub mod guest_command;
 pub mod headless;
 pub mod journal;
 pub mod record;
+pub mod rewind_flow;
 pub mod supervisor;
 pub mod verify;
 

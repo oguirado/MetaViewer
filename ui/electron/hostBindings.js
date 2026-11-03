@@ -27,6 +27,7 @@ import { spawnSync } from 'node:child_process';
 import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import {createRewindHost} from './rewindHost.js';
 import {createGuestCommandHost} from './guestCommandHost.js';
 import {guestCommandProfileOwnerSync,arm64CapsuleStatusSync} from './guestCommandProfile.js';
 import { createHeadlessHost } from './headlessHost.js';
@@ -37,6 +38,7 @@ import { isDeepStrictEqual } from 'node:util';
 /** Exact capsule-family tag selection; hello, list and graphical traffic stay legacy.
  * @param {any} body */
 export function envelopeTagForBody(body) {
+ if(['rewind_request/v0.2','rewind_event/v0.2'].includes(body?.schema))return 'rewind_envelope/v0.2';
  return ['headless_request/v0.2','headless_event/v0.2','guest_command_request/v0.2','guest_command_event/v0.2'].includes(body?.schema)?'capsule_envelope/v0.2':'envelope/v0.2';
 }
 
@@ -279,6 +281,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       clearTimeout(helloTimer); clearInterval(keepalive);
       headless.disconnect();
       guestCommand.disconnect();
+      rewind?.disconnect();
       if (disposed) return; disposed = true; live = false;
       // [TARGET, unit decision] End every painted lifetime before transport
       // teardown so renderer snapshots close WRITE and offer session recovery.
@@ -301,7 +304,9 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const headless = createHeadlessHost({send,
       available:()=>live && !disposed && process.arch === 'arm64' && headlessOwner !== null && agentPeers.length === 1 && headlessOwner === 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'),
       ownerId:agentPeers.length === 1 ? 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex') : ''});
-    const guestCommand=createGuestCommandHost({send,sessionId:config.session_id,ownerId:agentPeers.length===1?'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'):'',available:()=>live&&!disposed&&arm64CapsuleStatusSync(env).microvm.available&&guestCommandOwner!==null&&agentPeers.length===1&&guestCommandOwner==='actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')});
+    let rewind=/** @type {ReturnType<typeof createRewindHost>|null} */(null);
+    const guestCommand=createGuestCommandHost({send,commandAllowed:()=>!rewind||rewind.commandAllowed(),stopTarget:()=>rewind?.stopTarget(),cancelAvailable:()=>env.MV_REWIND_ENABLED!=='1',sessionId:config.session_id,ownerId:agentPeers.length===1?'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'):'',available:()=>live&&!disposed&&arm64CapsuleStatusSync(env).microvm.available&&guestCommandOwner!==null&&agentPeers.length===1&&guestCommandOwner==='actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')});
+    rewind=createRewindHost({send,available:()=>env.MV_REWIND_ENABLED==='1'&&process.arch==='arm64'&&guestCommand.status().available,ownerId:guestCommandOwner??'',guest:guestCommand.status,commitReady:guestCommand.commitRewind});
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(() => shutdown(acquireFail('HELLO_TIMEOUT')), DEADLINE);
     /** @param {any} body @param {string} [messageId] @param {(error?: Error | null) => void} [onWritten] */
@@ -491,7 +496,8 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (!isDeepStrictEqual(body,config.core.hello)) throw fail();
         live = true;clearTimeout(helloTimer);ready();return;
       }
-      if(body.schema==='guest_command_event/v0.2'){guestCommand.receive(body);return;}
+      if(body.schema==='rewind_event/v0.2'){if(!rewind)throw fail();rewind.receive(body);return;}
+      if(body.schema==='guest_command_event/v0.2'){guestCommand.receive(body);if(body.event==='stopped')rewind?.guestClosed();return;}
       if (body.schema === 'headless_event/v0.2') { headless.receive(body); return; }
       // [TARGET, unit decision] Capture metadata uses the frozen error-detail
       // carrier. It never reaches renderer error consumers or exposes raw detail.
@@ -910,6 +916,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     return {core:{
       headless,
       guestCommand,
+      rewind,
       /** @param {(state:any)=>void} cb */
       subscribeCapture(cb) {
         if(disposed || typeof cb !== 'function' || captureListeners.size >= MAX_ITEMS) throw fail();

@@ -13,6 +13,22 @@ import (
 )
 
 func normalGuestCommandFromEnv() (guestCommandOwner, error) {
+	if os.Getenv("MV_REWIND_ENABLED") == "1" {
+		owner, err := guestcommand.NewRewindFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		inventory, err := resourceinventory.OpenFromEnv("guestcommand")
+		if err != nil {
+			_ = owner.Close()
+			return nil, err
+		}
+		if err = owner.SetInventory(inventory); err != nil {
+			_ = owner.Close()
+			return nil, err
+		}
+		return owner, nil
+	}
 	mode := os.Getenv("MV_ARM64_CAPSULES")
 	if mode == "" {
 		return nil, nil

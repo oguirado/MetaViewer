@@ -9,6 +9,7 @@ use std::time::Duration;
 pub mod guest_command;
 pub mod headless;
 pub mod payload;
+pub mod rewind;
 mod schemas;
 pub use payload::Command;
 
@@ -252,8 +253,11 @@ fn preflight(raw: &str, limits: &WireLimits) -> Result<(), DecodeError> {
 /// Authentication, sequence and replay state remain shared on one connection.
 pub fn envelope_schema(body: &Command) -> &'static str {
     match body {
-        Command::HeadlessRequest(_) | Command::HeadlessEvent(_)
-        | Command::GuestCommandRequest(_) | Command::GuestCommandEvent(_) => "capsule_envelope/v0.2",
+        Command::RewindRequest(_) | Command::RewindEvent(_) => "rewind_envelope/v0.2",
+        Command::HeadlessRequest(_)
+        | Command::HeadlessEvent(_)
+        | Command::GuestCommandRequest(_)
+        | Command::GuestCommandEvent(_) => "capsule_envelope/v0.2",
         _ => "envelope/v0.2",
     }
 }
@@ -276,10 +280,12 @@ pub fn decode_envelope_with_limits(
     let value: Value = serde_json::from_str(raw).map_err(|_| DecodeError::Malformed)?;
     check_integer_rails(&value)?;
     // Diagnose version refusal before the closed typed enum rejects it as shape.
-    if value["schema"]
-        .as_str()
-        .is_some_and(|v| !matches!(v, "envelope/v0.2" | "capsule_envelope/v0.2"))
-        || is_unknown_body_version(value["body"]["schema"].as_str())
+    if value["schema"].as_str().is_some_and(|v| {
+        !matches!(
+            v,
+            "envelope/v0.2" | "capsule_envelope/v0.2" | "rewind_envelope/v0.2"
+        )
+    }) || is_unknown_body_version(value["body"]["schema"].as_str())
         || value["body"]["schema"] == "hello/v0.2"
             && value["body"]["contract_version"]
                 .as_str()
@@ -294,6 +300,7 @@ pub fn decode_envelope_with_limits(
     let schema_name = match envelope.schema.as_str() {
         "envelope/v0.2" => "envelope.schema.json",
         "capsule_envelope/v0.2" => "capsule_envelope.schema.json",
+        "rewind_envelope/v0.2" => "rewind_envelope.schema.json",
         _ => return Err(DecodeError::UnknownVersion),
     };
     let value = serde_json::to_value(&envelope).map_err(|_| DecodeError::InvalidField)?;
@@ -383,6 +390,11 @@ fn ramws_path_ok(s: &str) -> bool {
 }
 
 fn pattern_ok(s: &str, pattern: &str) -> bool {
+    if pattern == r"^[^\x00-\x1f\x7f/\\]*$" {
+        return !s
+            .chars()
+            .any(|c| c < ' ' || c == '\u{7f}' || c == '/' || c == '\\');
+    }
     if pattern == "^[^\\x00-\\x1f\\x7f]*$" {
         return !s.chars().any(|c| c < ' ' || c == '\u{7f}');
     }
@@ -394,6 +406,7 @@ fn pattern_ok(s: &str, pattern: &str) -> bool {
         "job-",
         "actor-",
         "reservation-",
+        "point-",
     ] {
         let expected = format!("^{prefix}[a-z0-9][a-z0-9._-]{{0,63}}$");
         if pattern == expected {

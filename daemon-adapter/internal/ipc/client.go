@@ -232,12 +232,12 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 			return exitLoop(err)
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
-		if in.Schema == "capsule_envelope/v0.2" && !capsuleHelloSeen {
+		if (in.Schema == "capsule_envelope/v0.2" || in.Schema == "rewind_envelope/v0.2") && !capsuleHelloSeen {
 			err = errors.New("authenticated core hello required before requests")
 			fail(err)
 			return exitLoop(err)
 		}
-		if !isHello && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" {
+		if !isHello && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)

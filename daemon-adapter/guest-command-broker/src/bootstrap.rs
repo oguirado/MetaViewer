@@ -112,6 +112,20 @@ pub fn read_boot(a: &GuestAuthority) -> Result<Boot> {
         .read_to_string(&mut raw)?;
     Boot::parse(&raw)
 }
+/// Separate opt-in boot parser; normal Boot and lifetime are unchanged.
+#[cfg(feature = "rewind-profile")]
+pub fn read_rewind_boot(a: &GuestAuthority) -> Result<crate::rewind::Boot> {
+    a.check()?;
+    let fd = open_directory(libc::AT_FDCWD, "/proc")?;
+    require_root_directory(fd.as_raw_fd())?;
+    mount(a, "proc", "/proc", "proc", libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC, "hidepid=2")?;
+    let mounted = open_directory(libc::AT_FDCWD, "/proc")?;
+    filesystem(mounted.as_raw_fd(), libc::PROC_SUPER_MAGIC)?;
+    use std::io::Read;
+    let mut raw = String::new();
+    std::fs::File::open("/proc/cmdline")?.take(8193).read_to_string(&mut raw)?;
+    crate::rewind::Boot::parse(&raw)
+}
 pub fn prepare(a: &GuestAuthority) -> Result<()> {
     a.check()?;
     // The kernel opened PID1's console descriptors before exec. Removing only

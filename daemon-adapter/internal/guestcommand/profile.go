@@ -24,6 +24,7 @@ type File struct {
 	SHA256   string `json:"sha256"`
 }
 type Profile struct {
+	Rewind             bool            `json:"-"`
 	Schema             string          `json:"schema"`
 	OwnerID            string          `json:"owner_id"`
 	GuardianUnit       string          `json:"guardian_unit"`
@@ -138,7 +139,9 @@ func pinned(p Pin, max int64) ([]byte, error) {
 	}
 	return b, nil
 }
-func Load(path string) (*Profile, error) {
+func Load(path string) (*Profile, error)       { return loadProfile(path, false) }
+func LoadRewind(path string) (*Profile, error) { return loadProfile(path, true) }
+func loadProfile(path string, rewind bool) (*Profile, error) {
 	b, e := readRegular(path, true, 65536)
 	if e != nil {
 		return nil, e
@@ -155,7 +158,12 @@ func Load(path string) (*Profile, error) {
 	if d.Decode(new(any)) != io.EOF {
 		return nil, errors.New("trailing profile")
 	}
-	if p.Schema != "mv-guest-command-host/v1" || !ownerPattern.MatchString(p.OwnerID) || !unitPattern.MatchString(p.GuardianUnit) || p.ControllerRelative != "guest_command_runtime/controller.py" {
+	schema, controller := "mv-guest-command-host/v1", "guest_command_runtime/controller.py"
+	if rewind {
+		schema, controller = "mv-rewind-host/v1", "rewind_runtime/controller.py"
+	}
+	p.Rewind = rewind
+	if p.Schema != schema || !ownerPattern.MatchString(p.OwnerID) || !unitPattern.MatchString(p.GuardianUnit) || p.ControllerRelative != controller {
 		return nil, errors.New("profile identity")
 	}
 	if e = privateDir(p.StateRoot); e != nil {
@@ -177,6 +185,15 @@ func Load(path string) (*Profile, error) {
 		return nil, e
 	}
 	required := map[string]bool{"guest_command_runtime/__init__.py": false, "guest_command_runtime/_schemas.py": false, "guest_command_runtime/wire.py": false, "guest_command_runtime/schema.py": false, "guest_command_runtime/config.py": false, "guest_command_runtime/image.py": false, "guest_command_runtime/native_checks.py": false, "guest_command_runtime/native.py": false, "guest_command_runtime/protocol.py": false, "guest_command_runtime/storage.py": false, "guest_command_runtime/controller.py": false}
+	if rewind {
+		required = map[string]bool{}
+		for _, name := range []string{"__init__", "_schemas", "wire", "schema", "config", "image", "native_checks", "protocol"} {
+			required["guest_command_runtime/"+name+".py"] = false
+		}
+		for _, name := range []string{"__init__", "config", "native", "controller"} {
+			required["rewind_runtime/"+name+".py"] = false
+		}
+	}
 	for _, f := range p.Files {
 		v, ok := required[f.Relative]
 		if !ok || v {
@@ -202,7 +219,11 @@ func Load(path string) (*Profile, error) {
 	if owner != p.OwnerID || root != p.RuntimeRoot {
 		return nil, errors.New("config authority mismatch")
 	}
-	if e = validateTemplate(p.ConfigTemplate); e != nil {
+	validator := validateTemplate
+	if rewind {
+		validator = validateRewindTemplate
+	}
+	if e = validator(p.ConfigTemplate); e != nil {
 		return nil, e
 	}
 	return &p, nil

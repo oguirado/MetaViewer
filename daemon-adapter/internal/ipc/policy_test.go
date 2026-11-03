@@ -73,8 +73,22 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 	allFiles := files
 	files = nil
 	seenAdditive := 0
+	seenRewind := 0
 	for _, file := range allFiles {
-		if pin, added := additiveFixturePins[filepath.Base(file)]; added {
+		name := filepath.Base(file)
+		if pin, added := rewindFixturePins[name]; added {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(raw)
+			if hex.EncodeToString(sum[:]) != pin {
+				return nil, fmt.Errorf("rewind fixture bytes changed: %s", name)
+			}
+			seenRewind++
+		} else if strings.HasPrefix(name, "rewind_") {
+			return nil, fmt.Errorf("unrecorded rewind fixture: %s", name)
+		} else if pin, added := additiveFixturePins[name]; added {
 			raw, err := os.ReadFile(file)
 			if err != nil {
 				return nil, err
@@ -87,6 +101,9 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 		} else {
 			files = append(files, file)
 		}
+	}
+	if seenRewind != len(rewindFixturePins) {
+		return nil, errors.New("rewind fixture corpus incomplete")
 	}
 	if seenAdditive != len(additiveFixturePins) {
 		return nil, errors.New("additive fixture corpus incomplete")

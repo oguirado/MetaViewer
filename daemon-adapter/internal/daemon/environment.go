@@ -84,6 +84,18 @@ func networkModesFromEnv() ([]string, error) {
 
 func RuntimeFromEnv() (Runtime, error) {
 	var zero Runtime
+	if enabled := os.Getenv("MV_REWIND_ENABLED"); enabled != "" && enabled != "1" {
+		return zero, configuration("MV_REWIND_ENABLED must be 1 when set")
+	}
+	if os.Getenv("MV_REWIND_ENABLED") == "1" && (os.Getenv("MV_GUEST_COMMAND_ONLY") != "" || os.Getenv("MV_HEADLESS_ONLY") != "") {
+		return zero, configuration("rewind mode conflicts with other exclusive modes")
+	}
+	if only := os.Getenv("MV_REWIND_ONLY"); only != "" {
+		if only != "1" || os.Getenv("MV_REWIND_ENABLED") != "1" || os.Getenv("MV_GUEST_COMMAND_ONLY") != "" || os.Getenv("MV_HEADLESS_ONLY") != "" {
+			return zero, configuration("exclusive rewind opt-in required")
+		}
+		return guestCommandOnlyRuntimeFromEnv(func() (guestCommandOwner, error) { return guestcommand.NewRewindFromEnv() })
+	}
 	if mode := os.Getenv("MV_GUEST_COMMAND_ONLY"); mode != "" {
 		if mode != "1" || os.Getenv("MV_HEADLESS_ONLY") != "" {
 			return zero, configuration("MV_GUEST_COMMAND_ONLY must be 1 and exclusive")
@@ -305,7 +317,7 @@ func RuntimeFromEnv() (Runtime, error) {
 		if header.Schema == "hello/v0.2" {
 			return nil, helloSession.accept(ctx, profiles, pubs, authority, monotonic, capsule.NewRuntime, frames.NewSubscriptions)
 		}
-		if header.Schema == "guest_command_request/v0.2" {
+		if header.Schema == "guest_command_request/v0.2" || header.Schema == "rewind_request/v0.2" {
 			return routeGuestCommand(ctx, guestManager, policy, e)
 		}
 		if header.Schema == "headless_request/v0.2" {

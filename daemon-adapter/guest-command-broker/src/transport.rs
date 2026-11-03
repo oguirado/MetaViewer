@@ -114,6 +114,13 @@ pub fn accept(a: &GuestAuthority, end: u64, nonce: String) -> Result<Transport> 
     }
 }
 impl Transport {
+    #[cfg(feature = "rewind-profile")]
+    pub(crate) fn rewound(fd: OwnedFd, binding: &crate::rewind::Binding) -> Self {
+        Self { fd, input: Vec::with_capacity(wire::HEADER), first: None,
+            receiver: None, sender: None, nonce: binding.nonce.clone(),
+            queue: VecDeque::new(), queued: 0, end: u64::MAX - 10000,
+            stdout_sent: 0, stderr_sent: 0 }
+    }
     pub fn receive(&mut self, a: &GuestAuthority) -> Result<Option<Frame>> {
         a.check()?;
         let now = now_ms()?;
