@@ -14,10 +14,9 @@ PACKAGE_YML = ROOT / '.github/workflows/package.yml'
 
 
 def extract_gate_script(workflow_text: str) -> str:
-    return textwrap.dedent(
-        workflow_text.split('      - name: Execute gate and publish receipt\n', 1)[1]
-        .split('        run: |\n', 1)[1]
-    )
+    # Standard library only: the laws job runs these tests without PyYAML.
+    block = workflow_text.split('      - name: Execute gate and publish receipt\n', 1)[1].split('        run: |\n', 1)[1]
+    return textwrap.dedent(re.split(r'(?m)^ {0,8}\S', block, maxsplit=1)[0])
 
 
 class PackageReceiptBindingTests(unittest.TestCase):

@@ -21,6 +21,49 @@ spec.loader.exec_module(host)
 
 
 class BackendTests(unittest.TestCase):
+    @staticmethod
+    def state_fixture():
+        return dict(schema='wender.state/v1',source=dict(kind='vision',url=None,title='Synthetic'),
+            prune=dict(name='synthetic',version=1),ax_sha256='a'*64,ax_stable_sha256='b'*64,
+            viewport=dict(w=100,h=80),nodes=[],actionable=[],counts=dict(raw=0,nodes=0,actionable=0))
+
+    def test_compiled_state_preserves_same_acquisition_and_validated_hash(self):
+        from metaviewer_agents.perception import compiled
+        from metaviewer_agents.wender_bridge import validate_state
+        b=self.backend;b.wender=self.root
+        sensed=dict(table=dict(schema='vqa.element-table/v1',frame_sha256='c'*64,
+                    width=100,height=80,elements=[]),ax=[],window=dict(url=None,title='Synthetic'))
+        state=self.state_fixture();expected=validate_state(state)
+        with patch.object(compiled,'compiled_browser_entry',return_value=state) as invoke, \
+             patch.object(host,'module') as module,patch.object(host.subprocess,'run') as run, \
+             patch.object(b,'ax') as ax:
+            result=b.state_for(sensed)
+        invoke.assert_called_once_with('state',dict(element_table=sensed['table'],
+            tree=dict(elements=sensed['ax'],window=sensed['window'])),root=self.root)
+        module.assert_not_called();run.assert_not_called();ax.assert_not_called()
+        self.assertEqual(result,state);self.assertEqual(validate_state(result),expected)
+
+    def test_invalid_compiled_state_refuses_without_source_fallback(self):
+        from metaviewer_agents.perception import compiled
+        from metaviewer_agents.observe import ObservationError
+        b=self.backend;b.wender=self.root
+        state=self.state_fixture();state['prune']['version']=1.0
+        with patch.object(compiled,'compiled_browser_entry',return_value=state), \
+             patch.object(host,'module') as module:
+            with self.assertRaises(ObservationError):b.state_for(dict(table={},ax=[],window={}))
+        module.assert_not_called()
+
+    def test_source_state_shim_path_remains_unchanged(self):
+        from metaviewer_agents.perception import compiled
+        b=self.backend;b.wender=self.root;b._glue=SimpleNamespace(WENDER_SHIM='existing source shim')
+        sensed=dict(table={},ax=[],window={});state=self.state_fixture()
+        with patch.object(compiled,'compiled_browser_entry',return_value=None), \
+             patch.object(host.subprocess,'run',return_value=SimpleNamespace(returncode=0,stdout=json.dumps(state))) as run:
+            self.assertEqual(b.state_for(sensed),state)
+        self.assertEqual(run.call_args.args[0],[sys.executable,'-c','existing source shim'])
+        self.assertEqual(json.loads(run.call_args.kwargs['input']),dict(element_table={},tree=dict(elements=[],window={})))
+        self.assertEqual(run.call_args.kwargs['env']['PYTHONPATH'],str(self.root))
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='mw-entry-Música-')
         self.addCleanup(temporary.cleanup)

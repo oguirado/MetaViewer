@@ -634,11 +634,16 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		var input struct {
 			SurfaceID  string `json:"surface_id"`
 			ProposalID string `json:"proposal_id"`
+			Origin     string `json:"origin"`
+			Action     struct {
+				Type string `json:"type"`
+			} `json:"action"`
 		}
 		_ = json.Unmarshal(q.Params, &input)
 		frameMu.Lock()
 		before := lastFrames[input.SurfaceID]
 		frameMu.Unlock()
+		var currentBaseline json.RawMessage
 		failure := func(err error) ([]json.RawMessage, error) {
 			if q.Op == "input" && input.ProposalID != "" && len(before) != 0 {
 				completed := monotonic()
@@ -664,6 +669,30 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		var evidence capsule.InputEvidence
 		var err error
 		if q.Op == "input" {
+			// Snapshot the actual publication before native input. Subscriptions
+			// can advance independently of this handler's diagnostic lastFrames.
+			if input.Origin != "human" && (input.Action.Type == "click" || input.Action.Type == "type" || input.Action.Type == "key") {
+				current, baselineErr := m.SubscriptionBinding(input.SurfaceID)
+				if baselineErr != nil {
+					return failure(baselineErr)
+				}
+				profile, ok := profiles[current.Surface.ProfileID]
+				if !ok {
+					profile, ok = m.ProfileFor(current.Surface.ProfileID)
+				}
+				if !ok {
+					return failure(configuration("current input frame publisher required"))
+				}
+				ref, baselineErr := pubs[profile.RAMRoot].Current(input.SurfaceID)
+				if baselineErr != nil {
+					return failure(configuration("current published input frame required"))
+				}
+				currentJSON, baselineErr := json.Marshal(ref)
+				if baselineErr != nil {
+					return failure(baselineErr)
+				}
+				currentBaseline = currentJSON
+			}
 			events, evidence, err = m.HandleInputWithEvidence(ctx, q)
 		} else {
 			events, err = m.Handle(ctx, q)
@@ -730,10 +759,40 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 			}
 		}
 		if strings.TrimSpace(q.Op) == "list" {
-			return listSnapshots(events)
+			events, err = listSnapshots(events)
+			if err != nil {
+				return nil, err
+			}
 		}
 		if q.Op != "input" {
-			return events, nil
+			// State updates fence core admission even when the picture is static.
+			// Preserve reply-before-frame order, including list reconciliation.
+			out := make([]json.RawMessage, 0, len(events))
+			for _, event := range events {
+				out = append(out, event)
+				var state struct {
+					Event string `json:"event"`
+					Data  struct {
+						Surface capsule.Surface `json:"surface"`
+					} `json:"data"`
+				}
+				if json.Unmarshal(event, &state) != nil || state.Event != "state_changed" || state.Data.Surface.State != "active" || state.Data.Surface.Control != "agent" {
+					continue
+				}
+				id := state.Data.Surface.SurfaceID
+				ref, refreshErr := captureStateFrame(ctx, m, profiles, pubs, id)
+				if refreshErr != nil {
+					fmt.Fprintf(os.Stderr, "adapter: state refresh %s: %v; state change remains successful\n", id, refreshErr)
+					continue
+				}
+				frameJSON, _ := json.Marshal(ref)
+				frameMu.Lock()
+				lastFrames[id] = frameJSON
+				frameMu.Unlock()
+				ready, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "frame_ready", "data": map[string]any{"frame_ref": ref}})
+				out = append(out, ready)
+			}
+			return out, nil
 		}
 		// [TARGET, unit decision] Execution time is adapter-observed native
 		// completion, before capture; expectation verification remains false.
@@ -810,10 +869,24 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		}
 		capture := func(c context.Context) (capsule.Binding, capsule.NativeFrame, error) { return m.Capture(c, id) }
 		var baseline frames.Ref
-		_ = json.Unmarshal(before, &baseline)
+		baselineSource := before
+		if currentBaseline != nil {
+			baselineSource = currentBaseline
+		}
+		_ = json.Unmarshal(baselineSource, &baseline)
 		var binding capsule.Binding
 		var native capsule.NativeFrame
-		if params.Action.Type == "type" || params.Action.Type == "key" {
+		settle := params.Action.Type == "type" || params.Action.Type == "key"
+		if params.Action.Type == "click" {
+			current, bindingErr := m.SubscriptionBinding(id)
+			if bindingErr != nil {
+				return failure(bindingErr)
+			}
+			// Holdings has its own native semantic before/after observation;
+			// preserve that capture sequence instead of polling for RGB change.
+			settle = current.NativeKind != "holdings"
+		}
+		if settle {
 			binding, native, err = settleInput(ctx, baseline.SHA256, capture, time.Now, waitInputCapture)
 		} else {
 			binding, native, err = capture(ctx)
@@ -860,8 +933,8 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		}
 		var beforeRef frames.Ref
 		if canObserve {
-			if len(before) == 0 ||
-				json.Unmarshal(before, &beforeRef) != nil ||
+			if len(baselineSource) == 0 ||
+				json.Unmarshal(baselineSource, &beforeRef) != nil ||
 				beforeRef.SurfaceID != id ||
 				beforeRef.Generation == 0 ||
 				beforeRef.Generation >= ref.Generation ||
@@ -991,6 +1064,10 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 		SurfaceID string `json:"surface_id"`
 	}
 	_ = json.Unmarshal(q.Params, &params)
+	var creation *CreationError
+	if errors.As(err, &creation) && creation.SurfaceID != "" {
+		params.SurfaceID = creation.SurfaceID
+	}
 	if params.SurfaceID == "" {
 		params.SurfaceID = e.MsgID
 	}
@@ -1001,8 +1078,9 @@ func wireFailure(e ipc.Envelope, q capsule.Request, err error) ([]json.RawMessag
 	return []json.RawMessage{b}, nil
 }
 
-// [TARGET, unit decision] Settle only drained agent text/key input. Clicks and
-// human-origin input retain their existing capture policy. Never invent a change.
+// [TARGET, unit decision] Settle drained agent pixel clicks/text/key by capture
+// only. Human input and Holdings semantic clicks keep their existing policy.
+// Never invent a change.
 const postInputSettleBound = 1500 * time.Millisecond
 const postInputCaptureInterval = 50 * time.Millisecond
 
@@ -1329,14 +1407,17 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 			fresh.SetHostWindowMinimized(id, minimized)
 		},
 		OnTerminal: func(id string, reason string) {
-			ev, err := fresh.MarkHostWindowLost(id, reason)
+			ev, err := fresh.BeginHostWindowLost(id, reason)
 			if err == nil && len(ev) > 0 && session.emit != nil {
 				lock := session.surfaceLock(id)
 				if lock != nil {
 					lock.Lock()
 					defer lock.Unlock()
 				}
-				_ = session.emit(session.ctx, ev)
+				err = session.emit(session.ctx, ev)
+				fresh.CompleteLost(id, err == nil && session.ctx.Err() == nil)
+			} else if err == nil && len(ev) > 0 {
+				fresh.CompleteLost(id, false)
 			}
 		},
 		Admit: func() error {

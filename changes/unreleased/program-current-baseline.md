@@ -1,0 +1,1 @@
+- Snapshot the actual current published frame before drained agent pixel input so subscription updates cannot leave post-input settling comparing against a prior action. Refuse missing or retired publication state before native input, preserve bounded capture-only settling and retain human and semantic Holdings behavior.

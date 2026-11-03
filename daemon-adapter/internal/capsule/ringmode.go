@@ -16,6 +16,10 @@ func (m *Manager) CaptureResident(ctx context.Context, id string, read func(Bind
 	}
 	m.mu.Lock()
 	b, ok := m.bindings[id]
+	if ok && m.hasPendingHostLossLocked(b) {
+		m.mu.Unlock()
+		return b, NativeFrame{}, fault("host_window_unavailable", b.HostLostReason)
+	}
 	if !ok || b.Surface.State != "active" || m.destroying[id] || m.hasPending(id) {
 		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("surface", "resident capture requires active drained surface")
