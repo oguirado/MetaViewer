@@ -1,5 +1,7 @@
 # MetaViewer — Judge Quickstart
 
+After installation, follow the [Judge tour](JUDGE_TOUR.md) with your AI.
+
 This page takes a hackathon judge from a clean Linux machine (such as an 8-core,
 16 GiB RAM x64 laptop) to a running MetaViewer wall with live browser and program
 capsules.
