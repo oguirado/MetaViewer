@@ -2,7 +2,7 @@ import { createWallProjection } from './projection.js';
 import { buildAuthorityIntent, createWallIntentBuilders } from './intents.js';
 
 /** @typedef {{schema:'action_verdict/v0.2',proposal_id:string,core_seq:number,decision:'admitted'|'refused',reason_code?:string}} ActionVerdict */
-/** @typedef {{createSurface?:()=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
+/** @typedef {{createSurface?:()=>Promise<any>,listVMCapsules?:()=>Promise<any>,createVMCapsule?:(choice:{choiceId:string})=>Promise<any>,propose?:(json:string)=>Promise<ActionVerdict>,intent?:(json:string)=>Promise<true>,subscribeFrames?:(callback:(notice:any)=>void)=>(()=>void)}} AuthorityPort */
 /** @typedef {{command:string,args:readonly string[],cols:number,rows:number}} TerminalSpec */
 /** @typedef {{open?:(spec:TerminalSpec)=>Promise<{session:string}>,setEnabled?:(enabled:boolean)=>Promise<true>,close?:(spec:{session:string})=>Promise<unknown>}} TerminalPort */
 /** @typedef {{code:string,message:string,tone:'success'|'refusal'}} OutcomeRow */
@@ -40,7 +40,15 @@ export function createAuthorityAdapter(port) {
   const intent = typeof port?.intent === 'function' ? port.intent.bind(port) : null;
   const propose = typeof port?.propose === 'function' ? port.propose.bind(port) : null;
   const createSurface = typeof port?.createSurface === 'function' ? port.createSurface.bind(port) : null;
+  const listVMCapsules = typeof port?.listVMCapsules === 'function' ? port.listVMCapsules.bind(port) : null;
+  const createVMCapsule = typeof port?.createVMCapsule === 'function' ? port.createVMCapsule.bind(port) : null;
   return Object.freeze({
+    listVMCapsules: listVMCapsules ? async () => listVMCapsules() : null,
+    createVMCapsule: createVMCapsule ? async (/** @type {{choiceId:string}} */ choice) => {
+      if (!choice || Reflect.ownKeys(choice).join(',') !== 'choiceId' || typeof choice.choiceId !== 'string'
+          || !/^[0-9a-f-]{36}$/.test(choice.choiceId)) return {ok:false,code:'VM_CHOICE_INVALID'};
+      return createVMCapsule({choiceId:choice.choiceId});
+    } : null,
     createSurface: createSurface ? async () => {
       const reply = await createSurface();
       if (reply?.ok === true) return {code:'INTENT_ACKNOWLEDGED',message:'Request sent.',tone:/** @type {const} */ ('success')};
