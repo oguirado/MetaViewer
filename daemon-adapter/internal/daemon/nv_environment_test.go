@@ -154,8 +154,12 @@ func TestNVSecondHelloPreservesSurface(t *testing.T) {
 		t.Fatalf("unsubscribe: %s %v", events, e)
 	}
 	listed, err := r.Handler(ctx, ipc.Envelope{Body: json.RawMessage(`{"schema":"surface_request/v0.2","op":"list","params":{}}`)})
-	if err != nil || len(listed) != 1 {
+	if err != nil || len(listed) != 2 {
 		t.Fatalf("surface lost: %s %v", listed, err)
+	}
+	var refresh struct{ Event string }
+	if json.Unmarshal(listed[1], &refresh) != nil || refresh.Event != "frame_ready" {
+		t.Fatalf("list missing fresh frame: %s", listed)
 	}
 }
 

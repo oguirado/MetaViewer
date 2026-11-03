@@ -14,7 +14,9 @@ WORKFLOWS = ROOT / '.github/workflows'
 
 def script(name):
     source = (WORKFLOWS / name).read_text()
-    return textwrap.dedent(source.split('      - name: Execute gate and publish receipt\n')[1].split('        run: |\n', 1)[1])
+    # Standard library only: the laws job runs these tests without PyYAML.
+    block = source.split('      - name: Execute gate and publish receipt\n', 1)[1].split('        run: |\n', 1)[1]
+    return textwrap.dedent(re.split(r'(?m)^ {0,8}\S', block, maxsplit=1)[0])
 
 
 class MatrixTests(unittest.TestCase):

@@ -127,6 +127,14 @@ func TestPostInputUnknownProfileRefusesWithoutPanic(t *testing.T) {
 	}
 
 	// Negative control: with configured profile and publisher, post-input capture succeeds.
+	// Agent input now requires a genuine current publication before dispatch.
+	binding, native, err := m.Capture(ctx, surfaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pub.Publish(surfaceID, binding, native); err != nil {
+		t.Fatal(err)
+	}
 	validHandler := isolatedWireHandler(t, m, managerProfiles, map[string]*frames.Publisher{root: pub}, origin)
 	inputEnv2 := ipc.Envelope{
 		MsgID: "msg-2",

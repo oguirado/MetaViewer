@@ -126,9 +126,10 @@ def _open_deterministic_tar_gz(dest: Path):
     return raw, gz, tf
 
 
-def compute_app_manifest(app_dir: Path) -> bytes:
+def compute_app_manifest(app_dir: Path, extra_files: dict[str, Path] | None = None) -> bytes:
     """Compute MetaViewer-linux-<arch>.sha256 matching ui/tools/package.js."""
     entries: list[tuple[str, int, Path]] = []
+    extra_files = extra_files or {}
     for root, dirs, files in os.walk(app_dir, followlinks=False):
         dirs.sort()
         files.sort()
@@ -145,7 +146,9 @@ def compute_app_manifest(app_dir: Path) -> bytes:
             if not stat.S_ISREG(st.st_mode):
                 raise AssetBuildError(f"non-regular file refused in app bundle: {p}")
             rel = (rel_root / fname).as_posix() if rel_root != Path(".") else fname
-            entries.append((rel, st.st_mode & 0o777, p))
+            if rel not in extra_files:
+                entries.append((rel, st.st_mode & 0o777, p))
+    entries.extend((rel, 0o644, p) for rel, p in extra_files.items())
     entries.sort(key=lambda item: item[0])
     lines: list[str] = []
     for rel, mode, p in entries:
@@ -165,8 +168,16 @@ def build_app_asset(app_dir: Path, out_dir: Path, arch: str) -> Path:
     if not exe.is_file() or not os.access(exe, os.X_OK):
         raise AssetBuildError(f"packaged app directory has no executable metaviewer binary: {exe}")
 
-    sibling_sha = app_dir.parent / f"{bundle_name}.sha256"
-    manifest_bytes = sibling_sha.read_bytes() if sibling_sha.is_file() else compute_app_manifest(app_dir)
+    # [TARGET, unit decision] Keep the product's relative LICENSE link valid,
+    # preserve Electron's root LICENSE, and seal the delivered notice bytes.
+    product_notices = {
+        f"licenses/metaviewer/{name}": REPO_ROOT / name
+        for name in ("LICENSE", "NOTICE-EVALUATION.md")
+    }
+    for source in product_notices.values():
+        if not source.is_file() or source.is_symlink():
+            raise AssetBuildError(f"missing regular product notice: {source}")
+    manifest_bytes = compute_app_manifest(app_dir, product_notices)
 
     out_path = out_dir / f"metaviewer-linux-{arch}.tar.gz"
     raw, gz, tf = _open_deterministic_tar_gz(out_path)
@@ -185,7 +196,13 @@ def build_app_asset(app_dir: Path, out_dir: Path, arch: str) -> Path:
             for fname in files:
                 src = Path(root) / fname
                 rel_f = (rel_root / fname).as_posix() if rel_root != Path(".") else fname
-                _add_file_from_disk(tf, f"{bundle_name}/{rel_f}", src)
+                if rel_f not in product_notices:
+                    _add_file_from_disk(tf, f"{bundle_name}/{rel_f}", src)
+        for directory in ("licenses", "licenses/metaviewer"):
+            if not (app_dir / directory).is_dir():
+                _add_dir(tf, f"{bundle_name}/{directory}")
+        for relative, source in product_notices.items():
+            _add_file_from_disk(tf, f"{bundle_name}/{relative}", source, mode=0o644)
         _add_bytes(tf, f"{bundle_name}.sha256", manifest_bytes, 0o644)
     finally:
         tf.close()
@@ -213,6 +230,12 @@ def build_node_asset(
                     raise AssetBuildError(f"unsafe member name in node tarball: {n}")
             if not any(n.endswith("/bin/node") for n in names):
                 raise AssetBuildError(f"node tarball has no */bin/node member: {node_tarball}")
+            for member in tf.getmembers():
+                if member.name.endswith("/bin/node"):
+                    license_name = member.name.removesuffix("bin/node") + "LICENSE"
+                    licenses = [m for m in tf.getmembers() if m.name == license_name]
+                    if len(licenses) != 1 or not licenses[0].isfile() or licenses[0].size == 0:
+                        raise AssetBuildError(f"node tarball missing regular runtime LICENSE: {license_name}")
         if node_tarball.resolve() != out_path.resolve():
             shutil.copyfile(node_tarball, out_path)
         return out_path
@@ -224,13 +247,25 @@ def build_node_asset(
         node_bin = Path(found)
     if not node_bin.is_file():
         raise AssetBuildError(f"node binary not found: {node_bin}")
+    node_license = node_bin.resolve().parent.parent / "LICENSE"
+    if not node_license.is_file() or node_license.is_symlink() or node_license.stat().st_size == 0:
+        raise AssetBuildError(f"node runtime LICENSE not found: {node_license}")
 
     top = f"node-v24-linux-{arch}"
     with lzma.open(out_path, mode="wb", preset=6) as xz:
         with tarfile.open(mode="w", fileobj=xz, format=tarfile.GNU_FORMAT) as tf:
             _add_dir(tf, top, 0o755)
             _add_dir(tf, f"{top}/bin", 0o755)
+            _add_file_from_disk(tf, f"{top}/LICENSE", node_license, mode=0o644)
             _add_file_from_disk(tf, f"{top}/bin/node", node_bin.resolve(), mode=0o755)
+            npm_root = node_bin.resolve().parent.parent / "lib/node_modules/npm"
+            if npm_root.is_dir():
+                for source in sorted(npm_root.rglob("*")):
+                    if source.is_file() and not source.is_symlink():
+                        relative = source.relative_to(npm_root).as_posix()
+                        _add_file_from_disk(tf, f"{top}/lib/node_modules/npm/{relative}",
+                                            source, mode=0o755 if source.stat().st_mode & 0o111 else 0o644)
+
     return out_path
 
 
@@ -240,6 +275,7 @@ def build_opensuperficies_asset(
     arch: str,
     firewall_dir: Path | None = None,
 ) -> Path:
+    notice_root = srf_bin_dir
     if (srf_bin_dir / "bin" / "srf-identity-surface").is_file():
         if firewall_dir is None and (srf_bin_dir / "firewall").is_dir():
             firewall_dir = srf_bin_dir / "firewall"
@@ -257,6 +293,13 @@ def build_opensuperficies_asset(
                 continue
             if item.name.startswith("srf"):
                 _add_file_from_disk(tf, f"opensuperficies/bin/{item.name}", item, mode=0o755)
+        # [TARGET, unit decision] Retain supplied legal files only; no grant is
+        # inferred from their presence. Flat inputs keep their bin layout.
+        for source_dir in dict.fromkeys((notice_root, srf_bin_dir)):
+            prefix = "opensuperficies/bin" if source_dir == srf_bin_dir else "opensuperficies"
+            for item in sorted(source_dir.iterdir()):
+                if re.match(r"^(LICENSE|LICENCE|NOTICE|COPYING|COPYRIGHT|EULA|THIRD[-_]PARTY[-_](?:LICENSES?|NOTICES?))(?:[._-].*)?$", item.name, re.I):
+                    _add_file_from_disk(tf, f"{prefix}/{item.name}", item, mode=0o644)
         if firewall_dir is not None and firewall_dir.is_dir():
             _add_dir(tf, "opensuperficies/firewall", 0o755)
             for fname in ("apply.sh", "srf-open-egress.rules", "srf-open-egress6.rules", "srf-open-egress.service"):
@@ -354,6 +397,45 @@ def build_git_component_asset(
     return out_path
 
 
+def build_compiled_component_asset(comp_name: str, source_dir: Path,
+                                   out_dir: Path, arch: str) -> Path:
+    """[TARGET, unit decision] Export only the pinned, source-free distribution.
+
+    Pins live in the public runtime; export metadata cannot authorize new bytes.
+    Never synthesize Git metadata for compiled executables.
+    """
+    if arch != 'x64':
+        raise AssetBuildError('compiled private sidecars are available only for linux-x64')
+    pins = json.loads((REPO_ROOT / 'agents/metaviewer_agents/perception/compiled.lock.json').read_text())['components'][comp_name]
+    if load_deps_lock().get(comp_name, {}).get('commit') != pins['commit']:
+        raise AssetBuildError(f'{comp_name}: compiled source commit differs from deps.lock')
+    archive = source_dir / f'{comp_name}-linux-{arch}.tar.gz'
+    if not archive.is_file() or sha256_file(archive) != pins['archive_sha256']:
+        raise AssetBuildError(f'{comp_name}: compiled archive missing or hash mismatch')
+    seen = set()
+    with tarfile.open(archive, 'r:gz') as tf:
+        for member in tf:
+            path = Path(member.name)
+            if path.is_absolute() or '..' in path.parts or not path.parts or path.parts[0] != comp_name:
+                raise AssetBuildError(f'{comp_name}: unsafe compiled member {member.name}')
+            if member.isdir():
+                continue
+            relative = path.relative_to(comp_name).as_posix()
+            if (not member.isfile() or relative not in pins['files'] or relative in seen or
+                    path.suffix.lower() in ('.py', '.pyc', '.pyo', '.pyi')):
+                raise AssetBuildError(f'{comp_name}: unpinned compiled member {member.name}')
+            stream = tf.extractfile(member)
+            if stream is None or hashlib.file_digest(stream, 'sha256').hexdigest() != pins['files'][relative]:
+                raise AssetBuildError(f'{comp_name}: compiled member hash mismatch: {relative}')
+            seen.add(relative)
+    if seen != set(pins['files']):
+        raise AssetBuildError(f'{comp_name}: missing compiled files')
+    dest = out_dir / f'{comp_name}.tar.gz'
+    if archive.resolve() != dest.resolve():
+        shutil.copyfile(archive, dest)
+    return dest
+
+
 def default_image_tags(arch: str, include_open_020: bool = False) -> list[str]:
     tags = [
         f"opensuperficies-identity-browser-{arch}:0.1.1",
@@ -442,8 +524,9 @@ def build_all_assets(
     node_bin: Path | None = None,
     srf_dir: Path,
     firewall_dir: Path | None = None,
-    vision_engine_dir: Path,
-    wender_agent_dir: Path,
+    vision_engine_dir: Path | None = None,
+    wender_agent_dir: Path | None = None,
+    compiled_sidecars_dir: Path | None = None,
     images_tar: Path | None = None,
     image_tags: list[str] | None = None,
     repo_root: Path = REPO_ROOT,
@@ -464,10 +547,16 @@ def build_all_assets(
     srf_asset = build_opensuperficies_asset(srf_dir, out_dir, arch, firewall_dir=firewall_dir)
     built.append(srf_asset)
 
-    ve_asset = build_git_component_asset("vision-engine", vision_engine_dir, out_dir, expected_commit=ve_commit)
+    if compiled_sidecars_dir is None and (vision_engine_dir is None or wender_agent_dir is None):
+        raise AssetBuildError('supply --compiled-sidecars-dir or both component checkout directories')
+    ve_asset = (build_compiled_component_asset('vision-engine', compiled_sidecars_dir, out_dir, arch)
+                if compiled_sidecars_dir is not None else
+                build_git_component_asset("vision-engine", vision_engine_dir, out_dir, expected_commit=ve_commit))
     built.append(ve_asset)
 
-    wa_asset = build_git_component_asset("wender-agent", wender_agent_dir, out_dir, expected_commit=wa_commit)
+    wa_asset = (build_compiled_component_asset('wender-agent', compiled_sidecars_dir, out_dir, arch)
+                if compiled_sidecars_dir is not None else
+                build_git_component_asset("wender-agent", wender_agent_dir, out_dir, expected_commit=wa_commit))
     built.append(wa_asset)
 
     img_asset = build_images_asset(out_dir, arch, images_tar=images_tar, image_tags=image_tags)
@@ -514,6 +603,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument("--out-dir", required=True, type=Path, help="Output directory for release assets and SHA256SUMS")
     ap.add_argument("--arch", default=os.environ.get("MV_RELEASE_ARCH"), help="Target architecture: x64 or arm64")
+    ap.add_argument('--compiled-sidecars-dir', type=Path,
+                    help='Directory containing pinned source-free linux-x64 component archives')
     ap.add_argument(
         "--app-dir",
         type=Path,
@@ -573,8 +664,6 @@ def main(argv: list[str] | None = None) -> int:
             for flag, val in (
                 ("--app-dir", args.app_dir),
                 ("--opensuperficies-dir", args.opensuperficies_dir),
-                ("--vision-engine-dir", args.vision_engine_dir),
-                ("--wender-agent-dir", args.wender_agent_dir),
             )
             if val is None
         ]
@@ -590,6 +679,7 @@ def main(argv: list[str] | None = None) -> int:
             firewall_dir=args.firewall_dir,
             vision_engine_dir=args.vision_engine_dir,
             wender_agent_dir=args.wender_agent_dir,
+            compiled_sidecars_dir=args.compiled_sidecars_dir,
             images_tar=args.images_tar,
         )
         print(json.dumps(summary, indent=2, sort_keys=True))

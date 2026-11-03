@@ -15,9 +15,9 @@ const identity = st => `${st.dev}:${st.ino}:${st.uid}:${st.mode}`;
  * This function never discovers capsules or accepts a renderer pathname.
  * expectedSocketUid is explicit: absence must never mean "current uid".
  * jquery is a host-supplied asset for Debian's missing client symlink.
- * @param {{viewRoot:string,capsule:string,expectedSocketUid:number,jquery?:Uint8Array,keyboard?:{layout:string,keycodes:Record<string,number>}}} options
+ * @param {{viewRoot:string,capsule:string,expectedSocketUid:number,jquery?:Uint8Array,keyboard?:{layout:string,keycodes:Record<string,number>},privateSocket?:boolean}} options
  */
-export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid, jquery, keyboard }) {
+export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid, jquery, keyboard, privateSocket = false }) {
   const patchKeyboard = keyboard ? (await import('./xpraKeyboard.js')).rawKeyboardPatch : undefined;
   if (keyboard) patchKeyboard?.(keyboard); // Validate before opening any listener.
   if (!Number.isInteger(expectedSocketUid) || expectedSocketUid < 0 ||
@@ -37,8 +37,8 @@ export async function openXpraHumanBridge({ viewRoot, capsule, expectedSocketUid
       stats.push(st);
     }
     if (stats.slice(0, 2).some(st => !st.isDirectory() || st.uid !== hostUid || (st.mode & 0o777) !== 0o700) ||
-        !stats[2].isDirectory() || (stats[2].mode & 0o777) !== 0o777 ||
-        !stats[3].isSocket() || stats[3].uid !== expectedSocketUid || (stats[3].mode & 0o777) !== 0o666) {
+        !stats[2].isDirectory() || (stats[2].mode & 0o777) !== (privateSocket ? 0o700 : 0o777) ||
+        !stats[3].isSocket() || stats[3].uid !== expectedSocketUid || (stats[3].mode & 0o777) !== (privateSocket ? 0o600 : 0o666)) {
       throw Error('XPRA_PERMISSIONS_REFUSED');
     }
     return stats.map(identity).join('/');

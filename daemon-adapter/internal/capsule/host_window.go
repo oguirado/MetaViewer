@@ -20,6 +20,33 @@ import (
 	"metaviewer/daemon-adapter/internal/cli"
 )
 
+// [TARGET, unit decision] Resize is capture progress, not absence. Yield one
+// attempt to the paced subscription; never retry in an unbounded capture loop.
+var hostWindowResizePattern = regexp.MustCompile(`^(?:host_window_unavailable:\s*)*resized: [0-9]+x[0-9]+ -> ([0-9]+)x([0-9]+)$`)
+
+// HostWindowResizeGeometry accepts only the native bounded resize diagnostic.
+func HostWindowResizeGeometry(reason string) (int, int, bool) {
+	match := hostWindowResizePattern.FindStringSubmatch(strings.TrimSpace(reason))
+	if match == nil {
+		return 0, 0, false
+	}
+	w, ew := strconv.Atoi(match[1])
+	h, eh := strconv.Atoi(match[2])
+	return w, h, ew == nil && eh == nil && w >= 1 && h >= 1 && w <= 4096 && h <= 4096
+}
+
+// IsHostWindowResize identifies a validated geometry change from capture.
+func IsHostWindowResize(err error) bool {
+	var f *cli.Fault
+	return errors.As(err, &f) && f.Code == "host_window_resized"
+}
+
+// IsHostWindowWaiting distinguishes a witnessed minimize gap from terminal loss.
+func IsHostWindowWaiting(err error) bool {
+	var f *cli.Fault
+	return errors.As(err, &f) && f.Code == "host_window_unavailable" && isHostWindowMinimizedReason(f.Detail)
+}
+
 func isHostWindowMinimizedReason(s string) bool {
 	lower := strings.ToLower(s)
 	return strings.Contains(lower, "minimized") || strings.Contains(lower, "iconic") || strings.Contains(lower, "unmapped")
@@ -160,9 +187,23 @@ func writeHostWindowFrameFile(framesRoot string, seq uint64, rgb []byte) (string
 	return finalPath, nil
 }
 
+// [TARGET, unit decision] A capture/input can fence the window before the next
+// subscription poll. Preserve its pending loss through every capture entry so
+// the wire owner can deliver state_changed before capture_failed, without IO.
+// Caller holds m.mu; this is evidence for delivery, never capture admission.
+func (m *Manager) hasPendingHostLossLocked(b Binding) bool {
+	return (b.NativeKind == "host-window" || b.NativeKind == "host-xpra") &&
+		b.Surface.State == "lost" && b.ConfirmedAbsent &&
+		len(b.pendingHostLost) > 0 && !m.destroying[b.Surface.SurfaceID]
+}
+
 func (m *Manager) captureHostWindow(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()
 	b, ok := m.bindings[id]
+	if ok && m.hasPendingHostLossLocked(b) {
+		m.mu.Unlock()
+		return b, NativeFrame{}, fault("host_window_unavailable", b.HostLostReason)
+	}
 	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || m.destroying[id] {
 		m.mu.Unlock()
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
@@ -205,6 +246,10 @@ func (m *Manager) captureHostWindow(ctx context.Context, id string) (Binding, Na
 	}
 	if execErr != nil {
 		errText := execErr.Error()
+		if w, h, resized := HostWindowResizeGeometry(errText); resized {
+			m.updateHostWindowGeometryLocked(id, w, h)
+			return m.bindings[id], NativeFrame{}, fault("host_window_resized", "capture geometry changed")
+		}
 		if isHostWindowMinimizedReason(errText) {
 			current.HostMinimized = true
 			m.bindings[id] = current
@@ -214,7 +259,10 @@ func (m *Manager) captureHostWindow(ctx context.Context, id string) (Binding, Na
 			reason := extractOrDefaultHostWindowReason(errText, "host_window_unavailable: window closed or witness changed")
 			current.HostLostReason = reason
 			m.bindings[id] = current
-			_, _ = m.markLostLocked(id, true, false)
+			ev, _ := m.markLostLocked(id, true, false)
+			lost := m.bindings[id]
+			lost.pendingHostLost = ev
+			m.bindings[id] = lost
 			return m.bindings[id], NativeFrame{}, fault("host_window_unavailable", reason)
 		}
 		return current, NativeFrame{}, execErr
@@ -283,6 +331,10 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 	b := m.bindings[surfaceID]
 	xidStr := strconv.FormatUint(uint64(b.HostXID), 10)
 	baseArgs := append([]string{"input", "--xid", xidStr, "--witness", b.HostWitness}, HostWindowSessionArgs(b.HostDisplay, b.HostXauthority)...)
+	// Opt-in diagnostics pair with the wall validator without logging input data.
+	if os.Getenv("MV_INPUT_DIAGNOSTICS") == "1" {
+		fmt.Fprintf(os.Stderr, "METAVIEWER_HOST_INPUT stage=dispatch action=%s\n", actionType)
+	}
 	var callArgvs [][]string
 	var textChunks [][]byte
 	nativeAction := actionType
@@ -380,14 +432,40 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 				reason := extractOrDefaultHostWindowReason(errText, "host_window_unavailable: window closed or witness changed")
 				b.HostLostReason = reason
 				m.bindings[surfaceID] = b
-				_, _ = m.markLostLocked(surfaceID, true, false)
+				ev, _ := m.markLostLocked(surfaceID, true, false)
+				lost := m.bindings[surfaceID]
+				lost.pendingHostLost = ev
+				m.bindings[surfaceID] = lost
 				return nil, fault("host_window_unavailable", reason)
 			}
 			return nil, execErr
 		}
 		receipt = NativeInputReceipt{}
 		trimmed := bytes.TrimSpace(out)
-		if len(trimmed) > 0 && trimmed[0] == '{' {
+		if b.NativeKind == "host-xpra" || b.NativeKind == "host-window" {
+			var ack struct {
+				OK            *bool  `json:"ok"`
+				XID           uint32 `json:"xid"`
+				Witness       string `json:"witness"`
+				Kind          string `json:"kind"`
+				FocusVerified *bool  `json:"focus_verified"`
+			}
+			if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &ack); e != nil {
+				return nil, e
+			}
+			expected := nativeAction
+			if expected == "text" {
+				expected = "type"
+			}
+			if ack.OK == nil || !*ack.OK || ack.XID != b.HostXID || ack.Witness != b.HostWitness || ack.Kind != expected || ack.FocusVerified == nil || !*ack.FocusVerified {
+				return nil, fault("input", "unverified host-window input receipt")
+			}
+			if os.Getenv("MV_INPUT_DIAGNOSTICS") == "1" {
+				fmt.Fprintln(os.Stderr, "METAVIEWER_HOST_INPUT stage=ack verified=true")
+			}
+			receipt.Kind = nativeAction
+			receipt.FocusVerified = ack.FocusVerified
+		} else if len(trimmed) > 0 && trimmed[0] == '{' {
 			if e := cli.ParseLine(out, m.cfg.MaxOutputBytes, &receipt); e != nil {
 				return nil, e
 			}
@@ -459,18 +537,28 @@ func (m *Manager) UpdateHostWindowGeometry(id string, w, h int) bool {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.updateHostWindowGeometryLocked(id, w, h)
+}
+
+func (m *Manager) updateHostWindowGeometryLocked(id string, w, h int) bool {
 	b, ok := m.bindings[id]
-	if !ok || b.Surface.State != "active" || m.destroying[id] || b.NativeKind != "host-window" {
+	if !ok || b.Surface.State != "active" || m.destroying[id] ||
+		!((b.NativeKind == "host-window" || b.NativeKind == "host-xpra") ||
+			((b.NativeKind == "browser" || b.NativeKind == "program") && b.Window != "")) {
 		return false
 	}
 	changed := b.Surface.Geometry.W != w || b.Surface.Geometry.H != h
 	b.Surface.Geometry = Geometry{W: w, H: h}
 	b.HostMinimized = false
 	m.bindings[id] = b
-	if p, ok := m.cfg.Profiles[b.Surface.ProfileID]; ok {
-		p.Width = w
-		p.Height = h
-		m.cfg.Profiles[b.Surface.ProfileID] = p
+	// Native identity profiles retain their configured next-create allocation.
+	// Host-window profiles instead follow the witnessed opening geometry.
+	if b.NativeKind == "host-window" || b.NativeKind == "host-xpra" {
+		if p, ok := m.cfg.Profiles[b.Surface.ProfileID]; ok {
+			p.Width = w
+			p.Height = h
+			m.cfg.Profiles[b.Surface.ProfileID] = p
+		}
 	}
 	return changed
 }
@@ -481,7 +569,7 @@ func (m *Manager) SetHostWindowMinimized(id string, minimized bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !ok || b.Surface.State != "active" || m.destroying[id] || b.NativeKind != "host-window" {
+	if !ok || b.Surface.State != "active" || m.destroying[id] || (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 		return
 	}
 	b.HostMinimized = minimized
@@ -491,15 +579,24 @@ func (m *Manager) SetHostWindowMinimized(id string, minimized bool) {
 // MarkHostWindowLost transitions an active host-window surface to lost when
 // the window closes or its witness changes, returning the state_changed event.
 func (m *Manager) MarkHostWindowLost(id string, reason string) (json.RawMessage, error) {
+	return m.markHostWindowLost(id, reason, false)
+}
+
+// BeginHostWindowLost coordinates DISPLAY loss delivery with VERIFIED error events.
+func (m *Manager) BeginHostWindowLost(id string, reason string) (json.RawMessage, error) {
+	return m.markHostWindowLost(id, reason, true)
+}
+
+func (m *Manager) markHostWindowLost(id string, reason string, trackDelivery bool) (json.RawMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	b, ok := m.bindings[id]
-	if !ok || b.NativeKind != "host-window" {
+	if !ok || (b.NativeKind != "host-window" && b.NativeKind != "host-xpra") {
 		return nil, fault("surface", "host-window surface required")
 	}
 	if reason != "" {
 		b.HostLostReason = extractOrDefaultHostWindowReason(reason, reason)
 		m.bindings[id] = b
 	}
-	return m.markLostLocked(id, true, false)
+	return m.markLostLocked(id, true, trackDelivery)
 }

@@ -35,6 +35,7 @@ import time
 import uuid
 
 from .mw_handoff import HandoffLatch, HandoffResult
+from .wender_bridge import detect_stopstate
 from .executor import AdmittedExecutor
 from .tools import _check_action, _check_verdict_admitted
 
@@ -55,6 +56,13 @@ class OwnerRefused(ValueError):
         super().__init__(code)
 
 
+class RebindHandoff(OwnerRefused):
+    """Fresh pre-dispatch evidence for the run owner's absorbing stop."""
+    def __init__(self, sensed):
+        self.sensed = sensed
+        super().__init__('MW_HANDOFF_REQUIRED')
+
+
 def need(value, code='OUT_OF_SUPPORT'):
     if not value:
         raise OwnerRefused(code)
@@ -69,6 +77,7 @@ def sleep_ns(ns):
 def wender_api():
     from .perception.deps_lock import resolve_locked_component
     root = resolve_locked_component('wender-agent')
+    need(not (root / 'wender-runtime').exists(), 'MW_COMPILED_WORKFLOW_UNAVAILABLE')
     sys.path.insert(0, str(root))
     from tools import memoryweb_gate as gate
     from wender.learn import mw_workflow as mw
@@ -246,7 +255,9 @@ class ReplayOwner:
         self.slots = PrivateSlots(self, slot_values)
         self.notice = copy.deepcopy(notice)
         self.latest = None
-        self.handoff = HandoffLatch(self.output.with_suffix('.handoff.json'))
+        self.handoff = HandoffLatch(self.output.with_suffix('.handoff.json'),
+                                    detector=detect_stopstate)
+        self.rebind_handoff = False
         self.send_ready = False
         self.publications, self.targets = {}, {}
         self.receipts = []
@@ -521,7 +532,8 @@ class ReplayOwner:
             self.pace()
             need(workflow['status'] == 'draft')
             for slot in workflow['text_slots']:
-                need(slot['slot_id'] in self.slots.values and not slot['chip_clear_steps'])
+                need(slot['slot_id'] in self.slots.values, 'MW_SLOT_MISSING: ' + slot['slot_id'])
+                need(not slot['chip_clear_steps'])
                 self.slots.normalize(slot)
                 self.length_binding(slot['slot_id'])
             need(bool(workflow['oracle']['postconditions']))
@@ -551,7 +563,7 @@ class ReplayOwner:
             need(all(self.predicate_supported(p) for p in predicates))
             return self.answer(True)
         except (OwnerRefused, ValueError) as error:
-            if isinstance(error, OwnerRefused) and error.code.startswith('MW_TEXT_UNPRINTABLE:'):
+            if isinstance(error, OwnerRefused) and error.code.startswith(('MW_TEXT_UNPRINTABLE:', 'MW_SLOT_MISSING:')):
                 self.text_refusal = error.code
             return self.answer(False)
 
@@ -743,8 +755,13 @@ class ReplayOwner:
         expectation = dict(type='changed_region', bbox=dict(x=0, y=0, w=frame['width'], h=frame['height']))
         timeout = action.get('delivery_budget_ms', 30000)
         boundary = time.monotonic_ns()
-        admitted = self.backend.call('propose', sensed=sensed,
-            plan=dict(action=translated, expectation=expectation), max_ms=timeout)
+        try:
+            admitted = self.backend.call('propose', sensed=sensed,
+                plan=dict(action=translated, expectation=expectation), max_ms=timeout)
+        except RebindHandoff as error:
+            self.rebind_handoff = True
+            self.stop_check(error.sensed)
+            raise
         verdict = _check_verdict_admitted(admitted.get('verdict'))
         need(verdict['proposal_id'] == admitted.get('proposal_id'), 'MW_ADMISSION_BINDING')
         verified = self.backend.call('wait_verify', admitted=admitted, timeout_ms=timeout)
@@ -866,7 +883,7 @@ class ReplayOwner:
             required_segments={k: list(v) for k, v in self.inventory(self.corpus.workflow).items()},
             final_task_pass=summary['rc'] == 0)
         need(inventory == expected and (summary['rc'] != 0 or self.final_pass), 'MW_JOURNAL')
-        if self.handoff.latched:
+        if self.handoff.latched and self.handoff.persisted is True:
             summary['evidence_refs'].append(self.handoff.path.name)
         if self.focus_evidence:
             evidence = self.output.with_suffix('.focus.json')
@@ -950,5 +967,13 @@ class ReplayOwner:
                   self.readback_runner(self.mw, self))
         result = runner(self.corpus.path, bundle=self.corpus.bundle, owners=owners, limits=self.limits)
         need(not self.slot_readback_error, 'MW_SLOT_READBACK_DEADLINE')
+        handoff_path = (str(self.handoff.path)
+                        if self.handoff.latched and self.handoff.persisted is True else None)
+        if self.rebind_handoff and self.handoff.latched:
+            # The pinned workflow conservatively calls every exception after
+            # intent uncertain. This local stop occurred before core submission;
+            # preserve its journal verbatim and return the explicit handoff.
+            return HandoffResult(4, 'HUMAN_HANDOFF', result.summary, result.diagnostic,
+                                 handoff_path)
         return HandoffResult(result.rc, result.verdict_code, result.summary, result.diagnostic,
-                             str(self.handoff.path) if self.handoff.latched else None)
+                             handoff_path)

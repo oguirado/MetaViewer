@@ -5,12 +5,12 @@ const REASON_LABELS=Object.freeze({
   cloudflare_challenge:'Cloudflare challenge',unusual_traffic:'unusual-traffic page',login_wall:'login wall',captcha_wall:'CAPTCHA',
 });
 /** What the operator must do, in order. The agent never solves, signs in or
- * evades; control, WRITE mode and release are the operator's explicit gestures.
+ * evades; control and release are the operator's explicit gestures.
  * [TARGET, unit decision] Wall tiles accept typing only under human control
- * plus WRITE (App inputEnabledFor), and WRITE is set in multislot. */
+ * plus the input arming performed by the successful Take control action. */
 export const HANDOFF_STEPS=Object.freeze([
   'Press Take control. The agent stops acting on this capsule.',
-  'Select the capsule, press Open in multislot and set input to WRITE, then click the capsule and type.',
+  'After Take control succeeds, input is in WRITE mode: click the capsule in the wall and type.',
   'Solve the check or sign in yourself. The agent never does it for you.',
   'Release control on the capsule.',
   'Re-run the workflow. Acknowledge only hides this notice; it does not resume the run.',
