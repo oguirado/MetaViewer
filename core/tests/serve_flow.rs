@@ -203,9 +203,8 @@ fn lifecycle_requests_forward_and_replies_are_durable() {
         let mut daemon = Peer::connect(&socket, "daemon").await;
         let mut agent = Peer::connect(&socket, "agent").await;
         let mut ui = Peer::connect(&socket, "ui").await;
-        // The reply below binds profile-demo. Keep the requested identity aligned
-        // so the pending-create fence is actually settled before the next create.
-        let create = json!({"schema":"surface_request/v0.2","op":"create","params":{"kind":"game_capsule","geometry":{"w":800,"h":600},"profile_id":"profile-demo"}});
+        // A different profile in the daemon reply must not block later creates.
+        let create = json!({"schema":"surface_request/v0.2","op":"create","params":{"kind":"desktop_capsule","geometry":{"w":1280,"h":720},"profile_id":"test"}});
         // A registered executor is not a lifecycle caller.
         daemon.send(create.clone()).await;
         daemon.verdict("refused", Some("POLICY")).await;
