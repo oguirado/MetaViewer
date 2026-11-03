@@ -15,13 +15,15 @@ class DispatchPublicationRaceTests(unittest.TestCase):
         self.addCleanup(self.replay.doCleanups)
 
     def run_race(self, *, always_stale=False, journal_error=False,
-                 stale_type_once=False, type_transport_error=False):
+                 stale_type_once=False, type_transport_error=False,
+                 stale_type_round=False, focus_loss=False, budget_exhaustion=False):
         replay = self.replay
         current = {}
         publication, submit, journal = replay.publication, replay.submit, goal.atomic_journal
         self.proposals = []
         self.records = []
         refused_type = False
+        stale_types = 0
 
         def publish(*args, **kwargs):
             observed = publication(*args, **kwargs)
@@ -42,9 +44,18 @@ class DispatchPublicationRaceTests(unittest.TestCase):
             return journal(path, value, **kwargs)
 
         def admit(proposal, **kwargs):
-            nonlocal refused_type
+            nonlocal refused_type, stale_types
             self.proposals.append(copy.deepcopy(proposal))
             binding = proposal['based_on_frame']
+            if stale_type_round and proposal['action']['type'] == 'type' and stale_types < 3:
+                stale_types += 1
+                if stale_types == 3:
+                    if focus_loss:
+                        replay.fixture.row['focused'] = False
+                        replay.fixture.row['states']['focused'] = False
+                    if budget_exhaustion:
+                        replay.b.run_deadline_ns = 0
+                raise goal.host.tools.ToolRefusal('STALE_FRAME', None)
             if stale_type_once and proposal['action']['type'] == 'type' and not refused_type:
                 refused_type = True
                 raise goal.host.tools.ToolRefusal('STALE_FRAME', None)
@@ -77,8 +88,40 @@ class DispatchPublicationRaceTests(unittest.TestCase):
     def test_actual_stale_admission_still_exhausts_without_dispatch(self):
         with self.assertRaisesRegex(goal.host.OwnerRefused, 'MW_STALE_FRAME_EXHAUSTED'):
             self.run_race(always_stale=True)
-        self.assertEqual([r['status'] for r in self.replay.b.frame_attempts], ['STALE_FRAME'] * 3)
+        self.assertEqual([r['status'] for r in self.replay.b.frame_attempts], ['STALE_FRAME'] * 9)
         self.assertEqual(self.replay.submitted, [])
+
+    def test_stale_round_then_admitted_delivers_text_once(self):
+        moves = self.run_race(stale_type_round=True)
+        self.assertEqual(len(moves), 3)
+        self.assertEqual([p['action']['type'] for p in self.replay.submitted],
+                         ['click', 'type', 'key'])
+        self.assertEqual([r['status'] for r in self.replay.b.frame_attempts],
+                         ['admitted'] + ['STALE_FRAME'] * 3 + ['admitted'] * 2)
+        self.assertEqual(len(self.replay.b.attempts), 3)
+        self.assertEqual(len(list(self.replay.b.evidence.glob('intent-*.json'))), 3)
+        self.assertTrue(all(a['status'] == 'verified_move' for a in self.replay.b.attempts))
+
+    def test_focus_loss_during_round_retry_never_delivers_text(self):
+        with self.assertRaisesRegex(goal.host.OwnerRefused, 'MW_BROWSER_FOCUS'):
+            self.run_race(stale_type_round=True, focus_loss=True)
+        self.assertEqual([p['action']['type'] for p in self.replay.submitted], ['click'])
+        self.assertEqual(len(self.proposals), 4)
+        self.assertEqual(len(self.replay.b.attempts), 2)
+
+    def test_budget_exhaustion_during_round_retry_never_delivers_text(self):
+        with self.assertRaisesRegex(goal.host.OwnerRefused, 'MW_PROGRAM_DEADLINE'):
+            self.run_race(stale_type_round=True, budget_exhaustion=True)
+        self.assertEqual([p['action']['type'] for p in self.replay.submitted], ['click'])
+        self.assertEqual(len(self.proposals), 4)
+
+    def test_rebind_pixels_round_never_retries(self):
+        self.replay.b.rebind_caret_keys = False
+        with self.assertRaisesRegex(goal.host.OwnerRefused, 'MW_STALE_FRAME_EXHAUSTED'):
+            self.run_race()
+        self.assertEqual([r['status'] for r in self.replay.b.frame_attempts],
+                         ['admitted', 'admitted'] + ['MW_REBIND_PIXELS'] * 3)
+        self.assertEqual([p['action']['type'] for p in self.replay.submitted], ['click', 'type'])
 
     def test_journal_failure_never_submits(self):
         with self.assertRaisesRegex(OSError, 'dispatch journal unavailable'):
