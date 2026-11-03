@@ -368,6 +368,7 @@ impl CoreState {
         }
         let mut event = CapsuleStateEvent {
             schema: CapsuleStateEventSchema::Value,
+            slots: Optional::Missing,
             operation_id: request.operation_id.clone(),
             op: request.op.clone(),
             profile_id: request.profile_id.clone(),

@@ -389,3 +389,99 @@ os.chmod(p+'/payload.tar',0o600)
 		})
 	}
 }
+
+func TestNamedSlotsOverwriteListDeleteAndStartupReconcile(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	r.CreateOnly = true
+	first, e := s.Save(ctx, r)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = s.Save(ctx, r); e == nil || e.Error() != "SLOT_EXISTS" {
+		t.Fatal("Save silently overwrote", e)
+	}
+	rows, e := s.List(ctx, r.ProfileID)
+	if e != nil || len(rows) != 1 || rows[0].SlotID != r.SlotID || rows[0].SavedAt == "" {
+		t.Fatal(rows, e)
+	}
+	r.CreateOnly = false
+	r.OverwriteOnly = true
+	second, e := s.Save(ctx, r)
+	if e != nil || second.Generation != first.Generation+1 {
+		t.Fatal(second, e)
+	}
+	other := r
+	other.ProfileID = "other-profile"
+	rows, e = s.List(ctx, other.ProfileID)
+	if e != nil || len(rows) != 0 {
+		t.Fatal("foreign slots listed", rows, e)
+	}
+	s.cfg.Failpoint = func(point string) error {
+		if point == "ref-sync" {
+			return errors.New("crash")
+		}
+		return nil
+	}
+	_, _ = s.Save(ctx, r)
+	s.cfg.Failpoint = nil
+	if _, e = os.Stat(filepath.Join(s.slot(r.SlotID), "intent.json")); e != nil {
+		t.Fatal("missing recovery marker", e)
+	}
+	if e = s.ReconcileAll(ctx); e != nil {
+		t.Fatal("startup recovery", e)
+	}
+	if _, e = os.Stat(filepath.Join(s.slot(r.SlotID), "intent.json")); !os.IsNotExist(e) {
+		t.Fatal("startup retained intent", e)
+	}
+	if e = s.Delete(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	rows, e = s.List(ctx, r.ProfileID)
+	if e != nil || len(rows) != 0 {
+		t.Fatal(rows, e)
+	}
+	if _, e = s.Save(ctx, r); e == nil || e.Error() != "SLOT_NOT_FOUND" {
+		t.Fatal("overwrite created missing slot", e)
+	}
+}
+
+func TestCopySelectedSlotToNewProfileAndRejectForeignSourceBeforeTouch(t *testing.T) {
+	s, r := fixture(t)
+	ctx := context.Background()
+	if _, e := s.Save(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	id := "new-copy"
+	if e := os.WriteFile(filepath.Join(s.cfg.Root, "metadata", id+".json"), []byte(`{"profile_id":"new-copy"}`), 0600); e != nil {
+		t.Fatal(e)
+	}
+	if e := s.Provision(ctx, id); e != nil {
+		t.Fatal(e)
+	}
+	r.SourceProfileID = r.ProfileID
+	r.ProfileID = id
+	if _, e := s.Load(ctx, r); e != nil {
+		t.Fatal(e)
+	}
+	dest := filepath.Join(s.cfg.Root, "profiles", id, "data")
+	got, e := os.ReadFile(dest)
+	if e != nil || string(got) != "original\x00bytes" {
+		t.Fatal("copied bytes differ", string(got), e)
+	}
+	if e = os.WriteFile(dest, []byte("destination marker"), 0600); e != nil {
+		t.Fatal(e)
+	}
+	r.SourceProfileID = "foreign-profile"
+	if _, e = s.Load(ctx, r); e == nil || e.Error() != "FOREIGN_SLOT" {
+		t.Fatal("foreign source accepted", e)
+	}
+	got, e = os.ReadFile(dest)
+	if e != nil || string(got) != "destination marker" {
+		t.Fatal("refusal touched destination", string(got), e)
+	}
+	source, e := os.ReadFile(filepath.Join(s.cfg.Root, "profiles", "demo", "data"))
+	if e != nil || string(source) != "original\x00bytes" {
+		t.Fatal("copy touched source", e)
+	}
+}

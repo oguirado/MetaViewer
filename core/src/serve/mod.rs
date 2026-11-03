@@ -2010,6 +2010,7 @@ impl Server {
             .map(|op| op.event.clone());
         let event = recorded.unwrap_or_else(|| CapsuleStateEvent {
             schema: CapsuleStateEventSchema::Value,
+            slots: Optional::Missing,
             operation_id: request.operation_id.clone(),
             op: request.op.clone(),
             profile_id: request.profile_id.clone(),

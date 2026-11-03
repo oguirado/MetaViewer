@@ -2160,6 +2160,8 @@ pub enum CapsuleStateEventSchema {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CapsuleStateOp {
+    List,
+    Delete,
     Save,
     Overwrite,
     Load,
@@ -2189,7 +2191,20 @@ pub struct CapsuleStateRequest {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CapsuleSlot {
+    pub slot_id: String,
+    pub name: String,
+    pub saved_at: String,
+    pub generation: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CapsuleStateEvent {
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub slots: Optional<Vec<CapsuleSlot>>,
     pub schema: CapsuleStateEventSchema,
     pub operation_id: String,
     pub op: CapsuleStateOp,

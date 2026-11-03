@@ -48,11 +48,11 @@ func TestFrozenCeilings(t *testing.T) {
 }
 
 const (
-	minContractFixtureCount  = 526
-	minContractEntryCount    = 527
-	minContractSchemaCount   = 23
-	pinnedFixtureSet488SHA   = "26eabfeddedc949c07007b3589daa469bb6e0a9f5bce3478d06d0c2c85490b02"
-	pinnedFixtureSet489SHA   = "c539077ab48d1052f17138ea3c803c29810177d41c2e83572f1c336dd1189d65"
+	minContractFixtureCount = 542
+	minContractEntryCount   = 543
+	minContractSchemaCount  = 23
+	pinnedFixtureSet488SHA  = "65d137826119d750852c08194f55097822dc6a7113efeba2be35d715d8cf1773"
+	pinnedFixtureSet489SHA  = "fb0b7d559fe823b623dc0556c1d04ddd848705b68603db27b0c91185c5dd6038"
 )
 
 func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, error) {

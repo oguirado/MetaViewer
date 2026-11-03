@@ -19,7 +19,9 @@
           "enum": [
             "save",
             "overwrite",
-            "load"
+            "load",
+            "list",
+            "delete"
           ]
         },
         "profile_id": {

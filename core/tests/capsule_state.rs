@@ -438,3 +438,35 @@ fn new_contract_fixtures_agree_with_closed_wire_decoder() {
         );
     }
 }
+
+#[test]
+fn list_and_delete_keep_ui_authority_and_terminal_idempotency() {
+    for op in ["list", "delete"] {
+        let mut state = CoreState::new("session-1", 10).unwrap();
+        let mut req = request();
+        req["op"] = op.into();
+        assert_eq!(
+            state
+                .apply(&admit(req.clone(), Component::Agent))
+                .unwrap()
+                .reason,
+            Some(Refusal::Policy)
+        );
+        assert!(
+            state
+                .apply(&admit(req.clone(), Component::Ui))
+                .unwrap()
+                .dispatch
+        );
+        let mut event = completion("completed");
+        event.op = serde_json::from_value(json!(op)).unwrap();
+        state
+            .apply(&Input::CapsuleStateEvent {
+                epoch: state.epoch,
+                event,
+            })
+            .unwrap();
+        assert!(state.slot_ops.is_empty());
+        assert!(!state.apply(&admit(req, Component::Ui)).unwrap().dispatch);
+    }
+}

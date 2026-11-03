@@ -23,6 +23,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -45,9 +46,12 @@ type Config struct {
 }
 type Request struct {
 	SlotID, ProfileID, Kind, Architecture, Image string
+	SourceProfileID                              string
 	HumanConfirmed                               bool
+	CreateOnly, OverwriteOnly                    bool
 }
 type Manifest struct {
+	SavedAt       string `json:"saved_at,omitempty"`
 	Version       int    `json:"version"`
 	Generation    uint64 `json:"generation"`
 	ProfileID     string `json:"profile_id"`
@@ -446,6 +450,15 @@ func (s *Store) Save(ctx context.Context, r Request) (Manifest, error) {
 	if e != nil && !os.IsNotExist(e) {
 		return m, e
 	}
+	if r.CreateOnly && old.Generation != 0 {
+		return m, errors.New("SLOT_EXISTS")
+	}
+	if r.OverwriteOnly && old.Generation == 0 {
+		return m, errors.New("SLOT_NOT_FOUND")
+	}
+	if old.Generation != 0 && old.ProfileID != r.ProfileID {
+		return m, errors.New("FOREIGN_SLOT")
+	}
 	if old.Generation == math.MaxUint64 {
 		return m, errors.New("SLOT_GENERATION_EXHAUSTED")
 	}
@@ -507,7 +520,7 @@ func (s *Store) Save(ctx context.Context, r Request) (Manifest, error) {
 	if e = s.step("payload"); e != nil {
 		return m, e
 	}
-	m = Manifest{Version: Version, Generation: old.Generation + 1, ProfileID: r.ProfileID, Kind: r.Kind, Architecture: r.Architecture, Image: r.Image, PayloadSHA256: payload.Hash, PayloadBytes: payload.Bytes, ExpandedBytes: payload.Expanded, Entries: payload.Entries}
+	m = Manifest{SavedAt: time.Now().UTC().Format(time.RFC3339Nano), Version: Version, Generation: old.Generation + 1, ProfileID: r.ProfileID, Kind: r.Kind, Architecture: r.Architecture, Image: r.Image, PayloadSHA256: payload.Hash, PayloadBytes: payload.Bytes, ExpandedBytes: payload.Expanded, Entries: payload.Entries}
 	b, _ := json.Marshal(m)
 	m.Digest = hash(b)
 	if e = writeSync(filepath.Join(stage, "manifest.json"), b); e != nil {
@@ -605,6 +618,9 @@ func (s *Store) Load(ctx context.Context, r Request) (Manifest, error) {
 	m, e = s.selectLocked(ctx, r.SlotID)
 	if e != nil {
 		return m, e
+	}
+	if r.SourceProfileID != "" && m.ProfileID != r.SourceProfileID {
+		return m, errors.New("FOREIGN_SLOT")
 	}
 	if m.Kind != r.Kind || m.Architecture != r.Architecture || m.Image != r.Image {
 		return m, errors.New("SLOT_INCOMPATIBLE: update required")
@@ -740,7 +756,7 @@ func (s *Store) docker(ctx context.Context, op, profile, stage string, cap int64
 	if profile != "" {
 		parent := filepath.Dir(profile)
 		mode := ",readonly"
-		if op == "unpack" || op == "exchange" || op == "exchange-probe" {
+		if op == "provision" || op == "unpack" || op == "exchange" || op == "exchange-probe" {
 			mode = ""
 		}
 		args = append(args, "--mount", "type=bind,src="+parent+",dst=/profiles"+mode)
@@ -838,7 +854,11 @@ def verify(s):
    assert (m.isfile() or m.isdir()) and m.uid==OWNER and m.gid==OWNER and m.size>=0 and not m.mode&0o7000
    count+=1;total+=m.size;assert count<=100000 and total<=cap
  return dict(hash=h.hexdigest(),bytes=st.st_size,expanded=total,entries=count)
-if op=='probe':
+if op=='provision':
+ assert not os.path.islink(p)
+ os.makedirs(p,mode=0o700,exist_ok=True);assert os.path.isdir(p)
+ os.chown(p,OWNER,OWNER);os.chmod(p,0o700);syncdir(os.path.dirname(p));r={}
+elif op=='probe':
  total,count=inventory(p);r=dict(bytes=total+count*12288+65536,expanded=total,entries=count)
 elif op=='pack':
  total,count=inventory(p)
@@ -870,3 +890,134 @@ elif op=='exchange-probe':
 else:raise ValueError('unknown helper operation')
 print(json.dumps(r,separators=(',',':')))
 `
+
+// [TARGET, unit decision] Listing exports metadata only, capped to the wire limit.
+type Entry struct {
+	SlotID     string `json:"slot_id"`
+	Name       string `json:"name"`
+	SavedAt    string `json:"saved_at"`
+	Generation uint64 `json:"generation"`
+}
+
+func (s *Store) List(ctx context.Context, profile string) ([]Entry, error) {
+	entries, e := os.ReadDir(filepath.Join(s.cfg.Root, "slots"))
+	if e != nil {
+		return nil, e
+	}
+	out := []Entry{}
+	for _, entry := range entries {
+		if !idPattern.MatchString(entry.Name()) || !entry.IsDir() {
+			return nil, errors.New("UNSAFE_SLOT")
+		}
+		m, e := s.Select(ctx, entry.Name())
+		if os.IsNotExist(e) {
+			continue
+		}
+		if e != nil {
+			return nil, e
+		}
+		if m.ProfileID != profile {
+			continue
+		}
+		stamp := m.SavedAt
+		if stamp == "" {
+			st, e := os.Stat(filepath.Join(s.generation(entry.Name(), m.Digest), "manifest.json"))
+			if e != nil {
+				return nil, e
+			}
+			stamp = st.ModTime().UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, Entry{entry.Name(), entry.Name(), stamp, m.Generation})
+		if len(out) > 256 {
+			return nil, errors.New("SLOT_LIST_LIMIT")
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SlotID < out[j].SlotID })
+	return out, nil
+}
+func (s *Store) Delete(ctx context.Context, r Request) error {
+	u, e := s.custody(ctx, r)
+	if e != nil {
+		return e
+	}
+	defer u()
+	v, e := s.slotLock(r.SlotID)
+	if e != nil {
+		return e
+	}
+	defer v()
+	if e = s.noIntent(r.SlotID); e != nil {
+		return e
+	}
+	m, e := s.selectLocked(ctx, r.SlotID)
+	if e != nil {
+		return e
+	}
+	if m.ProfileID != r.ProfileID {
+		return errors.New("FOREIGN_SLOT")
+	}
+	// Retain the guard inode so competing operations cannot lock an unlinked guard.
+	entries, e := os.ReadDir(s.slot(r.SlotID))
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if entry.Name() != "guard" {
+			if e = os.RemoveAll(filepath.Join(s.slot(r.SlotID), entry.Name())); e != nil {
+				return e
+			}
+		}
+	}
+	return syncDir(s.slot(r.SlotID))
+}
+func (s *Store) ReconcileAll(ctx context.Context) error {
+	entries, e := os.ReadDir(filepath.Join(s.cfg.Root, "slots"))
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !idPattern.MatchString(entry.Name()) {
+			return errors.New("UNSAFE_SLOT")
+		}
+		if e = s.Reconcile(ctx, entry.Name()); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+
+// Provision is called only after native identity creation; never overwrites data.
+func (s *Store) Provision(ctx context.Context, id string) error {
+	if !idPattern.MatchString(id) || protected(id) || id == s.cfg.LiveProfile {
+		return errors.New("IDENTITY_PROTECTED")
+	}
+	u, e := lock(filepath.Join(s.cfg.Root, "locks", id+".guard"))
+	if e != nil {
+		return e
+	}
+	defer u()
+	if e = s.cfg.CheckStopped(ctx, id); e != nil {
+		return e
+	}
+	p := filepath.Join(s.cfg.Root, "profiles", id)
+	st, e := os.Lstat(p)
+	if e == nil {
+		if !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
+			return errors.New("UNSAFE_PROFILE")
+		}
+		entries, e := os.ReadDir(p)
+		if e != nil || len(entries) != 0 {
+			return errors.New("PROFILE_ALREADY_BOUND")
+		}
+	} else if !os.IsNotExist(e) {
+		return e
+	}
+	_, e = s.helper(ctx, "provision", p, "", s.cfg.MaxBytes)
+	return e
+}
+
+func (s *Store) Image() string { return s.cfg.Image }
+
+func (s *Store) AcquireStopped(ctx context.Context, r Request) (func(), error) {
+	return s.custody(ctx, r)
+}
