@@ -1,0 +1,5 @@
+- Add a checksum-verified judge asset fetch command for explicit local directories and HTTPS releases.
+- Add a before-install doctor phase, early display refusal, and T1 RAM and disk checks.
+- Preserve npm from Node assets and include available npm files in CI runtime assets.
+- Load capsule images before offering the Open firewall and explain the legacy public-network limitation.
+- Document headless installation, Debian verification status, CI asset scope and fresh-clone steps.
