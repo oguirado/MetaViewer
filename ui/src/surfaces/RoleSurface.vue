@@ -1,4 +1,35 @@
 <script>
+// [TARGET, unit decision] Explicit recovery uses existing window-list, detach,
+// and create operations. A matching live witness is required before releasing the tile.
+/** @param {any} api @param {any} previous */
+export async function findLiveHostWindow(api, previous) {
+  if (!previous || typeof api?.listWindows !== 'function') return null;
+  const rows = await api.listWindows();
+  if (!Array.isArray(rows)) return null;
+  return rows.find((/** @type {any} */ row) => row.xid === previous.xid && row.witness === previous.witness) || null;
+}
+
+// A successful detach receipt survives a failed create for this renderer API only.
+// Unknown surfaces without that receipt must still fail closed.
+const detachedHostWindows = new WeakMap();
+/** @param {any} api @param {string} surfaceId @param {any} previous */
+export async function reopenHostWindow(api, surfaceId, previous) {
+  const current = await findLiveHostWindow(api, previous);
+  if (!current) throw Error('HOST_WINDOW_UNAVAILABLE');
+  let detached = detachedHostWindows.get(api);
+  if (!detached) { detached = new Map(); detachedHostWindows.set(api, detached); }
+  const witnessKey = `${current.xid}:${current.witness}`;
+  if (detached.get(surfaceId) !== witnessKey) {
+    const receipt = await api.detachWindow(surfaceId);
+    if (!receipt?.ok) throw Error(receipt?.reason || receipt?.code || 'HOST_WINDOW_DETACH_FAILED');
+    detached.set(surfaceId, witnessKey);
+  }
+  const opened = await api.createWindow(current);
+  if (!opened?.ok) throw Error(opened?.reason || opened?.code || 'HOST_WINDOW_UNAVAILABLE');
+  detached.delete(surfaceId);
+  return opened;
+}
+
 /** @param {any} rect */
 function normalizeRect(rect) {
   if (!rect || typeof rect !== 'object') return null;
@@ -158,7 +189,7 @@ const menuPopup = ref(/** @type {HTMLElement|null} */ (null));
 watch(menuOpen, async open => {
   if (!open) { if (menuPopup.value?.matches?.(':popover-open')) menuPopup.value.hidePopover(); return; }
   await nextTick();
-  if (menuOpen.value) /** @type {any} */ (menuPopup.value)?.showPopover?.({source:menuHost.value?.querySelector?.('button')});
+  if (menuOpen.value) /** @type {any} */ (menuPopup.value)?.showPopover?.({source:menuHost.value?.querySelector?.('.mv-role-menu-button')});
 });
 watch(menuOpen, open => overlays?.set(menuOwner, open), {flush:'sync'});
 /** @param {Event} event */
@@ -179,6 +210,8 @@ function reconnectReleased() { resourceReleased.value = false; void sync(); }
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
 const root = ref(/** @type {HTMLElement|null} */ (null));
 const role = ref(api ? '' : 'agent'), watching = ref(false), error = ref('');
+const hostXpra = ref(false);
+const reopenableHostWindow = ref(false);
 const hostWindow = ref(/** @type {any} */ (null));
 let ended = false, notifiedEnd = false, resync = false;
 let transferring = false;
@@ -202,10 +235,12 @@ async function sync() {
     if (mounted || hostWindow.value) {
       const status = await api.status(props.surfaceId);
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
+      hostXpra.value = status.hostXpra === true;
       if (status.hostWindow !== undefined) {
         hostWindow.value = status.hostWindow || null;
         if (status.hostWindow?.state === 'lost') {
           error.value = status.hostWindow.lostReason || 'Window closed — capsule tile ended.';
+          try { reopenableHostWindow.value = Boolean(await findLiveHostWindow(api, status.hostWindow)); } catch { reopenableHostWindow.value = false; }
           return;
         }
       }
@@ -291,7 +326,7 @@ function bindScrollListeners() {
   }
 }
 async function detachHostWindow() {
-  if (ended) return;
+  if (ended || progress.value) return;
   menuOpen.value = false;
   progress.value = 'Detaching window…';
   error.value = '';
@@ -336,6 +371,19 @@ async function lifecycle(operation) {
   } catch (reason) { error.value = /** @type {Error} */(reason).message; }
   finally { progress.value = ''; }
 }
+async function reopenLostHostWindow() {
+  if (progress.value || !hostWindow.value) return;
+  progress.value = 'Reopening window…';
+  try {
+    const completion = reopenHostWindow(api, props.surfaceId, hostWindow.value);
+    emit('lifecycle', {surfaceId:props.surfaceId, completion});
+    const result = await completion;
+    ended = true;
+    if (result.surfaceId) emit('reveal', result.surfaceId);
+    emit('stopped', props.surfaceId);
+  } catch (reason) { error.value = /** @type {Error} */ (reason).message; }
+  finally { progress.value = ''; }
+}
 async function confirmLogin() {
   try { const result = await api.confirmLogin(props.surfaceId); if (!result.ok) throw Error(result.code); confirmed.value = true; }
   catch (reason) { error.value = /** @type {Error} */(reason).message; }
@@ -351,10 +399,12 @@ onMounted(async () => {
     const status = await api.status(props.surfaceId);
     if (!alive) return;
     if (!['human','agent'].includes(status.role)) throw Error(status.code || 'CAPSULE_ROLE_UNPROVEN');
+    hostXpra.value = status.hostXpra === true;
     if (status.hostWindow) {
       hostWindow.value = status.hostWindow;
       if (status.hostWindow.state === 'lost') {
         error.value = status.hostWindow.lostReason || 'Window closed — capsule tile ended.';
+        try { reopenableHostWindow.value = Boolean(await findLiveHostWindow(api, status.hostWindow)); } catch { reopenableHostWindow.value = false; }
       }
     }
     const transfer = tileLayout?.transfers.get(props.surfaceId);
@@ -382,13 +432,20 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
         <div v-if="tileLayout" class="mv-tile-size-controls" aria-label="Tile size">
           <button v-for="control in sizeControls" :key="control.action" type="button" :id="`tile-size-${control.action}-${surfaceId}`" :title="control.title" :aria-label="control.title" @pointerdown.stop @click.stop="resizeTile(control.action)">{{ control.label }}</button>
         </div>
-        <span class="mv-role-mode-badge">{{ role }}</span>
-        <span v-if="hostWindow" :id="`tile-host-indicator-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-indicator`" class="mv-host-window-badge" :title="`${hostWindow.title} — ${hostWindow.program}. This tile is attached to a real window on your desktop, not an isolated container.`">Real desktop — not isolated</span>
+        <span class="mv-role-mode-badge">{{ hostWindow ? (hostWindow.state === 'lost' ? 'Window closed' : control === 'human' ? 'You control this window' : 'Agent controls this window') : role }}</span>
+        <span v-if="hostXpra" class="mv-host-window-badge" aria-label="Runs on your computer (not isolated)">Runs on your computer — not isolated</span>
+        <span v-if="hostWindow" :id="`tile-host-indicator-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-indicator`" class="mv-host-window-badge" aria-label="Real desktop (not isolated)" :title="`${hostWindow.title} — ${hostWindow.program}. This tile is attached to a real window on your desktop, not an isolated container.`">Real desktop — not isolated</span>
         <button v-if="hostWindow" type="button" :id="`tile-host-stop-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-stop`" class="mv-host-window-stop" @click.stop="detachHostWindow">Stop</button>
-        <span v-if="recordingPaused" role="status">Recording paused (size limit)</span>
+        <span v-if="recordingPaused" class="mv-role-recording-paused" role="status">Recording paused (size limit)</span>
         <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
         <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
-          <button :id="`tile-switch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/mode/switch`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('switchMode'))">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>
+          <div class="mv-role-compact-actions">
+            <span>{{ hostWindow ? (hostWindow.state === 'lost' ? 'Window closed' : control === 'human' ? 'You control this window' : 'Agent controls this window') : role }}</span>
+            <span v-if="recordingPaused" role="status">Recording paused (size limit)</span>
+            <template v-if="tileLayout"><button v-for="control in sizeControls" :key="control.action" type="button" role="menuitem" :id="`tile-menu-size-${control.action}-${surfaceId}`" :aria-label="control.title" @click="runMenu(() => resizeTile(control.action))">{{ control.title }}</button></template>
+            <hr v-if="tileLayout" role="separator">
+          </div>
+          <button v-if="!hostWindow" :id="`tile-switch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/mode/switch`" role="menuitem" type="button" :disabled="!!progress" @click="runMenu(() => lifecycle('switchMode'))">Switch to {{ role === 'human' ? 'agent' : 'human' }} mode</button>
           <button v-if="role === 'human'" role="menuitem" :id="`tile-login-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/login/confirm`" title="Remembers that this identity has a signed-in session; shown as Last login in Identities." type="button" :disabled="confirmed || !!progress" @click="runMenu(confirmLogin)">{{ confirmed ? 'Marked as logged in' : 'Mark as logged in' }}</button>
           <button v-if="role === 'agent' && control === 'agent'" role="menuitem" :id="`tile-watch-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/watch`" type="button" @click="runMenu(() => watching = !watching)">{{ watching ? 'Close watch' : 'Watch read-only' }}</button>
           <template v-if="tileLayout">
@@ -408,8 +465,10 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
     </Teleport>
     <span v-if="progress" role="status">{{ progress }}</span>
     <div ref="root" class="mv-role-viewport">
-      <div v-if="role === 'agent'" :style="{visibility: (watching || hostWindow?.minimized || hostWindow?.state === 'lost') ? 'hidden' : undefined}" :inert="watching || Boolean(hostWindow?.minimized) || hostWindow?.state === 'lost'" class="mv-role-agent-canvas"><slot /></div>
+      <!-- [TARGET, unit decision] Terminal canvas leaves layout: visibility:hidden still consumes the clipped viewport. -->
+      <div v-if="role === 'agent' && hostWindow?.state !== 'lost'" :style="{visibility: (watching || hostWindow?.minimized || hostWindow?.state === 'lost') ? 'hidden' : undefined}" :inert="watching || Boolean(hostWindow?.minimized) || hostWindow?.state === 'lost'" class="mv-role-agent-canvas"><slot /></div>
       <button v-if="resourceReleased" :id="`tile-reconnect-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/reconnect`" type="button" @click="reconnectReleased">Disconnected to save resources, click to reconnect</button>
+      <button v-if="error && hostWindow?.state === 'lost' && reopenableHostWindow" type="button" :disabled="!!progress" @click="reopenLostHostWindow">Reopen</button>
       <button v-if="error && !hostWindow" type="button" @click="error = ''; sync()">Reopen</button>
       <p v-if="hostWindow?.minimized && !error && hostWindow?.state !== 'lost'" :id="`tile-host-minimized-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-minimized`" class="mv-role-status" role="status">Window minimized — waiting for window to be restored</p>
       <p v-else-if="role === 'human' || watching" class="mv-role-status" role="status">{{ error || (resourceReleased ? 'Disconnected to save resources, click to reconnect' : viewState === 'reconnecting' && hasConnected ? 'Reconnecting…' : viewState === 'connecting' || !mounted ? 'Connecting…' : role === 'human' ? 'Human capsule' : 'Read-only watch') }}</p>
@@ -418,14 +477,16 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
   </div>
 </template>
 <style scoped>
-.mv-role-menu-host { position:relative; display:flex; align-items:center; gap:6px; }
+.mv-role-menu-host { position:relative; display:flex; flex-wrap:wrap; min-width:0; max-width:100%; align-items:center; gap:6px; }
+.mv-role-menu-host > span { min-width:0; overflow-wrap:anywhere; }
+.mv-tile-size-controls { flex-wrap:wrap; min-width:0; }
 .mv-tile-size-controls { display:flex; gap:2px; }
 .mv-tile-size-controls button { padding:2px 4px; min-height:26px; white-space:nowrap; }
 .mv-desktop-menu-title { padding:4px 8px; font-weight:600; }
 .mv-desktop-menu-row { display:flex; align-items:center; gap:6px; padding:2px 8px; }
 .mv-desktop-menu-row > span { flex:1; white-space:nowrap; }
 .mv-role-mode-badge { font-size:11px; text-transform:capitalize; }
-.mv-role-menu-button { min-width:28px; min-height:28px; }
+.mv-role-menu-button { flex:0 0 28px; min-width:28px; min-height:28px; }
 .mv-role-menu-host hr { width:100%; }
 :global(.mv-tile:has([data-capsule-role="human"]) [data-semantic-anchor$="/control"]) { display:none; }
 .mv-role-surface { flex:1 1 auto; display:flex; flex-direction:column; width:100%; height:100%; min-height:0; }
@@ -434,4 +495,17 @@ onBeforeUnmount(() => { stopNativeFocus?.(); overlays?.set(menuOwner, false); gl
 .mv-role-status { position:absolute; top:0; left:0; pointer-events:none; }
 .mv-role-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
 .mv-role-watch { display:flex; justify-content:flex-end; }
+.mv-role-compact-actions { display:none; }
+@container tile-chrome (max-width: 499px) {
+  .mv-role-menu-host {
+    display:contents;
+  }
+  /* Who controls the tile and a paused recording stay visible: safety state never moves into a menu. */
+  .mv-tile-size-controls { display:none; }
+  .mv-role-mode-badge, .mv-role-recording-paused { font-size:11px; white-space:nowrap; }
+  .mv-host-window-badge { font-size:0; flex:0 0 auto; }
+  .mv-host-window-badge::after { content:"Not isolated"; font-size:11px; white-space:nowrap; }
+  .mv-role-compact-actions { display:contents; }
+  .mv-role-menu-host > span { overflow-wrap:normal; }
+}
 </style>

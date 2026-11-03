@@ -4,8 +4,8 @@ import { mkdir, lstat, realpath, open, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { constants } from 'node:fs';
 
-/** @param {string} stateDir @param {string} profileId @param {string} mode @param {string|{xid:number,witness:string,title:string,program:string,width?:number,height?:number,display?:string,xauthority?:string}} [target] */
-export async function stageOpeningMode(stateDir, profileId, mode, target) {
+/** @param {string} stateDir @param {string} profileId @param {string} mode @param {string|{xid:number,witness:string,title:string,program:string,width?:number,height?:number,display?:string,xauthority?:string}} [target] @param {boolean} [hostXpra] */
+export async function stageOpeningMode(stateDir, profileId, mode, target, hostXpra = false) {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(profileId) || !['human','agent'].includes(mode)) throw Error('CAPSULE_MODE_INVALID');
   /** @type {any} */
   let payload = {schema:'metaviewer.opening_mode/v0.3',profile_id:profileId,mode};
@@ -27,6 +27,10 @@ export async function stageOpeningMode(stateDir, profileId, mode, target) {
     } else {
       throw Error('CAPSULE_MODE_INVALID');
     }
+  }
+  if (hostXpra) {
+    if (typeof target !== 'string') throw Error('CAPSULE_MODE_INVALID');
+    payload.host_xpra = true;
   }
   if (isForeignIdentity(profileId)) throw Object.assign(Error('IDENTITY_PROTECTED'), {code:'IDENTITY_PROTECTED'});
   const directory = join(stateDir, 'opening-modes');

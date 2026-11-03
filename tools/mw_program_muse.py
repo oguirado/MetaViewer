@@ -33,6 +33,18 @@ def main():
     os.environ['MV_HOSTED'] = '1'
     os.environ['TMPDIR'] = str(root)
     tempfile.tempdir = str(root)
+    # [TARGET, unit decision] Program runner keeps this public helper boundary.
+    # Its scrubbed child env carries the verified runtime directory in PYTHONPATH.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'agents'))
+    from metaviewer_agents.perception.compiled import compiled_executable
+    runtime = compiled_executable('wender-agent', root=os.environ.get('PYTHONPATH'))
+    if runtime is not None:
+        import subprocess
+        result = subprocess.run([str(runtime), 'model'], input=json.dumps(request),
+                                text=True, timeout=request['timeout_s'])
+        if result.returncode:
+            raise SystemExit(result.returncode)
+        return
     from wender.learn.model_client import ModelClient, MuseBackend
     backend = MuseBackend(workspace=root, effort='low', timeout=request['timeout_s'])
     client = ModelClient(backend)

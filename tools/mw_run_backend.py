@@ -54,17 +54,22 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 ATTACH_KEYS = ('MV_CORE_CONFIG', 'XDG_RUNTIME_DIR', 'MV_SRF_BIN_DIR', 'MV_SRF_STATE_DIR',
-               'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY')
+               'SRF_IDENTITY_STORE_ROOT', 'SRF_PROXY_REGISTRY', 'MV_WENDER_EXECUTABLE',
+               'MV_VISION_EXECUTABLE', 'MV_WENDER_ROOT', 'VQA_VE_ROOT', 'MV_OPERATOR_REPO')
 SCHEMA_KINDS = ('site', 'workflow', 'step', 'run')
 MAX_NOTICE_S = 300
 CAPTCHA_CUES = {
     'checkbox': {"i'm not a robot", 'no soy un robot', 'verify you are human',
                  'verifica que eres un ser humano'},
-    'iframe': {'cloudflare security challenge', 'widget containing a cloudflare security challenge'},
+    'iframe': {'cloudflare security challenge', 'widget containing a cloudflare security challenge',
+               'recaptcha', 'recaptcha challenge', 'hcaptcha', 'hcaptcha challenge'},
     'dialog': {'recaptcha'},
 }
 SIGN_IN_PHRASES = ('sign in', 'log in', 'login', 'sign up', 'create an account', 'iniciar sesión',
                    'inicia sesión', 'regístrate', 'crea una cuenta')
+HUMAN_CHECK_PHRASES = ('verify you are human', 'verify that you are human',
+                       'verifica que eres un ser humano')
+PASSWORD_NAMES = {'password', 'contraseña'}
 
 
 def module(name, path):
@@ -83,6 +88,7 @@ from metaviewer_agents.mw_home import HomeError, canonical_home, check_home, res
 from metaviewer_agents.mw_owner import Corpus, OwnerRefused, ReplayOwner, bounded_read, need, focus_only_steps
 from metaviewer_agents.perception.deps_lock import DependencyLockError
 from metaviewer_agents.verify import build_proposal
+from metaviewer_agents.mw_owner import RebindHandoff
 
 
 def readback_runner(mw, owner):
@@ -264,12 +270,44 @@ def normalized(text):
 
 
 def wall_kind(tree):
-    """Classify a CAPTCHA cue or a sign-in dialog in native AX rows; never act on it."""
-    rows = [row for row in tree.get('elements', []) if isinstance(row, dict)]
+    """Classify exposed native AX wall cues; never act on or answer a wall.
+
+    [TARGET, unit decision] Page headings or password-plus-sign-in wording
+    supply the page-level login seam. Native AX rows are exposed unless marked
+    hidden/ignored/invisible or given an empty box; no DOM/extra read is needed.
+    Frame names and human-check text are stop-only cues, not vendor proof.
+    """
+    rows = []
+    for row in tree.get('elements', []):
+        if not isinstance(row, dict):
+            continue
+        states = row.get('states') or {}
+        if any(source.get('hidden') is True or source.get('ignored') is True or
+               source.get('visible') is False for source in (row, states)):
+            continue
+        box = row.get('box')
+        if isinstance(box, (list, tuple)) and len(box) == 4 and (box[2] <= 0 or box[3] <= 0):
+            continue
+        rows.append(row)
     if any(normalized(row.get('name')) in CAPTCHA_CUES.get(row.get('role'), ()) for row in rows):
+        return 'captcha_wall'
+    if any(row.get('role') in ('text', 'statictext', 'paragraph', 'heading', 'dialog', 'alertdialog') and
+           any(phrase in normalized(row.get('name')) for phrase in HUMAN_CHECK_PHRASES) for row in rows):
         return 'captcha_wall'
     if any(row.get('role') in ('dialog', 'alertdialog') and
            any(phrase in normalized(row.get('name')) for phrase in SIGN_IN_PHRASES) for row in rows):
+        return 'login_wall'
+    if any(row.get('role') == 'heading' and
+           any(normalized(row.get('name')) == phrase or
+               normalized(row.get('name')).startswith(tuple(phrase + suffix for suffix in (' to ', ' with ', ' a ', ' en ')))
+               for phrase in SIGN_IN_PHRASES) for row in rows):
+        return 'login_wall'
+    password = any(row.get('role') == 'textbox' and
+                   (normalized(row.get('name')) in PASSWORD_NAMES or
+                    re.fullmatch(r'enter (?:your )?password[: ]*', normalized(row.get('name'))))
+                   for row in rows)
+    if password and any(row.get('role') in ('button', 'link', 'text', 'statictext') and
+                        normalized(row.get('name')) in SIGN_IN_PHRASES for row in rows):
         return 'login_wall'
     return None
 
@@ -291,6 +329,8 @@ def private_json(path, root, mode=0o600):
 
 def admit_home(repo, override):
     home = canonical_home(resolve_home(repo, override))
+    if home_check.packaged_runtime(Path(repo), home):
+        return check_home(home, lambda path: path.is_relative_to(repo))
 
     def tracked(path):
         selectors = {'memoryweb'}
@@ -343,8 +383,16 @@ def connect(env, trace=None):
     return client
 
 
+CARET_OFF_MIN_LEVEL = 0xc0  # [MEASURED] x64 off phase beside a glyph: e1e1e1, efefef, ffffff
+
+
 class HostBackend:
     surface_kind = 'browser'
+    eager_slot_text = True
+    agent_control_required = False
+    # The stored workflow owner imports Wender state APIs in process; the compiled
+    # runtime exports plan and model only. A lane on those entries may opt in.
+    compiled_wender_ok = False
 
     def __init__(self, client, identity, evidence, env):
         from metaviewer_agents.perception.deps_lock import resolve_locked_component
@@ -360,6 +408,11 @@ class HostBackend:
         self.admin = self.binary.with_name('srf-identity-admin')
         need(all(p.is_absolute() for p in (self.state, self.binary, self.store)), 'MW_RUN_CONFIG')
         self.wender = resolve_locked_component('wender-agent')
+        from metaviewer_agents.perception.compiled import compiled_executable
+        if not self.compiled_wender_ok and compiled_executable('wender-agent', root=self.wender) is not None:
+            raise refuse('MW_COMPILED_BROWSER_UNAVAILABLE',
+                'compiled Wender exports plan/model only; browser workflow/state APIs require '
+                'a verified checkout. Program automation supports the compiled runtime.')
         self.pending = {}
         self.network_evidence = None
         self.surface_id = None
@@ -414,15 +467,19 @@ class HostBackend:
             if capsule:
                 leases.add(capsule)
         inventory = command(['docker', 'ps', '--format', '{{.Names}}'])
-        need(inventory.returncode == 0, 'MW_RUN_OWNERSHIP')
+        if inventory.returncode != 0:
+            raise refuse('MW_RUN_OWNERSHIP',
+                'Docker inventory failed; restore access to the Docker daemon in this shell, '
+                'then run bash scripts/judge/metaviewer-judge.sh doctor --capsules before retrying')
         active = set(inventory.stdout.decode().splitlines())
-        need(bool(leases & active), 'MW_RUN_NO_SURFACE')
-        need(len(leases) == 1 and leases <= active, 'MW_RUN_AMBIGUOUS')
+        leases &= active
+        need(bool(leases), 'MW_RUN_NO_SURFACE')
+        need(len(leases) == 1, 'MW_RUN_AMBIGUOUS')
         capsule = next(iter(leases))
         surface = surfaces[0]['surface_id']
         need(self.surface_id in (None, surface) and self.capsule in (None, capsule), 'MW_RUN_OWNERSHIP')
         self.surface_id, self.capsule = surface, capsule
-        if self.surface_kind == 'desktop_capsule':
+        if self.surface_kind == 'desktop_capsule' or self.agent_control_required:
             need(surfaces[0].get('control') == 'agent', 'MW_PROGRAM_CONTROL')
         return dict(profile='mv-live-1', identity=self.identity, surface_id=surface, capsules=[capsule])
 
@@ -462,7 +519,7 @@ class HostBackend:
         tree = self.native(self.binary, ['ax', '--container', self.capsule, '--window', 'w1',
                                          '--state-dir', str(self.state)])
         for row in tree.get('elements', []) if isinstance(tree.get('elements'), list) else []:
-            if (isinstance(row, dict) and row.get('role') in ('textbox', 'combobox')
+            if (self.eager_slot_text and isinstance(row, dict) and row.get('role') in ('textbox', 'combobox')
                     and row.get('focused') is True and not isinstance(row.get('value'), str)):
                 row['value'] = self.slot_text(row)
         return tree
@@ -601,6 +658,14 @@ class HostBackend:
 
     def state_for(self, sensed):
         # The pinned shim computes Wender IDs, AX hashes and actionable state.
+        from metaviewer_agents.perception.compiled import compiled_browser_entry
+        tree = dict(elements=sensed['ax'], window=sensed['window'])
+        request = dict(element_table=sensed['table'], tree=tree)
+        state = compiled_browser_entry('state', request, root=self.wender)
+        if state is not None:
+            from metaviewer_agents.wender_bridge import validate_state
+            validate_state(state)
+            return state
         if not hasattr(self, '_glue'):
             self._glue = module('mv_entry_glue', ROOT / 'tools/gate_g_ai.py')
         glue = self._glue
@@ -609,8 +674,7 @@ class HostBackend:
         # [TARGET, unit decision] State and AX predicates share this acquisition's
         # snapshot. Re-reading AX here multiplied native latency and expired the
         # unchanged T1 target before Wender's fixed locate deadline.
-        tree = dict(elements=sensed['ax'], window=sensed['window'])
-        payload = json.dumps(dict(element_table=sensed['table'], tree=tree))
+        payload = json.dumps(request)
         result = subprocess.run(argv, input=payload, text=True, capture_output=True, timeout=30,
                                 cwd=self.wender, env={'PATH': os.defpath, 'PYTHONPATH': str(self.wender),
                                                      'PYTHONDONTWRITEBYTECODE': '1'})
@@ -650,8 +714,8 @@ class HostBackend:
     def caret_only_change(before, after, rows, old_pixels, new_pixels):
         """[TARGET, unit decision] Admit only a solid black one-pixel caret.
 
-        Measured E1 blink: one column, fifteen pixels, black versus the
-        surrounding flat editor background. Bound height at thirty-two pixels;
+        Measured blink: one column, fifteen pixels, black versus near white
+        background or antialiased edge. Bound height at thirty-two pixels;
         text/value/geometry/focus must independently survive AX revalidation.
         """
         if (before['surface_id'] != after['surface_id'] or
@@ -675,19 +739,29 @@ class HostBackend:
             return False
         if changed != [((y + dy) * w + x) for dy in range(len(changed))]:
             return False
-        pair = (old_pixels[changed[0]*3:changed[0]*3+3], new_pixels[changed[0]*3:changed[0]*3+3])
-        if b'\0\0\0' not in pair or pair[0] == pair[1]:
+        first = old_pixels[changed[0]*3:changed[0]*3+3]
+        if first == b'\0\0\0':
+            caret, off = old_pixels, new_pixels
+        elif new_pixels[changed[0]*3:changed[0]*3+3] == b'\0\0\0':
+            caret, off = new_pixels, old_pixels
+        else:
             return False
-        off = new_pixels if pair[0] == b'\0\0\0' else old_pixels
-        background = pair[1] if pair[0] == b'\0\0\0' else pair[0]
-        return all((old_pixels[i*3:i*3+3], new_pixels[i*3:i*3+3]) == pair and
-                   off[(i-1)*3:(i-1)*3+3] == off[(i+1)*3:(i+1)*3+3] == background
+        # Measured on x64: beside the last typed glyph the caret's other phase is the glyph's
+        # antialiased edge (efefef, not ffffff), so it is near white rather than one flat colour.
+        return all(caret[i*3:i*3+3] == b'\0\0\0' and min(off[i*3:i*3+3]) >= CARET_OFF_MIN_LEVEL
                    for i in changed)
 
+    def observe_for_rebind(self, timeout_ms):
+        return tools.observe(self.surface_id, client=self.client, timeout_ms=timeout_ms)
+
     def rebind(self, sensed, plan, remaining):
-        observed = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)
+        deadline = time.monotonic_ns() + remaining * 1_000_000
+        observed = self.observe_for_rebind(remaining)
         fresh = self.perceive(observed)
-        need(not wall_kind(dict(elements=fresh['ax'])), 'MW_HANDOFF_REQUIRED')
+        wall = wall_kind(dict(elements=fresh['ax']))
+        if wall:
+            raise RebindHandoff(dict(fresh, observed=dict(observed,
+                observed_wall=dict(observed=True, kind=wall))))
         self.revalidate_action(sensed, fresh, plan['action'])
         # AX/geometry and pixels were re-perceived. A new generation requires
         # identical pixels or the strictly classified caret blink below.
@@ -710,8 +784,33 @@ class HostBackend:
         # Reuse only the already retained identical pixel content; never spend
         # another native capture/file read between this binding and proposal.
         final = tools.observe(self.surface_id, client=self.client, timeout_ms=remaining)['frame_ref']
-        need(all(final[k] == latest[k] for k in ('surface_id', 'sha256', 'width', 'height')) and
-             final['generation'] >= latest['generation'], 'MW_REBIND_PIXELS')
+        # [TARGET, unit decision] Only the browser goal's verified focused key or text
+        # may bind either retained caret phase. Classify an unseen final phase
+        # before one more publication read; no pixel reads follow that read.
+        # Click/type and other owners keep the identical-final-pixels gate.
+        keys = ('surface_id', 'sha256', 'width', 'height')
+        if (getattr(self, 'rebind_caret_keys', False) and plan['action']['type'] in ('key', 'type') and
+                not all(final[k] == latest[k] for k in keys)):
+            alternate = self.retain(final)
+            old_pixels = Path(witness['artifact']).read_bytes()
+            new_pixels = Path(alternate['artifact']).read_bytes()
+            need(hashlib.sha256(old_pixels).hexdigest() == latest['sha256'] and
+                 hashlib.sha256(new_pixels).hexdigest() == final['sha256'], 'MW_FRAME_BINDING')
+            need(final['generation'] >= latest['generation'] and
+                 self.caret_only_change(latest, final, fresh['ax'], old_pixels, new_pixels),
+                 'MW_REBIND_PIXELS')
+            phases = [(latest, witness), (final, alternate)]
+            latest = final
+            budget = (deadline - time.monotonic_ns()) // 1_000_000
+            need(budget > 0, 'MW_STALE_FRAME_EXHAUSTED')
+            final = tools.observe(self.surface_id, client=self.client, timeout_ms=budget)['frame_ref']
+            matches = [(frame, proof) for frame, proof in phases
+                       if all(final[k] == frame[k] for k in keys)]
+            need(bool(matches), 'MW_REBIND_PIXELS')
+            witness = matches[0][1]
+        else:
+            need(all(final[k] == latest[k] for k in keys), 'MW_REBIND_PIXELS')
+        need(final['generation'] >= latest['generation'], 'MW_REBIND_PIXELS')
         fresh['frame_witness'] = dict(witness, generation=final['generation'])
         fresh['frame'] = final
         return fresh
@@ -745,7 +844,7 @@ class HostBackend:
             binding = proposal.get('based_on_frame')
             if binding is None:
                 binding = {k: fresh['frame'][k] for k in ('sha256', 'generation') if k in fresh['frame']}
-            row = dict(attempt=attempt + 1, based_on_frame=binding,
+            row = dict(attempt=attempt + 1, proposal_id=proposal['proposal_id'], based_on_frame=binding,
                        observed_generation=sensed['frame']['generation'], submit_mono_ns=time.monotonic_ns(),
                        status='intent_pending')
             self.frame_attempts.append(row)
@@ -760,6 +859,9 @@ class HostBackend:
             except tools.ToolRefusal as error:
                 self.last_core_refusal = error.reason_code
                 row['status'] = error.reason_code
+                on_refusal = getattr(self, 'proposal_refused', None)
+                if callable(on_refusal):
+                    on_refusal(row, error)
                 if error.reason_code != 'STALE_FRAME' or 'ax' not in sensed:
                     raise
         else:
@@ -887,6 +989,9 @@ def run_entry(args):
     if getattr(args, 'surface_kind', 'browser') == 'program':
         program = module('mv_mw_run_program', ROOT / 'tools/mw_run_program.py')
         return program.run_entry(args)
+    if getattr(args, 'goal', None) is not None:
+        browser = module('mv_mw_run_browser_goal', ROOT / 'tools/mw_run_browser_goal.py')
+        return browser.run_entry(args)
     receipt, report = None, None
     rc, code = 6, 'MW_RUN_CONFIG'
     backend, message, trace = None, None, {}
@@ -905,10 +1010,12 @@ def run_entry(args):
             backend = HostBackend(client, args.identity, evidence, os.environ)
             rc, code, receipt = execute(args, home, evidence, backend, trace=trace)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
-            ClientError, tools.ToolRefusal, tools.VerificationFailed) as error:
+            ClientError, tools.ToolRefusal, tools.VerificationFailed, subprocess.SubprocessError) as error:
         code = getattr(error, 'code', getattr(error, 'reason_code', 'MW_RUN_CONFIG'))
         message = str(error)
-        if isinstance(error, ClientError):
+        if isinstance(error, subprocess.TimeoutExpired):
+            code, message = 'MW_RUN_NATIVE', 'native discovery command timed out'
+        elif isinstance(error, ClientError):
             code, message = 'MW_RUN_CORE', (f'core connection failed ({error.code}: {error}); '
                                             'is this the running MetaViewer core?')
         elif isinstance(error, HomeError):
