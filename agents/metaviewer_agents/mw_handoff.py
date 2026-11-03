@@ -4,6 +4,7 @@
 kind login_wall or captcha_wall supplies the missing observed-wall seam.
 Login controls alone are not walls. A new ReplayOwner is a new authorized run.
 The path is returned directly and through the closed run schema's evidence_refs.
+Optional detector injection keeps process dispatch at the existing bridge.
 """
 from dataclasses import dataclass
 import json
@@ -19,21 +20,28 @@ class HandoffResult:
 
 
 class HandoffLatch:
-    def __init__(self, path):
+    def __init__(self, path, *, detector=None):
         self.path = path
         self.latched = False
+        self.detector = detector
 
     def inspect(self, sensed, seq, write):
         if self.latched:
             return True
         # Pinned wender/perceive/stopstate.py:89-176; inspect existing STATE,
         # never acquire a new perception path or persist detector evidence values.
-        from wender.perceive.stopstate import detect
         state = sensed.get('state', {'nodes': sensed.get('ax', [])})
         observed = sensed.get('observed', {})
-        receipt = detect(state, url=observed.get('url', ''),
-                         frame_urls=observed.get('frame_urls', state.get('frame_urls', ())),
-                         headers=observed.get('headers', state.get('headers')))
+        request = dict(state=state, url=observed.get('url', ''),
+                       frame_urls=observed.get('frame_urls', state.get('frame_urls', ())),
+                       headers=observed.get('headers', state.get('headers')))
+        if self.detector is None:
+            from wender.perceive.stopstate import detect
+            receipt = detect(request['state'], url=request['url'],
+                             frame_urls=request['frame_urls'], headers=request['headers'])
+        else:
+            receipt = self.detector(request['state'], url=request['url'],
+                                    frame_urls=request['frame_urls'], headers=request['headers'])
         wall = observed.get('observed_wall')
         if (not receipt['is_stop'] and type(wall) is dict and
                 wall.get('observed') is True and

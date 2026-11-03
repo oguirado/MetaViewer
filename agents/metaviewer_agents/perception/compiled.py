@@ -6,6 +6,7 @@ refuse before spawning. No caller-supplied hash can replace this lock.
 """
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -16,6 +17,67 @@ from .deps_lock import DependencyLockError, _locked_commit
 VARIABLES = {'wender-agent': 'MV_WENDER_EXECUTABLE',
              'vision-engine': 'MV_VISION_EXECUTABLE'}
 LOCK = Path(__file__).with_name('compiled.lock.json')
+
+
+def compiled_browser_entry(mode, request, *, root=None, timeout=30):
+    """Invoke a pinned standalone browser entry, or select existing source mode.
+
+    No compiled distribution directory is imported into the host interpreter.
+    An explicitly selected but unusable runtime never falls back to source.
+    """
+    from ..observe import ObservationError
+    from ..wender_bridge import BoundedProcessTimeout, _run_bounded
+    if mode not in ('state', 'stopstate') or type(request) is not dict:
+        raise ObservationError('bad_shape', 'compiled browser request invalid')
+    executable = compiled_executable('wender-agent', root=root)
+    if executable is None:
+        return None
+    fields = {'state': {'element_table', 'tree'},
+              'stopstate': {'state', 'url', 'frame_urls', 'headers'}}
+    if set(request) != fields[mode]:
+        raise ObservationError('bad_shape', 'compiled browser request keys invalid')
+    try:
+        payload = json.dumps(request, sort_keys=True, separators=(',', ':'),
+                             ensure_ascii=False, allow_nan=False).encode('utf-8')
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise ObservationError('bad_shape', 'compiled browser request invalid') from None
+    if len(payload) > 1024 * 1024:
+        raise ObservationError('bad_shape', 'compiled browser request too large')
+    env = {'PATH': os.defpath}
+    language = os.environ.get('LANG')
+    if language is not None:
+        env['LANG'] = language
+    try:
+        result = _run_bounded([str(executable), mode], cwd=executable.parent,
+                              env=env, request=payload, timeout=timeout)
+    except BoundedProcessTimeout:
+        raise ObservationError('timeout', 'compiled browser entry timed out') from None
+    except OSError:
+        raise ObservationError('unavailable', 'compiled browser entry unavailable') from None
+    if result.returncode:
+        raise ObservationError('subprocess_failed', 'compiled browser entry refused')
+    def unique(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError('duplicate key')
+            value[key] = item
+        return value
+    def finite(raw):
+        value = float(raw)
+        if not math.isfinite(value):
+            raise ValueError('nonfinite number')
+        return value
+    def invalid_constant(raw):
+        raise ValueError('nonfinite constant')
+    try:
+        response = json.loads(result.stdout.decode('utf-8'), object_pairs_hook=unique,
+                              parse_float=finite, parse_constant=invalid_constant)
+    except (ValueError, UnicodeError, RecursionError):
+        raise ObservationError('bad_shape', 'compiled browser response invalid') from None
+    if type(response) is not dict:
+        raise ObservationError('bad_shape', 'compiled browser response must be an object')
+    return response
 
 
 def compiled_executable(name, *, root=None, lock_path=None):

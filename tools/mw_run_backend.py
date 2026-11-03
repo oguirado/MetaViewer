@@ -382,6 +382,9 @@ def connect(env, trace=None):
 
 class HostBackend:
     surface_kind = 'browser'
+    # The stored workflow owner imports Wender state APIs in process; the compiled
+    # runtime exports plan and model only. A lane on those entries may opt in.
+    compiled_wender_ok = False
 
     def __init__(self, client, identity, evidence, env):
         from metaviewer_agents.perception.deps_lock import resolve_locked_component
@@ -398,7 +401,7 @@ class HostBackend:
         need(all(p.is_absolute() for p in (self.state, self.binary, self.store)), 'MW_RUN_CONFIG')
         self.wender = resolve_locked_component('wender-agent')
         from metaviewer_agents.perception.compiled import compiled_executable
-        if compiled_executable('wender-agent', root=self.wender) is not None:
+        if not self.compiled_wender_ok and compiled_executable('wender-agent', root=self.wender) is not None:
             raise refuse('MW_COMPILED_BROWSER_UNAVAILABLE',
                 'compiled Wender exports plan/model only; browser workflow/state APIs require '
                 'a verified checkout. Program automation supports the compiled runtime.')
@@ -643,6 +646,14 @@ class HostBackend:
 
     def state_for(self, sensed):
         # The pinned shim computes Wender IDs, AX hashes and actionable state.
+        from metaviewer_agents.perception.compiled import compiled_browser_entry
+        tree = dict(elements=sensed['ax'], window=sensed['window'])
+        request = dict(element_table=sensed['table'], tree=tree)
+        state = compiled_browser_entry('state', request, root=self.wender)
+        if state is not None:
+            from metaviewer_agents.wender_bridge import validate_state
+            validate_state(state)
+            return state
         if not hasattr(self, '_glue'):
             self._glue = module('mv_entry_glue', ROOT / 'tools/gate_g_ai.py')
         glue = self._glue
@@ -651,8 +662,7 @@ class HostBackend:
         # [TARGET, unit decision] State and AX predicates share this acquisition's
         # snapshot. Re-reading AX here multiplied native latency and expired the
         # unchanged T1 target before Wender's fixed locate deadline.
-        tree = dict(elements=sensed['ax'], window=sensed['window'])
-        payload = json.dumps(dict(element_table=sensed['table'], tree=tree))
+        payload = json.dumps(request)
         result = subprocess.run(argv, input=payload, text=True, capture_output=True, timeout=30,
                                 cwd=self.wender, env={'PATH': os.defpath, 'PYTHONPATH': str(self.wender),
                                                      'PYTHONDONTWRITEBYTECODE': '1'})

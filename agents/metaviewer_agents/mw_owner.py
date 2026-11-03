@@ -35,6 +35,7 @@ import time
 import uuid
 
 from .mw_handoff import HandoffLatch, HandoffResult
+from .wender_bridge import detect_stopstate
 from .executor import AdmittedExecutor
 from .tools import _check_action, _check_verdict_admitted
 
@@ -247,7 +248,8 @@ class ReplayOwner:
         self.slots = PrivateSlots(self, slot_values)
         self.notice = copy.deepcopy(notice)
         self.latest = None
-        self.handoff = HandoffLatch(self.output.with_suffix('.handoff.json'))
+        self.handoff = HandoffLatch(self.output.with_suffix('.handoff.json'),
+                                    detector=detect_stopstate)
         self.send_ready = False
         self.publications, self.targets = {}, {}
         self.receipts = []
