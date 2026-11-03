@@ -259,6 +259,7 @@ v027-walls.md	changes/unreleased/v027-walls.md
 v027win-9c20b1c75b6a	changes/unreleased/v027-window-close-2.md
 v027-window-close.md	changes/unreleased/v027-window-close.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
+v027win-bfdd59ead78f	changes/unreleased/v027-window-reuse-message.md
 v027-x64-evidence.md	changes/unreleased/v027-x64-evidence.md
 vm-capsule-create.md	changes/unreleased/vm-capsule-create.md
 vm-microvm-roadmap.md	changes/unreleased/vm-microvm-roadmap.md
