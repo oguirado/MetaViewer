@@ -386,6 +386,7 @@ def connect(env, trace=None):
 class HostBackend:
     surface_kind = 'browser'
     eager_slot_text = True
+    agent_control_required = False
     # The stored workflow owner imports Wender state APIs in process; the compiled
     # runtime exports plan and model only. A lane on those entries may opt in.
     compiled_wender_ok = False
@@ -475,7 +476,7 @@ class HostBackend:
         surface = surfaces[0]['surface_id']
         need(self.surface_id in (None, surface) and self.capsule in (None, capsule), 'MW_RUN_OWNERSHIP')
         self.surface_id, self.capsule = surface, capsule
-        if self.surface_kind == 'desktop_capsule':
+        if self.surface_kind == 'desktop_capsule' or self.agent_control_required:
             need(surfaces[0].get('control') == 'agent', 'MW_PROGRAM_CONTROL')
         return dict(profile='mv-live-1', identity=self.identity, surface_id=surface, capsules=[capsule])
 

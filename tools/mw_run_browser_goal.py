@@ -29,6 +29,7 @@ from metaviewer_agents.wender_bridge import WenderSubprocessAdapter, detect_stop
 class BrowserGoalBackend(host.HostBackend):
     compiled_wender_ok = True  # planning goes through WenderSubprocessAdapter and the model entry.
     eager_slot_text = False  # Only the chosen text target requires exact readback.
+    agent_control_required = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -73,6 +74,12 @@ class BrowserGoalBackend(host.HostBackend):
 
     def observe_for_rebind(self, timeout_ms):
         return self.observe(timeout_ms)
+
+    def slot_text(self, row):
+        # Readback can outlive its first observation. Fence every native text
+        # sample against takeover without repeating any input.
+        self.ownership()
+        return super().slot_text(row)
 
     def perceive(self, observed):
         sensed = super().perceive(observed)
@@ -181,6 +188,20 @@ def annotate_ax(backend, sensed, marks_path):
         frame_witness=sensed['frame_witness'], source='native_ax_annotations'))
 
 
+def terminal_failure(backend, attempt, action, error, journal_id):
+    # [TARGET, unit decision] The core's explicit terminal failure settles the
+    # attempt for every action kind and both reply paths. Timeouts do not.
+    body = error.receipt
+    if isinstance(body, dict) and body.get('code') == 'VERIFICATION_FAILED':
+        settled = dict(attempt, status=('key_effect_unverified' if action['type'] == 'key'
+                                       else 'effect_unverified'),
+                       delivery_verified=None, effect_verified=False, settlement=body)
+        artifact = atomic_journal(backend.evidence / ('receipt-' + journal_id + '.json'), settled)
+        attempt.update(settled, receipt_artifact=artifact)
+        raise host.OwnerRefused('MW_PROGRAM_NO_VISIBLE_EFFECT') from error
+    raise error
+
+
 def run_moves(backend, planner, args, marks_path=None):
     validate_request(args.goal, args.steps, args.timeout_ms)
     text, key = getattr(args, 'text', None), getattr(args, 'key', None)
@@ -235,16 +256,7 @@ def run_moves(backend, planner, args, marks_path=None):
             admitted = backend.propose(sensed, dict(action=action, expectation=expectation),
                                         remaining_budget(backend, args.timeout_ms))
         except host.tools.VerificationFailed as error:
-            # [TARGET, unit decision] A terminal core failure is settled evidence,
-            # not dispatch_pending. It does not prove delivery or visible effect.
-            body = error.receipt
-            if action['type'] == 'key' and body.get('code') == 'VERIFICATION_FAILED':
-                attempt.update(status='key_effect_unverified', delivery_verified=None,
-                               effect_verified=False, settlement=body)
-                attempt['receipt_artifact'] = atomic_journal(
-                    backend.evidence / ('receipt-' + journal_id + '.json'), attempt)
-                raise host.OwnerRefused('MW_PROGRAM_NO_VISIBLE_EFFECT') from error
-            raise
+            terminal_failure(backend, attempt, action, error, journal_id)
         except host.tools.ToolRefusal as error:
             rows = getattr(backend, 'frame_attempts', [])
             if rows and rows[-1].get('status') == error.reason_code:
@@ -259,7 +271,10 @@ def run_moves(backend, planner, args, marks_path=None):
                 attempt['status'] = 'refused_before_execution'
             raise
         attempt['status'] = 'settlement_pending'
-        verified = backend.wait_verify(admitted, remaining_budget(backend, args.timeout_ms))
+        try:
+            verified = backend.wait_verify(admitted, remaining_budget(backend, args.timeout_ms))
+        except host.tools.VerificationFailed as error:
+            terminal_failure(backend, attempt, action, error, journal_id)
         move = dict(action=action, target=target, verification=verified)
         # Persist native settlement BEFORE readback; failure cannot erase input.
         attempt['receipt_artifact'] = atomic_journal(
@@ -316,6 +331,8 @@ def run_entry(args):
             code, message = 'MW_PROGRAM_CONTROL', refusal_sentence('MW_PROGRAM_CONTROL')
         elif isinstance(error, host.subprocess.TimeoutExpired):
             code, message = 'MW_RUN_NATIVE', 'native discovery command timed out'
+        elif isinstance(error, host.ClientError) and error.code == 'busy':
+            code, message = error.code, str(error)
         elif isinstance(error, host.ClientError):
             code, message = 'MW_RUN_CORE', (f'core connection failed ({error.code}: {error}); '
                 'is this the running MetaViewer core?')
