@@ -427,8 +427,19 @@ func (d *DisplayTaps) session(parent context.Context, id, path string, target Di
 		if frameTarget.Width != target.Width || frameTarget.Height != target.Height {
 			if d.cfg.OnResize != nil {
 				d.cfg.OnResize(id, frameTarget.Width, frameTarget.Height)
+				return errDisplayResized
 			}
-			return errDisplayResized
+			if target.HostWindow {
+				return errDisplayResized
+			}
+		}
+		// [TARGET, unit decision] A native tap without a geometry owner
+		// publishes the witnessed size locally instead of retrying forever.
+		if !target.HostWindow && d.cfg.OnResize == nil && ring.target != frameTarget {
+			ring.close()
+			if err := ring.open(frameTarget); err != nil {
+				return err
+			}
 		}
 		if target.HostWindow {
 			if d.cfg.OnMinimized != nil {
