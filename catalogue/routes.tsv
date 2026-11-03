@@ -231,8 +231,8 @@ v027-ocr-read.md	changes/unreleased/v027-ocr-read.md
 v027-repo.md	changes/unreleased/v027-repo.md
 v027-verify-text.md	changes/unreleased/v027-verify-text.md
 v027-walls.md	changes/unreleased/v027-walls.md
-vmcapsu-c516225ae209	changes/unreleased/vm-capsule-launcher.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
+vm-open-path-held.md	changes/unreleased/vm-open-path-held.md
 wallhos-8d882103cf53	changes/unreleased/wall-host-clipboard.md
 witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
@@ -2104,7 +2104,6 @@ v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
 v027-firstrun.test.js	ui/test/v027-firstrun.test.js
 v027jud-8b5bd1d28241	ui/test/v027-judge-planner.test.js
 verdict-f74b75134886	ui/test/verdictParity.test.mjs
-vmcapsu-38700e317c0c	ui/test/vm-capsule-open.test.js
 vmarkde-f640a1549e17	ui/test/vmark-delivery.test.js
 w3contr-ee4ed320402b	ui/test/w3-control-timeout.test.js
 w3frame-6611301ee8f6	ui/test/w3-frame-acquire.test.js
