@@ -1,5 +1,20 @@
 //! Embedded contract references for scalar and union validation.
+// Embedded contracts are immutable, so each file is parsed once per process.
 pub(super) fn schema(name: &str) -> Option<serde_json::Value> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Cache = Mutex<HashMap<String, Option<serde_json::Value>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(value) = cache.lock().unwrap().get(name) {
+        return value.clone();
+    }
+    let value = schema_uncached(name);
+    cache.lock().unwrap().insert(name.to_owned(), value.clone());
+    value
+}
+
+fn schema_uncached(name: &str) -> Option<serde_json::Value> {
     let raw = match name {
         "guest_command_observation.schema.json" => {
             include_str!("../../../contracts/v0.2/guest_command_observation.schema.json")
