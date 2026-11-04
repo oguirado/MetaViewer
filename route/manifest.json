@@ -1,13 +1,13 @@
 {
  "corpus": "mv",
  "docs": {
-  "built_on": "40b833a29b1679fa169eedb433d4189733e74968",
-  "files": 82,
+  "built_on": "7d78bac9c073f6ff4888ab8d725492306eb72def",
+  "files": 79,
   "index": "route/docs.jsonl",
-  "nodes": 616,
+  "nodes": 1734,
   "note": "built_on is the commit checked out at build time; check compares bytes, not commits",
   "schema": "route.docs.v1",
-  "sha256": "f0fb0a938837849ad9172335a5bfa9aa513e0aee72fef9e4229d890bdf2b1ee3"
+  "sha256": "5f898878c1d4e8eb32468ed2c740bf0758f590ab69a687e5177bd05bbf5ede9d"
  },
  "removed_count": {
   "local_path": 8,
@@ -322,7 +322,11 @@
  "review": "Findings are model output with no human review; coordinates, not proof.",
  "schema": "route.manifest.v1",
  "skip": "(^|/)(catalogue|router|route|third_party|vendor|vendored|node_modules|\\.kit)(/|$)|^docs/papers/|\\.min\\.",
- "study": {},
+ "study": {
+  "route/study/adapter.jsonl": "156d04bfbbfc5a8da9d1bea1d6a2811d896c102d2958b50c516d31320332c808",
+  "route/study/core.jsonl": "a5795abed3c707af96a6f1355491d4305641f2475dfdfa820515d47639c1f1a7",
+  "route/study/ui.jsonl": "60dfcf5a7bb4411f8632f829bc5c20a6ce08c519b18ae8bb3aa5921a395afd75"
+ },
  "study_pin": "188e3b388e363c1ff250e1e6b4e55d226a1515de",
  "symbols_at": "7df63db885b4689efa88dd1390490c6dde2c7571"
 }
