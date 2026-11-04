@@ -1,0 +1,1 @@
+- Fix the MicroVM panel dark theme alias with the existing semantic token definitions.

@@ -28,7 +28,7 @@
    review and replay. This command never runs a workflow or alters the original
    checkout or site. The button and replay controls belong to other units.
 
-[TARGET, unit decision] The following is the single prompt template used by the
+[TARGET] The following is the single prompt template used by the
 host and the later button. The host substitutes the marked values after checking
 home admission and recording digests. Numeric format requirements below are
 [CITED: MemoryWeb sites/README.md and tools/mwsem.py at the inspected checkout].

@@ -212,5 +212,5 @@ func (a *clientAuthority) Wrap(_ context.Context, in ipc.Envelope, body json.Raw
 	if err := a.Reserve(context.Background(), key, a.out, token); err != nil {
 		return ipc.Envelope{}, err
 	}
-	return ipc.Envelope{Schema: "envelope/v0.2", MsgID: "daemon-" + token, TsNS: now - a.origin, From: in.To, To: in.From, SessionID: in.SessionID, Seq: a.out, Nonce: token, Body: body}, nil
+	return ipc.Envelope{Schema: ipc.EnvelopeSchema(body), MsgID: "daemon-" + token, TsNS: now - a.origin, From: in.To, To: in.From, SessionID: in.SessionID, Seq: a.out, Nonce: token, Body: body}, nil
 }

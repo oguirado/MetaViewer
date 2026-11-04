@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/rewind_point.schema.json",
+  "title": "Rewind point",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "rewind_point/v0.2",
+      "maxLength": 17
+    },
+    "point_id": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 70,
+      "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "label": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 80,
+      "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]*$"
+    },
+    "created_order": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "created_mono_ns": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "source_generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "source_authority_epoch": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "compatibility_sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "state_sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "memory_sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "state_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "memory_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "counter_value": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "usable",
+        "unavailable"
+      ],
+      "maxLength": 11
+    },
+    "active_references": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "schema",
+    "point_id",
+    "label",
+    "created_order",
+    "created_mono_ns",
+    "source_generation",
+    "source_authority_epoch",
+    "compatibility_sha256",
+    "state_sha256",
+    "memory_sha256",
+    "state_bytes",
+    "memory_bytes",
+    "counter_value",
+    "status",
+    "active_references"
+  ],
+  "additionalProperties": false,
+  "maxProperties": 15
+}

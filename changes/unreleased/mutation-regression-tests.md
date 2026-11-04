@@ -1,0 +1,1 @@
+- Add regression tests for remembered Grid6 identity cells (saved on snap and applied on reopen), renamed capsule titles on the tile, the launcher Recent group fed by a real host launch, the input prompt gate of the non-default agent CLIs, and the per-architecture slot helper image candidates.

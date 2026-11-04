@@ -1,0 +1,35 @@
+{
+  "schema": "guest_command_observation_envelope/v0.2",
+  "msg_id": "message-one",
+  "ts_ns": 1,
+  "from": {
+    "component": "core",
+    "instance": "core-one"
+  },
+  "to": {
+    "component": "ui",
+    "instance": "ui-one"
+  },
+  "session_id": "session-one",
+  "seq": 1,
+  "nonce": "nonce-one",
+  "body": {
+    "schema": "guest_command_observation/v0.2",
+    "event_id": "event-observation-one",
+    "event": "accepted_run",
+    "accepted_event_id": "event-accepted-one",
+    "request_id": "request-run-one",
+    "reservation_id": "reservation-one",
+    "owner_id": "actor-one",
+    "workload_id": "workload-one",
+    "generation": 1,
+    "job_id": "job-one",
+    "requester": {
+      "component": "agent",
+      "instance": "agent-one"
+    },
+    "command_utf8": "printf 'hello\\n'",
+    "cwd": "",
+    "timeout_ms": 10000
+  }
+}

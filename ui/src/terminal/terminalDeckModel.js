@@ -1,4 +1,5 @@
-import { assertSafeWorkflowPrompt, workflowPrompt } from './workflowPrompts.js';
+import {AGENT_PROFILE_IDS,AGENT_START_TIMEOUT_MS,agentPromptState} from './agentPromptGate.js';
+import { assertSafeWorkflowPrompt, assertSafeWorkflowIdentity, workflowPrompt } from './workflowPrompts.js';
 /**
  * OpenFresnel-style Terminal Deck model and controller for MetaViewer (P18h).
  *
@@ -633,6 +634,22 @@ export function createTerminalDeckController(options = {}) {
   const closedBrokerSessions = new Set();
   /** @type {Map<string, number>} */
   const ackedBytesBySession = new Map();
+  /** @type {Map<string,{text:string,decoder:TextDecoder,refused:boolean,lastAt:number}>} */
+  const agentOutput=new Map();
+  /** @type {Set<string>} */
+  const agentExited=new Set();
+  /** @param {{session:string,bytes:number[]}} frame */
+  function observeAgentOutput(frame) {
+    if(!frame?.session || !Array.isArray(frame.bytes)) return;
+    let output=agentOutput.get(frame.session);
+    if(!output) {
+      if(agentOutput.size>=64) agentOutput.delete(/** @type {string} */ (agentOutput.keys().next().value));
+      output={text:'',decoder:new TextDecoder(),refused:false,lastAt:performance.now()};agentOutput.set(frame.session,output);
+    }
+    output.lastAt=performance.now();
+    output.text=(output.text+output.decoder.decode(new Uint8Array(frame.bytes),{stream:true})).slice(-32768);
+    if(agentPromptState('',output.text)==='authentication') output.refused=true;
+  }
   /** @type {Set<{ timer: ReturnType<typeof setTimeout>, resolve: () => void }>} */
   const pendingTimers = new Set();
   let toastTimer = /** @type {ReturnType<typeof setTimeout>|null} */ (null);
@@ -671,14 +688,14 @@ export function createTerminalDeckController(options = {}) {
   /** @type {{ entries?: unknown, capabilities?: unknown } | null} */
   let providerListing = null;
   let lastPastedText = '';
-  /** @type {Map<string, { getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void } | null>} */
+  /** @type {Map<string, { getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void, focus?: () => void } | null>} */
   const registeredTerminals = new Map();
   /** @type {WeakSet<object>} */
   const handledEvents = new WeakSet();
 
   /**
    * @param {string} slotId
-   * @param {{ getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void } | null} term
+   * @param {{ getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void, focus?: () => void } | null} term
    */
   function registerTerminal(slotId, term) {
     if (typeof slotId !== 'string' || !slotId) return;
@@ -896,6 +913,8 @@ export function createTerminalDeckController(options = {}) {
       ? event.session
       : (typeof event?.sessionId === 'string' ? event.sessionId : '');
     if (!sessionId) return;
+    agentExited.add(sessionId);
+    if(agentExited.size>128) agentExited.delete(/** @type {string} */ (agentExited.values().next().value));
     const cleanExit = isCleanProcessExitReason(event?.reason);
     if (cleanExit) {
       exitedSessions.add(sessionId);
@@ -937,6 +956,7 @@ export function createTerminalDeckController(options = {}) {
         }
       }
     }
+    observeAgentOutput(frame);
     options.onSessionData?.(frame);
   }
 
@@ -1001,7 +1021,8 @@ export function createTerminalDeckController(options = {}) {
             // Best-effort ack.
           }
         }
-        options.onSessionData?.(frame);
+        observeAgentOutput(frame);
+    options.onSessionData?.(frame);
       });
       direct.onExit(handleSessionExit);
       await direct.attach();
@@ -1168,7 +1189,7 @@ export function createTerminalDeckController(options = {}) {
    * active screen (or into an existing slot on restart).
    *
    * @param {string} profileId
-   * @param {{ cols?: number, rows?: number, reuseSlotId?: string }} [launchOpts]
+   * @param {{ cols?: number, rows?: number, reuseSlotId?: string, focus?: boolean }} [launchOpts]
    * @returns {Promise<DeckSlot>}
    */
   async function launchProfile(profileId, launchOpts = {}) {
@@ -1239,14 +1260,19 @@ export function createTerminalDeckController(options = {}) {
       existing.slot.status = 'running';
       existing.slot.busy = true;
       existing.slot.sessionId = sessionId;
-      focusedSlotId = existing.slot.id;
+      if (launchOpts.focus !== false) focusedSlotId = existing.slot.id;
       launcherOpen = false;
       persist();
       notify();
       return existing.slot;
     }
 
+    const previousScreen = activeScreenIndex, previousClose = pendingCloseSlotId;
     const screen = claimNewSlotScreen(sessionId);
+    if (launchOpts.focus === false) {
+      activeScreenIndex = previousScreen;
+      pendingCloseSlotId = previousClose;
+    }
     const slotId = `slot-${nextSlotSeq++}`;
     /** @type {DeckSlot} */
     const slot = {
@@ -1260,7 +1286,7 @@ export function createTerminalDeckController(options = {}) {
       sessionId,
     };
     screen.slots.push(slot);
-    focusedSlotId = slot.id;
+    if (launchOpts.focus !== false) focusedSlotId = slot.id;
     launcherOpen = false;
     persist();
     notify();
@@ -1278,7 +1304,7 @@ export function createTerminalDeckController(options = {}) {
    */
   async function launchCustomCli(rawCommand, launchOpts = {}) {
     const commandText = typeof rawCommand === 'string' ? rawCommand.trim() : '';
-    if (!commandText || commandText.includes('\0') || commandText.includes('\r') || commandText.includes('\n')) {
+    if (!commandText || /[\x00-\x1f\x7f-\x9f]/.test(rawCommand)) {
       errorCode = 'COMMAND_NOT_ALLOWED';
       errorMessage = 'COMMAND_NOT_ALLOWED: Enter a single-line command.';
       notify();
@@ -1677,6 +1703,52 @@ export function createTerminalDeckController(options = {}) {
     return { ok: copied, text: promptText, toast: toastMessage };
   }
 
+  /** Prepare instructions for an agent CLI. Pairing identifies a capsule, not
+   * the process reading its terminal. Until the host attests an agent input
+   * target, copy only: a shell must never receive these executable examples.
+   * @param {string} kind @param {string} identityLine @param {string|null} targetSlotId */
+  async function useWorkflowPrompt(kind, identityLine = '', targetSlotId = null) {
+    const text = assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
+      '<operator-pasted capsule identity line>', () => assertSafeWorkflowIdentity(identityLine) || '<operator-pasted capsule identity line>'));
+    if (targetSlotId !== null) {
+      const slot = findSlot(targetSlotId)?.slot;
+      if (!identityLine || !slot || slot.status !== 'running' || !slot.sessionId) {
+        toastMessage = 'Paired terminal unavailable'; notify();
+        return {ok:false,pasted:false};
+      }
+    }
+    const result = await bootstrap(text);
+    toastMessage = result.ok ? 'Copied — paste into your agent CLI, not a shell.' : 'Copy unavailable';
+    notify();
+    return {...result, pasted:false};
+  }
+
+  /** Launch is host-owned and precedes this gate. No raw shell receives workflow text.
+   * @param {string} kind @param {string} identityLine @param {string} slotId
+   * @param {string} profileId @param {()=>boolean} [stillCurrent] */
+  async function prepareAgentPrompt(kind,identityLine,slotId,profileId,stillCurrent=()=>true) {
+    const text=assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
+      '<operator-pasted capsule identity line>',()=>assertSafeWorkflowIdentity(identityLine)));
+    const sessionId=findSlot(slotId)?.slot.sessionId;
+    const fail=(/** @type {string} */ message)=>{toastMessage=message;notify();return {ok:false,pasted:false};};
+    if(!identityLine || !AGENT_PROFILE_IDS.includes(profileId) || !sessionId) return fail('Agent terminal unavailable; nothing pasted.');
+    const deadline=performance.now()+AGENT_START_TIMEOUT_MS;
+    while(!disposed && stillCurrent()) {
+      const slot=findSlot(slotId)?.slot;
+      if(!slot || slot.sessionId!==sessionId || slot.profileId!==profileId || slot.status!=='running' || agentExited.has(sessionId)) return fail('Agent exited or changed; nothing pasted.');
+      const output=agentOutput.get(sessionId);
+      if(output?.refused) return fail('Complete authentication or workspace trust yourself, then choose the workflow again. Nothing pasted.');
+      if(performance.now()>=deadline) return fail('Agent input prompt not observed within 15 seconds; nothing pasted.');
+      if(output && performance.now()-output.lastAt>=300 && agentPromptState(profileId,output.text)==='ready') {
+        const pasted=writeSessionBytes(sessionId,new TextEncoder().encode('\x1b[200~'+text+'\x1b[201~'));
+        toastMessage=pasted?'Prompt pasted into agent CLI — add your task; Enter was not sent.':'Agent input unavailable; nothing pasted.';
+        registeredTerminals.get(slotId)?.focus?.();notify();return {ok:pasted,pasted};
+      }
+      await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    return fail('Agent preparation cancelled; nothing pasted.');
+  }
+
   /**
    * Copies the active terminal selection (or `explicitText` if provided) to the
    * host clipboard. When there is no non-empty selection, does not overwrite the
@@ -2013,8 +2085,10 @@ export function createTerminalDeckController(options = {}) {
     switchScreen,
     focusSlot,
     bootstrap,
+    useWorkflowPrompt,
+    prepareAgentPrompt,
     copyWorkflowPrompt: (/** @type {string} */ kind, /** @type {string} */ identityLine = '') => bootstrap(assertSafeWorkflowPrompt(
-      workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => identityLine || '<operator-pasted capsule identity line>'),
+      workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => assertSafeWorkflowIdentity(identityLine) || '<operator-pasted capsule identity line>'),
     )),
     dismissError,
     handleKeyDown,

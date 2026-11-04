@@ -1,0 +1,1 @@
+- Verify the admitted setup digest before loading the inventory module during session failure cleanup, retaining guardian shutdown on mismatch.

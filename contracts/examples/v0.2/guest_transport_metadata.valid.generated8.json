@@ -1,0 +1,6 @@
+{
+  "kind": "ready",
+  "workload_id": "workload-fixture",
+  "generation": 1,
+  "reservation_id": "reservation-fixture"
+}

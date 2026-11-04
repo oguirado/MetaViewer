@@ -1,0 +1,1 @@
+- Preserve uncertain-input and human-handoff exit codes when a stored workflow report cannot be written, and clear the unavailable report path.

@@ -1,6 +1,9 @@
 /** Count independent overlay owners; removing one must not uncover native views. */
 export function createOverlayCoordinator(doc = globalThis.document) {
   const owners = new Set();
+  const surfaceOwners = new Map();
+  const listeners = new Set();
+  const notify = () => { for (const listener of listeners) listener(); };
   const sync = () => {
     if (!doc?.body) return;
     if (owners.size) doc.body.setAttribute('data-mv-modal', 'open');
@@ -9,8 +12,18 @@ export function createOverlayCoordinator(doc = globalThis.document) {
   return {
     /** @param {object} owner @param {boolean} open */
     set(owner, open) { if (open) owners.add(owner); else owners.delete(owner); sync(); },
+    /** Tile-contained chrome occludes only the native view in that tile.
+     * @param {object} owner @param {string} surfaceId @param {boolean} open */
+    setSurface(owner, surfaceId, open) {
+      if (open) surfaceOwners.set(owner, surfaceId); else surfaceOwners.delete(owner);
+      notify();
+    },
+    /** @param {string} surfaceId */
+    isSurfaceOccluded(surfaceId) { return [...surfaceOwners.values()].includes(surfaceId); },
+    /** @param {()=>void} listener */
+    subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     get count() { return owners.size; },
-    dispose() { owners.clear(); sync(); },
+    dispose() { owners.clear(); surfaceOwners.clear(); sync(); notify(); listeners.clear(); },
   };
 }
 

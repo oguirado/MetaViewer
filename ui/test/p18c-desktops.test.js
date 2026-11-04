@@ -375,3 +375,49 @@ test('V027 empty view names the other view and its button navigates both ways',a
 test('V027 a choice while layout loading is pending wins over agent-only startup',()=>workspaceFixture(async({saved})=>{
   assert.equal(saved.at(-1).activeView,'human');
 },undefined,null,onlyAgent,vm=>vm.selectView('human')));
+
+
+test('desktop owner persists display names without remounting or changing capsule identity',()=>workspaceFixture(async({vm,saved,mounted,retired})=>{
+  const before=mounted.length;
+  assert.equal(await vm.renameDesktop('human',1,'Research'),true);
+  assert.equal(await vm.renameCapsule('h','Notes'),true);await tick();
+  assert.equal(saved.at(-1).views.human.desktops[0].label,'Research');
+  assert.equal(saved.at(-1).labels.h,'Notes');assert.equal(saved.at(-1).assignments.h.view,'human');
+  assert.equal(mounted.length,before);assert.equal(retired.length,0);
+}));
+test('desktop owner refuses corrupt layout names on restore',async()=>{
+ const state=model.createDesktopState();state.labels={h:'x'.repeat(81)};
+ await workspaceFixture(async({vm})=>{assert.equal(await vm.renameCapsule('h','Allowed'),false);},undefined,JSON.stringify(state));
+});
+test('failed name persistence restores the previous display label',async()=>{
+ let fail=false,raw=null;
+ await workspaceFixture(async({vm})=>{
+  assert.equal(await vm.renameCapsule('h','Before'),true);fail=true;
+  assert.equal(await vm.renameCapsule('h','After'),false);fail=false;
+  assert.equal(await vm.renameDesktop('human',1,'Research'),true);await tick();
+  assert.equal(JSON.parse(raw).labels.h,'Before');
+ },undefined,null,{storage:{readRaw:async()=>null,writeAtomic:async value=>{if(fail)throw Error('write refused');raw=value;}}});
+});
+
+test('an in-flight capsule name write cannot be superseded before it settles',async()=>{
+ let hold=false,release,raw=null;
+ await workspaceFixture(async({vm})=>{
+  assert.equal(await vm.renameCapsule('h','Before'),true);hold=true;
+  const first=vm.renameCapsule('h','After');
+  assert.equal(await vm.renameCapsule('h','Too soon'),false);
+  await tick();hold=false;release();assert.equal(await first,true);await tick();
+  assert.equal(JSON.parse(raw).labels.h,'After');
+ },undefined,null,{storage:{readRaw:async()=>null,writeAtomic:async value=>{if(hold)await new Promise(resolve=>{release=resolve;});raw=value;}}});
+});
+
+test('identity deletion retires saved aliases and cells while stopping preserves identity aliases',async()=>{
+ const state=model.createDesktopState();state.labels={'identity-a':'Old account',h:'Transient',other:'Keep'};
+ state.views.human.desktops[0].identityCells={'identity-a':{col:0,row:0},other:{col:1,row:0}};
+ await workspaceFixture(async({vm,saved})=>{
+  vm.forgetSurface('h');await tick();assert.equal(saved.at(-1).labels.h,undefined);assert.equal(saved.at(-1).labels['identity-a'],'Old account');
+  await vm.forgetIdentity('identity-a');await tick();const latest=saved.at(-1);
+  assert.equal(latest.labels['identity-a'],undefined);assert.equal(latest.labels.other,'Keep');
+  assert.equal(latest.views.human.desktops[0].identityCells['identity-a'],undefined);
+  assert.deepEqual(latest.views.human.desktops[0].identityCells.other,{col:1,row:0});
+ },undefined,JSON.stringify(state));
+});

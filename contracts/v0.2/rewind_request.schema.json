@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/rewind_request.schema.json",
+  "title": "Rewind request",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_request/v0.2",
+          "maxLength": 19
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "op": {
+          "type": "string",
+          "const": "pause",
+          "maxLength": 5
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "workload_id": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 73,
+              "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "workload_id",
+            "generation",
+            "authority_epoch"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 3
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_request/v0.2",
+          "maxLength": 19
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "op": {
+          "type": "string",
+          "const": "resume",
+          "maxLength": 6
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "workload_id": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 73,
+              "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "workload_id",
+            "generation",
+            "authority_epoch"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 3
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_request/v0.2",
+          "maxLength": 19
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "op": {
+          "type": "string",
+          "const": "mark",
+          "maxLength": 4
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "workload_id": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 73,
+              "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "label": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 80,
+              "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]*$"
+            }
+          },
+          "required": [
+            "workload_id",
+            "generation",
+            "authority_epoch",
+            "label"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 4
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 4
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_request/v0.2",
+          "maxLength": 19
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "op": {
+          "type": "string",
+          "const": "restore",
+          "maxLength": 7
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "workload_id": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 73,
+              "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "point_id": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 70,
+              "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+            }
+          },
+          "required": [
+            "workload_id",
+            "generation",
+            "authority_epoch",
+            "point_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 4
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 4
+    }
+  ]
+}

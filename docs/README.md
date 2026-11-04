@@ -10,11 +10,13 @@
 - [Judge Quickstart](JUDGE_QUICKSTART.md): asset verification, host doctor, installation and live wall.
 - [Offline fixture](JUDGES.md): hosted simulation, requiring a locally available locked Wender checkout.
 
-A complete public release asset set is **AUSENTE — no inventar** in the supplied
-evidence. Judge scripts exist; a fresh clone alone does not provide the packaged
-application, private components or images. Live wall evaluation needs a graphical
-session and the documented external runtime. Host programs and attached desktop
-windows run on the host and are not isolated. See the README limits before running.
+The public [v0.2.5 pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
+provides x64 compiled assets; its notes give the checksum manifest digest [CITED: release].
+ARM64 compiled assets for that release are **ABSENT — do not invent**. A clone alone
+contains no packaged application or private runtime. Use [the no-Docker route](JUDGE_NO_DOCKER.md)
+for app-only installation, and [the evidence guide](EVIDENCE.md) to distinguish
+source checks from reported live qualification. Live wall evaluation requires a
+graphical session; Host program and Desktop window are not isolated.
 
 ## Build and operate
 
