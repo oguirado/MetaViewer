@@ -24,6 +24,9 @@ func normalGuestCommandFromEnv() (guestCommandOwner, error) {
 			return nil, err
 		}
 		if err = owner.SetInventory(inventory); err != nil {
+			if inventory != nil {
+				_ = inventory.Seal()
+			}
 			_ = owner.Close()
 			return nil, err
 		}

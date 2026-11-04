@@ -194,9 +194,19 @@ class CheckerT6Tests(unittest.TestCase):
                 with self.assertRaises(ValidationError):
                     self.validator.audit(loose_schema)
 
-        # Negative control: all 23 v0.2 schemas pass audit.
+        # Preserve the exact published inventory; separately admit the reviewed additions.
+        import hashlib
+        published = {'action_proposal.schema.json': '65ac7b8303183cf2dc07c75732818b67e14da989fd616f1028dde75d3bb2375d', 'action_receipt.schema.json': '2148a9e67669a01829965d8e7698338b425207d6f1e2e771daadd87de89ad36b', 'action_verdict.schema.json': '7c0d1653a58628d969582b204581162edc9a8fa961cfc52aa8c9032f9346b56d', 'capsule_meta.schema.json': '494d99f3882b4e8a3a1c02e2a72785cb3fe13859985aef692068f7bbc9179b0b', 'capsule_state_event.schema.json': '8172a6a2600085e6b08dfaaba91320808aae3c000be160420fcbe9bcd3634070', 'capsule_state_request.schema.json': '27bf48d0778bd9763595efffb8fde177edee13e667c9268f3e49fa4fcec19253', 'catalog_entry.schema.json': '0e3a515c2fcb6a5e2153ab892f394f73b6a4ccc3f76cc5c9916c78a9324bc833', 'envelope.schema.json': '9e4cc8049bb39d906d3e2df21bba20618959ac35c11dae68f59cf450ef0338f3', 'frame_ref.schema.json': '8050ce412b6b95792468701ea69670222798840b54787fee18f1f99dd3738397', 'hello.schema.json': 'e3099628720ebf4260528ff809f74d08a2da8a762339d2fdbaaca097f2a0d13c', 'mv_tool_call.schema.json': '7da7513b1b457dfeb08689c0ae70b2b950a2e093dab8706d99267acbd868cd5f', 'mv_tool_result.schema.json': 'f70eca64419f98375bb01259c4bb0cdd9cc64de1bb9158561ba5c32480fa3faa', 'observation.schema.json': '65ccb926746357fa88d0dad628199b3a27a51b5722201c1eb22e34059d761ead', 'record_event.schema.json': '4a18f9c8d32b43ad43a6f194717d977f786531fc7e9049ab0369951d37619fe8', 'record_request.schema.json': '4c781ef8e0807aa36d3b1abf87eff7f0ca943676626342bdc7f40ba8b6eb2a22', 'session_record.schema.json': '0b409b0e8958fbddb44d029ef8b79f634103e92d9092db76ecc207027bf5af5a', 'settings.schema.json': 'd162909a4f1a34b29f8e00651a89af7ddc75991c74c0aa527373253a729c154e', 'surface.schema.json': '90da5357ae82f065e32efa6b06cc4f6415e709a5257777f226b5c397acb8c2da', 'surface_event.schema.json': '6c4eb7497065bf6fd8fd965448c2cdcd0a5960f78012f5ec7c1453a3b0fba947', 'surface_input.schema.json': '023d7503602109c8b58dc86795cdd6279f1acf2db407ac3d6299a734765d139e', 'surface_request.schema.json': '4ab05a8018d3cc69747fa1b5d478186127fd8d0c3cd555ae7984344493e56a89', 'terminal_session.schema.json': '6896578203d3cbc14ccc474e4d9aec86d4c327e158bdc1fcc6e6689473d34cb5', 'ui_intent.schema.json': 'e30a180368df1ca38a2af58d26a7548053898a8cd6c595bd5cd7d7f4c57e3317'}
+        additions = set(['capsule_capabilities.schema.json', 'capsule_envelope.schema.json', 'capsule_resource_inventory.schema.json', 'guest_command_event.schema.json', 'guest_command_request.schema.json', 'guest_command_session.schema.json', 'guest_transport_metadata.schema.json', 'headless_event.schema.json', 'headless_request.schema.json', 'headless_session.schema.json', 'rewind_envelope.schema.json', 'rewind_event.schema.json', 'rewind_guest_reset.schema.json', 'rewind_point.schema.json', 'rewind_request.schema.json', 'rewind_session.schema.json'])
+        self.assertEqual(len(published), 23)
         v02_schemas = sorted((ROOT / "contracts" / "v0.2").glob("*.schema.json"))
-        self.assertEqual(len(v02_schemas), 23)
+        actual = {p.name for p in v02_schemas}
+        self.assertEqual(actual, set(published) | additions)
+        self.assertTrue(set(published).isdisjoint(additions))
+        for name, expected in published.items():
+            self.assertEqual(hashlib.sha256((ROOT / 'contracts/v0.2' / name).read_bytes()).hexdigest(), expected)
+        with self.assertRaises(AssertionError):
+            self.assertEqual(actual - {next(iter(additions))}, set(published) | additions)
         for path in v02_schemas:
             with self.subTest(schema=path.name):
                 self.validator.audit(self.validator.load(path.name))

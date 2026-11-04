@@ -1114,18 +1114,48 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'capture',
       'clipboard',
       'frames',
+      'guestCommand',
+      'headless',
       'input',
       'load',
       'loadSettings',
       'nestedDepth',
       'operator',
       'recordingDestination',
+      'rewind',
       'save',
       'saveSettings',
       'selfCapsuleId',
       'sideTerminal',
       'slots',
     ]);
+
+    // Public typed workload groups are shipped independently of frame diagnostics.
+    // They expose closed requests/snapshots, never raw IPC or native reset handles.
+    for (const [name, methods] of Object.entries({
+      guestCommand: ['capabilities', 'request', 'status', 'subscribe'],
+      headless: ['request', 'status', 'subscribe'],
+      rewind: ['request', 'status', 'subscribe'],
+    })) {
+      assert.deepEqual(Object.keys(api[name]).sort(), methods);
+      assert.equal(Object.isFrozen(api[name]), true);
+      for (const method of methods) assert.equal(typeof api[name][method], 'function');
+      assert.throws(() => assert.deepEqual(Object.keys({ ...api[name], unexpected() {} }).sort(), methods),
+        { code: 'ERR_ASSERTION' });
+      for (const privateMethod of ['invoke', 'send', 'reset', 'transport']) {
+        assert.equal(Object.hasOwn(api[name], privateMethod), false);
+      }
+    }
+    for (const privateMethod of ['invoke', 'send', 'transport', 'frameDiag']) {
+      assert.equal(Object.hasOwn(api, privateMethod), false);
+    }
+    const beforeInvalidCalls = invocations.length;
+    for (const name of ['guestCommand', 'headless', 'rewind']) {
+      await assert.rejects(api[name].status('unexpected'));
+      await assert.rejects(api[name].request({ op: 'unexpected', privateMethod: 'invoke' }));
+      assert.throws(() => api[name].subscribe(null));
+    }
+    assert.equal(invocations.length, beforeInvalidCalls, 'invalid workload calls must not cross IPC');
     const facadeKeys = Object.keys(api).sort();
     assert.throws(() => assert.deepEqual(Object.keys({ ...api, unexpected() {} }).sort(), facadeKeys),
       { code: 'ERR_ASSERTION' });

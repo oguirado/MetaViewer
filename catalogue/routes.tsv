@@ -146,6 +146,7 @@ protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
 adapter-cbafcbab0a3b	changes/unreleased/adapter-epoch-handoff.md
 agentpr-f8d684f8c4df	changes/unreleased/agent-program-starts-agent-controlled.md
+arm64ci-bd58bfab8e71	changes/unreleased/arm64-ci-inventory-regressions.md
 arm64gu-8f9d6dc80ac1	changes/unreleased/arm64-guest-commands.md
 arm64mi-da546ca53e79	changes/unreleased/arm64-microvm-rewind.md
 arm64-microvm.md	changes/unreleased/arm64-microvm.md
@@ -174,6 +175,7 @@ e5-fixtures.md	changes/unreleased/e5-fixtures.md
 firstvi-f9f97c74eb21	changes/unreleased/first-view-shows-capsule.md
 flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
+fronten-4d024e0d0183	changes/unreleased/frontend-app-launcher.md
 fronten-ad184a70c9c9	changes/unreleased/frontend-bootstrap-pill.md
 fronten-0c27b4d26eee	changes/unreleased/frontend-dark-workspace.md
 fronten-5d1bc7d41629	changes/unreleased/frontend-display-diagnostics.md
@@ -2526,6 +2528,7 @@ buttonBridge.js	ui/electron/buttonBridge.js
 bytePlane.js	ui/electron/bytePlane.js
 captureBridge.js	ui/electron/captureBridge.js
 coreLauncher.js	ui/electron/coreLauncher.js
+desktop-6f0b964ef041	ui/electron/desktopApplications.js
 desktopLayout.js	ui/electron/desktopLayout.js
 desktopShortcuts.js	ui/electron/desktopShortcuts.js
 displayReader.js	ui/electron/displayReader.js
@@ -2699,6 +2702,7 @@ contrast.test.js	ui/test/contrast.test.js
 coreLauncher.test.js	ui/test/coreLauncher.test.js
 creativ-f3bdf7f2988d	ui/test/creativeCapsule.test.js
 demoflo-dbdd4f1e86e9	ui/test/demoflow-dialog.test.js
+desktop-901a25840d3e	ui/test/desktop-applications.test.js
 display-b8cac33de3ce	ui/test/display-electron-main.mjs
 display-e269df34c2ff	ui/test/display-electron.test.js
 display-holds.test.js	ui/test/display-holds.test.js

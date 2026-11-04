@@ -86,12 +86,11 @@ class CodecRegressions(unittest.TestCase):
                     bad_body["tg_unknown_property"] = True
                     with self.assertRaises(ValidationError):
                         oracle.validate(bad_body, schema)
-                    # Metadata without a schema tag is not passed to a public-body constructor.
-                    if "schema" in body:
-                        for family, schema in schemas.items():
-                            bad = {**base_env, "schema": family + "/v0.2", "body": body}
-                            with self.assertRaises(ValidationError): oracle.validate(bad, schema)
-                            with self.assertRaises(e.EnvelopeError): e.validate_envelope(bad)
+                    # Direct metadata remains invalid in every wire family, with or without its own tag.
+                    for family, schema in schemas.items():
+                        bad = {**base_env, "schema": family + "/v0.2", "body": body}
+                        with self.assertRaises(ValidationError): oracle.validate(bad, schema)
+                        self.assert_bad(bad)
                     continue
                 family = prefix if prefix in schemas else families[prefix]
                 env = body if prefix in schemas else fixtures._wrap(body)

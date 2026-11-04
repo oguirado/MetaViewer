@@ -22,8 +22,8 @@ function audit(report) {
   assert.equal(report.popupDenied, true, 'E2E_WINDOW_OPEN: popup allowed');
   assert.equal(report.windows, 1);
   assert.equal(report.frozen, true);
-  assert.deepEqual(report.facade, ['authority', 'capture', 'clipboard', 'frames', 'input', 'load', 'loadSettings', 'nestedDepth', 'operator',
-    'recordingDestination', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal', 'slots']);
+  assert.deepEqual(report.facade, ['authority', 'capture', 'clipboard', 'frames', 'guestCommand', 'headless', 'input', 'load', 'loadSettings', 'nestedDepth', 'operator',
+    'recordingDestination', 'rewind', 'save', 'saveSettings', 'selfCapsuleId', 'sideTerminal', 'slots']);
   assert.deepEqual(report.slots, ['request']);
   assert.equal(report.slotsFrozen, true);
   assert.deepEqual(report.operator, {
@@ -88,4 +88,41 @@ test('slots request channel agrees with main and rejects unknown request fields'
   assert.deepEqual(calls, [[WIRE_CHANNELS.slotRequest, request]]);
   await assert.rejects(api.slots.request({ ...request, channel: 'unexpected' }));
   assert.equal(calls.length, 1);
+});
+
+// Source-only facade boundary; the Chromium audit above remains unchanged apart from its exact keys.
+test('typed workload facade groups stay closed and reject private or malformed calls', async () => {
+  const { installPreload } = await import('../../ui/electron/preload.js');
+  const invocations = [];
+  const api = installPreload({ contextBridge: { exposeInMainWorld() {} }, ipcRenderer: {
+    on() {}, removeListener() {}, async invoke(...args) { invocations.push(args); return true; },
+  } });
+
+    // Public typed workload groups are shipped independently of frame diagnostics.
+    // They expose closed requests/snapshots, never raw IPC or native reset handles.
+    for (const [name, methods] of Object.entries({
+      guestCommand: ['capabilities', 'request', 'status', 'subscribe'],
+      headless: ['request', 'status', 'subscribe'],
+      rewind: ['request', 'status', 'subscribe'],
+    })) {
+      assert.deepEqual(Object.keys(api[name]).sort(), methods);
+      assert.equal(Object.isFrozen(api[name]), true);
+      for (const method of methods) assert.equal(typeof api[name][method], 'function');
+      assert.throws(() => assert.deepEqual(Object.keys({ ...api[name], unexpected() {} }).sort(), methods),
+        { code: 'ERR_ASSERTION' });
+      for (const privateMethod of ['invoke', 'send', 'reset', 'transport']) {
+        assert.equal(Object.hasOwn(api[name], privateMethod), false);
+      }
+    }
+    for (const privateMethod of ['invoke', 'send', 'transport', 'frameDiag']) {
+      assert.equal(Object.hasOwn(api, privateMethod), false);
+    }
+    const beforeInvalidCalls = invocations.length;
+    for (const name of ['guestCommand', 'headless', 'rewind']) {
+      await assert.rejects(api[name].status('unexpected'));
+      await assert.rejects(api[name].request({ op: 'unexpected', privateMethod: 'invoke' }));
+      assert.throws(() => api[name].subscribe(null));
+    }
+    assert.equal(invocations.length, beforeInvalidCalls, 'invalid workload calls must not cross IPC');
+
 });
