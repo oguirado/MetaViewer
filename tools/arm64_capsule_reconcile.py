@@ -50,6 +50,19 @@ def closed(value, keys):
     need(type(value) is dict and set(value) == set(keys), 'closed object required')
 
 
+def plan_rewind(plan):
+    """Legacy plans remain normal; an explicit mode is a boolean only."""
+    need(type(plan) is dict, 'session plan object required')
+    mode = plan.get('rewind', False)
+    need(type(mode) is bool, 'explicit rewind mode required')
+    return mode
+
+
+def session_root_matches(root, run, plan):
+    plan_rewind(plan)
+    return root.name.startswith('metaviewer-arm64-' + run + '-')
+
+
 def canonical(path):
     path = str(path)
     need(path.startswith('/') and not path.startswith('//') and '\0' not in path
@@ -173,11 +186,14 @@ def inspect_held(path, acquire_lock=True):
         root = private_dir(held['root'])
         planraw = read_private(root / 'PLAN.json')
         plan = decode(planraw)
-        closed(plan, PLAN_KEYS)
+        extra = ({'rewind'} if 'rewind' in plan else set())
+        if 'launcher' in plan or 'outer' in plan:
+            extra |= {'launcher', 'outer'}
+        closed(plan, PLAN_KEYS | extra)
         run = plan['run_id']
         need(type(run) is str and re.fullmatch('[0-9a-f]{24}', run)
              and plan['schema'] == 'metaviewer-arm64-session/v1'
-             and root.name.startswith('metaviewer-arm64-' + run + '-')
+             and session_root_matches(root, run, plan)
              and held['unit'] == plan['unit'] == 'metaviewer-arm64-' + run + '.scope',
              'held/plan session binding mismatch')
         for key, pattern in [('expected_commit', '[0-9a-f]{40}'),
@@ -718,6 +734,7 @@ def reconcile_held(path, config_path=None, release=False, observer=None, *, reco
         root_identity = (root.stat().st_dev, root.stat().st_ino)
         plan_raw = read_private(root / 'PLAN.json')
         plan = decode(plan_raw)
+        plan_rewind(plan)
         need(plan.get('schema') == 'metaviewer-arm64-session/v1' and plan.get('unit') == held['unit'], 'session plan mismatch')
         fixed = root / 'inventory-config.json'
         if config_path is None and not fixed.exists():
