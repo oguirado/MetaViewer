@@ -6,6 +6,7 @@ import {parse} from '@vue/compiler-sfc';
 import {compileSfc,mountComponent,text,nodes,flush} from './mvui2-terminal-mount.mjs';
 import * as values from '../electron/guestCommandValues.js';
 import * as rewindControls from '../src/wall/rewindStateControls.js';
+import * as restoreDuration from '../src/wall/restoreDuration.js';
 import {guestWorkloadTile,validGuestWorkloadTile} from '../src/wall/guestWorkloadTile.js';
 import {classifyCapsulePanelParams,createCapsulePanelRouter} from '../src/wall/capsulePanelRouter.js';
 
@@ -27,7 +28,7 @@ test('actual kit admits closed CapsulePanel params; old component and new unknow
 });
 
 test('admitted real registry renders actual guest panel and Stop for uncertain held ownership',async()=>{
- const Panel=await compileSfc('components/GuestCommandPanel.vue',{'../../electron/guestCommandValues.js':values,'../wall/rewindStateControls.js':rewindControls});
+ const Panel=await compileSfc('components/GuestCommandPanel.vue',{'../../electron/guestCommandValues.js':values,'../wall/rewindStateControls.js':rewindControls,'../wall/restoreDuration.js':restoreDuration});
  const Router=createCapsulePanelRouter({...vue,graphical:vue.defineComponent({render(){throw Error('wrong graphical route');}}),rows:()=>[tile],validate:validGuestWorkloadTile,slot:({workload})=>vue.h(Panel,{snapshot:workload.snapshot})});
  const registry=kit.createPanelRegistry({CapsulePanel:Router});
  assert.equal(registry.resolveComponentName('CapsulePanel'),'CapsulePanel');
@@ -81,7 +82,7 @@ test('actual kit float/hide/show preserves graphical and MicroVM identities',asy
   assert.equal(presentation.state(id).hidden,false);
   assert.equal(classifyCapsulePanelParams({params:panel.params})?.kind,expected);
   if(expected==='microvm'){
-   const Panel=await compileSfc('components/GuestCommandPanel.vue',{'../../electron/guestCommandValues.js':values,'../wall/rewindStateControls.js':rewindControls});
+   const Panel=await compileSfc('components/GuestCommandPanel.vue',{'../../electron/guestCommandValues.js':values,'../wall/rewindStateControls.js':rewindControls,'../wall/restoreDuration.js':restoreDuration});
    const Router=createCapsulePanelRouter({...vue,graphical:null,rows:()=>[tile],validate:validGuestWorkloadTile,slot:({workload})=>vue.h(Panel,{snapshot:workload.snapshot})});
    const mounted=mountComponent(kit.createPanelRegistry({CapsulePanel:Router}).components.CapsulePanel,{params:{params:panel.params}});
    try{await flush();assert.match(text(mounted.root),/Stop capsule/);}finally{mounted.app.unmount();}

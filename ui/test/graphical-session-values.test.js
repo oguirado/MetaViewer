@@ -11,7 +11,7 @@ test('all canonical graphical schemas accept valid fixtures and reject invalid f
   const schema=m[1]==='graphical_session'?'graphical_session.schema.json':`${m[1]}.schema.json`;
   const valid=file.includes('.valid'),doc=load(file);assert.equal(graphicalValid(schema,doc),valid,file);count++;
  }
- assert.ok(count>=35);
+ assert.equal(count,56);
 });
 test('renderer actions are closed and cannot choose owner, request identity, or native paths',()=>{
  const attach={op:'attach',surface_id:'surface-A'},mark={op:'mark',surface_id:'surface-A',generation:1,authority_epoch:1,label:'checkpoint'},restore={op:'restore',surface_id:'surface-A',generation:1,authority_epoch:1,point_id:'point-one'};
@@ -24,4 +24,19 @@ test('snapshot has the exact closed public shape and point ages never use invali
  assert.equal(graphicalSnapshot(empty),true);assert.equal(graphicalSnapshot({...empty,host_path:'/tmp'}),false);assert.equal(graphicalSnapshot({...empty,point_ages_ms:{'point-x':0}}),false);
  const ready=load('graphical_session.valid.ready.json'),ages=Object.fromEntries(ready.points.map(p=>[p.point_id,null]));assert.equal(graphicalSnapshot({...empty,session:ready,point_ages_ms:ages}),true);
  let reads=0;const points=[{...ready.points[0]}];Object.defineProperty(points,'0',{enumerable:true,configurable:true,get(){reads++;return ready.points[0];}});const hostile={...ready,points};assert.equal(graphicalValid('graphical_session.schema.json',hostile),false);assert.equal(reads,0);
+});
+test('canonical schemas are parsed lazily and memoized only when validation needs them',async()=>{
+ const original=JSON.parse;let parses=0;
+ JSON.parse=function(...args){parses++;return original.apply(this,args);};
+ try{
+  const lazy=await import(`../electron/graphicalSessionValues.js?lazy=${Date.now()}`);
+  assert.equal(parses,0,'module import parsed canonical schemas');
+  const empty={available:true,busy:false,code:null,revision:0,session:null,uncertain:false,point_ages_ms:{}};
+  assert.equal(lazy.graphicalSnapshot(empty),true);
+  assert.equal(parses,0,'empty status snapshot parsed canonical schemas');
+  assert.equal(lazy.graphicalAction({op:'attach',surface_id:'surface-A'}),true);
+  assert.equal(parses,1,'graphical validation did not parse schemas exactly once');
+  assert.equal(lazy.graphicalAction({op:'attach',surface_id:'surface-B'}),true);
+  assert.equal(parses,1,'schema parse was not memoized');
+ }finally{JSON.parse=original;}
 });

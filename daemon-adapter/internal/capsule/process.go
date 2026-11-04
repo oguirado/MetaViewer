@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -325,10 +326,8 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 
 // NewRuntime resolves the native binary directory only from the admitted environment.
 func NewRuntime(cfg Config, clock cli.Clock) (*Manager, error) {
-	if raw := os.Getenv("MV_GRAPHICAL_SESSION_ENABLED"); raw != "" && raw != "1" {
-		return nil, fault("configuration", "invalid graphical session feature flag")
-	}
-	cfg.GraphicalSessions = os.Getenv("MV_GRAPHICAL_SESSION_ENABLED") == "1"
+	graphicalEnabled := graphicalRuntimeAdmitted(runtime.GOARCH, os.Getenv("MV_GRAPHICAL_SESSION_ENABLED"))
+	cfg.GraphicalSessions = graphicalEnabled
 	cfg.BinDir = os.Getenv("MV_SRF_BIN_DIR")
 	cfg.SlotLiveProfile = os.Getenv("MV_SRF_LIVE_PROFILE")
 	// [TARGET, unit decision] Optional trusted runtime knobs use the same bounded
@@ -348,9 +347,11 @@ func NewRuntime(cfg Config, clock cli.Clock) (*Manager, error) {
 		cfg.LivenessMisses = value
 	}
 	var environment []string
-	for _, key := range graphicalEnvironmentKeys {
-		if value, ok := os.LookupEnv(key); ok {
-			environment = append(environment, key+"="+value)
+	if graphicalEnabled {
+		for _, key := range graphicalEnvironmentKeys {
+			if value, ok := os.LookupEnv(key); ok {
+				environment = append(environment, key+"="+value)
+			}
 		}
 	}
 	for _, key := range []string{"PATH", "HOME", "XDG_RUNTIME_DIR", "MV_SRF_STATE_DIR", "SRF_IDENTITY_STORE_ROOT", "SRF_PROXY_REGISTRY", "SRF_EGRESS_PROXY"} {
@@ -363,4 +364,8 @@ func NewRuntime(cfg Config, clock cli.Clock) (*Manager, error) {
 		return nil, e
 	}
 	return NewManager(cfg, runner, clock)
+}
+
+func graphicalRuntimeAdmitted(arch, flag string) bool {
+	return arch == "arm64" && flag == "1"
 }

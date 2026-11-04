@@ -92,6 +92,100 @@ fn wire_rejects_malformed_runtime_ids_and_unknown_refusal_codes() {
         session("ready", 1, 1, vec![]), Value::Null, Value::Null).0;
     invalid_reason["reason_code"] = json!("OUTCOME_UNKNOWN\n");
     assert!(serde_json::from_value::<GraphicalSessionEvent>(invalid_reason).is_err());
+    let mut wrong_tag = valid.clone();
+    wrong_tag["schema"] = json!("surface_event/v0.2");
+    assert!(serde_json::from_value::<GraphicalSessionEvent>(wrong_tag).is_err());
+}
+
+#[test]
+fn lost_operation_emits_uncertain_and_creator_stop_retires_only_held_surface() {
+    let mut state = core(); complete_attach(&mut state);
+    assert!(submit(&mut state, ui(), request("mark", "request-loss", Some(1), Some(1))).dispatch);
+    state.apply(&Input::Lifecycle { surface_id: "surface-qemu".into(), update: LifecycleUpdate::Lost }).unwrap();
+    let unknown = state.graphical_session.saved_reply("request-loss").unwrap();
+    assert_eq!(unknown["event"], "outcome_unknown");
+    assert!(state.graphical_session.blocks_mutation("surface-qemu"));
+    assert!(state.graphical_session.creator_can_stop("surface-qemu", &ui()));
+    assert!(!state.graphical_session.creator_can_stop("surface-qemu", &ep(Component::Ui, "other-ui")));
+
+    let stop: metaviewer_core::wire::payload::SurfaceRequest = serde_json::from_value(json!({
+        "schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-qemu"}
+    })).unwrap();
+    let out = state.apply(&Input::SurfaceRequest { request: stop }).unwrap();
+    assert_eq!(out.reason, None);
+    assert!(state.graphical_session.pending.is_some(), "a Stop request does not prove physical closure");
+    state.apply(&Input::Lifecycle { surface_id: "surface-qemu".into(), update: LifecycleUpdate::Destroyed }).unwrap();
+    assert!(state.graphical_session.pending.is_none());
+    assert_eq!(state.graphical_session.session.as_ref().unwrap()["ownership"], "released");
+}
+
+#[test]
+fn creator_can_stop_ready_graphical_session_after_human_takeover() {
+    let mut state = core(); complete_attach(&mut state);
+    assert_eq!(state.apply(&Input::TakeControl { surface_id: "surface-qemu".into() }).unwrap().reason, None);
+    assert!(!state.surfaces["surface-qemu"].agent_controlled);
+    assert!(state.graphical_session.creator_can_stop("surface-qemu", &ui()));
+    assert!(!state.graphical_session.creator_can_stop("surface-qemu", &ep(Component::Ui, "other-ui")));
+    let stop: metaviewer_core::wire::payload::SurfaceRequest = serde_json::from_value(json!({
+        "schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-qemu"}
+    })).unwrap();
+    assert_eq!(state.apply(&Input::SurfaceRequest { request: stop }).unwrap().reason, None);
+    assert_eq!(state.graphical_session.session.as_ref().unwrap()["ownership"], "held", "Stop admission is not physical closure evidence");
+    state.apply(&Input::Lifecycle { surface_id: "surface-qemu".into(), update: LifecycleUpdate::Destroyed }).unwrap();
+    assert_eq!(state.graphical_session.session.as_ref().unwrap()["ownership"], "released");
+}
+
+#[test]
+fn unrelated_browser_create_is_allowed_but_vm_fallback_and_bound_profile_are_fenced() {
+    use metaviewer_core::wire::payload::SurfaceRequest;
+    let mut state = core();
+    state.profile_surfaces.insert("surface-qemu".into(), "vm-profile".into());
+    assert!(submit(&mut state, ui(), request("attach", "request-attach", None, None)).dispatch);
+    let create = |kind: &str, profile: &str| -> SurfaceRequest {
+        serde_json::from_value(json!({"schema":"surface_request/v0.2","op":"create","params":{
+            "kind":kind,"geometry":{"w":800,"h":600},"profile_id":profile
+        }})).unwrap()
+    };
+    let allowed = state.apply(&Input::SurfaceRequest { request: create("browser", "browser-profile") }).unwrap();
+    assert_eq!(allowed.reason, None);
+    assert_eq!(state.remaining_budget, 62);
+    let same_profile = state.apply(&Input::SurfaceRequest { request: create("browser", "vm-profile") }).unwrap();
+    assert_eq!(same_profile.reason, Some(Refusal::Policy));
+    let vm_other_profile = state.apply(&Input::SurfaceRequest { request: create("vm", "other-vm") }).unwrap();
+    assert_eq!(vm_other_profile.reason, None, "known held profile scopes the fence to that profile");
+
+    let mut no_binding = core();
+    assert!(submit(&mut no_binding, ui(), request("attach", "request-attach", None, None)).dispatch);
+    assert_eq!(no_binding.apply(&Input::SurfaceRequest { request: create("browser", "browser-profile") }).unwrap().reason, None);
+    assert_eq!(no_binding.apply(&Input::SurfaceRequest { request: create("vm", "other-vm") }).unwrap().reason, Some(Refusal::Policy));
+}
+
+#[test]
+fn physical_destroy_releases_session_and_clears_only_graphical_idempotency_journal() {
+    let mut state = core(); complete_attach(&mut state);
+    assert!(!state.graphical_session.history.is_empty());
+    assert!(!state.graphical_session.events.is_empty());
+    state.apply(&Input::Lifecycle { surface_id: "surface-qemu".into(), update: LifecycleUpdate::Destroyed }).unwrap();
+    assert!(state.graphical_session.history.is_empty());
+    assert!(state.graphical_session.events.is_empty());
+    assert_eq!(state.graphical_session.session.as_ref().unwrap()["ownership"], "released");
+}
+
+#[test]
+fn graphical_event_capacity_refuses_before_mutating_pending_or_history() {
+    let mut state = core(); complete_attach(&mut state);
+    assert!(submit(&mut state, ui(), request("mark", "request-capacity", Some(1), Some(1))).dispatch);
+    for n in 0..128 {
+        state.graphical_session.events.insert(format!("seed-{n}"), json!({"event_id":format!("seed-{n}")}));
+    }
+    let before_pending = state.graphical_session.pending.clone();
+    let before_reply = state.graphical_session.saved_reply("request-capacity").cloned();
+    let done = event("mark", "completed", "request-capacity", 1, 1,
+        session("ready", 1, 1, vec![mark_point()]), json!("point-one"), Value::Null);
+    let out = state.apply(&Input::GraphicalSessionEvent { notice: done, sender: daemon(), executor_epoch: 0 }).unwrap();
+    assert_eq!(out.reason, Some(Refusal::BudgetExceeded));
+    assert_eq!(state.graphical_session.pending, before_pending);
+    assert_eq!(state.graphical_session.saved_reply("request-capacity"), before_reply.as_ref());
 }
 
 #[test]

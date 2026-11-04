@@ -1441,9 +1441,16 @@ impl Server {
                     return self.unsupported_at(now_ns, &env, boundary);
                 }
                 let sid = value["params"]["surface_id"].as_str();
-                let graph_fenced = self.authority.state().graphical_session.pending.is_some()
-                    && op == "create"
-                    || sid.is_some_and(|id| self.authority.state().graphical_session.blocks_mutation(id));
+                let graphical_stop = op == "destroy" && env.from.component == Component::Ui
+                    && sid.is_some_and(|id| self.authority.state().graphical_session.creator_can_stop(id, &env.from));
+                if op == "destroy" && sid.is_some_and(|id| self.authority.state().graphical_session.held_surface() == Some(id)) && !graphical_stop {
+                    return self.unsupported_at(now_ns, &env, boundary);
+                }
+                let graph_fenced = (op == "create" && self.authority.state().graphical_session.blocks_profile_create(
+                    value["params"]["profile_id"].as_str().unwrap_or(""),
+                    value["params"]["kind"].as_str().unwrap_or(""),
+                    &self.authority.state().profile_surfaces,
+                )) || sid.is_some_and(|id| self.authority.state().graphical_session.blocks_mutation(id));
                 if graph_fenced && !matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe") {
                     return self.unsupported_at(now_ns, &env, boundary);
                 }
@@ -1451,9 +1458,8 @@ impl Server {
                     && !sid.is_some_and(|id| {
                         self.authority.state().surfaces.get(id).is_some_and(|s| {
                             s.live
-                                || (op == "destroy"
-                                    && env.from.component == Component::Ui
-                                    && !s.agent_controlled)
+                                || (op == "destroy" && env.from.component == Component::Ui
+                                    && (!s.agent_controlled || graphical_stop))
                         }) && !self.authority.state().is_destroyed(id)
                     })
                 {
@@ -1597,6 +1603,12 @@ impl Server {
                         return Ok(());
                     }
                     self.notify_cancellations_at(now_ns, &out.cancelled, out.core_seq)?;
+                }
+                if let SurfaceEvent::Case1(e) = event.as_ref() {
+                    if e.data.surface.state == SurfaceState::Lost {
+                        self.authority.flush_sync()?;
+                        self.notify_graphical_lost_at(now_ns, &e.data.surface.surface_id)?;
+                    }
                 }
                 if let SurfaceEvent::Case1(e) = event.as_ref() {
                     if e.data.surface.state == SurfaceState::Destroyed {
@@ -3160,7 +3172,12 @@ mod nv_regressions {
                 .unwrap();
         }
         fn envelope(&self, c: Component, n: u64, body: Value) -> Envelope {
-            decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("nv-{c:?}-{n}"),"ts_ns":0,"from":self.endpoint(c),"to":self.server.config.core.endpoint,"session_id":"nv-session","seq":n,"nonce":format!("nv-{c:?}-{n}"),"body":body}).to_string()).unwrap()
+            let schema = if body["schema"].as_str().is_some_and(|tag| tag.starts_with("graphical_session_")) {
+                "graphical_session_envelope/v0.2"
+            } else {
+                "envelope/v0.2"
+            };
+            decode_envelope(&json!({"schema":schema,"msg_id":format!("nv-{c:?}-{n}"),"ts_ns":0,"from":self.endpoint(c),"to":self.server.config.core.endpoint,"session_id":"nv-session","seq":n,"nonce":format!("nv-{c:?}-{n}"),"body":body}).to_string()).unwrap()
         }
         async fn route(&mut self, c: Component, n: u64, body: Value) -> Result<()> {
             let reg = self
@@ -5893,6 +5910,48 @@ mod nv_regressions {
             ));
 
             let _ = fs::remove_dir_all(&shm_dir);
+        });
+    }
+
+    #[test]
+    fn lost_surface_publishes_graphical_outcome_unknown_to_creator() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            f.server.graphical_session_enabled = true;
+            let ui_rx = f.attach(Component::Ui, 32);
+            let daemon_rx = f.attach(Component::Daemon, 32);
+            let owner = crate::headless::actor_id(&f.endpoint(Component::Agent));
+            f.route(Component::Ui, 2, json!({
+                "schema":"graphical_session_request/v0.2","request_id":"request-attach-lost",
+                "surface_id":"surface-demo","owner_id":owner,"op":"attach","params":{}
+            })).await.unwrap();
+            let attach = json!({"schema":"graphical_session_event/v0.2","event_id":"event-attach-lost-done",
+                "request_id":"request-attach-lost","owner_id":owner,"surface_id":"surface-demo",
+                "generation":1,"authority_epoch":1,"op":"attach","event":"completed","reason_code":null,
+                "point_id":null,"session":{"schema":"graphical_session/v0.2","surface_id":"surface-demo",
+                    "runtime_id":format!("runtime-{}", "a".repeat(64)),"owner_id":owner,"generation":1,
+                    "authority_epoch":1,"authority":"core","phase":"ready","ownership":"held",
+                    "pending_request_id":null,"points":[],"backend":"qemu","isa":"aarch64"},
+                "elapsed_ms":1,"frame_sha256":null,"frame_generation":null});
+            f.route(Component::Daemon, 2, attach).await.unwrap();
+            f.route(Component::Ui, 3, json!({
+                "schema":"graphical_session_request/v0.2","request_id":"request-mark-lost",
+                "surface_id":"surface-demo","owner_id":owner,"generation":1,"authority_epoch":1,
+                "op":"mark","params":{"label":"checkpoint"}
+            })).await.unwrap();
+            let lost = json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":{
+                "schema":"surface/v0.2","surface_id":"surface-demo","kind":"vm","display":"display-nv",
+                "geometry":{"w":1280,"h":720},"state":"lost","visibility":"unfolded","control":"agent",
+                "profile_id":"profile-demo"}}});
+            f.route(Component::Daemon, 3, lost).await.unwrap();
+            let events: Vec<_> = ui_rx.try_iter().filter_map(|env| match env.body {
+                Command::GraphicalSessionEvent(event) => Some(event.0), _ => None,
+            }).collect();
+            assert!(events.iter().any(|event| event["request_id"] == "request-mark-lost"
+                && event["event"] == "outcome_unknown" && event["reason_code"] == "OUTCOME_UNKNOWN"));
+            assert!(f.server.authority.state().graphical_session.pending.as_ref().unwrap().uncertain);
+            drop(daemon_rx);
         });
     }
 }

@@ -29,7 +29,6 @@ import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import {createRewindHost} from './rewindHost.js';
-import {createGraphicalSessionHost} from './graphicalSessionHost.js';
 import {createGuestCommandHost} from './guestCommandHost.js';
 import {observationEnvelopeValid} from './guestCommandObservationValues.js';
 import {guestCommandProfileOwnerSync,arm64CapsuleStatusSync} from './guestCommandProfile.js';
@@ -310,7 +309,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const headless = createHeadlessHost({send,
       available:()=>live && !disposed && process.arch === 'arm64' && headlessOwner !== null && agentPeers.length === 1 && headlessOwner === 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'),
       ownerId:agentPeers.length === 1 ? 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex') : ''});
-    const graphicalSession=env.MV_GRAPHICAL_SESSION_ENABLED==='1'&&process.arch==='arm64'&&agentPeers.length===1?createGraphicalSessionHost({send,available:()=>live&&!disposed,ownerId:'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')}):null;
+    const graphicalSession=env.MV_GRAPHICAL_SESSION_ENABLED==='1'&&process.arch==='arm64'&&agentPeers.length===1?(await import('./graphicalSessionHost.js')).createGraphicalSessionHost({send,available:()=>live&&!disposed,ownerId:'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')}):null;
     let rewind=/** @type {ReturnType<typeof createRewindHost>|null} */(null);
     const guestCommand=createGuestCommandHost({send,observationIdentity:agentPeers.length===1?{coreInstance:config.core.endpoint.instance,uiInstance:ui.endpoint.instance,agentInstance:agentPeers[0].endpoint.instance}:null,commandAllowed:()=>!rewind||rewind.commandAllowed(),stopTarget:()=>rewind?.stopTarget(),cancelAvailable:()=>env.MV_REWIND_ENABLED!=='1',sessionId:config.session_id,ownerId:agentPeers.length===1?'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'):'',available:()=>live&&!disposed&&arm64CapsuleStatusSync(env).microvm.available&&guestCommandOwner!==null&&agentPeers.length===1&&guestCommandOwner==='actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')});
     rewind=createRewindHost({send,available:()=>env.MV_REWIND_ENABLED==='1'&&process.arch==='arm64'&&guestCommand.status().available,ownerId:guestCommandOwner??'',guest:guestCommand.status,commitReady:guestCommand.commitRewind});
@@ -503,7 +502,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (!isDeepStrictEqual(body,config.core.hello)) throw fail();
         live = true;clearTimeout(helloTimer);ready();return;
       }
-      if(body.schema==='graphical_session_event/v0.2'){if(!graphicalSession)throw fail();graphicalSession.receive(body);return;}
+      if(body.schema==='graphical_session_event/v0.2'){if(graphicalSession){try{graphicalSession.receive(body);}catch{graphicalSession.quarantine();}}return;}
       if(body.schema==='rewind_event/v0.2'){if(!rewind)throw fail();rewind.receive(body);return;}
       const observationMetadata={session_id:env.session_id,from:env.from,to:env.to,seq:env.seq};
       if(body.schema==='guest_command_observation/v0.2'){if(!observationEnvelopeValid(env))throw fail();guestCommand.observe(body,observationMetadata);return;}

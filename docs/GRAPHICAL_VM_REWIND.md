@@ -36,7 +36,9 @@ only after a newer authoritative surface frame has been published. A point's
 hash the VM's RAM or disk contents.
 
 An ambiguous native outcome, timeout or lost connection holds custody and fences
-further Mark and Back requests. Normal Stop remains available. Only physical
+further Mark and Back requests. Capture and input stay fenced while a native
+operation is pending or its outcome is unknown, so the tile may retain its last
+published image. Normal Stop remains available. Only physical
 surface destruction releases the session; hiding a tile or losing a transport
 does not establish cleanup. Native process, container, lease and overlay closure
 must be verified independently.

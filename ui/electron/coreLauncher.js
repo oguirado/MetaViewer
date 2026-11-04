@@ -99,7 +99,7 @@ export const CORE_MAX_PATH_CHARS = 4096;
  * the validated runtime dir itself.
  * @type {ReadonlyArray<string>}
  */
-export const ALLOWED_CORE_ENV = Object.freeze(['LANG', 'LC_ALL', 'PATH', 'TMPDIR', 'TZ', 'MV_GRAPHICAL_SESSION_ENABLED']);
+export const ALLOWED_CORE_ENV = Object.freeze(['LANG', 'LC_ALL', 'PATH', 'TMPDIR', 'TZ']);
 
 /**
  * [TARGET, unit decision] Exact environment allowlist for the bundled daemon
@@ -194,8 +194,7 @@ export function graphicalSessionAdapterEnv(parent, arch = process.arch) {
     fail('ENV_SHAPE', 'parent environment must be an object');
   }
   const env = /** @type {Record<string, unknown>} */ (parent);
-  const present = GRAPHICAL_SESSION_ENV.filter((key) => Object.hasOwn(env, key));
-  if (present.length === 0 || (env.MV_GRAPHICAL_SESSION_ENABLED === '0' && present.length === 1)) return Object.freeze({});
+  if (arch !== 'arm64' || env.MV_GRAPHICAL_SESSION_ENABLED !== '1') return Object.freeze({});
   if (!graphicalSessionPinsReady(env, arch)) {
     fail('GRAPHICAL_SESSION_ENV', 'graphical VM requires the complete arm64 executable pin set');
   }
@@ -334,7 +333,7 @@ export function scrubChildEnv(rawEnv, runtimeDir) {
   const parent = /** @type {Record<string, unknown>} */ (rawEnv);
   const out = /** @type {Record<string, string>} */ ({});
   for (const name of ALLOWED_CORE_ENV) {
-    if (name === 'PATH' || name === 'MV_GRAPHICAL_SESSION_ENABLED') {
+    if (name === 'PATH') {
       continue;
     }
     const raw = parent[name];

@@ -1,0 +1,4 @@
+- Keep late or malformed graphical responses confined to their feature, preserve normal Stop after VM loss or human takeover, and release feature counters only after physical closure.
+- Preserve ordinary host startup with disabled graphical settings, scope creation fences to the held VM, and defer graphical schema allocation until the feature is used.
+- Use defined theme tokens for graphical checkpoint controls and retain existing memory and command limits.
+- Bind graphical control colors locally to the active kit dark scheme with the canonical normal and high-contrast token values.

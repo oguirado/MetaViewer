@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -346,6 +347,11 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 		args = append(args, "--point-id", point)
 	}
 	out, execErr := m.execute(work, profile, args, nil)
+	preSpawn := false
+	if execErr != nil {
+		var refusal *preSpawnRefusal
+		preSpawn = errors.As(execErr, &refusal)
+	}
 	var n graphicalNative
 	if execErr == nil {
 		execErr = parseGraphicalNative(out, &n)
@@ -388,9 +394,28 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 	}
 	m.mu.Lock()
 	current, live := m.bindings[q.SurfaceID]
-	if m.graphical != g || !live || current.RunID != b.RunID || current.Surface.State != "active" || m.destroying[q.SurfaceID] || g.stopping {
+	if m.graphical != g {
 		m.mu.Unlock()
 		return nil, nil
+	}
+	if g.stopping || m.destroying[q.SurfaceID] {
+		g.busy = false
+		g.unknown = true
+		g.cancel = nil
+		m.mu.Unlock()
+		return nil, nil
+	}
+	if !live || current.RunID != b.RunID || current.Surface.State != "active" {
+		g.busy = false
+		g.unknown = true
+		g.cancel = nil
+		if g.session != nil {
+			g.session.Phase = "outcome_unknown"
+			g.session.PendingRequestID = &q.RequestID
+		}
+		uncertain := graphicalEvent(q, g.session, "outcome_unknown", "OUTCOME_UNKNOWN")
+		m.mu.Unlock()
+		return encode(uncertain)
 	}
 	finish := func(e GraphicalEvent) (json.RawMessage, error) {
 		if e.Event == "completed" {
@@ -403,13 +428,14 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 		return encode(e)
 	}
 	if execErr != nil || n.Status == "outcome_unknown" {
-		if q.Op == "attach" {
-			return finish(graphicalEvent(q, prior, "refused", "UNAVAILABLE"))
-		}
 		g.unknown = true
 		if g.session != nil {
 			g.session.Phase = "outcome_unknown"
 			g.session.PendingRequestID = &q.RequestID
+		}
+		if q.Op == "attach" && preSpawn {
+			m.graphical = nil
+			return finish(graphicalEvent(q, nil, "refused", "UNAVAILABLE"))
 		}
 		return finish(graphicalEvent(q, g.session, "outcome_unknown", "OUTCOME_UNKNOWN"))
 	}
@@ -417,6 +443,10 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 		code := "NATIVE_FAILED"
 		if n.Code != nil {
 			code = graphicalCode(*n.Code)
+		}
+		if q.Op == "attach" {
+			m.graphical = nil
+			return finish(graphicalEvent(q, nil, "refused", code))
 		}
 		return finish(graphicalEvent(q, prior, "refused", code))
 	}
@@ -440,6 +470,9 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 		next.Generation++
 		next.AuthorityEpoch++
 		m.nextInputEpoch(q.SurfaceID)
+	}
+	if q.Op == "attach" {
+		g.requests = map[string]bool{q.RequestID: true}
 	}
 	var frameHash *string
 	var frameGen *uint64

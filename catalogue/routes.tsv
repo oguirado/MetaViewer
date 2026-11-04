@@ -198,6 +198,7 @@ fronten-42a09513c557	changes/unreleased/frontend-viewport-resize.md
 fronten-5717175eba13	changes/unreleased/frontend-working-tree.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 graphic-d6644d957c3e	changes/unreleased/graphical-qemu-session.md
+graphic-7ebce61348e3	changes/unreleased/graphical-session-review-fixes.md
 graphic-194a2bad7a4f	changes/unreleased/graphical-vm-header.md
 graphic-7dd542f5cb3e	changes/unreleased/graphical-vm-projection.md
 grouped-43ef97876a82	changes/unreleased/grouped-app-launcher.md
@@ -1881,6 +1882,7 @@ fuzz_test.go	daemon-adapter/internal/capsule/fuzz_test.go
 geometry_test.go	daemon-adapter/internal/capsule/geometry_test.go
 graphic-39bff9178f14	daemon-adapter/internal/capsule/graphical_environment.go
 graphic-e1e0000c37e4	daemon-adapter/internal/capsule/graphical_environment_test.go
+graphic-0dbf55c961e0	daemon-adapter/internal/capsule/graphical_lifecycle_fixes_test.go
 graphical_session.go	daemon-adapter/internal/capsule/graphical_session.go
 graphic-6ff9d31cdfe3	daemon-adapter/internal/capsule/graphical_session_test.go
 handoff.go	daemon-adapter/internal/capsule/handoff.go

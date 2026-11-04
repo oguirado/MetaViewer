@@ -22,6 +22,7 @@ import {gcAction,gcObservationSnapshot} from './guestCommandValues.js';
 import {arm64CapsuleStatusSync} from './guestCommandProfile.js';
 import {validAction} from './headlessValues.js';
 import { acquireCapsuleCreation } from './profilePicker.js';
+import {graphicalSessionPinsReady} from './coreLauncher.js';
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
 import { constants, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join, isAbsolute, relative, resolve, sep, dirname } from 'node:path';
@@ -744,14 +745,14 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
       const listed = await listIdentities();
       if (!listed?.ok || !Array.isArray(listed.rows)) return refuse('VM_UNAVAILABLE');
       const ids = new Set(listed.rows.filter((/** @type {any} */ row) => row?.browser === 'program').map((/** @type {any} */ row) => row.id));
-      const candidates = configuredVMProfiles(env, hostArch).filter(p => ids.has(p.id) && !isForeignIdentity(p.id));
+      const candidates = configuredVMProfiles(env, hostArch, graphicalSessionPinsReady(env, hostArch)).filter(p => ids.has(p.id) && !isForeignIdentity(p.id));
       if (candidates.length !== 1) return refuse('VM_UNAVAILABLE');
       const selected = candidates[0];
       key = `pending:${selected.id}`;
       const free = typeof readFreeMemoryBytes === 'function' ? await readFreeMemoryBytes() : parseMemAvailableBytes(readFileSync('/proc/meminfo','utf8'));
       // Revalidate synchronously after the final await, before reserving anything.
       if (disposed || typeof env.MV_SRF_PROFILES !== 'string' || Buffer.byteLength(env.MV_SRF_PROFILES,'utf8') > 1048576) return refuse('VM_UNAVAILABLE');
-      const current = configuredVMProfiles(env, hostArch).filter(p => ids.has(p.id) && !isForeignIdentity(p.id));
+      const current = configuredVMProfiles(env, hostArch, graphicalSessionPinsReady(env, hostArch)).filter(p => ids.has(p.id) && !isForeignIdentity(p.id));
       if (current.length !== 1 || current[0].id !== selected.id || current[0].configuration !== selected.configuration) return refuse('VM_UNAVAILABLE');
       const state = summarizeSurfaces(capsuleStates);
       if (state.bound.has(selected.id)) return refuse('PROFILE_ALREADY_BOUND');
@@ -889,7 +890,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     const disable=(/** @type {'vm'|'microvm'} */ kind,/** @type {string} */ reason)=>{result[kind]={available:false,reason};};
     if(identity.depth!==null){disable('vm','Nested walls cannot create capsules.');disable('microvm','Nested walls cannot create capsules.');return result;}
     const {configuredVMProfiles}=await (profilePickerModulePromise??=import('./profilePicker.js'));
-    if(result.vm.available&&configuredVMProfiles(env,hostArch).length===0)disable('vm','The graphical VM profile is unavailable.');
+    if(result.vm.available&&configuredVMProfiles(env,hostArch,graphicalSessionPinsReady(env,hostArch)).length===0)disable('vm','The graphical VM profile is unavailable.');
     const guest=core.guestCommand?.status?.();
     if(result.microvm.available&&guest?.available!==true)disable('microvm','The MicroVM runtime or protected profile is unavailable.');
     if(guest?.uncertain||guest?.session?.ownership==='held')disable('vm','Stop and reconcile the current MicroVM before creating a graphical VM.');
@@ -937,7 +938,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     vmAvailable: async () => {
       if (identity.depth !== null) return false;
       const {configuredVMProfiles} = await (profilePickerModulePromise ??= import('./profilePicker.js'));
-      return configuredVMProfiles(env, hostArch).length > 0;
+      return configuredVMProfiles(env, hostArch, graphicalSessionPinsReady(env, hostArch)).length > 0;
     },
     // [TARGET, unit decision] Browser creation has no action/frame authority.
     // Zero renderer arguments: profile and geometry remain host-owned.
@@ -1300,7 +1301,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         return result;
       }); channels.push(channel);
     }
-  } catch(e) { for (const channel of channels) ipcMain.removeHandler?.(channel); throw e; }
+  } catch(e) { try { stopGraphicalSession(); } catch {} for (const channel of channels) ipcMain.removeHandler?.(channel); throw e; }
   // The source owns reader/port capabilities and calls deliver; no frame path is sent.
   /** @type {Map<string, any>} */ const pendingEntries = new Map();
   /** @type {Set<any>} */ const streams = new Set();
@@ -1399,6 +1400,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   } catch (e) {
     disposed = true;
     subscribed = false;
+    try { stopGraphicalSession(); } catch {}
     for (const channel of channels) ipcMain.removeHandler?.(channel);
     throw e;
   }
@@ -1430,7 +1432,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     inputPartialSeq,
     inputPartialApplied,
     notifyCreateRefusal: (/** @type {any} */ failure) => refuse(resolveCreateFailureCode(failure)),
-    async dispose() { stopGraphicalSession(); stopRewind(); stopGuestCommand(); stopObservation(); stopHeadless(); disposed=true; subscribed=false; stopFrames(); stopCadence();
+    async dispose() { try { stopGraphicalSession(); } catch {} stopRewind(); stopGuestCommand(); stopObservation(); stopHeadless(); disposed=true; subscribed=false; stopFrames(); stopCadence();
       knownSurfaces.clear();
       inputRateWindow.clear();
       inputLastSeq.clear();

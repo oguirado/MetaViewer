@@ -41,12 +41,15 @@ onBeforeUnmount(()=>{close();clearInterval(timer);document.removeEventListener('
  </div>
 </template>
 <style>
+/* Kit scheme alias, local to this optional control; canonical dark token values. */
+:root[data-theme-scheme="mv-dark"][data-theme-contrast="normal"] .graphical-vm-state-controls { --mv-semantic-surface-panel:var(--mv-primitive-color-neutral-950);--mv-semantic-surface-canvas:var(--mv-primitive-color-neutral-1000);--mv-semantic-text-primary:var(--mv-primitive-color-neutral-50);--mv-semantic-text-muted:var(--mv-primitive-color-neutral-400);--mv-semantic-border-default:var(--mv-primitive-color-neutral-500); }
+:root[data-theme-scheme="mv-dark"][data-theme-contrast="high"] .graphical-vm-state-controls { --mv-semantic-surface-panel:var(--mv-primitive-color-neutral-1100);--mv-semantic-surface-canvas:var(--mv-primitive-color-neutral-1100);--mv-semantic-text-primary:var(--mv-primitive-color-neutral-0);--mv-semantic-text-muted:var(--mv-primitive-color-neutral-50);--mv-semantic-border-default:var(--mv-primitive-color-neutral-400); }
 .graphical-vm-state-controls { display:inline-flex;align-items:center;gap:4px; }
-.graphical-vm-state-controls > button { display:inline-flex;align-items:center;gap:4px;background:var(--cuk-semantic-surface-panel);color:var(--cuk-semantic-text-primary);border:1px solid var(--cuk-semantic-border-default);font:inherit; }
-.graphical-vm-state-status { max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--cuk-semantic-text-muted); }
-.graphical-vm-state-points { position:fixed;inset:auto;top:80px;right:8px;margin:4px 0 0;padding:8px;min-width:240px;max-width:280px;max-height:60vh;overflow:auto;border:1px solid var(--cuk-semantic-border-default);border-radius:6px;background:var(--cuk-semantic-surface-panel);color:var(--cuk-semantic-text-primary);box-shadow:var(--cuk-semantic-elevation-s1-floating); }
+.graphical-vm-state-controls > button { display:inline-flex;align-items:center;gap:4px;background:var(--mv-semantic-surface-panel);color:var(--mv-semantic-text-primary);border:1px solid var(--mv-semantic-border-default);font:inherit; }
+.graphical-vm-state-status { max-width:14rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;color:var(--mv-semantic-text-muted); }
+.graphical-vm-state-points { position:fixed;inset:auto;top:80px;right:8px;margin:4px 0 0;padding:8px;min-width:240px;max-width:280px;max-height:60vh;overflow:auto;border:1px solid var(--mv-semantic-border-default);border-radius:6px;background:var(--mv-semantic-surface-panel);color:var(--mv-semantic-text-primary); }
 .graphical-vm-state-points[hidden] { display:none; }
-.graphical-vm-state-points > button { display:grid;gap:4px;width:100%;padding:8px;text-align:left;background:var(--cuk-semantic-surface-canvas);color:var(--cuk-semantic-text-primary);border:1px solid var(--cuk-semantic-border-default); }
+.graphical-vm-state-points > button { display:grid;gap:4px;width:100%;padding:8px;text-align:left;background:var(--mv-semantic-surface-canvas);color:var(--mv-semantic-text-primary);border:1px solid var(--mv-semantic-border-default); }
 .graphical-vm-state-points p,.graphical-vm-state-points span { font-size:11px; }
 </style>
 

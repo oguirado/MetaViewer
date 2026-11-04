@@ -1,8 +1,6 @@
 // @ts-check
 'use strict';
 
-import {graphicalSessionPinsReady} from './coreLauncher.js';
-
 /**
  * MULTI-CAPSULE profile picker: chooses the browser profile for each additional
  * "Add capsule" create. Pure and synchronous at its core; every input (the
@@ -433,11 +431,11 @@ export function createRefusalReason(code, missingId = 'mv-live-2') {
 
 /** VM creation uses an explicitly configured agent template, never browser defaults.
  * @param {Record<string, any>} env @param {string} arch
+ * @param {boolean} [graphicalReady] Trusted privileged pin-admission result; omitted keeps legacy selection.
  * @returns {ReadonlyArray<ProfileEntry & {configuration:string}>}
  */
-export function configuredVMProfiles(env, arch) {
+export function configuredVMProfiles(env, arch, graphicalReady = false) {
   if (arch !== 'arm64' || typeof env.MV_SRF_PROFILES !== 'string' || env.MV_SRF_PROFILES.length > MAP_BYTES_MAX) return [];
-  const graphicalReady = graphicalSessionPinsReady(env, arch);
   let rows;
   try { rows = JSON.parse(env.MV_SRF_PROFILES); } catch { return []; }
   if (!plain(rows)) return [];
@@ -446,7 +444,7 @@ export function configuredVMProfiles(env, arch) {
     if (!validId(id) || !plain(raw)) continue;
     const w = raw.Width, h = raw.Height;
     const mode = raw.default_mode || raw.role || 'agent';
-    const programReady = raw.Program === 'notepad-vm' || (raw.Program === 'notepad-rw-vm' && graphicalReady);
+    const programReady = raw.Program === 'notepad-vm' || (raw.Program === 'notepad-rw-vm' && graphicalReady === true);
     if (raw.Kind !== 'vm' || raw.NativeKind !== 'vm' || !programReady || mode !== 'agent'
         || typeof w !== 'number' || typeof h !== 'number' || !Number.isSafeInteger(w) || !Number.isSafeInteger(h)
         || w < 1 || h < 1 || w > 8192 || h > 8192

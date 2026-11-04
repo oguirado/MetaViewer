@@ -831,10 +831,15 @@ impl CoreState {
                     serde_json::to_value(request).map_err(|_| AdmissionError::InvalidInput)?;
                 let graph_cleanup = value["op"] == "destroy"
                     && value["params"]["surface_id"].as_str().is_some_and(|id| {
-                        self.graphical_session.blocks_mutation(id)
+                        self.graphical_session.held_surface() == Some(id)
                     });
                 if (value["op"] == "create" && (self.headless.held || self.guest_command.held))
-                    || (self.graphical_session.pending.is_some() && value["op"] == "create")
+                    || (value["op"] == "create"
+                        && self.graphical_session.blocks_profile_create(
+                            value["params"]["profile_id"].as_str().unwrap_or(""),
+                            value["params"]["kind"].as_str().unwrap_or(""),
+                            &self.profile_surfaces,
+                        ))
                     || value["params"]["surface_id"].as_str().is_some_and(|id| {
                         self.graphical_session.blocks_mutation(id)
                             && !matches!(value["op"].as_str(), Some("destroy" | "frame_subscribe" | "frame_unsubscribe"))
@@ -854,7 +859,8 @@ impl CoreState {
                         // binding; this grants no input, frames or renewed liveness.
                         self.is_destroyed(id)
                             || self.surfaces.get(id).is_some_and(|s| {
-                                !s.live && (value["op"] != "destroy" || s.agent_controlled)
+                                !s.live && (value["op"] != "destroy"
+                                    || (s.agent_controlled && self.graphical_session.held_surface() != Some(id)))
                             })
                     })
                     || !valid_surface_create_policy(request)

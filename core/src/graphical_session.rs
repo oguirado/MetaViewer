@@ -54,6 +54,16 @@ impl State {
         if let Some(p) = &self.pending { return p.request["surface_id"].as_str(); }
         self.session.as_ref().filter(|s| s["ownership"] == "held").and_then(|s| s["surface_id"].as_str())
     }
+    pub fn creator_can_stop(&self, surface_id: &str, caller: &crate::Endpoint) -> bool {
+        self.held_surface() == Some(surface_id) && self.creator.as_ref() == Some(caller)
+    }
+    pub fn blocks_profile_create(&self, profile_id: &str, kind: &str, bindings: &BTreeMap<String, String>) -> bool {
+        let Some(surface_id) = self.held_surface() else { return false; };
+        match bindings.get(surface_id) {
+            Some(held_profile) => held_profile == profile_id,
+            None => kind == "vm",
+        }
+    }
     pub fn saved_reply(&self, request_id: &str) -> Option<&Value> {
         self.history.get(request_id).map(|r| &r.reply)
     }
@@ -178,6 +188,7 @@ impl State {
     ) -> Result<Option<Endpoint>, &'static str> {
         let e=&notice.0; let event_id=text(e,"event_id");
         if let Some(old)=self.events.get(event_id) { return if old==e { Ok(None) } else { Err("POLICY") }; }
+        if self.events.len() >= MAX_HISTORY { return Err("CAPACITY"); }
         let p=self.pending.clone().ok_or("POLICY")?;
         if p.uncertain || p.daemon!=*sender || executor_epoch!=p.executor_epoch || e["event"]=="accepted"
             || e["request_id"]!=p.request["request_id"] || e["op"]!=p.request["op"]
@@ -245,7 +256,6 @@ impl State {
             self.session=Some(session); self.pending=None;
         } else { return Err("POLICY"); }
         self.events.insert(event_id.to_owned(),e.clone());
-        if self.events.len()>MAX_HISTORY { return Err("CAPACITY"); }
         if let Some(h)=self.history.get_mut(text(&p.request,"request_id")) { h.reply=e.clone(); }
         Ok(Some(p.caller))
     }
@@ -281,6 +291,8 @@ impl State {
         self.pending=None;
         if let Some(s)=self.session.as_mut() { s["phase"]=json!("stopped"); s["ownership"]=json!("released"); s["pending_request_id"]=Value::Null; }
         self.creator=None;
+        self.history.clear();
+        self.events.clear();
     }
 }
 fn text<'a>(value:&'a Value,key:&str)->&'a str { value[key].as_str().unwrap_or("") }

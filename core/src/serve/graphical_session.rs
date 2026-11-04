@@ -97,6 +97,19 @@ impl Server {
         }
         Ok(())
     }
+
+    pub(super) fn notify_graphical_lost_at(&mut self, now_ns: u64, surface_id: &str) -> Result<()> {
+        let Some(pending) = self.authority.state().graphical_session.pending.as_ref()
+            .filter(|p| p.uncertain && p.request["surface_id"] == surface_id).cloned() else { return Ok(()); };
+        let Some(reply) = self.authority.state().graphical_session.saved_reply(
+            pending.request["request_id"].as_str().unwrap_or(""),
+        ).cloned() else { return Ok(()); };
+        let event: GraphicalSessionEvent = serde_json::from_value(reply)?;
+        if self.connections.contains_key(&pending.caller) {
+            let _ = self.send_at(now_ns, &pending.caller, Command::GraphicalSessionEvent(Box::new(event)));
+        }
+        Ok(())
+    }
 }
 
 fn graphical_refusal_code(reason: Refusal) -> &'static str {

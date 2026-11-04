@@ -36,16 +36,23 @@ export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=300
   code=null;
   return new Promise(resolve=>{const p=/** @type {GraphicalPending} */({body,resolve,accepted:false,before:session?clone(session):null,timer:null});pending.set(body.request_id,p);p.timer=setTimeout(()=>unknown(p),timeoutMs);publish();try{send(clone(body));}catch{unknown(p);}});
  }
- /** @param {any} e @param {GraphicalPending} p @returns {boolean} */
+ /** @param {any} e @param {{body:any}} p @returns {boolean} */
  function correlate(e,p){const b=p.body;if(e.request_id!==b.request_id||e.owner_id!==ownerId||e.surface_id!==b.surface_id||e.op!==b.op)return false;if(b.op==='attach')return true;const advance=b.op==='restore'&&e.event==='completed'?1:0;return e.generation===b.generation+advance&&e.authority_epoch===b.authority_epoch+advance;}
  /** @param {any} event @returns {boolean} */
  function receive(event){
-  if(!graphicalPlain(event))throw Error('GRAPHICAL_PROTOCOL');
-  if(seen.has(event?.event_id)||seen.size>=256)throw Error('GRAPHICAL_PROTOCOL');
+  if(!graphicalPlain(event)||!graphicalValid('graphical_session_event.schema.json',event))throw Error('GRAPHICAL_PROTOCOL');
   const p=pending.get(event.request_id),prior=history.get(event.request_id);
-  if(!p){if(prior?.closed)return false;throw Error('GRAPHICAL_CORRELATION');}
+  // A local timeout does not revoke the Core's right to finish. Late events
+  // are evidence only: they never reopen a timed-out or physically closed owner.
+  if(!p){
+   const s=event.session;
+   if(event.event==='outcome_unknown'&&session&&s&&event.owner_id===ownerId&&event.surface_id===session.surface_id&&s.runtime_id===session.runtime_id&&s.generation===session.generation&&s.authority_epoch===session.authority_epoch){quarantine();return false;}
+   if(prior&&!correlate(event,prior))throw Error('GRAPHICAL_CORRELATION');return false;
+  }
   const fail=()=>{unknown(p);return false;};
-  if(!graphicalValid('graphical_session_event.schema.json',event)||!correlate(event,p))return fail();
+  if(!correlate(event,p))return fail();
+  if(seen.has(event.event_id))return false;
+  if(seen.size>=256)throw Error('GRAPHICAL_PROTOCOL');
   const s=event.session,b=p.body;
   if(s&&(s.surface_id!==b.surface_id||s.owner_id!==ownerId||s.backend!=='qemu'||s.isa!=='aarch64'))return fail();
   if(event.event==='accepted'){
@@ -81,7 +88,24 @@ export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=300
  /** @param {any} a @param {any} b @returns {boolean} */
  function same(a,b){return JSON.stringify(canonical(a))===JSON.stringify(canonical(b));}
  /** @param {string} surfaceId @returns {boolean} */
- function surfaceClosed(surfaceId){if(typeof surfaceId!=='string')throw Error('GRAPHICAL_CLOSE');if(session?.surface_id!==surfaceId&&!([...pending.values()].some((/** @type {any} */ p)=>p.body.surface_id===surfaceId)))return false;if(!tombstones.has(surfaceId)&&tombstones.size>=256)throw Error('GRAPHICAL_TOMBSTONE_CAPACITY');tombstones.add(surfaceId);const done=[];for(const [id,p] of pending){if(p.body.surface_id===surfaceId){clearTimeout(/** @type {ReturnType<typeof setTimeout>} */(p.timer));pending.delete(id);remember(id,{body:p.body,closed:true,unknown:true});done.push(p);}}session=null;uncertain=false;code=null;const v=publish();for(const p of done)p.resolve(v);return true;}
+ function surfaceClosed(surfaceId){
+  if(typeof surfaceId!=='string')throw Error('GRAPHICAL_CLOSE');
+  const inflight=[...pending.values()],known=[...history.values()];
+  const active=session?.surface_id??inflight[0]?.body.surface_id??(uncertain?known.at(-1)?.body.surface_id:null);
+  if(active!==null&&active!==undefined?active!==surfaceId:!known.some(entry=>entry.body.surface_id===surfaceId))return false;
+  const done=inflight.filter(p=>p.body.surface_id===surfaceId);
+  for(const p of done){clearTimeout(/** @type {ReturnType<typeof setTimeout>} */(p.timer));pending.delete(p.body.request_id);}
+  // Only this trusted physical-destroy callback resets per-owner replay caps.
+  // Fresh random request IDs keep all old late events detached from new owners.
+  history.clear();seen.clear();tombstones.clear();
+  session=null;uncertain=false;code=null;const v=publish();for(const p of done)p.resolve(v);return true;
+ }
+ function quarantine(){
+  if(disposed)return;
+  for(const p of [...pending.values()])unknown(p);
+  uncertain=true;code='OUTCOME_UNKNOWN';if(session)session={...session,phase:'outcome_unknown'};
+  publish();
+ }
  function disconnect(){if(disposed)return;disposed=true;for(const p of pending.values())unknown(p);code='UNAVAILABLE';publish();}
- return Object.freeze({status,request,receive,commandAllowed,disconnect,subscribe(/** @type {(value:any)=>void} */ cb){if(typeof cb!=='function'||listeners.size>=64)throw Error('GRAPHICAL_SUBSCRIBER');listeners.add(cb);cb(status());return()=>listeners.delete(cb);},surfaceClosed});
+ return Object.freeze({status,request,receive,commandAllowed,disconnect,quarantine,subscribe(/** @type {(value:any)=>void} */ cb){if(typeof cb!=='function'||listeners.size>=64)throw Error('GRAPHICAL_SUBSCRIBER');listeners.add(cb);cb(status());return()=>listeners.delete(cb);},surfaceClosed});
 }

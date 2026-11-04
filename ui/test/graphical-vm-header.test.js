@@ -90,3 +90,23 @@ test('a physically released stopped session permits attach to a new VM lifetime'
  const s=fixture();s.session.phase='stopped';s.session.ownership='released';const h=host(s);await h.controller.refresh();
  await h.controller.attach([{...row,id:'surface-new'}]);assert.deepEqual(h.calls,[{op:'attach',surface_id:'surface-new'}]);h.controller.dispose();
 });
+
+
+test('graphical header CSS references only existing canonical theme tokens',()=>{
+ const theme=readFileSync(new URL('../src/design/metaviewer.css',import.meta.url),'utf8');
+ const defined=new Set([...theme.matchAll(/(--[a-z0-9-]+)\s*:/g)].map(match=>match[1]));
+ const referenced=[...source.matchAll(/var\((--[a-z0-9-]+)/g)].map(match=>match[1]);
+ assert.ok(referenced.length>0);for(const token of referenced)assert.ok(defined.has(token),`Undefined graphical header token: ${token}`);
+ assert.doesNotMatch(source,/--cuk-semantic-/);
+});
+
+test('graphical control local mv-dark bridge mirrors canonical dark without changing global theme',()=>{
+ const theme=readFileSync(new URL('../src/design/metaviewer.css',import.meta.url),'utf8');
+ const keys=['surface-panel','surface-canvas','text-primary','text-muted','border-default'];
+ for(const contrast of ['normal','high']){
+  const canonical=theme.split(`:root[data-theme-scheme="dark"][data-theme-contrast="${contrast}"] {`)[1].split('}')[0];
+  const local=source.split(`:root[data-theme-scheme="mv-dark"][data-theme-contrast="${contrast}"] .graphical-vm-state-controls {`)[1].split('}')[0];
+  const values=text=>new Map([...text.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(match=>[match[1],match[2]]));
+  for(const key of keys)assert.equal(values(local).get(`--mv-semantic-${key}`),values(canonical).get(`--mv-semantic-${key}`));
+ }
+});

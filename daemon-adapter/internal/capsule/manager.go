@@ -1199,6 +1199,14 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 		e := m.cfg.BeforeDestroy(ctx, q.SurfaceID)
 		m.mu.Lock()
 		if e != nil {
+			// BeforeDestroy has not dispatched native removal. If the same
+			// surface is still active, make a later destroy retry possible while
+			// preserving any in-flight/unknown graphical state.
+			if current, stillLive := m.bindings[q.SurfaceID]; stillLive && current.Surface.State == "active" && current.RunID == b.RunID && current.Container == b.Container {
+				if g := m.graphical; g != nil && g.surface == q.SurfaceID && g.run == b.RunID {
+					g.stopping = false
+				}
+			}
 			return nil, e
 		}
 	}
