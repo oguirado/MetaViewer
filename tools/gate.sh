@@ -1782,7 +1782,7 @@ def build_leg(leg, root, environment):
             shutil.copytree(installed, preserved)
             environment['ELECTRON_OVERRIDE_DIST_PATH'] = str(preserved)
         commands = [[tools['npm'], 'ci', '--offline'],
-                    [tools['node'], '--test', '--test-timeout=120000', *[str(p.relative_to(directory)) for p in tests]]]
+                    [tools['node'], '--test', '--test-concurrency=2', '--test-timeout=120000', *[str(p.relative_to(directory)) for p in tests]]]
     for command in commands:
         rc = bounded(command, directory, child)
         if rc:

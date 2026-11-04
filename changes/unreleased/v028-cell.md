@@ -1,0 +1,1 @@
+- Fix capsule cell restoration after a Control snap in custom desktop layouts: a reopened capsule returns to its remembered cell, and ended panels no longer count as occupying it.

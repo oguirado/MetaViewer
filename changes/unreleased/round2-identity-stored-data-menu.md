@@ -1,0 +1,1 @@
+- Add Stored data navigation to Human and Agent identity menus, including live identities, while retaining stopped-capsule checks for saved-data operations.

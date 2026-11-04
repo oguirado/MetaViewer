@@ -1,0 +1,12 @@
+{
+  "schema": "headless_request/v0.2",
+  "request_id": "job-example",
+  "op": "run",
+  "params": {
+    "workload_id": "workload-example",
+    "generation": 1,
+    "job_id": "job-example",
+    "operation": "sumsq",
+    "n": 10
+  }
+}

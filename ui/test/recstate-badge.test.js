@@ -109,14 +109,7 @@ for (const [label, edits] of BADGE_MUTANTS) {
 export const WALL_HOOK = [
   ["import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';\n",
     "import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';\nimport RecordingBadge from '../recording/RecordingBadge.vue';\n"],
-  [`    <span
-      :id="badgeId"
-      class="mv-tile-chrome__badge"
-      :data-variant="badgeVariant"
-      role="status"
-      :data-semantic-anchor="badgeAnchor"
-      :title="badgeTitle"
-    >{{ badgeText }}</span>`,
+  ["    <span\n      :id=\"badgeId\"\n      class=\"mv-tile-chrome__badge\" :class=\"{ 'mv-tile-chrome__badge--header': headerTarget }\"\n      :data-variant=\"badgeVariant\" :data-automation-recording=\"demoActive ? 'true' : undefined\"\n      role=\"status\"\n      :data-semantic-anchor=\"badgeAnchor\"\n      :title=\"demoActive ? (demoSealing ? 'Sealing automation' : 'Recording automation') : badgeTitle\"\n    >{{ demoActive ? 'Recording automation' : phase === 'error' ? 'Error' : badgeText }}<button v-if=\"demoActive\" :id=\"`${badgeId}-demo-stop`\" type=\"button\" class=\"mv-demo-stop\" :aria-label=\"`Stop recording automation for ${props.capsuleLabel || props.profileId}`\" :data-semantic-anchor=\"`demo/stop/tile/${props.capsuleId}`\" :disabled=\"demoStopDisabled\" @click.stop=\"automation?.stop?.()\">{{ demoSealing ? 'Sealing…' : 'Stop' }}</button></span>",
   '    <RecordingBadge :capsule-id="props.capsuleId" :capture-state="props.captureState" />'],
 ];
 
@@ -132,7 +125,7 @@ async function chromeWith(edits, clock) {
   return Chrome;
 }
 
-test('wall hook: TileCaptureChrome with the hook ticks between host events; the unhooked chrome is static', async () => {
+test('wall hook and production chrome tick between host events; bypassing the clock freezes the badge', async () => {
   const clock = fakeClock();
   const hooked = await chromeWith(WALL_HOOK, clock);
   const store = storeWith(CAP, { phase: 'recording', recordingId: 'rec-1', elapsedMs: 7000 });
@@ -143,13 +136,19 @@ test('wall hook: TileCaptureChrome with the hook ticks between host events; the 
     assert.equal(textOf(byId(mounted, BADGE)).trim(), 'Recording 00:10');
     assert.equal(byId(mounted, BADGE).props['data-variant'], 'recording');
   } finally { mounted.close(); }
-  // negative control: without the hook the badge only repaints on events
   const plain = await chromeWith([], clock);
-  const frozenStore = storeWith(CAP, { phase: 'recording', recordingId: 'rec-1', elapsedMs: 7000 });
-  const frozen = mount(plain, { capsuleId: CAP, capsuleLabel: 'Cap', captureState: frozenStore });
+  const live = mount(plain, { capsuleId: CAP, capsuleLabel: 'Cap', captureState: storeWith(CAP, {phase:'recording',recordingId:'rec-live',elapsedMs:7000}), clock });
   try {
     clock.advance(3000); await flush();
-    assert.equal(textOf(byId(frozen, BADGE)).trim(), 'Recording 00:07', 'unhooked badge is frozen between events');
+    assert.equal(textOf(byId(live, BADGE)).trim(), 'Recording 00:10', 'the production chrome also ticks');
+  } finally { live.close(); }
+  // Negative control: bypass the interpolated elapsed value.
+  const frozenChrome = await chromeWith([['elapsedMs: elapsed.value,','elapsedMs: entry.value?.elapsedMs,']], clock);
+  const frozenStore = storeWith(CAP, { phase: 'recording', recordingId: 'rec-1', elapsedMs: 7000 });
+  const frozen = mount(frozenChrome, { capsuleId: CAP, capsuleLabel: 'Cap', captureState: frozenStore, clock });
+  try {
+    clock.advance(3000); await flush();
+    assert.equal(textOf(byId(frozen, BADGE)).trim(), 'Recording 00:07', 'bypassing the clock freezes the badge between events');
   } finally { frozen.close(); }
 });
 

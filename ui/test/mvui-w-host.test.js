@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import { validates, intentSchema } from './mvui-x-schema.js';
@@ -99,7 +103,7 @@ async function boot(host, search = '') {
     'capsule-ui-kit/theme': { installKitTheme() {}, setKitScheme() {} },
   };
   const code = main.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
-    (_all, binding, _q, spec) => `const ${binding} = globalThis.__wBoot[${JSON.stringify(spec)}];`)
+    (_all, binding, _q, spec) => `const ${sfcImportBinding(binding)} = globalThis.__wBoot[${JSON.stringify(spec)}];`)
     .replace(/^import\s+['"][^'"\n]+['"];?$/gm, '');
   await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#w-${++serial}`);
   await tick();
@@ -155,8 +159,8 @@ test('each optional method is independently feature detected, including non-call
       try {
         assert.ok(mounted.props, `${name}: ${mounted.mount.textContent}`);
         const p = mounted.props;
-        if (name === 'loadSettings') assert.equal(JSON.parse(await p.settingsHost.loadSettings()).scheme, 'mv-light');
-        if (name === 'saveSettings') { await p.settingsHost.saveSettings(encodeMvSettings({ scheme: 'mv-dark', density: 'compact' })); assert.equal(mounted.local.size, 1); }
+        if (name === 'loadSettings') assert.equal(JSON.parse(await p.settingsHost.loadSettings()).scheme, 'mv-dark');
+        if (name === 'saveSettings') { await p.settingsHost.saveSettings(encodeMvSettings({ scheme: 'mv-light', density: 'compact' })); assert.equal(mounted.local.size, 1); }
         if (name === 'recordingDestination') assert.equal(p.exportDestination, '');
         if (name === 'nestedDepth') assert.equal(p.nestedHost.getNestedDepth(), null);
         if (name === 'selfCapsuleId') assert.equal(p.nestedHost.getSelfCapsuleId(), null);
@@ -250,7 +254,7 @@ async function component(path, deps) {
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, spec) => {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__wComponents[${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__wComponents[${JSON.stringify(spec)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#w-component-${serial}`)).default;
 }
@@ -286,7 +290,7 @@ test('mounted App routes wall controls and catalog proposals, renders typed verd
     './terminal/SideTerminalOverlay.vue': stub, './multislot/MultislotHost.vue': vue.defineComponent({ setup: (_p, ctx) => { captured.multislot = ctx; return () => vue.h('div'); } }),
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': stub,
     './agent/AgentLaneHost.vue': stub, './surfaces/SurfaceCanvas.vue': stub,
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const App = await component('App.vue', deps);
   const mounted = mountComponent(App, booted.props);

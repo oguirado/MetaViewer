@@ -1,10 +1,12 @@
 # VM and MicroVM roadmap
 
-This document records the agreed direction and the current limits of VM capsules. It is a roadmap, not a declaration that every backend, image or mode is available. Source references describe revision `07f2ada1b8011c78d046b665b3a0e823b80372fa`; runtime observations below are scoped to the owned ARM64 diagnostic run.
+This document records the agreed direction and the current limits of VM capsules. It is a roadmap, not a declaration that every backend, image or mode is available. The graphical VM source descends from revision `07f2ada1b8011c78d046b665b3a0e823b80372fa`. Later owned episodes established manual ARM64 VM creation/frame/stop and fixed-job MicroVM creation/result/stop from the interface. Those tests do not mean every installed package contains or enables the relevant profiles.
+
+The [ARM64 general-command candidate](docs/ARM64_GUEST_COMMANDS.md) has independently reviewed backend, configured packaged UI and SDK command/stop episodes. The next integration connects graphical VM and the visible MicroVM command console to ordinary Add capsule with [verified local setup](docs/ARM64_CAPSULE_SETUP.md). The new setup, transport and package require fresh acceptance before release; historical configured episodes do not prove the new package. General image import, graphical MicroVM, interactive PTY/SSH and save slots remain outside this acceptance.
 
 ## Current implementation and evidence
 
-The current VM creation path uses the existing `createSurface({kind: 'vm'})` selector. The host chooses an eligible configured profile and owns its image, program and path configuration. The renderer cannot supply those values. The ordinary browser call remains `createSurface()` with no selector. This preserves the existing authority facade and wire protocol; it does not add a VM-specific public method or channel. See [authority admission](ui/electron/authorityWire.js), [preload validation](ui/electron/preload.js), [profile selection](ui/electron/profilePicker.js), and [creation regressions](ui/test/vm-capsule-open.test.js).
+The current VM creation path uses the existing `createSurface({kind: 'vm'})` selector. The host chooses an eligible configured profile and owns its image, program and path configuration. The renderer cannot supply those values. The ordinary browser call remains `createSurface()` with no selector. VM creation reuses the existing `createSurface` method and channel. A separate read-only `authority.vmAvailable` boolean query uses `metaviewer:authority.vmAvailable`; it reports host capability without granting creation authority. See [authority admission](ui/electron/authorityWire.js), [preload validation](ui/electron/preload.js), [profile selection](ui/electron/profilePicker.js), and [creation regressions](ui/test/vm-capsule-open.test.js).
 
 The admitted source template is an ARM64 graphical Linux VM using `notepad-vm`. The scoped graphical episode is complete: direct visual inspection observed the guest editor on the actual RoleSurface canvas, and the verified core-frame and owned teardown evidence received independent review. Core destruction and the absence of the owned application/native processes and control groups were corroborated. The visual observation was not an automated optical acceptance predicate.
 
@@ -32,12 +34,12 @@ Each row requires its own image version, host prerequisites and evidence. ARM64 
 
 | Architecture | Backend | Mode | Current boundary | Next acceptance gate |
 | --- | --- | --- | --- | --- |
-| ARM64 | Ordinary VM | Desktop | Configured template; scoped graphical episode closed and independently reviewed, with visually observed guest editor and verified frame/teardown evidence | Prove manual creation separately; then admit a fresh core-controlled action and verify its semantic result |
+| ARM64 | Ordinary VM | Desktop | Configured template; manual UI creation, frame delivery and owned stop independently reviewed | Enable the tested profile in the delivered package; guest input still needs its own acceptance |
 | ARM64 | Ordinary VM | Terminal | Proposed; no general terminal/headless adapter proof | Define adapter contract, then prove session, output, cancellation and teardown |
 | x64 | Ordinary VM | Desktop | Runtime unproved; inspected hosts currently return `ENODEV` from the KVM API | Establish usable host virtualization, then validate a native image and the full capsule lifecycle |
 | x64 | Ordinary VM | Terminal | Runtime and adapter unproved; same host blocker | Resolve host prerequisite and validate terminal lifecycle independently |
 | ARM64 | MicroVM | Desktop | Backend, image integration and graphical mode unproved | Select and validate a backend recipe plus guest capture/input integration |
-| ARM64 | MicroVM | Terminal | Backend and mode unproved | Prove compatible kernel/root filesystem, adapter and owned lifecycle |
+| ARM64 | MicroVM | Terminal | Fixed-job UI lifecycle reviewed; general commands, file persistence, stderr/exit, cancel, timeout and stop observed in a separate real backend episode | Complete general-command SDK and packaged UI acceptance, then integrate the candidate |
 | x64 | MicroVM | Desktop | Unproved; inspected host KVM blocker also applies | Resolve host prerequisite and prove backend/image/graphical integration |
 | x64 | MicroVM | Terminal | Unproved; inspected host KVM blocker also applies | Resolve host prerequisite and prove backend/image/terminal integration |
 

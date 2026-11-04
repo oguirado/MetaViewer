@@ -98,7 +98,7 @@ const kitProviders = computed(() => {
 </script>
 <template>
   <div v-if="!deck" id="mv-side-terminal-overlay" class="mv-side-terminal-overlay" data-semantic-anchor="terminal/overlay" :data-cuk-geometry-id="chromeGeometry" :data-terminal-state="bindingState">
-    <BrokerLaunchControls v-if="terminalBroker" :visible="overlayOpen" :broker="terminalBroker" :providers="hostProviders" />
+    <BrokerLaunchControls v-if="terminalBroker && !terminalBinding" :visible="overlayOpen" :broker="terminalBroker" :providers="hostProviders" />
     <SideTerminalPanel
       :facade="facadeRef ?? undefined"
       :providers="kitProviders"

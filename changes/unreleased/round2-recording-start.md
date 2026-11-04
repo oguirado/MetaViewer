@@ -1,0 +1,1 @@
+- Fix recording startup reactivity, keep the tile timer advancing between frames, and provide verified capture subscriptions for Human capsules without changing input authority.

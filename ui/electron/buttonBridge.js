@@ -30,16 +30,19 @@ export function copyBounded(clipboard,text) {
   clipboard.writeText(text);
 }
 /** @param {any} options */
-export function createButtonService({root,demoRoot=root,clipboard,env=process.env,spawnTool=spawn,killGroup=process.kill,stopBudgetMs=DISPOSE_BUDGET_MS,disposeBudgetMs=DISPOSE_BUDGET_MS}) {
+export function createButtonService({root,demoRoot=root,clipboard,env=process.env,spawnTool=spawn,killGroup=process.kill,stopBudgetMs=DISPOSE_BUDGET_MS,disposeBudgetMs=DISPOSE_BUDGET_MS,onState=()=>{}}) {
   /** @type {any} */let active=null;
   let sealedDemo='';
   const childEnv=Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','MV_MW_HOME','MV_MEMORYWEB_REPO'].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]]));
+  if(typeof env.MV_OPERATOR_STATE_HOME==='string')childEnv.XDG_STATE_HOME=env.MV_OPERATOR_STATE_HOME;
   /** @param {string} verb @param {any} v */
-  function launch(verb,v) {
+  function launch(verb,v,copyPrompt=true) {
     if(typeof demoRoot!=='string')throw new Error('DEMO_RUNTIME');
     const argv=[join(demoRoot,'tools/mv_demo.py'),verb,...(verb==='record'?['--identity',v.identity,'--demo',v.demo]:verb==='prompt'?['--demo',v.demo,'--site',v.site]:['--site',v.site])];
-    const child=spawnTool('python3',argv,{shell:false,env:childEnv,stdio:['ignore','pipe','pipe'],detached:true});
+    const child=spawnTool('python3',argv,{shell:false,env:{...childEnv,MV_DEMO_HOST_CHILD:'1'},stdio:['ignore','pipe','pipe'],detached:true});
     let output=Buffer.alloc(0),bytes=0,settled=false,announced=false,failed=false,armedMs=0;
+    let phase='starting';
+    /** @type {any} */let payload=null;
     /** @type {Promise<any>|undefined} */let stopping;
     /** @type {ReturnType<typeof setTimeout>|undefined} */let stopTimer;
     /** @type {(value:any)=>void} */let finish;
@@ -64,6 +67,7 @@ export function createButtonService({root,demoRoot=root,clipboard,env=process.en
         return stopping;
       }
       stopping=done;
+      if(!settled){phase=announced?'sealing':'starting';onState();}
       if(!settled){
         armKill(budgetMs);
         signalGroup('SIGINT');
@@ -80,27 +84,62 @@ export function createButtonService({root,demoRoot=root,clipboard,env=process.en
         try {
           const row=JSON.parse(output.subarray(0,output.indexOf(10)).toString('utf8'));
           if(Object.keys(row).length!==1 || !viewerUrl(row.url))throw new Error();
-          announced=true;clearTimeout(timer);announce({ok:true,url:row.url});
+          announced=true;phase='recording';clearTimeout(timer);onState();announce({ok:true,url:row.url});
         }catch{fail();}
       }
     });
     child.once('error',fail);
     child.once('close',(/** @type {number} */rc)=>{
-      if(settled)return;settled=true;clearTimeout(timer);clearTimeout(stopTimer);
+      if(settled)return;settled=true;phase='idle';clearTimeout(timer);clearTimeout(stopTimer);onState();
       let reply={ok:false,code:'DEMO_REFUSED'};
       try {
-        if(failed || rc!==0)throw new Error();
         const text=output.toString('utf8');
-        if(verb==='prompt')copyBounded(clipboard,promptBlock(text));
+        if(!failed && rc===6 && verb==='check') {
+          const row=JSON.parse(text.trim());
+          // Forward only this static diagnostic, never authored paths or text.
+          if(row.schema==='metaviewer.demo/v1' && row.ok===false && row.error==='ACTING_STEP_LOCATE_WAIT_REQUIRED')reply={ok:false,code:'ACTING_STEP_LOCATE_WAIT_REQUIRED'};
+        }
+        if(failed || rc!==0)throw new Error();
+        if(verb==='prompt'){const block=promptBlock(text);payload=copyPrompt?block:text;if(copyPrompt)copyBounded(clipboard,block);}
         else {
           const row=JSON.parse(text.trim().split('\n').at(-1)??'');
-          if(row.schema!=='metaviewer.demo/v1' || row.ok!==true || !row.result || (verb==='record' && !announced) || (verb==='check' && (row.result.site!==v.site || row.result.validated!==true || (row.result.source!==undefined && row.result.source!=='user'))))throw new Error();
+          if(row.schema!=='metaviewer.demo/v1' || row.ok!==true || !row.result || (verb==='record' && !announced) || (verb==='check' && (row.result.site!==v.site || row.result.validated!==true || (row.result.source!==undefined && !['user','home'].includes(row.result.source)))))throw new Error();
         }
+        if(verb!=='prompt')payload=JSON.parse(text.trim().split('\n').at(-1)??'').result;
         reply=/** @type {any} */({ok:true});
       }catch{/* Public refusal only. */}
       announce(reply);finish(reply);
     });
-    return {done,ready,stop,demo:v.demo};
+    return {done,ready,stop,demo:v.demo,identity:v.identity,get phase(){return phase;},get payload(){return payload;}};
+  }
+  function state() {
+    const run=active;
+    return {schema:'metaviewer.demo_state/v1',ok:true,phase:run?.phase??'idle',identity:run && run.phase!=='idle'?run.identity:'',demo:run && run.phase!=='idle'?run.demo:''};
+  }
+  /** @param {any} run @param {any} reply */
+  function finishRecord(run,reply) {
+    if(reply.ok)sealedDemo=run.demo;
+    if(active===run)active=null;
+    onState();
+  }
+  /** @param {any} v */
+  function record(v) {
+    assertButtonCall('demo.start',[v]);
+    if(active)return null;
+    sealedDemo='';const run=launch('record',v);active=run;onState();
+    void run.done.then(reply=>{if(!reply.ok)finishRecord(run,reply);});
+    return run;
+  }
+  // CLI prompt/check use the same environment and custody as UI operations.
+  // The durable tool gate verifies earlier seals after an application restart.
+  /** @param {string} method @param {any[]} args */
+  async function cliTool(method,args) {
+    assertButtonCall(method,args);
+    if(!['demo.prompt','demo.check'].includes(method))throw new Error('BUTTON_ARGS');
+    if(active)return {reply:{ok:false,code:'DEMO_BUSY'}};
+    const run=launch(method==='demo.prompt'?'prompt':'check',args[0],false);
+    const reply=await run.done;
+    return {reply,...(reply.ok?(method==='demo.prompt'?{text:run.payload}:{result:run.payload}):{})};
   }
   /** @param {string} method @param {any[]} args */
   async function request(method,args) {
@@ -108,27 +147,21 @@ export function createButtonService({root,demoRoot=root,clipboard,env=process.en
     const v=args[0];
     try {
       if(method==='entry.copy'){copyBounded(clipboard,promptBlock(readFileSync(join(root,'docs/AGENT_ENTRY.md'),'utf8')));return {ok:true};}
+      if(method==='demo.state')return state();
       if(method==='demo.start') {
-        if(active)return {ok:false,code:'DEMO_BUSY'};
-        sealedDemo='';const run=launch('record',v);active=run;
-        // Keep successful seals for Stop; release failed runs only after exit.
-        void run.done.then((/** @type {any} */reply)=>{if(!reply.ok && active===run)active=null;});
-        run.demo=v.demo;
-        const reply=await run.ready;
-        if(!reply.ok && active===run)active=null;
-        return reply;
+        const run=record(v);if(!run)return {ok:false,code:'DEMO_BUSY'};
+        return await run.ready;
       }
       if(method==='demo.stop') {
         if(!active)return {ok:false,code:'DEMO_NOT_RECORDING'};
         const run=active;
         const reply=await run.stop();
-        if(reply.ok)sealedDemo=run.demo;
-        if(active===run)active=null;return reply;
+        finishRecord(run,reply);return reply;
       }
       if(active)return {ok:false,code:'DEMO_BUSY'};
       if(method==='demo.prompt' && sealedDemo!==v.demo)return {ok:false,code:'DEMO_REFUSED'};
       return await launch(method==='demo.prompt'?'prompt':'check',v).done;
     }catch{return {ok:false,code:'BUTTON_UNAVAILABLE'};}
   }
-  return {request,async dispose(){if(active){const run=active;await run.stop(disposeBudgetMs);if(active===run)active=null;}}};
+  return {request,state,record,finishRecord,cliTool,async dispose(){if(active){const run=active;await run.stop(disposeBudgetMs);if(active===run)active=null;}}};
 }

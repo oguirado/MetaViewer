@@ -206,20 +206,21 @@ test('P18C mutant: revoking instead of hiding a human view is rejected',async()=
 });
 
 async function workspaceFixture(run,source=read('../src/wall/DesktopWorkspace.vue'),initial=null, overrides={}, beforeLoad=()=>{}) {
-  const restore=environment();let live;const saved=[],mounted=[],retired=[],presetCalls=[],presetReplies=new Map(),reveals=[];
-  let stored=initial;
-  const Wall=vue.defineComponent({props:['projectionView','storage'],emits:['ready','wall-settled'],setup(p,ctx){
+  const restore=environment();let live;const saved=[],mounted=[],retired=[],presetCalls=[],presetReplies=new Map(),revealReplies=new Map(),reveals=[],panels=new Map(),closePanels=new Map();
+  let stored=initial,liveState;
+  const Wall=vue.defineComponent({props:['projectionView','storage'],emits:['ready','wall-settled','panel-closed'],setup(p,ctx){
+    const key=ctx.attrs['data-desktop'];panels.set(key,new Set());closePanels.set(key,id=>{panels.get(key).delete(id);ctx.emit('panel-closed',{capsuleId:id});});
     const identity=++serial;mounted.push(identity);const revision=vue.ref(0),stop=p.projectionView.subscribe(()=>revision.value++);
-    ctx.expose({revealSurface:id=>{reveals.push({key:ctx.attrs['data-desktop'],id});return {ok:p.projectionView.getProjection().rows.some(r=>r.id===id)};},setPreset:preset=>{const key=ctx.attrs['data-desktop'];presetCalls.push({key,preset});return presetReplies.get(key)??{ok:true};},applyPresentationIntent:()=>({ok:true})});
+    ctx.expose({hasSurfacePanel:id=>panels.get(key).has(id),revealSurface:id=>{reveals.push({key,id});const ok=revealReplies.get(key+'/'+id)!==false && p.projectionView.getProjection().rows.some(r=>r.id===id);if(ok)panels.get(key).add(id);return {ok};},setPreset:preset=>{const key=ctx.attrs['data-desktop'];presetCalls.push({key,preset});return presetReplies.get(key)??{ok:true};},applyPresentationIntent:()=>({ok:true})});
     vue.onMounted(()=>{ctx.emit('ready');ctx.emit('wall-settled');});vue.onBeforeUnmount(()=>{stop();retired.push(identity);});
     return()=>{void revision.value;return vue.h('section',{},p.projectionView.getProjection().rows.map(r=>vue.h('article',{id:r.id},r.id)));};
   }});
   try {
     const Workspace=await compile(source,{'./WallWorkspace.vue':Wall,'./layout.js':{createWallLayout},'../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js':{decodeAndMigrateLayoutProfile},'../../electron/desktopLayout.js':model,'../../electron/desktopShortcuts.js':keys});
-    const props=vue.reactive({storage:{readRaw:async()=>stored,writeAtomic:async raw=>{stored=raw;saved.push(JSON.parse(raw));}},scope:SCOPE,defaultProfile:createWallLayout(SCOPE),projectionView:{getSnapshot:()=>({envelope:{projection:{rows}}})},rows:[...rows],modes:{h:'human',a:'agent'},intentBuilders:{},controlRegistry:{},scheduler:{},tileScheduler:{}});
+    const props=vue.reactive({storage:{readRaw:async()=>stored,writeAtomic:async raw=>{stored=raw;saved.push(JSON.parse(raw));}},scope:SCOPE,defaultProfile:createWallLayout(SCOPE),projectionView:{getSnapshot:()=>({status:'live',stale:false,envelope:{projection:{rows}}})},rows:[...rows],modes:{h:'human',a:'agent'},intentBuilders:{},controlRegistry:{},scheduler:{},tileScheduler:{},onDesktopsChange:state=>{liveState=state;}});
     Object.assign(props,overrides);
     live=mount(Workspace,props);beforeLoad(live.vm);await tick();await tick();
-    await run({vm:live.vm,props,saved,mounted,retired,presetCalls,presetReplies,reveals,getStored:()=>stored});
+    await run({vm:live.vm,props,saved,mounted,retired,presetCalls,presetReplies,revealReplies,reveals,panels,closePanels,getState:()=>liveState,getStored:()=>stored});
   } finally {live?.app.unmount();restore();}
 }
 test('P18C actual desktop host keeps inactive walls mounted, routes openings, and persists navigation',()=>workspaceFixture(async({vm,props,saved,mounted,retired})=>{
@@ -375,3 +376,95 @@ test('V027 empty view names the other view and its button navigates both ways',a
 test('V027 a choice while layout loading is pending wins over agent-only startup',()=>workspaceFixture(async({saved})=>{
   assert.equal(saved.at(-1).activeView,'human');
 },undefined,null,onlyAgent,vm=>vm.selectView('human')));
+
+
+test('desktop owner persists display names without remounting or changing capsule identity',()=>workspaceFixture(async({vm,saved,mounted,retired})=>{
+  const before=mounted.length;
+  assert.equal(await vm.renameDesktop('human',1,'Research'),true);
+  assert.equal(await vm.renameCapsule('h','Notes'),true);await tick();
+  assert.equal(saved.at(-1).views.human.desktops[0].label,'Research');
+  assert.equal(saved.at(-1).labels.h,'Notes');assert.equal(saved.at(-1).assignments.h.view,'human');
+  assert.equal(mounted.length,before);assert.equal(retired.length,0);
+}));
+test('desktop owner refuses corrupt layout names on restore',async()=>{
+ const state=model.createDesktopState();state.labels={h:'x'.repeat(81)};
+ await workspaceFixture(async({vm})=>{assert.equal(await vm.renameCapsule('h','Allowed'),false);},undefined,JSON.stringify(state));
+});
+test('failed name persistence restores the previous display label',async()=>{
+ let fail=false,raw=null;
+ await workspaceFixture(async({vm})=>{
+  assert.equal(await vm.renameCapsule('h','Before'),true);fail=true;
+  assert.equal(await vm.renameCapsule('h','After'),false);fail=false;
+  assert.equal(await vm.renameDesktop('human',1,'Research'),true);await tick();
+  assert.equal(JSON.parse(raw).labels.h,'Before');
+ },undefined,null,{storage:{readRaw:async()=>null,writeAtomic:async value=>{if(fail)throw Error('write refused');raw=value;}}});
+});
+
+test('an in-flight capsule name write cannot be superseded before it settles',async()=>{
+ let hold=false,release,raw=null;
+ await workspaceFixture(async({vm})=>{
+  assert.equal(await vm.renameCapsule('h','Before'),true);hold=true;
+  const first=vm.renameCapsule('h','After');
+  assert.equal(await vm.renameCapsule('h','Too soon'),false);
+  await tick();hold=false;release();assert.equal(await first,true);await tick();
+  assert.equal(JSON.parse(raw).labels.h,'After');
+ },undefined,null,{storage:{readRaw:async()=>null,writeAtomic:async value=>{if(hold)await new Promise(resolve=>{release=resolve;});raw=value;}}});
+});
+
+test('identity deletion retires saved aliases and cells while stopping preserves identity aliases',async()=>{
+ const state=model.createDesktopState();state.labels={'identity-a':'Old account',h:'Transient',other:'Keep'};
+ state.views.human.desktops[0].identityCells={'identity-a':{col:0,row:0},other:{col:1,row:0}};
+ await workspaceFixture(async({vm,saved})=>{
+  vm.forgetSurface('h');await tick();assert.equal(saved.at(-1).labels.h,undefined);assert.equal(saved.at(-1).labels['identity-a'],'Old account');
+  await vm.forgetIdentity('identity-a');await tick();const latest=saved.at(-1);
+  assert.equal(latest.labels['identity-a'],undefined);assert.equal(latest.labels.other,'Keep');
+  assert.equal(latest.views.human.desktops[0].identityCells['identity-a'],undefined);
+  assert.deepEqual(latest.views.human.desktops[0].identityCells.other,{col:1,row:0});
+ },undefined,JSON.stringify(state));
+});
+
+
+test('OPFIX a vanished panel is recovered when returning to its desktop',()=>workspaceFixture(async({vm,panels,saved})=>{
+ assert.ok(panels.get('human-1').has('h'));
+ vm.addDesktop();await tick();vm.selectView('agent');await tick();
+ panels.get('human-1').delete('h');
+ vm.selectView('human');vm.selectDesktop(1);await tick();
+ assert.equal(saved.at(-1).assignments.h.desktop,1);
+ assert.ok(panels.get('human-1').has('h'),'a listed live capsule must be revealed again after panel loss');
+}));
+test('OPFIX explicit panel closure survives navigation until Refresh is requested',()=>workspaceFixture(async({vm,panels,closePanels,saved,getState})=>{
+ closePanels.get('human-1')('h');await tick();
+ vm.selectView('agent');await tick();vm.selectView('human');await tick();
+ assert.equal(panels.get('human-1').has('h'),false,'navigation respects explicit Close');
+ const assignments=JSON.stringify(getState().assignments);
+ const result=await vm.refreshCurrentDesktop();await tick();
+ assert.equal(result.ok,true);
+ assert.ok(panels.get('human-1').has('h'),'Refresh restores the current desktop from live rows');
+ assert.equal(JSON.stringify(getState().assignments),assignments,'Refresh never moves live capsule assignments');
+ assert.equal(JSON.stringify(saved.at(-1).assignments),assignments,'persisted assignments also stay unchanged');
+}));
+
+
+test('OPFIX Refresh reports a failed panel restoration instead of a successful layout',()=>workspaceFixture(async({vm,panels,revealReplies})=>{
+ panels.get('human-1').delete('h');revealReplies.set('human-1/h',false);
+ const result=await vm.refreshCurrentDesktop();
+ assert.equal(result.ok,false);assert.equal(result.code,'SURFACE_UNAVAILABLE');
+ assert.deepEqual(result.failedCapsules,['h']);
+ assert.equal(panels.get('human-1').has('h'),false);
+}));
+test('OPFIX Refresh refuses stale live state without undoing an explicit close',()=>workspaceFixture(async({vm,props,panels,closePanels,reveals,presetCalls})=>{
+ closePanels.get('human-1')('h');await tick();
+ props.projectionView.getSnapshot=()=>({status:'live',stale:true,envelope:{projection:{rows}}});
+ const before=[reveals.length,presetCalls.length];
+ assert.deepEqual(await vm.refreshCurrentDesktop(),{ok:false,code:'PROJECTION_UNAVAILABLE'});
+ assert.deepEqual([reveals.length,presetCalls.length],before);
+ vm.selectView('agent');await tick();vm.selectView('human');await tick();
+ assert.equal(panels.get('human-1').has('h'),false);
+}));
+test('OPFIX Refresh rejects a desktop switch during its pending render',()=>workspaceFixture(async({vm})=>{
+ const pending=vm.refreshCurrentDesktop();vm.selectView('agent');
+ assert.deepEqual(await pending,{ok:false,code:'DESKTOP_CHANGED'});
+}));
+test('OPFIX Refresh before hydration is unavailable',async()=>{
+ let pending;await workspaceFixture(async()=>{assert.deepEqual(await pending,{ok:false,code:'ERR_NOT_READY'});},undefined,null,{},vm=>{pending=vm.refreshCurrentDesktop();});
+});

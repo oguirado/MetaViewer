@@ -146,6 +146,34 @@ class WallDeadlineTests(unittest.TestCase):
         self.assertTrue(bare_report_path.is_file())
         self.assertTrue(bare_report_path.is_relative_to(self.state_home / 'metaviewer/runs'))
 
+    def test_terminal_json_is_published_with_deadline_disarmed(self):
+        host = load_host()
+        output = io.StringIO()
+        fired = []
+
+        class ExpireOnPublication(io.StringIO):
+            def write(stream, text):
+                count = super().write(text)
+                if text.startswith('{') and not fired and signal.getitimer(signal.ITIMER_REAL)[0] > 0:
+                    fired.append(True)
+                    signal.raise_signal(signal.SIGALRM)
+                return count
+
+        output = ExpireOnPublication()
+        with patch.dict(os.environ, XDG_STATE_HOME=str(self.state_home)), \
+             patch.object(host, 'admit_home', return_value=self.home), \
+             patch.object(host, 'connect'), \
+             patch.object(host, 'HostBackend', return_value=SimpleNamespace()), \
+             patch.object(host, 'execute', return_value=(0, 'PASS', None)), \
+             contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
+            rc = mw_run.main(['--identity', 'fixture', '--site', 'meta-ai', '--workflow', 'ask'],
+                             runner=host.run_entry)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(output.getvalue().splitlines()), 1)
+        self.assertEqual(json.loads(output.getvalue())['rc'], 0)
+        self.assertEqual(fired, [])
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL)[0], 0)
+
     def test_budget_from_workflow(self):
         host = load_host()
         shutil.copytree(ROOT / 'memoryweb-builtin/sites/meta-ai', self.home / 'sites/meta-ai')

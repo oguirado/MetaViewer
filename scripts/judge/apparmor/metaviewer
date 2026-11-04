@@ -11,7 +11,7 @@
 # Remove it with: sudo apparmor_parser -R /etc/apparmor.d/metaviewer-judge &&
 # sudo rm /etc/apparmor.d/metaviewer-judge
 #
-# [TARGET, unit decision] The attachment glob matches the packaged directory
+# The attachment glob matches the packaged directory
 # name MetaViewer-linux-<arch> wherever it is unpacked, so the install smoke
 # (which runs a temporary copy) is covered as well as the installed copy.
 abi <abi/4.0>,

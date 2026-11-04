@@ -286,7 +286,7 @@ describe('lane T CSP surface', () => {
   test('chrome CSS builds on kit tokens with compact, overflow-free rules', () => {
     const css = readFileSync(CSS_URL, 'utf8');
     assertTokenOnlyCss(css, 'wall.css');
-    const chrome = css.slice(css.indexOf('MVUI9 tile capture chrome'));
+    const chrome = css.slice(css.indexOf('MVUI9 tile capture chrome'), css.indexOf('/* Compact capsule chrome:'));
     assert.ok(chrome.length > 0, 'chrome section is present');
     for (const selector of ['.mv-tile-chrome', '.mv-tile-chrome__record',
       '.mv-tile-chrome__shot', '.mv-tile-chrome__badge']) {
@@ -358,6 +358,7 @@ describe('TileCaptureChrome static contract (pinned compiler)', async () => {
     assert.deepEqual([...new Set(specifiers)].sort(), [
       '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue',
       '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue',
+      '../recording/useRecordingElapsed.js',
       './tileCapture.js',
       'vue',
     ]);
@@ -371,7 +372,7 @@ describe('TileCaptureChrome static contract (pinned compiler)', async () => {
 
   test('rail renders the record handle, screenshot control and badge with tile anchors', () => {
     const template = source.slice(source.indexOf('<template>'));
-    assert.match(template, /<div v-if="!props\.displayOnly" class="mv-tile-chrome" role="group"/);
+    assert.match(template, /<div v-if="!props\.displayOnly" class="mv-tile-chrome"[^>]*role="group"/);
     assert.match(template, /<span :id="recordWrapId" class="mv-tile-chrome__record" :data-semantic-anchor="recordAnchor">/);
     assert.match(template, /<SaasRecordButton[\s\S]*?:phase="phase"[\s\S]*?:disabled="recordDisabled"[\s\S]*?:unavailable-reason="recordReason"[\s\S]*?@submit-intent="onRecordIntent"/);
     assert.match(template, /<button[\s\S]*?:id="shotId"[\s\S]*?class="mv-tile-chrome__shot"[\s\S]*?:data-semantic-anchor="shotAnchor"[\s\S]*?:aria-label="shotName"[\s\S]*?:disabled="shotDisabled"[\s\S]*?@click="onShotClick"/);

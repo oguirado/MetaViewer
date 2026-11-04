@@ -1,0 +1,11 @@
+{
+  "schema": "rewind_request/v0.2",
+  "request_id": "request-mark",
+  "op": "mark",
+  "params": {
+    "workload_id": "workload-one",
+    "generation": 2,
+    "authority_epoch": 2,
+    "label": "Before edit"
+  }
+}

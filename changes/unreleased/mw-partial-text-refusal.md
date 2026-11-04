@@ -1,0 +1,1 @@
+- Keep an input-uncertain outcome when a verified focus click is followed by a clean type refusal, retaining the click receipt and refused-type evidence.

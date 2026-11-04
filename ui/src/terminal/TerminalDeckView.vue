@@ -3,7 +3,7 @@
  * OpenFresnel-style full-wall Terminal Deck view for MetaViewer (P18h).
  *
  * Acts as a third workspace beside Humans and Agents. Renders the screen bar
- * ("Screen 1, 2, …" with "+" and empty-only "✕"), "🚀 Bootstrap" and
+ * ("Screen 1, 2, …" with "+" and empty-only "✕"), workflow controls and
  * "＋ New terminal" actions, the profile/Custom CLI launcher popover, an
  * equal-tile terminal grid with focus rings and SIGINT-then-close lifecycle,
  * and busy-close confirmation.
@@ -17,11 +17,18 @@ import {
   collectRetainedSlotIds,
   createTerminalDeckController,
   matchDeckShortcut,
+  placeTerminalLauncher,
+  placeTerminalContextMenu,
 } from './terminalDeckModel.js';
 import './terminal.css';
+import {createPairedTerminals} from './pairedTerminals.js';
+import {AGENT_PROFILE_IDS} from './agentPromptGate.js';
 
 const props = defineProps({
   open: { type: Boolean, default: true },
+  compact: { type: Boolean, default: false },
+  idPrefix: { type: String, default: '' },
+  pairedTarget: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalBinding: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalSessionPort: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
@@ -32,7 +39,11 @@ const props = defineProps({
   closeGraceMs: { type: Number, default: undefined },
 });
 
-const emit = defineEmits(['update:open']);
+/** @param {string} id */
+function domId(id) { return props.idPrefix ? `${props.idPrefix}-${id}` : id; }
+/** @param {unknown} id */
+function localId(id) { return typeof id === 'string' && props.idPrefix && id.startsWith(`${props.idPrefix}-`) ? id.slice(props.idPrefix.length+1) : id; }
+const emit = defineEmits(['update:open','pair-focus']);
 
 class MvDeckTerminal extends Terminal {
   /** @param {any} options */
@@ -44,6 +55,10 @@ class MvDeckTerminal extends Terminal {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const revision = ref(0);
+const pairBusy = ref(false), pairError = ref('');
+const agentChoice=ref(/** @type {any} */ (null));
+const agentPreparing=ref(false);
+let agentGeneration=0;
 const customCommand = ref('');
 const pastedBootstrapText = ref('');
 const lastBootstrapFocused = ref(false);
@@ -63,6 +78,15 @@ const contextMenu = ref(
     selectionText: '',
   }),
 );
+const deckRoot = ref(/** @type {HTMLElement|null} */ (null));
+const contextDimensions = ref({width:0,height:0});
+const contextMenuStyle = computed(() => {
+  const root=deckRoot.value?.getBoundingClientRect?.();
+  const local=root && placeTerminalContextMenu(root,contextMenu.value,contextDimensions.value,{width:globalThis.window?.innerWidth ?? 0,height:globalThis.window?.innerHeight ?? 0});
+  return /** @type {import('vue').CSSProperties} */ (local
+    ? {position:'absolute',left:`${local.left}px`,top:`${local.top}px`,maxWidth:'100%',maxHeight:'100%'}
+    : {left:`${contextMenu.value.x}px`,top:`${contextMenu.value.y}px`});
+});
 const contextMenuWrap = ref(/** @type {any} */ (null));
 const bootstrapWrap = ref(/** @type {any} */ (null));
 
@@ -72,6 +96,27 @@ const viewportElements = new Map();
 const mountedTerminals = new Map();
 /** @type {Map<string, string[]>} */
 const pendingSessionOutput = new Map();
+const fittedSizes = new Map();
+const viewportObserver = typeof globalThis.ResizeObserver === 'function' ? new ResizeObserver(entries => {
+  if (!props.open) return;
+  for (const entry of entries) {
+    if (entry.contentRect.width < 1 || entry.contentRect.height < 1) continue;
+    const slotId = [...viewportElements].find(([,element]) => element === entry.target)?.[0];
+    if (!slotId) continue;
+    const slot = controller.findSlot(slotId);
+    const current = mountedTerminals.get(slotId);
+    if (!slot || slot.screenIndex !== activeScreenIndex.value || !current?.term) continue;
+    try {
+      current.fit?.fit();
+      const {cols,rows}=current.term;
+      const size=`${cols}x${rows}`;
+      if (cols > 0 && rows > 0 && fittedSizes.get(slotId) !== size) {
+        fittedSizes.set(slotId,size);
+        controller.resizeSession(current.sessionId,cols,rows);
+      }
+    } catch { /* A detached or hidden viewport is fitted on its next observation. */ }
+  }
+}) : null;
 // [TARGET, unit decision] Retain at most 64 Ki UTF-16 code units per unmounted session.
 const MAX_PENDING_OUTPUT_CHARS = 64 * 1024;
 
@@ -128,7 +173,7 @@ const controller = createTerminalDeckController({
   },
   onPasteText(_slotId, text) {
     const activeEl = /** @type {any} */ (globalThis.document)?.activeElement;
-    const activeId = activeEl?.id ?? activeEl?.props?.id ?? '';
+    const activeId = localId(activeEl?.id ?? activeEl?.props?.id ?? '');
     if (activeId === 'terminal-deck-custom-input') {
       lastBootstrapFocused.value = false;
       customCommand.value = `${customCommand.value}${text}`;
@@ -177,6 +222,18 @@ const controller = createTerminalDeckController({
   },
 });
 
+const pairedTerminals=createPairedTerminals(controller);
+watch(()=>[props.open,props.pairedTarget],async (_value,_old,onCleanup)=>{
+  agentGeneration++;agentChoice.value=null;agentPreparing.value=false;
+  if (!props.open || !props.pairedTarget) {pairBusy.value=false;return;}
+  let current=true;onCleanup(()=>{current=false;});pairBusy.value=true;pairError.value='';
+  try {
+    const pair=await pairedTerminals.open(props.pairedTarget);
+    if (current) {controller.focusSlot(pair.slotId);revision.value++;}
+  } catch (error) {if(current)pairError.value=error instanceof Error?error.message:'Paired terminal unavailable';}
+  finally {if(current)pairBusy.value=false;}
+},{immediate:true});
+
 const deckState = computed(() => {
   void revision.value;
   const st = controller.state;
@@ -195,13 +252,57 @@ const screens = computed(() => deckState.value.screens);
 const activeScreenIndex = computed(() => deckState.value.activeScreenIndex);
 const activeScreen = computed(() => deckState.value.activeScreen);
 const focusedSlotId = computed(() => deckState.value.focusedSlotId);
+const focusedPair=computed(()=>{revision.value;return pairedTerminals.forSlot(focusedSlotId.value);});
+const pairMatchesTarget=computed(()=>!props.compact || focusedPair.value?.surfaceId === props.pairedTarget?.surfaceId);
+const workflowIdentity=computed(()=>pairMatchesTarget.value ? focusedPair.value?.identityLine ?? pastedBootstrapText.value : '');
+watch(focusedPair,pair=>emit('pair-focus',pair?.surfaceId ?? null),{immediate:true});
 const pendingCloseSlotId = computed(() => deckState.value.pendingCloseSlotId);
 const launcherOpen = computed(() => deckState.value.launcherOpen);
 const toastMessage = computed(() => deckState.value.toastMessage);
 const errorCode = computed(() => deckState.value.errorCode);
 const errorMessage = computed(() => deckState.value.errorMessage);
-const gridColumns = computed(() => String(deckState.value.gridColumns));
+const gridColumns = computed(() => props.compact ? '1' : String(deckState.value.gridColumns));
 const profiles = computed(() => deckState.value.profiles);
+async function copyPairedId() {
+  if (!pairMatchesTarget.value || !focusedPair.value) return;
+  await controller.copySelection(focusedPair.value.surfaceId, focusedPair.value.slotId);
+}
+/** @param {string} slotId */
+function pairedTerminalLabel(slotId) {
+  const slot=controller.findSlot(slotId)?.slot;
+  return slot?.profileId==='shell'?'Host shell':slot?.title ?? 'Terminal';
+}
+const agentProfiles=computed(()=>profiles.value.filter(profile=>AGENT_PROFILE_IDS.includes(profile.id)));
+/** @param {string} kind */
+async function chooseWorkflow(kind) {
+  if(!pairMatchesTarget.value || !focusedPair.value) return controller.useWorkflowPrompt(kind,workflowIdentity.value,null);
+  const pair={...focusedPair.value},slot=controller.findSlot(pair.slotId)?.slot;
+  if(slot?.status==='running' && AGENT_PROFILE_IDS.includes(slot.profileId)) {
+    const generation=++agentGeneration;agentChoice.value=null;agentPreparing.value=true;pairError.value='';
+    const current=()=>generation===agentGeneration && props.open && focusedPair.value?.surfaceId===pair.surfaceId;
+    try {return await controller.prepareAgentPrompt(kind,pair.identityLine,slot.id,slot.profileId,current);}
+    finally {if(generation===agentGeneration)agentPreparing.value=false;}
+  }
+  agentGeneration++;agentPreparing.value=false;agentChoice.value={kind,pair};
+  await controller.refreshProviders();
+}
+function cancelAgentChoice() {agentGeneration++;agentChoice.value=null;agentPreparing.value=false;agentPreparing.value=false;}
+/** @param {string} profileId */
+async function launchWorkflowAgent(profileId) {
+  const choice=agentChoice.value;
+  if(!choice || agentPreparing.value) return;
+  const generation=++agentGeneration;
+  const current=()=>generation===agentGeneration && props.open && focusedPair.value?.surfaceId===choice.pair.surfaceId;
+  agentPreparing.value=true;pairError.value='';
+  try {
+    const pair=await pairedTerminals.open(choice.pair,profileId);
+    if(!current()) return;
+    controller.focusSlot(pair.slotId);revision.value++;
+    await controller.prepareAgentPrompt(choice.kind,pair.identityLine,pair.slotId,profileId,current);
+  } catch(error) {if(current())pairError.value=error instanceof Error?error.message:'Agent launch unavailable';}
+  finally {if(generation===agentGeneration){agentPreparing.value=false;agentChoice.value=null;}}
+}
+watch(focusedSlotId,()=>{if(agentChoice.value && focusedPair.value?.surfaceId!==agentChoice.value.pair.surfaceId)cancelAgentChoice();});
 const allScreenSlots = computed(() => {
   const list = [];
   const scrs = screens.value ?? [];
@@ -212,16 +313,43 @@ const allScreenSlots = computed(() => {
       list.push({
         slot,
         screenIndex: sIdx,
-        onActiveScreen: sIdx === activeIdx,
+        onActiveScreen: sIdx === activeIdx && (!props.compact || (slot.id === focusedSlotId.value && pairMatchesTarget.value)),
       });
     }
   }
   return list;
 });
 const launcherWrap = ref(/** @type {any} */ (null));
-const overlayCoordinator = /** @type {{ set?: (owner: string, active: boolean) => void } | null} */ (inject('overlayCoordinator', null));
-const launcherOverlayOwner = 'terminal-deck-overlay';
-const overlayOpen = computed(() => Boolean(props.open && (launcherOpen.value || pendingCloseSlotId.value || contextMenu.value.open)));
+const launcherPanel = ref(/** @type {HTMLElement|null} */ (null));
+const launcherPlacement = ref(/** @type {ReturnType<typeof placeTerminalLauncher>} */ (null));
+let launcherSizeObserver = /** @type {ResizeObserver|null} */ (null);
+function updateLauncherPlacement() {
+  if (!launcherOpen.value) return;
+  const panel=deckRoot.value?.getBoundingClientRect?.(),anchor=newTerminalButton.value?.getBoundingClientRect?.(),menu=launcherPanel.value;
+  if (!panel || !anchor || !menu) return;
+  const next=placeTerminalLauncher(panel,anchor,Math.max(menu.scrollHeight,menu.offsetHeight),{width:globalThis.window?.innerWidth ?? 0,height:globalThis.window?.innerHeight ?? 0});
+  if (JSON.stringify(next)!==JSON.stringify(launcherPlacement.value)) launcherPlacement.value=next;
+}
+watch(launcherOpen,async open=>{
+  launcherSizeObserver?.disconnect();launcherSizeObserver=null;launcherPlacement.value=null;
+  if (!open) return;
+  await nextTick();
+  if (!launcherOpen.value) return;
+  if (typeof ResizeObserver==='function') {
+    launcherSizeObserver=new ResizeObserver(updateLauncherPlacement);
+    if(deckRoot.value)launcherSizeObserver.observe(deckRoot.value);
+    if(launcherPanel.value)launcherSizeObserver.observe(launcherPanel.value);
+  }
+  updateLauncherPlacement();await nextTick();updateLauncherPlacement();
+});
+const launcherStyle=computed(()=>/** @type {import('vue').CSSProperties} */ (launcherPlacement.value ? {
+  position:'fixed',right:'auto',left:`${launcherPlacement.value.left}px`,top:`${launcherPlacement.value.top}px`,
+  width:`${launcherPlacement.value.width}px`,maxHeight:`${launcherPlacement.value.maxHeight}px`,visibility:'visible',
+} : {visibility:'hidden'}));
+const overlayCoordinator = /** @type {{ set?: (owner: object, active: boolean) => void, setSurface?: (owner: object, surfaceId: string, active: boolean) => void } | null} */ (inject('overlayCoordinator', null));
+const launcherOverlayOwner = {};
+const contextOverlayOwner = {};
+const overlayOpen = computed(() => Boolean(props.open && (launcherOpen.value || pendingCloseSlotId.value)));
 
 /**
  * @param {boolean} [open]
@@ -243,6 +371,11 @@ function syncOverlayAttr(open = overlayOpen.value) {
 }
 
 watch(overlayOpen, (open) => { syncOverlayAttr(open); }, { immediate: true, flush: 'sync' });
+// A terminal context menu is local chrome, not a modal over every capsule.
+watch(() => [props.open, contextMenu.value.open, props.pairedTarget?.surfaceId], () => {
+  const surfaceId = props.pairedTarget?.surfaceId;
+  if (typeof surfaceId === 'string') overlayCoordinator?.setSurface?.(contextOverlayOwner, surfaceId, Boolean(props.open && contextMenu.value.open));
+}, {immediate:true, flush:'sync'});
 
 /**
  * @param {string} slotId
@@ -252,8 +385,12 @@ function setViewportRef(slotId, el) {
   const isElement = typeof HTMLElement !== 'undefined'
     ? el instanceof HTMLElement
     : Boolean(el && typeof el === 'object');
+  const previous=viewportElements.get(slotId);
+  if (previous === el) return;
+  if (previous) viewportObserver?.unobserve(previous);
   if (isElement) {
     viewportElements.set(slotId, /** @type {HTMLElement} */ (el));
+    viewportObserver?.observe(/** @type {HTMLElement} */ (el));
   } else {
     viewportElements.delete(slotId);
   }
@@ -263,6 +400,7 @@ function setViewportRef(slotId, el) {
  * @param {string} slotId
  */
 function destroySlotTerminal(slotId) {
+  fittedSizes.delete(slotId);
   controller.unregisterTerminal(slotId);
   const existing = mountedTerminals.get(slotId);
   if (!existing) return;
@@ -308,12 +446,16 @@ function syncTerminals() {
         try {
           current.fit?.fit();
           if (current.term && current.term.cols > 0 && current.term.rows > 0) {
-            controller.resizeSession(slot.sessionId, current.term.cols, current.term.rows);
+            const size=`${current.term.cols}x${current.term.rows}`;
+            if (fittedSizes.get(slot.id)!==size) {
+              fittedSizes.set(slot.id,size);
+              controller.resizeSession(slot.sessionId, current.term.cols, current.term.rows);
+            }
           }
         } catch {
           // Fit is best-effort in headless DOMs.
         }
-        if (focusedSlotId.value === slot.id && !lastBootstrapFocused.value && !controlsFocused.value && !pendingCloseSlotId.value) {
+        if (focusedSlotId.value === slot.id && !lastBootstrapFocused.value && !controlsFocused.value && !pendingCloseSlotId.value && !current.term?.hasSelection?.()) {
           try {
             current.term?.focus();
           } catch {
@@ -352,6 +494,7 @@ function syncTerminals() {
         try {
           fit.fit();
           if (term.cols > 0 && term.rows > 0) {
+            fittedSizes.set(slot.id,`${term.cols}x${term.rows}`);
             controller.resizeSession(sessionId, term.cols, term.rows);
           }
         } catch {
@@ -396,6 +539,11 @@ function syncTerminals() {
  */
 function onWindowKeyDown(event) {
   if (!props.open) return;
+  const eventDeck = /** @type {Element|null} */ (event.target)?.closest?.('.mv-terminal-deck');
+  if ((eventDeck && eventDeck !== deckRoot.value) || (props.compact && eventDeck !== deckRoot.value)) return;
+  if (props.compact && ['new-shell','next-screen','prev-screen'].includes(matchDeckShortcut(event) ?? '')) {
+    event.preventDefault();event.stopPropagation();return;
+  }
   if (pendingCloseSlotId.value) {
     if (event.key === 'Escape') controller.cancelPendingClose();
     else if (event.key === 'Tab') {
@@ -419,7 +567,7 @@ function onWindowKeyDown(event) {
 /** @param {FocusEvent} event */
 function containDialogFocus(event) {
   if (props.open && pendingCloseSlotId.value && !closeDialog.value?.contains?.(event.target)) {
-    closeDialog.value?.querySelector?.('#terminal-deck-confirm-close-no')?.focus?.();
+    closeDialog.value?.querySelector?.('[data-semantic-anchor="terminal/confirm-close/cancel"]')?.focus?.();
   }
 }
 
@@ -430,7 +578,7 @@ watch(pendingCloseSlotId, async (id, previous) => {
     closeContextMenu();
     controller.setLauncherOpen(false);
     await nextTick();
-    closeDialog.value?.querySelector?.('#terminal-deck-confirm-close-no')?.focus?.();
+    closeDialog.value?.querySelector?.('[data-semantic-anchor="terminal/confirm-close/cancel"]')?.focus?.();
   } else if (!id && previous) {
     await nextTick();
     if (dialogReturnFocus?.isConnected !== false && typeof dialogReturnFocus?.focus === 'function') dialogReturnFocus.focus();
@@ -464,7 +612,7 @@ function isInsideLauncherWrap(target) {
   let cur = el;
   while (cur) {
     if (wrap && cur === wrap) return true;
-    const id = cur.id ?? cur.props?.id;
+    const id = localId(cur.id ?? cur.props?.id);
     if (id === 'terminal-deck-new' || id === 'terminal-deck-launcher') return true;
     const cls = String(cur.className ?? cur.props?.class ?? '');
     if (cls.includes('mv-terminal-deck__launcher-wrap') || cls.includes('mv-terminal-deck__popover')) return true;
@@ -498,7 +646,7 @@ function isInsideContextMenu(target) {
   let cur = el;
   while (cur) {
     if (wrap && cur === wrap) return true;
-    const id = cur.id ?? cur.props?.id;
+    const id = localId(cur.id ?? cur.props?.id);
     if (
       id === 'terminal-deck-context-menu' ||
       id === 'terminal-deck-context-copy' ||
@@ -530,7 +678,7 @@ function isInsideBootstrapWrap(target) {
   let cur = /** @type {any} */ (target);
   while (cur) {
     if (wrap && cur === wrap) return true;
-    const id = cur.id ?? cur.props?.id;
+    const id = localId(cur.id ?? cur.props?.id);
     if (
       id === 'terminal-deck-bootstrap' ||
       id === 'terminal-deck-bootstrap-panel' ||
@@ -596,6 +744,7 @@ function onTileContextMenu(slotId, event) {
     if (!contextMenu.value.open) return;
     const bounds = contextMenuWrap.value?.getBoundingClientRect?.();
     if (!bounds) return;
+    contextDimensions.value={width:bounds.width,height:bounds.height};
     contextMenu.value.x = Math.max(0, Math.min(x, (globalThis.window?.innerWidth ?? x) - bounds.width));
     contextMenu.value.y = Math.max(0, Math.min(y, (globalThis.window?.innerHeight ?? y) - bounds.height));
   });
@@ -612,6 +761,11 @@ async function onContextMenuPaste() {
   const { slotId } = contextMenu.value;
   closeContextMenu();
   await controller.pasteClipboard(undefined, slotId);
+}
+
+/** @param {Event} event */
+function onBootstrapInput(event) {
+  if (!focusedPair.value) pastedBootstrapText.value = /** @type {HTMLInputElement} */ (event.target).value;
 }
 
 /**
@@ -712,10 +866,6 @@ function onDismissError() {
   controller.dismissError();
 }
 
-async function onBootstrap() {
-  await controller.bootstrap();
-}
-
 /**
  * @param {number} index
  */
@@ -754,13 +904,34 @@ function focusSlot(slotId) {
   if (pendingCloseSlotId.value) return;
   controlsFocused.value = false;
   lastBootstrapFocused.value = false;
-  controller.focusSlot(slotId);
+  if (controller.state.focusedSlotId !== slotId) controller.focusSlot(slotId);
   const entry = mountedTerminals.get(slotId);
   try {
-    entry?.term?.focus();
+    if (!entry?.term?.hasSelection?.()) entry?.term?.focus();
   } catch {
     // Best-effort focus.
   }
+}
+
+/** Capture the owner before xterm stops Shift+mousedown during mouse reporting.
+ * Right-click belongs to the local menu and never reaches an application.
+ * @param {string} slotId @param {MouseEvent|PointerEvent} event */
+function onTilePointerDown(slotId, event) {
+  if (pendingCloseSlotId.value) return;
+  controlsFocused.value=false;lastBootstrapFocused.value=false;
+  if (controller.state.focusedSlotId!==slotId) controller.focusSlot(slotId);
+  if (event.button===2) onTileContextMenu(slotId,event);
+  else {
+    // Shift selection can stop xterm before its own mousedown focus handler.
+    try { mountedTerminals.get(slotId)?.term?.focus(); } catch { /* best effort */ }
+  }
+}
+
+/** Suppress mouse-reporting hover while Shift requests local selection.
+ * Drag moves still reach xterm's document selection listener.
+ * @param {MouseEvent} event */
+function onTerminalMouseMove(event) {
+  if (event.shiftKey && event.buttons===0) event.stopPropagation();
 }
 
 /**
@@ -828,6 +999,8 @@ watch(
 );
 
 onMounted(() => {
+  globalThis.window?.addEventListener?.('resize', updateLauncherPlacement);
+  globalThis.window?.addEventListener?.('scroll', updateLauncherPlacement, true);
   globalThis.document?.addEventListener?.('focusin', containDialogFocus, true);
   if (props.open) {
     void controller.refreshProviders();
@@ -850,8 +1023,14 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  agentGeneration++;
+  launcherSizeObserver?.disconnect();
+  globalThis.window?.removeEventListener?.('resize', updateLauncherPlacement);
+  globalThis.window?.removeEventListener?.('scroll', updateLauncherPlacement, true);
+  viewportObserver?.disconnect();
   globalThis.document?.removeEventListener?.('focusin', containDialogFocus, true);
   syncOverlayAttr(false);
+  if (typeof props.pairedTarget?.surfaceId === 'string') overlayCoordinator?.setSurface?.(contextOverlayOwner, props.pairedTarget.surfaceId, false);
   globalThis.window?.removeEventListener?.('keydown', onWindowKeyDown, true);
   globalThis.document?.removeEventListener?.('keydown', onWindowKeyDown, true);
   globalThis.document?.removeEventListener?.('pointerdown', onDocumentPointerDown, true);
@@ -877,13 +1056,17 @@ defineExpose({
 
 <template>
   <div
-    id="mv-terminal-deck"
+    :id="domId('mv-terminal-deck')"
+    ref="deckRoot"
     class="mv-terminal-deck"
+    :data-compact="String(compact)"
     data-semantic-anchor="terminal/deck/root"
     aria-label="Terminal workspace"
     @keydown="onWindowKeyDown"
+    @contextmenu.prevent
   >
     <header class="mv-terminal-deck__bar" aria-label="Terminal operator bar">
+      <button v-if="compact" :id="domId('terminal-deck-hide')" data-semantic-anchor="terminal/hide" type="button" class="mv-terminal-deck__action-btn" @click="emit('update:open', false)">Hide terminal</button>
       <div class="mv-terminal-deck__screens" role="tablist" aria-label="Terminal screens">
         <div
           v-for="(screen, sIdx) in screens"
@@ -893,7 +1076,7 @@ defineExpose({
         >
           <button
             type="button"
-            :id="`terminal-deck-screen-${screen.number}`"
+            :id="domId(`terminal-deck-screen-${screen.number}`)"
             :data-semantic-anchor="`terminal/screen/${screen.number}`"
             class="mv-terminal-deck__screen-tab"
             role="tab"
@@ -903,7 +1086,7 @@ defineExpose({
           <button
             v-if="canRemoveScreen(sIdx)"
             type="button"
-            :id="`terminal-deck-screen-remove-${screen.number}`"
+            :id="domId(`terminal-deck-screen-remove-${screen.number}`)"
             :data-semantic-anchor="`terminal/screen/${screen.number}/remove`"
             class="mv-terminal-deck__screen-remove"
             :aria-label="`Remove ${screen.label}`"
@@ -912,7 +1095,7 @@ defineExpose({
         </div>
         <button
           type="button"
-          id="terminal-deck-screen-add"
+          :id="domId('terminal-deck-screen-add')"
           data-semantic-anchor="terminal/screen/add"
           class="mv-terminal-deck__screen-add"
           aria-label="Add screen"
@@ -922,8 +1105,9 @@ defineExpose({
 
       <div class="mv-terminal-deck__actions">
         <span
+          v-if="pairMatchesTarget"
           ref="bootstrapWrap"
-          id="terminal-deck-bootstrap-panel"
+          :id="domId('terminal-deck-bootstrap-panel')"
           data-semantic-anchor="terminal/bootstrap/panel"
           :data-pasted-slot-id="pastedBootstrapText || undefined"
           class="mv-terminal-deck__bootstrap-wrap"
@@ -934,34 +1118,40 @@ defineExpose({
           @paste="onBootstrapPaste"
           @keydown="onBootstrapKeyDown"
         >
+          <button v-if="focusedPair" type="button" :id="domId('terminal-deck-copy-capsule-id')"
+            class="mv-terminal-deck__identity-pill mv-terminal-deck__identity-copy"
+            :title="`Copy capsule ID: ${focusedPair.surfaceId}`" aria-label="Copy capsule ID" @click="copyPairedId">
+            <span>Capsule ID:</span><span class="mv-terminal-deck__identity-value">{{ focusedPair.surfaceId }}</span>
+          </button>
+          <label v-else class="mv-terminal-deck__identity-pill"
+            :title="focusedPair ? `Paired with ${focusedPair.title} · ${pairedTerminalLabel(focusedPair.slotId)}. ${workflowIdentity}` : 'Paste Copy ID for AI here to select the capsule for workflow actions.'">
+            <span>Capsule ID: <span v-if="!workflowIdentity">None</span></span>
+            <input :id="domId('terminal-deck-bootstrap-paste-target')" data-semantic-anchor="terminal/bootstrap/identity"
+              :value="focusedPair?.surfaceId ?? pastedBootstrapText" :readonly="!!focusedPair" placeholder="Paste AI ID…"
+              :aria-label="focusedPair ? 'Paired capsule identity · ' + (pairedTerminalLabel(focusedPair.slotId)) : 'Capsule identity for workflow actions'"
+              @input="onBootstrapInput" />
+          </label>
           <button
-            type="button"
-            id="terminal-deck-bootstrap"
-            data-semantic-anchor="terminal/bootstrap"
-            class="mv-terminal-deck__action-btn"
-            @focus="lastBootstrapFocused = true"
-            @blur="onBootstrapFocusOut"
-            @paste="onBootstrapPaste"
-            @keydown="onBootstrapKeyDown"
-            @click="onBootstrap"
-          >🚀 Bootstrap</button>
-          <span role="status" aria-live="polite">
-            Paste Copy ID for AI here to select the capsule for workflow actions.
-            <template v-if="pastedBootstrapText">Selected capsule identity: <code>{{ pastedBootstrapText }}</code></template>
-            <template v-else>No capsule identity selected.</template>
-          </span>
-          <button
-            v-for="action in [{kind:'automate',label:'Automate'}, {kind:'use-automation',label:'Use automation'}, {kind:'no-automation',label:'No automation'}]"
+            v-for="action in [{kind:'automate',label:'Create automation',hint:'Teach an automation by showing the steps.'}, {kind:'use-automation',label:'Run automation',hint:'Prepare a task using a saved automation.'}, {kind:'no-automation',label:'Direct task',hint:'Prepare a task without a saved automation.'}]"
             :key="action.kind"
             type="button"
-            :id="`terminal-deck-${action.kind}`"
+            :id="domId(`terminal-deck-${action.kind}`)"
             :data-semantic-anchor="`terminal/${action.kind}`"
             class="mv-terminal-deck__action-btn"
-            @click="controller.copyWorkflowPrompt(action.kind, pastedBootstrapText)"
+            :title="action.hint"
+            @click="chooseWorkflow(action.kind)"
           >{{ action.label }}</button>
+          <span v-if="agentChoice" :id="domId('terminal-deck-agent-choice')" data-semantic-anchor="terminal/agent-choice" class="mv-terminal-deck__agent-choice" role="group" aria-label="Launch an agent CLI">
+            <span>{{ agentPreparing ? 'Waiting for agent input prompt…' : 'Replace this paired process with an agent CLI:' }}</span>
+            <span v-if="!agentProfiles.length">No agent CLI available from this terminal host. Nothing pasted.</span>
+            <button v-for="profile in agentProfiles" :key="profile.id" type="button"
+              :id="domId(`terminal-deck-launch-${profile.id}`)" :data-semantic-anchor="`terminal/launch/${profile.id}`"
+              class="mv-terminal-deck__action-btn" :disabled="agentPreparing" @click="launchWorkflowAgent(profile.id)">Launch {{ profile.label }}</button>
+            <button type="button" :id="domId('terminal-deck-agent-cancel')" data-semantic-anchor="terminal/agent-cancel" class="mv-terminal-deck__action-btn" @click="cancelAgentChoice">Cancel</button>
+          </span>
           <span
             v-if="toastMessage"
-            id="terminal-deck-bootstrap-toast"
+            :id="domId('terminal-deck-bootstrap-toast')"
             data-semantic-anchor="terminal/bootstrap/toast"
             class="mv-terminal-deck__toast"
             role="status"
@@ -976,7 +1166,7 @@ defineExpose({
         >
           <button
             type="button"
-            id="terminal-deck-new"
+            :id="domId('terminal-deck-new')"
             ref="newTerminalButton"
             title="New terminal (Ctrl+Shift+F6 leaves terminal input for controls)"
             data-semantic-anchor="terminal/new"
@@ -988,7 +1178,9 @@ defineExpose({
 
           <div
             v-if="launcherOpen"
-            id="terminal-deck-launcher"
+            ref="launcherPanel"
+            :style="launcherStyle"
+            :id="domId('terminal-deck-launcher')"
             data-semantic-anchor="terminal/launcher"
             class="mv-terminal-deck__popover"
             role="dialog"
@@ -1000,7 +1192,7 @@ defineExpose({
                 v-for="profile in profiles"
                 :key="profile.id"
                 type="button"
-                :id="`terminal-deck-profile-${profile.id}`"
+                :id="domId(`terminal-deck-profile-${profile.id}`)"
                 :data-semantic-anchor="`terminal/profile/${profile.id}`"
                 class="mv-terminal-deck__profile-btn"
                 @click="onLaunchProfile(profile.id)"
@@ -1014,7 +1206,7 @@ defineExpose({
               <label class="mv-terminal-deck__custom-label" for="terminal-deck-custom-input">Custom CLI</label>
               <div class="mv-terminal-deck__custom-row">
                 <input
-                  id="terminal-deck-custom-input"
+                  :id="domId('terminal-deck-custom-input')"
                   :value="customCommand"
                   data-semantic-anchor="terminal/custom/input"
                   class="mv-terminal-deck__custom-input"
@@ -1027,7 +1219,7 @@ defineExpose({
                 />
                 <button
                   type="button"
-                  id="terminal-deck-custom-launch"
+                  :id="domId('terminal-deck-custom-launch')"
                   data-semantic-anchor="terminal/custom/launch"
                   class="mv-terminal-deck__custom-submit"
                   :disabled="!customCommand.trim()"
@@ -1040,24 +1232,26 @@ defineExpose({
       </div>
     </header>
 
+    <p v-if="pairBusy" role="status">Opening paired terminal…</p>
+    <p v-if="pairError" role="alert">{{ pairError }}</p>
     <p
       v-if="errorMessage"
-      id="terminal-deck-error"
+      :id="domId('terminal-deck-error')"
       data-semantic-anchor="terminal/error"
       :data-error-code="errorCode || undefined"
       class="mv-terminal-deck__error"
       role="alert"
-    ><span id="terminal-deck-error-text" class="mv-terminal-deck__error-text">{{ errorMessage }}</span><button type="button" id="terminal-deck-error-dismiss" data-semantic-anchor="terminal/error/dismiss" class="mv-terminal-deck__error-dismiss" aria-label="Dismiss terminal error" @click="onDismissError">✕</button></p>
+    ><span :id="domId('terminal-deck-error-text')" class="mv-terminal-deck__error-text">{{ errorMessage }}</span><button type="button" :id="domId('terminal-deck-error-dismiss')" data-semantic-anchor="terminal/error/dismiss" class="mv-terminal-deck__error-dismiss" aria-label="Dismiss terminal error" @click="onDismissError">✕</button></p>
 
     <div
-      id="terminal-deck-grid"
+      :id="domId('terminal-deck-grid')"
       data-semantic-anchor="terminal/grid"
       class="mv-terminal-deck__grid"
       :data-grid-cols="gridColumns"
     >
       <div
         v-if="!activeScreen || activeScreen.slots.length === 0"
-        id="terminal-deck-empty"
+        :id="domId('terminal-deck-empty')"
         data-semantic-anchor="terminal/empty"
         class="mv-terminal-deck__empty"
       >
@@ -1065,7 +1259,7 @@ defineExpose({
         <p class="mv-terminal-deck__empty-copy">Use "＋ New terminal" or press Ctrl+Shift+T to launch a Shell.</p>
         <button
           type="button"
-          id="terminal-deck-empty-shell"
+          :id="domId('terminal-deck-empty-shell')"
           data-semantic-anchor="terminal/empty/shell"
           class="mv-terminal-deck__action-btn mv-terminal-deck__action-btn--primary"
           @click="onLaunchProfile('shell')"
@@ -1075,7 +1269,7 @@ defineExpose({
       <article
         v-for="item in allScreenSlots"
         :key="item.slot.id"
-        :id="`terminal-deck-tile-${item.slot.id}`"
+        :id="domId(`terminal-deck-tile-${item.slot.id}`)"
         :data-semantic-anchor="`terminal/tile/${item.slot.id}`"
         class="mv-terminal-deck__tile"
         :class="{
@@ -1090,19 +1284,21 @@ defineExpose({
         :data-slot-status="item.slot.status"
         :data-slot-kind="item.slot.kind"
         :data-slot-screen="item.screenIndex + 1"
+        :data-paired-capsule="pairedTerminals.forSlot(item.slot.id)?.surfaceId"
         tabindex="0"
         :aria-label="item.slot.title"
         aria-description="Press Ctrl+Shift+F6 to leave terminal input and focus the deck controls."
-        @mousedown="focusSlot(item.slot.id)"
+        @pointerdown.capture="onTilePointerDown(item.slot.id, $event)"
+        @mousedown.capture="onTilePointerDown(item.slot.id, $event)"
         @focus="focusSlot(item.slot.id)"
         @contextmenu.prevent="onTileContextMenu(item.slot.id, $event)"
         @keydown="onTileKeyDown(item.slot.id, $event)"
       >
         <header class="mv-terminal-deck__tile-header">
-          <span class="mv-terminal-deck__tile-title">{{ item.slot.title }}</span>
+          <span class="mv-terminal-deck__tile-title">{{ pairedTerminals.forSlot(item.slot.id)?.title ?? item.slot.title }}<template v-if="pairedTerminals.forSlot(item.slot.id)"> · {{ pairedTerminalLabel(item.slot.id) }}</template></span>
           <span
             v-if="item.slot.status === 'exited' || item.slot.status === 'restored'"
-            :id="`terminal-deck-status-${item.slot.id}`"
+            :id="domId(`terminal-deck-status-${item.slot.id}`)"
             :data-semantic-anchor="`terminal/tile/${item.slot.id}/status`"
             class="mv-terminal-deck__tile-status"
             role="status"
@@ -1111,14 +1307,14 @@ defineExpose({
             <button
               v-if="item.slot.status === 'restored' || item.slot.status === 'exited'"
               type="button"
-              :id="`terminal-deck-restart-${item.slot.id}`"
+              :id="domId(`terminal-deck-restart-${item.slot.id}`)"
               :data-semantic-anchor="`terminal/tile/${item.slot.id}/restart`"
               class="mv-terminal-deck__tile-restart"
               @click.stop="onRestartSlot(item.slot.id)"
             >Restart</button>
             <button
               type="button"
-              :id="`terminal-deck-close-${item.slot.id}`"
+              :id="domId(`terminal-deck-close-${item.slot.id}`)"
               :data-semantic-anchor="`terminal/tile/${item.slot.id}/close`"
               class="mv-terminal-deck__tile-close"
               :aria-label="`Close ${item.slot.title}`"
@@ -1129,10 +1325,12 @@ defineExpose({
 
         <div class="mv-terminal-deck__tile-body">
           <div
-            :id="`terminal-deck-viewport-${item.slot.id}`"
+            :id="domId(`terminal-deck-viewport-${item.slot.id}`)"
             :ref="(el) => setViewportRef(item.slot.id, el)"
             :data-semantic-anchor="`terminal/tile/${item.slot.id}/viewport`"
             class="mv-terminal-deck__viewport"
+            @mousemove.capture="onTerminalMouseMove"
+            title="Drag to select; hold Shift when an app captures the mouse. Ctrl+Shift+C copies."
             @contextmenu.prevent="onTileContextMenu(item.slot.id, $event)"
           ></div>
           <div
@@ -1148,17 +1346,18 @@ defineExpose({
     <div
       v-if="contextMenu.open"
       ref="contextMenuWrap"
-      id="terminal-deck-context-menu"
+      :id="domId('terminal-deck-context-menu')"
       data-semantic-anchor="terminal/context-menu"
+      data-mv-overlay-scope="terminal"
       class="mv-terminal-deck__context-menu"
       role="menu"
       aria-label="Terminal context menu"
-      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+      :style="contextMenuStyle"
       @keydown.esc.stop.prevent="closeContextMenu"
     >
       <button
         type="button"
-        id="terminal-deck-context-copy"
+        :id="domId('terminal-deck-context-copy')"
         data-semantic-anchor="terminal/context-menu/copy"
         class="mv-terminal-deck__context-item"
         role="menuitem"
@@ -1168,7 +1367,7 @@ defineExpose({
       >Copy</button>
       <button
         type="button"
-        id="terminal-deck-context-paste"
+        :id="domId('terminal-deck-context-paste')"
         data-semantic-anchor="terminal/context-menu/paste"
         class="mv-terminal-deck__context-item"
         role="menuitem"
@@ -1178,7 +1377,7 @@ defineExpose({
 
     <div
       v-if="pendingCloseSlotId"
-      id="terminal-deck-confirm-close"
+      :id="domId('terminal-deck-confirm-close')"
       ref="closeDialog"
       data-semantic-anchor="terminal/confirm-close"
       class="mv-terminal-deck__confirm-backdrop"
@@ -1194,14 +1393,14 @@ defineExpose({
         <div class="mv-terminal-deck__confirm-actions">
           <button
             type="button"
-            id="terminal-deck-confirm-close-yes"
+            :id="domId('terminal-deck-confirm-close-yes')"
             data-semantic-anchor="terminal/confirm-close/confirm"
             class="mv-terminal-deck__action-btn mv-terminal-deck__action-btn--primary"
             @click="onConfirmClose"
           >Close terminal</button>
           <button
             type="button"
-            id="terminal-deck-confirm-close-no"
+            :id="domId('terminal-deck-confirm-close-no')"
             data-semantic-anchor="terminal/confirm-close/cancel"
             class="mv-terminal-deck__action-btn"
             @click="onCancelClose"

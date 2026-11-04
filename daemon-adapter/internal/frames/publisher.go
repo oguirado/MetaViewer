@@ -83,12 +83,13 @@ type StageDurations struct {
 	Total   time.Duration
 }
 type publication struct {
-	skipReady bool
-	native    string
-	seq       uint64
-	refs      []Ref
-	published []time.Time
-	encoded   []byte
+	refreshEpoch uint64
+	skipReady    bool
+	native       string
+	seq          uint64
+	refs         []Ref
+	published    []time.Time
+	encoded      []byte
 }
 type Publisher struct {
 	ringSource   *RingSource
@@ -466,7 +467,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 		hasPrev = true
 		prevEncoded = old.encoded
 	}
-	if deduplicate && old.skipReady && hasPrev && prevLast.SHA256 == f.SHA256RGB24 && prevLast.Width == uint32(f.Width) && prevLast.Height == uint32(f.Height) {
+	if deduplicate && old.refreshEpoch == b.FrameRefreshEpoch && old.skipReady && hasPrev && prevLast.SHA256 == f.SHA256RGB24 && prevLast.Width == uint32(f.Width) && prevLast.Height == uint32(f.Height) {
 		old.seq = f.Seq
 		now := p.nowTime()
 		if len(old.published) == len(old.refs) {
@@ -541,7 +542,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	}
 	now := p.nowTime()
 	unchanged := exists && len(old.refs) > 0 && old.refs[len(old.refs)-1].SHA256 == sha && old.refs[len(old.refs)-1].Width == uint32(f.Width) && old.refs[len(old.refs)-1].Height == uint32(f.Height)
-	if deduplicate && unchanged {
+	if deduplicate && old.refreshEpoch == b.FrameRefreshEpoch && unchanged {
 		last := old.refs[len(old.refs)-1]
 		old.seq = f.Seq
 		old.encoded = encoded
@@ -803,7 +804,7 @@ func (p *Publisher) publish(id string, b capsule.Binding, f capsule.NativeFrame,
 	ref := Ref{Schema: "frame_ref/v0.2", SurfaceID: id, Generation: p.next, Tick: f.Seq, TsNS: f.TSNS, Width: uint32(f.Width), Height: uint32(f.Height), Format: "rgb24", RAMWSPath: path, SHA256: sha, CaptureUS: f.CaptureUS}
 	refs = append(refs, ref)
 	published = append(published, now)
-	p.surfaces[id] = publication{skipReady: true, native: f.Generation, seq: f.Seq, refs: refs, published: published, encoded: encoded}
+	p.surfaces[id] = publication{refreshEpoch: b.FrameRefreshEpoch, skipReady: true, native: f.Generation, seq: f.Seq, refs: refs, published: published, encoded: encoded}
 	stages.Total = time.Since(tStart)
 	if stages.Total > stages.Decode+stages.Hash {
 		stages.Write = stages.Total - stages.Decode - stages.Hash

@@ -208,7 +208,9 @@ const strip = computed(() => formatFrameStrip({
 
 const domId = computed(() => surfaceCanvasDomId(props.surfaceId));
 const anchor = computed(() => surfaceCanvasAnchor(props.surfaceId));
-const surfaceGeometry = computed(() => resolveSurfaceDimensions({
+// [TARGET, unit decision] Presentation owns geometry; projection is only a pre-paint fallback.
+const paintedGeometry = ref(/** @type {{frameWidth:number,frameHeight:number}|null} */ (null));
+const surfaceGeometry = computed(() => resolveSurfaceDimensions(paintedGeometry.value ?? {
   frameWidth: props.frameWidth,
   frameHeight: props.frameHeight,
 }));
@@ -407,6 +409,12 @@ function scheduleFpsDisplayUpdate(forceImmediate = false) {
  * @param {unknown} [captureHint]
  */
 function onFramePainted(captureHint) {
+  const canvas = canvasRef.value;
+  if (canvas && canvas.width > 0 && canvas.height > 0) {
+    if (paintedGeometry.value?.frameWidth !== canvas.width || paintedGeometry.value?.frameHeight !== canvas.height) {
+      paintedGeometry.value = { frameWidth: canvas.width, frameHeight: canvas.height };
+    }
+  }
   const cap = parseCaptureUsValue(captureHint);
   if (cap !== null) latestCaptureUs = cap;
   const now = readFpsClock();
@@ -1128,6 +1136,7 @@ watch(() => [props.surfaceId, props.generation, props.epoch], (_current, previou
     unbindFramePort(previous[0]);
     unbindDisplayPort(previous[0]);
     displayMode.value = 'absent';
+    paintedGeometry.value = null;
     // L3-1: the pinned delivery identity belongs to the old surface; the
     // rebind below receives a fresh notice for the new one.
     registeredIdentity = null;
@@ -1198,6 +1207,8 @@ onBeforeUnmount(() => {
     :data-anchor="anchor"
     :data-state="resolvedState"
     :data-aspect-ratio="surfaceGeometry.aspectRatio"
+    :data-frame-width="surfaceGeometry.width"
+    :data-frame-height="surfaceGeometry.height"
     :data-display-state="displayActive ? displayMode : undefined"
     :aria-label="accessibleName"
   >
@@ -1226,6 +1237,7 @@ onBeforeUnmount(() => {
 </template>
 <style scoped>
 .mv-surface {
+  --mv-frame-aspect: calc(attr(data-frame-width type(<number>), 1280) / attr(data-frame-height type(<number>), 900));
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1234,21 +1246,22 @@ onBeforeUnmount(() => {
   overflow: hidden;
   width: 100%;
   height: 100%;
+  flex: 1 1 0;
   background: var(--cuk-semantic-surface-canvas);
   color: var(--cuk-semantic-text-primary);
 }
-.mv-surface:has(> .mv-surface__strip) {
-  width: min(100cqw, calc((100cqh - 23px) * 1280 / 900));
-  height: min(100cqh, calc(100cqw * 900 / 1280 + 23px));
-}
+/* [TARGET, unit decision] Let flex reserve the actual wrapped witness height.
+ * The remaining canvas box uses contain; its margins match the tile, never
+ * black. Container-query arithmetic cannot account for a wrapping footer. */
 .mv-surface__canvas {
   display: block;
   width: 100%;
-  flex: 1;
+  height: 0;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
-  aspect-ratio: 1280 / 900;
   object-fit: contain;
-  background-color: var(--mv-primitive-color-neutral-1100, #000000);
+  background-color: var(--cuk-semantic-surface-canvas);
 }
 .mv-surface__canvas[hidden] {
   display: none;
@@ -1312,7 +1325,7 @@ onBeforeUnmount(() => {
   padding: 0 8px;
   font-size: 11px;
   line-height: 23px;
-  color: var(--mv-primitive-color-neutral-300, #ced0d4);
+  color: var(--cuk-semantic-text-primary);
 }
 .mv-surface__strip {
   flex: 0 0 auto;
@@ -1323,10 +1336,10 @@ onBeforeUnmount(() => {
   padding: 0 8px 0 48px;
   overflow: hidden;
   white-space: nowrap;
-  border-top: 1px solid var(--mv-primitive-color-neutral-600, #525b66);
+  border-top: 1px solid var(--cuk-semantic-border-default);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px;
-  color: var(--mv-primitive-color-neutral-400, #a9b2bc);
+  color: var(--cuk-semantic-text-primary);
 }
 .mv-surface__key {
   overflow: hidden;
@@ -1353,11 +1366,10 @@ onBeforeUnmount(() => {
 /* The strip is part of the frame's flex height: wrapping consumes body space
  * without overlapping pixels or clipping the safety labels mid word. */
 @container tile-chrome (max-width: 499px) {
-  .mv-surface:has(> .mv-surface__strip) { width:100%; height:100%; }
   .mv-surface__strip {
     flex-wrap:wrap;
     gap:2px 8px;
-    padding:2px 8px;
+    padding:2px 8px 2px 48px;
     white-space:normal;
     overflow:visible;
   }

@@ -2033,3 +2033,44 @@ fn v027_lost_human_destroy_refuses_agent_but_allows_ui() {
         close_server(server, task, daemon, agent, ui).await;
     });
 }
+
+#[test]
+fn v028_lost_agent_program_destroy_allows_ui_and_refuses_agent() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        let mut prog = surface();
+        prog["kind"] = "desktop_capsule".into();
+        prog["control"] = "agent".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":prog}}))
+            .await;
+        ui.receive().await;
+        prog["state"] = "lost".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":prog}}))
+            .await;
+        ui.receive().await;
+        let budget = server.lock().unwrap().authority.state().remaining_budget;
+        let destroy = json!({"schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-demo"}});
+        agent.send(destroy.clone()).await;
+        agent.verdict("refused", Some("POLICY")).await;
+        assert_eq!(
+            server.lock().unwrap().authority.state().remaining_budget,
+            budget
+        );
+        daemon_barrier(&mut daemon).await;
+        ui.send(destroy.clone()).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            destroy
+        );
+        let mut destroyed = prog.clone();
+        destroyed["state"] = "destroyed".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":destroyed}}))
+            .await;
+        let stopped = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(stopped["data"]["surface"]["state"], "destroyed");
+        close_server(server, task, daemon, agent, ui).await;
+    });
+}

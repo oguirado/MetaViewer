@@ -1,0 +1,31 @@
+# Opt-in rewind backend candidate
+
+This package is not registered with core, Go, the UI, or the default daemon. No live capability follows from these source files. The existing guest-command runtime is imported unchanged for its byte protocol, command validation, image builder and low-level native helpers; no campaign paths or modules are imported.
+
+## Implemented boundary
+
+`config.load(path)` reads an owner-private, single-link regular JSON profile with schema `rewind-host-config/v1`. The closed profile contains `runtime_admitted`, `owner_id`, `runtime_root`, `external_cgroup`, `artifacts`, `startup_seconds`, and `stop_seconds`. Runtime admission defaults to nothing: an explicit true value in the protected configuration is required. This first candidate admits only the reviewed engine/kernel/BusyBox/new rewind-broker hashes. Paths belong only to the host profile, never renderer requests.
+
+`Controller(config)` owns one `Native` instance and one guest reader. `create(binding)` accepts a private core-provided owner/workload/reservation/session/generation/authority-epoch tuple. Core authentication and external epoch allocation remain prerequisites, not claims implemented by this class. `request(request, next_binding=..., point_id=...)` accepts the draft pause/mark/resume/restore request shape. Next binding and new point ID are separately supplied by the future trusted core bridge, not taken from renderer-supplied paths or entropy. Resume and restore require strictly greater host generation and authority epoch, with a fresh session and reservation. Bindings do not roll back with RAM.
+
+The supported first flow is create → pause → mark → resume, or restore an existing point from ready/paused. Mark requires paused state. It returns an internal point record; it is not yet the public `rewind_point` schema. There are at most two published immutable full-RAM points. A new mark first admits a temporary third full snapshot under the same RAM ceiling, verifies its hashes, then durably publishes the new pair and evicts only the oldest unmapped point. Failed staging preserves both prior points; failed deletion remains accounted as retired storage until Stop. Point hashes, file identities and compatibility are checked before reuse. A mapped memory file stays held until its exact retained Popen process is reaped. Failed restore keeps the point and enters uncertainty.
+
+`run(request)` reuses the existing `guest_command_request/v0.2` validator and `prepare_exec`, then sends the real MVGC command on the sole retained connection. It collects bounded ordered stdout/stderr and the correlated terminal event, requiring exact output byte accounting and job-empty proof. Its return contains raw byte values for the internal bridge; no JSON wire output is invented. Request/job IDs are never replayed. Pause/mark/restore refuse while a command owns the actor. Uncertainty fences subsequent commands while preserving the last completed result.
+
+`stop()` is an independent native-close path, including during a blocked command receive. It sets a permanent stop fence, closes the retained socket/process via pidfd/Popen ownership, and cannot publish ready afterward. Exact process closure is required before files are removed and ownership is released. A poisoned journal still allows physical cleanup but cannot report a complete release. Asynchronous Cancel is explicitly unavailable; no UI should expose it for this candidate.
+
+## Native custody and limits
+
+The containing service must use a dedicated child-free cgroup under `newton-ia.slice`, with MemoryHigh ≤6 GiB, MemoryMax ≤8 GiB, swap 0, CPU ≤2 cores and TasksMax ≤256. The runtime verifies those ceilings and exact process membership before native launch and during control calls. It requires a private process umask, an owned mode-0700 RAM root and fresh child directory, and the existing global 32-GiB headroom gate. The VM configuration remains 256 MiB and one vCPU. No normal 55-second TTL is altered; this separate profile has no whole-VM TTL and relies on its retained external service/guardian for lifetime admission.
+
+A base-directory flock excludes another cooperating owner before allocation; leftover runtime directories refuse takeover. The private append-only, fsynced, hash-chained ledger is bounded to 4 MiB. Native allocation/spawn/control intents precede effects. The implementation never reopens a prior runtime as a new owner or automatically retries an uncertain request. A crash/reconciliation or external service guardian implementation is still required before deployment. Snapshot consistency is RAM/initramfs-only; there is no attached block device and no external-side-effect consistency promise.
+
+## Remaining integration gates
+
+The draft schemas are under review. A trusted Go/core bridge must map public requests to these private methods, mint next bindings and point IDs, translate byte outputs and internal point records, and enforce actor/endpoint authentication and lifecycle correlation. It must expose Cancel as unsupported and compose ready-Mark as pause, mark, and reseeded resume. The native service needs a reviewed guardian, resource admission and cleanup on parent loss. No production CLI, transport runner, UI capability or live execution is included here. Tests use fake transports/processes and synthetic private files only.
+
+## Reviewed correction
+
+A stop-intent journal write failure still attempts physical close, then retains poisoned ownership instead of publishing release. A failed restore may be attempted again only through a new explicit core request with newer committed generation/epoch, after the failed VMM is proven closed, the ledger remains usable and the point is verified. Unknown closure permits only Stop. There is no automatic retry. The original revision remains in the campaign evidence.
+
+Ready-Mark composition uses a private deferred-publication option: the old point files remain until the subsequent resume and fresh reset complete. Failed resume rolls back the published point map and retains the old immutable files; the new staged files stay accounted until Stop. The public request schema is unchanged. Point metadata also records actual host `created_mono_ns` after hash verification; session `guest_counter` is the last confirmed reset counter, not a synthetic running timer.
