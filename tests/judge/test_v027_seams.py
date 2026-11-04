@@ -259,7 +259,7 @@ class LauncherFlowRegressions(unittest.TestCase):
             if name:
                 self.assertIn(f'aria-label="{name}"', control.group())
         self.assertIn('**`Switch to agent mode`** separately', quickstart)
-        self.assertIn('label="Use MetaViewer" @click="copyEntry"', app)
+        self.assertNotIn('label="Use MetaViewer"', app)
         role = (REPO / 'ui/src/surfaces/RoleSurface.vue').read_text()
         self.assertIn("Switch to {{ role === 'human' ? 'agent' : 'human' }} mode", role)
         self.assertIn("@click=\"runMenu(() => lifecycle('switchMode'))\"", role)
@@ -270,7 +270,7 @@ class LauncherFlowRegressions(unittest.TestCase):
         from judge_sandbox import REPO
         read = Path.read_text
         for relative, old in (
-            ('ui/src/App.vue', 'label="Use MetaViewer"'),
+            ('ui/src/App.vue', 'id="tile-preset-single"'),
             ('ui/src/surfaces/RoleSurface.vue', "Switch to {{ role === 'human' ? 'agent' : 'human' }} mode"),
         ):
             target = REPO / relative

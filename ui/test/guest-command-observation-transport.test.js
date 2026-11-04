@@ -5,8 +5,14 @@ import {once,EventEmitter} from 'node:events';
 import {mkdtemp,mkdir,writeFile,chmod,lstat,rm} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {envelopeTagForBody,createMainBindings} from '../electron/hostBindings.js';
+function useArm64Fixture(t){
+ const prior=Object.getOwnPropertyDescriptor(process,'arch');
+ Object.defineProperty(process,'arch',{value:'arm64'});
+ t.after(()=>Object.defineProperty(process,'arch',prior));
+}
 const reg=c=>({endpoint:{component:c,instance:c+'-headless'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component:c,component_version:'0.2.5',component_commit:'a'.repeat(40),dependencies:[]}});
 for(const malformed of [false,true])test(malformed?'real authenticated host rejects wrong observation family':'real authenticated host adopts SDK observation and output on same connection',async t=>{
+ useArm64Fixture(t);
  const wrongTag=false;
  const root=await mkdtemp('/dev/shm/mv-hl-');await mkdir(root+'/metaviewer',{mode:0o700});
  const config={session_id:'headless-test',core:reg('core'),peers:[reg('ui'),reg('agent')]};
