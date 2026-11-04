@@ -528,6 +528,8 @@ def build_profile(value, root, agent, unit, group, rewind=False):
 def child_environment(value, root, agent, profile, transport, normal=None, hosted=False, *, rewind=False, guardian=None):
     # The only display/auth authority is the explicit protected UI descriptor.
     env = native_environment(root)
+    if os.environ.get('MV_MUSE_RECORDING_UNSANDBOXED') == '1':
+        env['MV_MUSE_RECORDING_UNSANDBOXED'] = '1'
     env.update(DISPLAY=transport['display'],
                DBUS_SESSION_BUS_ADDRESS=transport['dbus_session_bus_address'],
                XDG_CONFIG_HOME=str(root / 'config'), XDG_DATA_HOME=str(root / 'data'),

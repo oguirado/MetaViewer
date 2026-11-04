@@ -10,7 +10,7 @@ test('Muse is a host-owned Contributor max profile with a scoped runtime and no 
  for(const arm of [false,true]) {
   const profile=installedAgentProfiles({...env,...(arm?{MV_ARM64_CAPSULES:'1'}:{})},resolve,()=>({homedir:'/host-person'})).get('agent-muse');
   assert.ok(profile);assert.ok(AGENT_PROFILE_IDS.includes('agent-muse'));
-  assert.deepEqual(profile.argv,['/usr/bin/unshare','--user','--map-current-user','--pid','--fork','--mount-proc','--','/usr/bin/muse','--workspace','/operator/repo','--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max']);
+  assert.deepEqual(profile.argv,['/usr/bin/unshare','--user','--map-current-user','--pid','--fork','--mount-proc','--','/usr/bin/muse','--workspace','/operator/repo','--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max','--sandbox-network','enabled']);
   assert.equal(profile.cwd,'/operator/repo');
   assert.equal(profile.env.XDG_RUNTIME_DIR,env.XDG_RUNTIME_DIR);assert.equal(profile.env.HOME,'/host-person');
   assert.equal(profile.env.API_TOKEN,undefined);assert.equal(profile.env.MUSE_AUTH_PATH,undefined);
@@ -54,4 +54,27 @@ test('Muse sign-in and trust screens never receive a workflow prompt',async()=>{
    assert.deepEqual(f.writes,[]);
   } finally {f.controller.dispose();}
  }
+});
+
+test('recording sandbox override is explicit, off by default and keeps approvals enabled',()=>{
+ for(const value of [undefined,'0','true','yes','1 ']) {
+  const profile=installedAgentProfiles({...env,MV_MUSE_RECORDING_UNSANDBOXED:value},resolve).get('agent-muse');
+  assert.equal(profile.argv.includes('--disable-sandbox'),false);
+ }
+ for(const arm of [false,true]) {
+  const profile=installedAgentProfiles({...env,MV_MUSE_RECORDING_UNSANDBOXED:'1',...(arm?{MV_ARM64_CAPSULES:'1'}:{})},resolve,()=>({homedir:'/host-person'})).get('agent-muse');
+  assert.equal(profile.argv.filter(arg=>arg==='--disable-sandbox').length,1);
+  for(const arg of ['--approval-mode','--yolo','--trust-workspace'])assert.equal(profile.argv.includes(arg),false);
+  assert.equal(profile.env.MV_MUSE_RECORDING_UNSANDBOXED,undefined);
+ }
+});
+test('network and recording widening belong only to Muse; other host profiles retain their argv',()=>{
+ const profiles=installedAgentProfiles({...env,MV_MUSE_RECORDING_UNSANDBOXED:'1'},name=>({path:'/usr/bin/'+name}));
+ for(const id of ['agent-codex','agent-gemini','agent-opencode']) {
+  assert.equal(profiles.get(id).argv.includes('--sandbox-network'),false);
+  assert.equal(profiles.get(id).argv.includes('--disable-sandbox'),false);
+ }
+ assert.deepEqual(profiles.get('agent-codex').argv,['/usr/bin/codex']);
+ assert.deepEqual(profiles.get('agent-gemini').argv,['/usr/bin/gemini']);
+ assert.deepEqual(profiles.get('agent-opencode').argv,['/usr/bin/opencode']);
 });

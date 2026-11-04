@@ -399,16 +399,29 @@ The host-owned **Muse** profile selects `muse-spark-1.3`, Contributor mode and
 maximum reasoning effort for this run. Its workspace is the host-owned
 `MV_OPERATOR_REPO`, never the entire home directory. The profile is unavailable
 without an absolute operator repository. It preserves the app's private
-`XDG_RUNTIME_DIR` in Muse's environment, keeps the normal sandbox and workspace
+`XDG_RUNTIME_DIR` in Muse's environment, keeps the file sandbox and workspace
 trust checks, and does not initiate sign-in or update the installed CLI. A
 working Muse sandbox backend is a prerequisite for shell tools; a visible
 input prompt is not proof that an agent task can run. The private-session
 launcher below confines writable runtime and automation state without granting
-access to `/dev/shm`. Filesystem access alone does not grant access to the core
-socket: the installed Muse network sandbox can deny Unix sockets before any
-connection. Stop on that refusal; never retry outside the sandbox or accept a
-native approval to bypass it.
+access to `/dev/shm`. The Muse profile passes `--sandbox-network enabled`.
+This widens network and host-socket access for that session so it can connect
+to the MetaViewer core. The file sandbox remains on. Other agent profiles are
+unchanged. Stop on a refusal; never accept a native approval to bypass the
+file sandbox.
 Authentication and trust questions remain the person's responsibility.
+
+For an operator-authorized recording only, start the app with
+`MV_MUSE_RECORDING_UNSANDBOXED=1` to append `--disable-sandbox` to Muse's
+command line. This disables Muse's file and network sandbox for that session,
+giving its tools the host user's access. It is off by default; no other value
+enables it, and other agent profiles are unchanged. Do not use this exception
+for judge sessions. It does not change approval mode, grant workspace trust or
+answer login questions. Stop at any native approval prompt for the operator.
+Omit the variable to return to the normal sandboxed profile.
+The protected ARM session helper forwards only this exact opt-in value; it
+does not forward the rest of the caller's environment or change admission
+limits, ownership checks or other agent profiles.
 
 For an ephemeral Muse session, run `python3 tools/muse_session.py --app
 /absolute/package/metaviewer` with the existing external

@@ -54,9 +54,12 @@ export function installedAgentProfiles(env,resolve=resolveHostBinary,hostUser=us
         const helper=resolve('unshare',discoveryEnv).path;
         if(!cleanAbsolute(helper)) throw Error('AGENT_NAMESPACE_UNAVAILABLE');
         argv=[helper,'--user','--map-current-user','--pid','--fork','--mount-proc','--',path,
-          '--workspace',workspace,'--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max'];
-        // The TUI keeps its normal sandbox and trust checks. The launcher must
-        // neither initiate a login nor replace the installed CLI during a run.
+          '--workspace',workspace,'--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max',
+          '--sandbox-network','enabled'];
+        // Explicit host-only recording exception; never selected by renderer input.
+        if(env.MV_MUSE_RECORDING_UNSANDBOXED==='1') argv.push('--disable-sandbox');
+        // By default network/host sockets are enabled; file sandbox and trust remain.
+        // The launcher must neither initiate a login nor replace the installed CLI.
         launchEnv=validateProviderEnv({HOME:discoveryEnv.HOME,PATH:discoveryEnv.PATH,TERM:'xterm-256color',
           XDG_RUNTIME_DIR:discoveryEnv.XDG_RUNTIME_DIR,MUSE_LOGIN:'0',MUSE_NO_AUTO_UPDATE:'1'},
           ['HOME','PATH','TERM','XDG_RUNTIME_DIR','MUSE_LOGIN','MUSE_NO_AUTO_UPDATE']);
