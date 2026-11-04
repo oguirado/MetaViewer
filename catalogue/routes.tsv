@@ -232,6 +232,7 @@ mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
 normala-0123b49a7983	changes/unreleased/normal-arm64-rewind-setup.md
+normala-81ed589da0e4	changes/unreleased/normal-arm64-scope-closure.md
 normalr-4af8538e0165	changes/unreleased/normal-rewind-runtime-path.md
 opfix-arm-cards.md	changes/unreleased/opfix-arm-cards.md
 opfixco-cf56b9a29339	changes/unreleased/opfix-copy-identifier.md
@@ -249,6 +250,7 @@ opfix2s-f24cf262333c	changes/unreleased/opfix2-separate-terminal-panel.md
 opfix2t-07c2e902ca62	changes/unreleased/opfix2-terminal-geometry.md
 opfix2t-c6e5a419b2e9	changes/unreleased/opfix2-terminal-verification.md
 opfix2r-1e567714e07c	changes/unreleased/opfix2r2-terminal-launcher.md
+opfix2r-65e5534583a3	changes/unreleased/opfix2r2-terminal-selection.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
 p18-opening-modes.md	changes/unreleased/p18-opening-modes.md
