@@ -1558,7 +1558,8 @@ test('DISPLAY pull replays a static frame after replacement without refreshing c
 });
 
 test('DISPLAY router retries bind before subscription; unbind mutant fails', async () => {
-  const source = readFileSync(new URL('../src/frames/displayPortRouter.js',import.meta.url),'utf8');
+  const source = readFileSync(new URL('../src/frames/displayPortRouter.js',import.meta.url),'utf8')
+    .replace("'../surfaces/tileScheduler.js'", JSON.stringify(new URL('../src/surfaces/tileScheduler.js', import.meta.url).href));
   async function exercise(install) {
     const requests = [], messages = [], timers = new Map();
     let next = 0;

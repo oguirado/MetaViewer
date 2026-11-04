@@ -1,0 +1,1 @@
+- Reuse the existing RGB24 converter when painting display frames while preserving pixels and canvas scratch reuse.
