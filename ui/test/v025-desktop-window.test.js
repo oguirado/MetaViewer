@@ -43,6 +43,7 @@ function createWindowLauncherHarness(sfcSource, modelMod, apiDouble = null) {
   const events = [];
   const ctx = {
     props: { visible: true },
+    disabledArmKinds: { get value() { return modelMod.unavailableArmCapsules(ctx.props.arm64Capabilities); } },
     buildCreateIntent: modelMod.buildCreateIntent,
     normalizeWindowList: modelMod.normalizeWindowList,
     filterWindowCandidates: modelMod.filterWindowCandidates,

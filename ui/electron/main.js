@@ -36,7 +36,8 @@ import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { createAdapterLauncher, findForbiddenEnv, redactAdapterDiagnostic } from './coreLauncher.js';
+import {requireGuestCommandMode} from './guestCommandProfile.js';
+import { createAdapterLauncher, requireHeadlessMode, findForbiddenEnv, redactAdapterDiagnostic } from './coreLauncher.js';
 
 // [TARGET, unit decision] When MV_SRF_BIN_DIR is configured, supervised adapter
 // failure aborts boot fail-closed with a typed ADAPTER_* MainError before
@@ -68,6 +69,9 @@ export function showStartupFailure(dialog, error, phase) {
   const rawCode = /** @type {{code?:unknown}|null} */ (error)?.code;
   const code = typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(rawCode)
     ? rawCode : (phase === 'create' ? 'SURFACE_CREATE_FAILED' : 'STARTUP_FAILED');
+  // [TARGET, unit decision] Held identities recover from the Identities row;
+  // the existing renderer create-refusal notice provides nonblocking feedback.
+  if (phase === 'create' && code === 'IDENTITY_UNAVAILABLE') return undefined;
   const title = phase === 'create' ? 'MetaViewer could not open the first capsule' : 'MetaViewer could not start';
   const next = phase === 'create'
     ? code === 'RAM_ADMISSION_REFUSED'
@@ -2290,6 +2294,7 @@ export async function bootProductionMain(handles) {
   let unwound = false;
   /** @type {unknown} */
   let pendingBootCreateError = null;
+  const unavailableIdentities = new Set();
   let bootReadyForNotices = false;
 
   /**
@@ -2476,6 +2481,9 @@ export async function bootProductionMain(handles) {
     throw error;
   }
   if (!retail.nested) {
+    let headlessOnly=false;
+    try {headlessOnly=requireGuestCommandMode(/** @type {NodeJS.ProcessEnv} */ (typed.env)) || requireHeadlessMode(/** @type {NodeJS.ProcessEnv} */ (typed.env));}
+    catch {await unwind();fail('HEADLESS_PROFILE_INVALID','The configured MicroVM profile is invalid.');}
     /** @type {import('./coreLauncher.js').CoreStatus | null} */
     let coreStatus = null;
     try {
@@ -2487,10 +2495,14 @@ export async function bootProductionMain(handles) {
       await unwind();
       fail('CORE_UNAVAILABLE', 'core did not reach live');
     }
+    if (adapter === null && headlessOnly) {
+      await unwind(); fail('ADAPTER_ABSENT','The configured MicroVM requires the daemon adapter.');
+    }
     if (adapter !== null) {
       const envRec = /** @type {Record<string, unknown>} */ (typed.env);
       const srfRequested =
-        typeof envRec.MV_SRF_BIN_DIR === 'string' && envRec.MV_SRF_BIN_DIR.length > 0;
+        (typeof envRec.MV_SRF_BIN_DIR === 'string' && envRec.MV_SRF_BIN_DIR.length > 0)
+        || headlessOnly;
       /** @type {import('./coreLauncher.js').AdapterStatus | null} */
       let adapterStatus = null;
       /** @type {unknown} */
@@ -2547,6 +2559,8 @@ export async function bootProductionMain(handles) {
         fail(adapterCode, refusal);
       }
       if (
+        !headlessOnly &&
+        envRec.MV_ARM64_CAPSULES !== '1' &&
         adapterStartError === null &&
         adapterStatus !== null &&
         adapterStatus.availability === 'live' &&
@@ -2574,6 +2588,7 @@ export async function bootProductionMain(handles) {
           onFailure: (error) => {
             capsuleStates.delete(pendingKey);
             if (unwound) return;
+            if (/** @type {any} */(error)?.code === 'IDENTITY_UNAVAILABLE') unavailableIdentities.add(bootProfile);
             showStartupFailure(handles.dialog, error, 'create');
             if (bootReadyForNotices && wireBridge !== null && typeof wireBridge.notifyCreateRefusal === 'function') {
               wireBridge.notifyCreateRefusal(error);
@@ -2655,6 +2670,7 @@ export async function bootProductionMain(handles) {
       const electron = createRequire(import.meta.url)('electron');
       roleBridge = (await import('./roleHost.js')).installRoleHost({electron, window:built, core,
         env:typed.env, capsuleStates,
+        unavailableIdentities, recoveryAdapterPid:() => adapter?.getStatus().pid ?? null,
         admit:(/** @type {unknown} */ event) => observeSender(event,contentsUnknown,PRIVILEGED_ORIGIN).verdict === 'admit',
         listIdentities:async () => {
           const {identityEnvironment,identityRunner,resolveIdentityTool:resolveOperatorIdentityTool} = await import('./operatorBridge.js');

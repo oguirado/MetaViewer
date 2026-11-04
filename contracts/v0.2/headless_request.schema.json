@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/headless_request.schema.json",
+  "title": "headless_request",
+  "description": "Additive bounded headless fixed-job message; never a graphical action or arbitrary shell.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_request/v0.2"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "op": {
+          "const": "create"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "template": {
+              "const": "headless-sumsq"
+            }
+          },
+          "required": [
+            "template"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_request/v0.2"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "op": {
+          "const": "run"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "workload_id": {
+              "$ref": "headless_session.schema.json#/$defs/workload_id"
+            },
+            "generation": {
+              "$ref": "headless_session.schema.json#/$defs/generation"
+            },
+            "job_id": {
+              "$ref": "headless_session.schema.json#/$defs/job_id"
+            },
+            "operation": {
+              "const": "sumsq"
+            },
+            "n": {
+              "$ref": "headless_session.schema.json#/$defs/n"
+            }
+          },
+          "required": [
+            "workload_id",
+            "generation",
+            "job_id",
+            "operation",
+            "n"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_request/v0.2"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "op": {
+          "const": "stop"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "workload_id": {
+              "$ref": "headless_session.schema.json#/$defs/workload_id"
+            },
+            "generation": {
+              "$ref": "headless_session.schema.json#/$defs/generation"
+            }
+          },
+          "required": [
+            "workload_id",
+            "generation"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "op",
+        "params"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    }
+  ]
+}

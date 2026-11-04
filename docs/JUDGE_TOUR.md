@@ -13,6 +13,8 @@ result on that architecture. Do not treat a parser test as live verification.
 
 **x64 browser automation: verified on local pages through the kit with the rules planner: goal, typing, exact read back, and a login wall stop.**
 
+**x64 release-package snapshot, commits c26 and c27 [CITED: maintainer evaluation]: browser rules goals 10 of 10 [MEASURED]; login wall `HUMAN_HANDOFF`; stop clean. Muse on x64 and real mouse drag under a window manager remain unverified.**
+
 ## Open the wall
 
 **Shows:** the installed application and its connection to the core.
@@ -45,7 +47,7 @@ changes the role. Marking login alone does not change the role.
 **Success:** both tiles show browser frames and their role badges; clicking a
 Human page works. Watching an Agent does not give human input authority.
 **If refused:** select a free identity and inspect the dialog/activity reason.
-On x64, public internet is unavailable without compatible Open network mode;
+On x64, Open network with its firewall step reached a public site with HTTP 200 [MEASURED] while local network and Docker bridge access were blocked. Public internet is unavailable without compatible Open network mode;
 legacy networking grants no public destinations. A live tile alone does not
 prove internet access. Use an already permitted page or ask the installer for
 an Open-ready kit; do not bypass policy.
@@ -88,18 +90,17 @@ is not documented here.
 
 **Shows:** a Linux GUI program in a container, separate from your desktop.
 Click **＋ Add capsule → Program**, click **Create Capsule**, choose
-**Role → Human**, enter `gnome-calculator` in **Binary name**, then **Start**.
-Repeat with **Agent** when you want automation.
+**Role → Agent**, enter `gnome-calculator` in **Binary name**, then **Start**.
+This is the measured x64 launch route. Human Program is a separate route;
+`gedit` as Human Program closed its window with `XPRA_MODE_REFUSED` on x64.
 
-**Success:** a calculator frame appears with the chosen role; a Human tile accepts
-clicks. **If refused:** inspect the missing binary, image or resource message.
+**Success:** a calculator frame appears with the chosen role. Human input is
+a separate check; the measured x64 result here is Agent launch. **If refused:** inspect the missing binary, image or resource message.
 Use a GUI binary installed on the host and the required program image. Do not
 substitute Host program without reviewing its different isolation boundary.
 
-**Architecture:** x64 — dialog verified; the binary is looked up on your computer,
-so without `gnome-calculator` installed it refuses with
-`host_program_unavailable: gnome-calculator: not found in PATH` (`sudo apt-get install -y gnome-calculator`);
-launch with the binary present is not verified live on x64; arm64 — calculator
+**Architecture:** x64 — isolated Program `gnome-calculator` as Agent verified
+from the release package [CITED: operator evaluation, c26/c27]; arm64 — calculator
 automation verified, standalone Program launch is not separately attested.
 
 ## Host program and Desktop window
@@ -125,7 +126,11 @@ For Desktop window, select an existing X11 window; native Wayland
 windows are unsupported. Do not assume an empty list means permission to capture
 another display.
 
-**Architecture:** x64 — both available, unverified live; arm64 — both verified.
+**Architecture:** x64 — Host program `gnome-calculator` as Agent verified;
+Desktop window `gedit` attach, type, resize and closed message verified
+[CITED: operator evaluation, c26/c27]. Real mouse drag under a window manager
+remains unverified. A closed tile can retain a reused X11 id: if **Add** refuses,
+press **Stop** on that old tile before attaching again. arm64 — both verified.
 
 ## Terminal and the prompt buttons
 
@@ -192,16 +197,29 @@ planner; dependency validation still applies. Stored workflows retain their
 separate compiled-runtime restriction. Never automatically retry
 `INPUT_UNCERTAIN`; delivery may already have happened.
 
-**Architecture:** x64 — verified on a local page with the rules planner; arm64 — browser goal with
+**Architecture:** x64 — browser rules goals 10 of 10 [MEASURED] from the release package;
+Muse on x64 remains unverified. arm64 — browser goal with
 Muse verified.
 
 ## Automate a program: calculator
 
-**Shows:** verified GUI actions on a running Agent calculator. Start an Agent
+**Shows:** GUI actions on a running Agent calculator; the button route below has
+arm64 verification. For the measured x64 recording route, use typed input.
+Start an Agent
 calculator through Program or Host program as appropriate; the latter remains
 unisolated and needs xpra. Copy its identity and prepare the attachment above.
-Clear it manually if necessary, then release control and observe its actual
-button names. For each next button, use its unique observed name:
+Clear it manually if necessary, establish calculator focus, then release control.
+On x64, use the measured typed route rather than the small **+** button:
+
+Use the command in [Text in a program](#text-in-a-program) with the copied
+calculator identity and `--text '2+3'` instead of the sample text.
+
+The measured process exit was rc 0 [MEASURED], with verdict
+`PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`. Inspect the calculator yourself;
+this does not certify exact text readback or the arithmetic result.
+
+For the arm64 button demonstration, observe its actual button names.
+For each next button, use its unique observed name:
 
 ```bash
 PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
@@ -224,8 +242,10 @@ unique observed target, attachment and dependency pins. Without Muse Code use
 `--planner rules` for an exact observed button; that does not inherit the Muse
 live verification. A visible effect is not proof of arithmetic correctness.
 
-**Architecture:** x64 — available, unverified live; arm64 — calculator 7+8 by Muse
-verified.
+**Architecture:** x64 — Agent calculator launch and typed `2+3` delivery verified
+with rc 0 [MEASURED], verdict `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`;
+arithmetic result and the button route above are not certified by that result.
+Muse on x64 remains unverified. arm64 — calculator 7+8 by Muse verified.
 
 ## Text in a program
 
@@ -246,7 +266,10 @@ action evidence before a new attempt; do not blindly type again. Use a named
 observed field instead of `focused` if focus is not established. Known password
 fields refuse; do not use this flow for secrets. Program `--key` is unsupported.
 
-**Architecture:** arm64 — typed into gedit and read back once with OCR, not always exact; x64 — not verified live;
+**Architecture:** arm64 — typed into gedit and read back once with OCR, not always exact;
+x64 — calculator `2+3` typed with rc 0 [MEASURED], verdict
+`PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; Desktop window `gedit` typing verified,
+without a supplied exact OCR readback result.
 
 ## Wall stop: login or CAPTCHA
 
@@ -311,15 +334,16 @@ available, separate cleanup verification not documented here.
 | Browser Human and Agent | Verified | Verified |
 | Views | Available, unverified separately | Verified |
 | Desktops and control handoff | Take control and Release verified by clicks on WSL2; desktops unverified separately | Take control and Release verified |
-| Program capsule | Needs the binary on your computer; refusal verified, launch unverified | Calculator verified; launch route not separately attested |
-| Host program | Requires xpra; unverified live | Verified; requires xpra |
-| Desktop window | X11 only; unverified live | Verified; X11 only |
-| Browser goals | Verified with rules, local page, after Take control and Release | Verified with Muse and rules, local page |
-| Calculator 7+8 | Available, unverified live | Muse verified |
-| Program text | Implemented; live verification absent | gedit typed; verdict certifies only when OCR reads it back |
+| Program capsule | Isolated `gnome-calculator` as Agent verified; Human Program `gedit` closed with `XPRA_MODE_REFUSED` | Calculator verified; launch route not separately attested |
+| Host program | `gnome-calculator` as Agent verified; requires xpra | Verified; requires xpra |
+| Desktop window | X11 `gedit` attach, type, resize, closed message verified; real mouse drag under a window manager unverified | Verified; X11 only |
+| Browser goals | Rules goals 10 of 10 [MEASURED]; Muse unverified | Verified with Muse and rules, local page |
+| Calculator 7+8 | Button arithmetic unverified; typed `2+3` sent, rc 0 [MEASURED], text uncertified | Muse verified |
+| Program text | `2+3`: `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; Desktop window `gedit` typing verified | gedit typed; verdict certifies only when OCR reads it back |
 | Wall stop | Verified on a local page | Verified on local pages |
 | Terminal, prompt buttons, capture | Available; live verification absent | Available; live verification absent |
 | Stop | Verified | Available; separate cleanup verification absent |
+| Open network with firewall step | Public site HTTP 200 [MEASURED]; local network and Docker bridge blocked | Separate Open result absent |
 | Public internet without Open mode | Not available | Legacy policy grants no public destinations |
 | VM capsules | Not verified live | Not verified live |
 

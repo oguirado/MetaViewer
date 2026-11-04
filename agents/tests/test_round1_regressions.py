@@ -66,36 +66,48 @@ class CodecRegressions(unittest.TestCase):
     def test_v02_contract_examples_and_closed_negative_controls(self):
         from tools.check_contracts import Validator, ValidationError
         root = Path(__file__).resolve().parents[2]
-        oracle = _target_oracle()
-        envelope_schema = oracle.load('envelope.schema.json')
-        envelope_bodies = {
-            branch['$ref'].removesuffix('.schema.json')
-            for branch in envelope_schema['properties']['body']['oneOf']
-        }
-        base_env = json.loads((root / 'contracts' / 'examples' / 'v0.2' / 'envelope.valid.json').read_text())
-        for path in sorted((root / 'contracts' / 'examples' / 'v0.2').glob('*.valid.json')):
-            body = _v02_pins(json.loads(path.read_text()))
-            prefix = path.name.split('.', 1)[0]
+        oracle = Validator(root / "contracts/v0.2")
+        schemas = {name: oracle.load(name + ".schema.json") for name in
+                   ("envelope", "capsule_envelope", "rewind_envelope")}
+        families = {branch["$ref"].removesuffix(".schema.json"): name
+                    for name, schema in schemas.items()
+                    for branch in schema["properties"]["body"]["oneOf"]}
+        examples = sorted((root / "contracts/examples/v0.2").glob("*.valid*.json"))
+        self.assertTrue(examples)
+        base_env = json.loads((root / "contracts/examples/v0.2/envelope.valid.json").read_text())
+        for path in examples:
             with self.subTest(path=path.name):
-                if prefix not in envelope_bodies and prefix != 'envelope':
-                    schema = oracle.load(f'{prefix}.schema.json')
+                body = json.loads(path.read_text())
+                prefix = path.name.split(".", 1)[0]
+                if prefix not in families and prefix not in schemas:
+                    schema = oracle.load(prefix + ".schema.json")
                     oracle.validate(body, schema)
                     bad_body = copy.deepcopy(body)
-                    bad_body['unknown_property'] = True
+                    bad_body["tg_unknown_property"] = True
                     with self.assertRaises(ValidationError):
                         oracle.validate(bad_body, schema)
-                    with self.assertRaises(ValidationError):
-                        oracle.validate({**base_env, 'body': body}, envelope_schema)
-                    with self.assertRaises(e.EnvelopeError) as caught:
-                        fixtures._wrap(body)
-                    self.assertEqual(caught.exception.code, 'bad_shape')
+                    # Direct metadata remains invalid in every wire family, with or without its own tag.
+                    for family, schema in schemas.items():
+                        bad = {**base_env, "schema": family + "/v0.2", "body": body}
+                        with self.assertRaises(ValidationError): oracle.validate(bad, schema)
+                        self.assert_bad(bad)
                     continue
-                env = body if body['schema'] == 'envelope/v0.2' else fixtures._wrap(body)
-                oracle.validate(env, envelope_schema)
-                self.assertEqual(e.loads_envelope(e.dumps_envelope(env, max_bytes=M), max_bytes=M), env)
+                family = prefix if prefix in schemas else families[prefix]
+                env = body if prefix in schemas else fixtures._wrap(body)
+                self.assertEqual(env["schema"], family + "/v0.2")
+                oracle.validate(env, schemas[family])
+                wire = e.dumps_envelope(env, max_bytes=M)
+                self.assertEqual(e.loads_envelope(wire, max_bytes=M), env)
+                for foreign, schema in schemas.items():
+                    if foreign == family: continue
+                    bad = {**env, "schema": foreign + "/v0.2"}
+                    with self.assertRaises(ValidationError): oracle.validate(bad, schema)
+                    with self.assertRaises(e.EnvelopeError): e.validate_envelope(bad)
                 bad = copy.deepcopy(env)
-                bad['body']['unknown_property'] = True
+                bad["body"]["tg_unknown_property"] = True
+                with self.assertRaises(ValidationError): oracle.validate(bad, schemas[family])
                 self.assert_bad(bad)
+
 
     def test_tool_discriminators_v02(self):
         for name, value in vars(tools).items():

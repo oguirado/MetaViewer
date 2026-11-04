@@ -22,21 +22,21 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const settings = scheme => JSON.stringify({ scheme, density: 'compact', wallFps: 30, recordingFps: 3 });
 
 test('stored decode falls back per field and refuses unknown keys', () => {
-  assert.deepEqual(decodeStoredSettings('{"scheme":"mv-dark","density":7}'), {
-    ok: true,
-    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
-  });
-  assert.deepEqual(decodeStoredSettings('{"scheme":"invented","density":"compact"}'), {
+  assert.deepEqual(decodeStoredSettings('{"scheme":"mv-light","density":7}'), {
     ok: true,
     settings: { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
-  assert.deepEqual(decodeStoredSettings('{"scheme":"mv-dark","future":1}'), {
+  assert.deepEqual(decodeStoredSettings('{"scheme":"invented","density":"compact"}'), {
+    ok: true,
+    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
+  });
+  assert.deepEqual(decodeStoredSettings('{"scheme":"mv-light","future":1}'), {
     ok: false,
     error: { code: 'ERR_SETTINGS_UNKNOWN_KEY', message: 'Unknown settings key: future' },
   });
   assert.deepEqual(decodeStoredSettings({}), {
     ok: true,
-    settings: { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
+    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
   const malformed = decodeStoredSettings('{nope');
   assert.equal(malformed.ok, false);
@@ -47,10 +47,10 @@ test('stored decode falls back per field and refuses unknown keys', () => {
 });
 
 test('store load keeps a valid scheme paired with an invalid density', async () => {
-  const store = createHostSettingsStore(createMemorySettingsHost('{"scheme":"mv-dark","density":7}'));
-  assert.deepEqual({ ...(await store.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  const store = createHostSettingsStore(createMemorySettingsHost('{"scheme":"mv-light","density":7}'));
+  assert.deepEqual({ ...(await store.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   const flipped = createHostSettingsStore(createMemorySettingsHost('{"scheme":"invented","density":"compact"}'));
-  assert.deepEqual({ ...(await flipped.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await flipped.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
 });
 
 test('the entry shares the exact store decode object', () => {

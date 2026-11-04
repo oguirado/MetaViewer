@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -110,7 +114,7 @@ async function loadApp(captured) {
     './wall/DesktopWorkspace.vue': wall,
     '../electron/desktopLayout.js': {createDesktopState,desktopRows},
     './surfaces/SurfaceCanvas.vue': stub,
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
     RoleSurface: roleSurface,
   };
   const source = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
@@ -118,7 +122,7 @@ async function loadApp(captured) {
   const compiled = compileScript(descriptor, { id: `p18r3-app-${++serial}`, inlineTemplate: true });
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(VUE_URL));
-    return `const ${binding.trim()} = globalThis.__p18r3deps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__p18r3deps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#app-${serial}`)).default;
 }

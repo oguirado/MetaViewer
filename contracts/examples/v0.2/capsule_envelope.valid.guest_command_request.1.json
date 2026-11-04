@@ -1,0 +1,30 @@
+{
+  "schema": "capsule_envelope/v0.2",
+  "msg_id": "guest-command-fixture",
+  "ts_ns": 0,
+  "from": {
+    "component": "ui",
+    "instance": "fixture-from"
+  },
+  "to": {
+    "component": "core",
+    "instance": "fixture-to"
+  },
+  "session_id": "fixture-session",
+  "seq": 1,
+  "nonce": "fixture-nonce",
+  "body": {
+    "schema": "guest_command_request/v0.2",
+    "request_id": "request-fixture",
+    "op": "run",
+    "params": {
+      "workload_id": "workload-fixture",
+      "generation": 1,
+      "job_id": "job-fixture",
+      "command_utf8": "x",
+      "cwd": "",
+      "stdin_b64": "",
+      "timeout_ms": 1
+    }
+  }
+}

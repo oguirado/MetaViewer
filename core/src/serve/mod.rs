@@ -1,3 +1,6 @@
+//! [TARGET, unit decision] Capsule state requests are UI-only, journalled before
+//! queued daemon dispatch, and settle through asynchronous accepted/completed or
+//! refused events. Native slot I/O never runs in this authority process.
 //! [TARGET, unit decision] Layout slots use surface_id as slot_id until a slot
 //! registry ABI exists (kit DOM aliases are resolved by layout.rs). Layout
 //! operations commit SurfaceNotice plus the closed intent witness and rebuild
@@ -47,7 +50,10 @@
 //! [TARGET, unit decision] Server shutdown/Drop and serve() teardown flush the
 //! authority journal and join its background sync worker before returning.
 mod capture;
+mod guest_command;
+mod headless;
 mod layout;
+mod rewind;
 mod timings;
 mod tools;
 
@@ -190,6 +196,7 @@ fn adapter_input_refusal(detail: &str) -> Refusal {
 /// One serialization point for all authority transitions and publication.
 pub struct Server {
     config: Config,
+    rewind_enabled: bool,
     authority: Authority,
     root: PathBuf,
     replay: ReplayTable,
@@ -206,6 +213,7 @@ pub struct Server {
     subscriptions: BTreeSet<(Endpoint, String)>,
     unsubscribed: BTreeSet<(Endpoint, String)>,
     human_inputs: BTreeMap<String, HumanInputPending>,
+    headless_graphical_seen: bool,
     tool_state: tools::ToolState,
     capture: crate::record::capture::Host,
     frame_timings: timings::Writer,
@@ -256,11 +264,18 @@ impl Server {
         let mut envelopes = Vec::new();
         let mut seen = BTreeSet::new();
         let mut human_inputs = BTreeMap::new();
+        let mut headless_graphical_seen = false;
         let mut tool_state = tools::ToolState::default();
         for seq in 1..=authority.state().core_seq {
             let event: serde_json::Value = serde_json::from_slice(&fs::read(
                 root.join("events").join(format!("{seq}.json")),
             )?)?;
+            if event["input"]["event"] == "SurfaceRequest"
+                && event["input"]["request"]["op"] == "create"
+                && event["outcome"]["reason"].is_null()
+            {
+                headless_graphical_seen = true;
+            }
             if let Some(cancelled) = event["outcome"]["cancelled"].as_array() {
                 for pid in cancelled.iter().filter_map(|v| v.as_str()) {
                     tool_state.evict_proposal(pid);
@@ -430,6 +445,7 @@ impl Server {
         let capture = crate::record::capture::Host::with_serial(authority.state().core_seq);
         let frame_timings = timings::Writer::start(root.join("artifacts/frame_timings.jsonl"));
         Ok(Self {
+            rewind_enabled: std::env::var("MV_REWIND_ENABLED").ok().as_deref() == Some("1"),
             frame_timings,
             frame_clock: None,
             config,
@@ -449,6 +465,7 @@ impl Server {
             subscriptions: BTreeSet::new(),
             unsubscribed: BTreeSet::new(),
             human_inputs,
+            headless_graphical_seen,
             tool_state,
             capture,
         })
@@ -487,6 +504,10 @@ impl Server {
             self.subscriptions.retain(|(p, _)| p != peer);
             self.unsubscribed.retain(|(p, _)| p != peer);
             if peer.component == Component::Daemon {
+                if let Ok(now_ns) = self.now() {
+                    let _ = self.mark_headless_unknown(now_ns);
+                    let _ = self.mark_guest_command_unknown(now_ns);
+                }
                 let mut pending: Vec<_> = self
                     .human_inputs
                     .iter()
@@ -580,7 +601,7 @@ impl Server {
             .checked_add(1)
             .ok_or_else(|| invalid("sequence exhausted"))?;
         let env = Envelope {
-            schema: "envelope/v0.2".into(),
+            schema: crate::wire::envelope_schema(&body).into(),
             msg_id: format!("{tag}-{}-{}", self.authority.state().epoch, self.serial),
             ts_ns: Clock::new(ts_ns),
             from: self.config.core.endpoint.clone(),
@@ -645,6 +666,7 @@ impl Server {
                         "data":{"surface_id":to.instance,"code":"QUEUE_OVERFLOW",
                         "detail":"Peer send queue exhausted; reconnect and refresh state"}}),
                 )?));
+                env.schema = crate::wire::envelope_schema(&env.body).to_owned();
                 let mut terminal = c
                     .terminal
                     .lock()
@@ -1302,6 +1324,51 @@ impl Server {
             clock.row.witness_journal_ns += boundary_started.elapsed().as_nanos();
         }
         match (&env.from.component, &env.body) {
+            (_, Command::CapsuleStateRequest(request)) => {
+                return self.capsule_state_request_at(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::CapsuleStateEvent(event)) => {
+                let out = self.authority.apply_with_witnesses(
+                    Input::CapsuleStateEvent {
+                        epoch,
+                        event: event.as_ref().clone(),
+                    },
+                    vec![boundary],
+                )?;
+                if let Some(reason) = out.reason {
+                    return self.refuse_at(
+                        now_ns,
+                        &env.from,
+                        &event.operation_id,
+                        reason,
+                        out.core_seq,
+                    );
+                }
+                self.authority.flush_sync()?;
+                let sender = self.authority.state().slot_history[&event.operation_id]
+                    .sender
+                    .clone();
+                return self.send_at(now_ns, &sender, env.body.clone());
+            }
+            (Component::Ui | Component::Agent, Command::RewindRequest(request)) => {
+                return self.rewind_request(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::RewindEvent(event)) => {
+                return self.rewind_event(now_ns, &env, event, epoch, boundary);
+            }
+            (Component::Ui | Component::Agent, Command::GuestCommandRequest(request)) => {
+                return self.guest_command_request(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::GuestCommandEvent(event)) => {
+                return self.guest_command_event(now_ns, &env, event, epoch, boundary);
+            }
+
+            (Component::Ui | Component::Agent, Command::HeadlessRequest(request)) => {
+                return self.headless_request(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::HeadlessEvent(event)) => {
+                return self.headless_event(now_ns, &env, event, epoch, boundary);
+            }
             (Component::Ui, Command::RecordRequest(request)) => {
                 return self.capture_wire(now_ns, &env, request, boundary);
             }
@@ -1374,6 +1441,25 @@ impl Server {
                 if let Some(reason) = out.reason {
                     return self.refuse_at(now_ns, &env.from, &env.msg_id, reason, out.core_seq);
                 }
+                if op == "create" {
+                    let profile_id = value["params"]["profile_id"]
+                        .as_str()
+                        .ok_or_else(|| invalid("missing profile"))?;
+                    let fence = self.authority.apply(Input::ProfileCreate {
+                        profile_id: profile_id.into(),
+                    })?;
+                    if let Some(reason) = fence.reason {
+                        return self.refuse_at(
+                            now_ns,
+                            &env.from,
+                            &env.msg_id,
+                            reason,
+                            fence.core_seq,
+                        );
+                    }
+                    self.authority.flush_sync()?;
+                    self.headless_graphical_seen = true;
+                }
                 match op {
                     "frame_subscribe" | "frame_unsubscribe" => {
                         let key = (
@@ -1403,6 +1489,50 @@ impl Server {
             (Component::Daemon, Command::SurfaceEvent(event)) => {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
+                }
+                if let SurfaceEvent::Case4(error) = event.as_ref() {
+                    if error.data.code == "ADAPTER_SCHEMA" {
+                        let pending = self
+                            .authority
+                            .state()
+                            .slot_history
+                            .values()
+                            .find(|operation| {
+                                operation.epoch == epoch
+                                    && operation.event.event
+                                        == crate::wire::payload::CapsuleStatePhase::Accepted
+                                    && error.data.surface_id
+                                        == format!(
+                                            "slot:{}",
+                                            crate::journal::sha256_hex(
+                                                operation.request.operation_id.as_bytes()
+                                            )
+                                        )
+                            })
+                            .cloned();
+                        if let Some(operation) = pending {
+                            let mut refused = operation.event;
+                            refused.event = crate::wire::payload::CapsuleStatePhase::Refused;
+                            refused.reason_code =
+                                crate::wire::Optional::Present("UNSUPPORTED_SCHEMA".into());
+                            let out = self.authority.apply_with_witnesses(
+                                Input::CapsuleStateEvent {
+                                    epoch,
+                                    event: refused.clone(),
+                                },
+                                vec![boundary],
+                            )?;
+                            if out.reason.is_none() {
+                                self.authority.flush_sync()?;
+                                return self.send_at(
+                                    now_ns,
+                                    &operation.sender,
+                                    Command::CapsuleStateEvent(Box::new(refused)),
+                                );
+                            }
+                            return Ok(());
+                        }
+                    }
                 }
                 let out = match event.as_ref() {
                     SurfaceEvent::Case0(e) => {
@@ -1878,6 +2008,8 @@ impl Server {
         self.poll_tool_waiters_at(now_ns)
     }
     fn poll_tool_waiters_at(&mut self, now_ns: u64) -> Result<()> {
+        self.poll_headless_at(now_ns)?;
+        self.poll_guest_command_at(now_ns)?;
         let prev = self.route_now_ns.replace(now_ns);
         let result = self.poll_tool_waiters();
         self.route_now_ns = prev;
@@ -1891,6 +2023,88 @@ impl Server {
             .map(|p| p.endpoint.clone())
             .ok_or_else(|| invalid("no agent"))
     }
+    // [TARGET, unit decision] No slot filesystem work runs under the server
+    // mutex. Only durable admission and bounded queue sends occur here. Native
+    // custody (protected/foreign profiles, login reservations) stays in adapter.
+    fn capsule_state_request_at(
+        &mut self,
+        now_ns: u64,
+        env: &Envelope,
+        request: &crate::wire::payload::CapsuleStateRequest,
+        boundary: Witness,
+    ) -> Result<()> {
+        use crate::wire::payload::{CapsuleStateEvent, CapsuleStateEventSchema, CapsuleStatePhase};
+        use crate::wire::Optional;
+        let out = self.authority.apply_with_witnesses(
+            Input::CapsuleStateRequest {
+                sender: env.from.clone(),
+                request: request.clone(),
+            },
+            vec![boundary],
+        )?;
+        let recorded = self
+            .authority
+            .state()
+            .slot_history
+            .get(&request.operation_id)
+            .filter(|op| op.sender == env.from && op.request == *request)
+            .map(|op| op.event.clone());
+        let event = recorded.unwrap_or_else(|| CapsuleStateEvent {
+            schema: CapsuleStateEventSchema::Value,
+            slots: Optional::Missing,
+            operation_id: request.operation_id.clone(),
+            op: request.op.clone(),
+            profile_id: request.profile_id.clone(),
+            slot_id: request.slot_id.clone(),
+            event: CapsuleStatePhase::Refused,
+            reason_code: Optional::Present("POLICY".into()),
+            generation: Optional::Missing,
+            sha256: Optional::Missing,
+        });
+        self.authority.flush_sync()?;
+        if out.dispatch {
+            let daemon = self
+                .config
+                .peers
+                .iter()
+                .find(|p| p.endpoint.component == Component::Daemon)
+                .map(|p| p.endpoint.clone());
+            // Queue failure proves this request was not dispatched. Settle a
+            // typed refusal durably, retaining its admitted-attempt budget.
+            let sent = if let Some(daemon) = daemon {
+                let mut forwarded = self.outbound_at(now_ns, &daemon, env.body.clone(), "core")?;
+                // Old adapters echo envelope msg_id as their typed schema-fault
+                // surface_id. A bounded deterministic ID binds that refusal.
+                forwarded.msg_id = format!(
+                    "slot:{}",
+                    crate::journal::sha256_hex(request.operation_id.as_bytes())
+                );
+                self.enqueue(&daemon, forwarded)
+            } else {
+                Err(invalid("no daemon"))
+            };
+            if sent.is_err() {
+                let mut refused = event;
+                refused.event = CapsuleStatePhase::Refused;
+                refused.reason_code = Optional::Present("DAEMON_UNAVAILABLE".into());
+                self.authority.apply(Input::CapsuleStateEvent {
+                    epoch: self.authority.state().epoch,
+                    event: refused.clone(),
+                })?;
+                self.authority.flush_sync()?;
+                return self.send_at(
+                    now_ns,
+                    &env.from,
+                    Command::CapsuleStateEvent(Box::new(refused)),
+                );
+            }
+        }
+        self.send_at(
+            now_ns,
+            &env.from,
+            Command::CapsuleStateEvent(Box::new(event)),
+        )
+    }
     fn lifecycle(
         &mut self,
         s: &crate::wire::payload::Surface,
@@ -1898,6 +2112,21 @@ impl Server {
         boundary: Witness,
     ) -> Result<crate::admission::Outcome> {
         use crate::wire::payload::{SurfaceControl, SurfaceState};
+        if self.authority.state().slot_ops.contains_key(&s.profile_id)
+            || self
+                .authority
+                .state()
+                .profile_surfaces
+                .get(&s.surface_id)
+                .is_some_and(|old| old != &s.profile_id)
+        {
+            return Ok(self.authority.apply_with_witnesses(
+                Input::Refuse {
+                    reason: Refusal::Policy,
+                },
+                vec![boundary],
+            )?);
+        }
         let agent_controlled = if created {
             s.control == SurfaceControl::Agent
         } else {
@@ -1927,13 +2156,26 @@ impl Server {
                 _ => LifecycleUpdate::Updated(surface),
             }
         };
-        Ok(self.authority.apply_with_witnesses(
+        let input = if !self
+            .authority
+            .state()
+            .profile_surfaces
+            .contains_key(&s.surface_id)
+            && (created || self.authority.state().surfaces.contains_key(&s.surface_id))
+        {
+            Input::ProfileLifecycle {
+                surface_id: s.surface_id.clone(),
+                profile_id: s.profile_id.clone(),
+                update,
+            }
+        } else {
             Input::Lifecycle {
                 surface_id: s.surface_id.clone(),
                 update,
-            },
-            vec![boundary],
-        )?)
+            }
+        };
+        let out = self.authority.apply_with_witnesses(input, vec![boundary])?;
+        Ok(out)
     }
     fn layout_intent(
         &mut self,
@@ -2780,6 +3022,37 @@ mod nv_regressions {
         drop(second);
         assert!(!second_path.exists());
     }
+    #[test]
+    fn capsule_queue_overflow_terminal_keeps_legacy_body_family() {
+        for raw in [
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.headless_request.valid.create.json"),
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.headless_event.valid.accepted_1.json"),
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.guest_command_request.0.json"),
+        include_str!("../../../contracts/examples/v0.2/capsule_envelope.valid.guest_command_event.0.json"),
+    ] {
+        let mut f = Fixture::new();
+        let to = f.endpoint(Component::Ui);
+        let (queue, _receiver) = mpsc::sync_channel(MAX_SEND_QUEUE);
+        let terminal = Arc::new(Mutex::new(None));
+        f.server.connections.insert(to.clone(), Connection {
+            id: 1, epoch: f.server.authority.state().epoch, queue,
+            terminal: terminal.clone(),
+        });
+        let mut env = decode_envelope(raw).unwrap();
+        env.to = to.clone();
+        for _ in 0..MAX_SEND_QUEUE { f.server.enqueue(&to, env.clone()).unwrap(); }
+        let err = f.server.enqueue(&to, env).unwrap_err();
+        assert!(matches!(err.downcast_ref::<SendFailure>(), Some(SendFailure::QueueOverflow(_))));
+        let mut diagnostic = terminal.lock().unwrap().take().unwrap();
+        assert_eq!(diagnostic.schema, "envelope/v0.2");
+        assert!(decode_envelope(&serde_json::to_string(&diagnostic).unwrap()).is_ok());
+        assert!(matches!(diagnostic.body, Command::SurfaceEvent(_)));
+        // Negative control: stale capsule tag must remain invalid.
+        diagnostic.schema = "capsule_envelope/v0.2".into();
+        assert!(decode_envelope(&serde_json::to_string(&diagnostic).unwrap()).is_err());
+    }
+    }
+
     struct Fixture {
         server: Server,
         root: PathBuf,

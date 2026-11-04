@@ -649,6 +649,7 @@ test('P8 boot: the generated entry never awaits whenReady at module top level (E
   const root = await mkdtemp(join(tmpdir(), 'mv-ready-Música-'));
   try {
     await writeFile(join(root,'package.json'), JSON.stringify({type:'module'}));
+    await writeFile(join(root,'package-pin.json'), JSON.stringify({commit:'a'.repeat(40)}));
     await writeFile(join(root,'main.js'), "export const validateRetailLaunch=()=>({ok:true}); export const mainDirectEntry=()=>{}; export const registerPrivilegedScheme=()=>{};");
     await writeFile(join(root,'coreLauncher.js'), "export const scrubChildEnv=e=>e; export const validateKillTarget=()=>true;");
     const source = productionEntry.replace('  verifyBootSeal(appRoot);', '  /* Seal fixture: tested by package seal suites. */');
@@ -675,6 +676,7 @@ test('POLISH-3 native platform initialization failure executes no core spawn (wi
   const root = await mkdtemp(join(tmpdir(), 'mv-platform-Música-'));
   try {
     await writeFile(join(root,'package.json'), JSON.stringify({type:'module'}));
+    await writeFile(join(root,'package-pin.json'), JSON.stringify({commit:'a'.repeat(40)}));
     await writeFile(join(root,'main.js'), "export const validateRetailLaunch=()=>({ok:true}); export const mainDirectEntry=()=>{}; export const registerPrivilegedScheme=()=>{};");
     await writeFile(join(root,'coreLauncher.js'), "export const scrubChildEnv=e=>e; export const validateKillTarget=()=>true;");
     const source = productionEntry.replace('  verifyBootSeal(appRoot);', '  /* Seal fixture: tested by package seal suites. */');

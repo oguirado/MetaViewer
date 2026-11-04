@@ -72,5 +72,6 @@ export function workflowPrompt(kind) {
     'rc 0 verifies bounded actions; rc 5 means INPUT_UNCERTAIN: never retry; rc 6 means inspect and repair the refusal.',
     'Never retry an uncertain action or change network policy.',
     'Do not include credentials, tokens, personal data or screenshots in this prompt.',
+    '', 'Task: ',
   ].join('\n'));
 }

@@ -58,3 +58,25 @@ test('P18G Dockview portal content maps to its sibling floating window by z-orde
  const result=role.floatingPresentation(el,{querySelectorAll:()=>[back,front]},node=>({zIndex:String(node.z)}));
  assert.equal(result.front,true);assert.deepEqual(result.occluders,[]);
 });
+
+
+test('floating native viewport clips to its window and the wall beside an open dock',async()=>{
+ const role=await loadRoleSurfaceModule();
+ const saved=globalThis.document,savedStyle=globalThis.getComputedStyle;
+ const wall={x:224,y:50,width:608,height:670};
+ const own={z:1001,getBoundingClientRect:()=>({x:630,y:80,width:202,height:330})};
+ const portal={className:'dv-render-overlay-float',z:1002,getBoundingClientRect:()=>({x:630,y:108,width:240,height:302})};
+ const tile={className:'mv-tile',parentElement:portal,getBoundingClientRect:()=>({x:630,y:80,width:240,height:330})};
+ const el={parentElement:tile,closest:s=>s==='.dv-resize-container'?null:portal};
+ const style=node=>({zIndex:String(node.z||0),overflow:'visible',display:'block',visibility:'visible'});
+ try {
+  globalThis.document={getElementById:id=>id==='shell-wall'?{getBoundingClientRect:()=>wall}:null};globalThis.getComputedStyle=style;
+  const clips=role.collectClipRects(el),floating=role.floatingPresentation(el,{querySelectorAll:()=>[own]},style);
+  assert.deepEqual(clips.wallViewport,wall,'portalled views must still respect the dock boundary');
+  assert.deepEqual(floating.bounds,own.getBoundingClientRect());
+  const result=role.clipRoleBounds(portal.getBoundingClientRect(),[...clips.scrollAncestors,floating.bounds],clips.wallViewport);
+  assert.deepEqual(result,{visible:true,bounds:{x:630,y:108,width:202,height:302}});
+  assert.equal(result.bounds.x+result.bounds.width,wall.x+wall.width);
+  assert.equal(role.clipRoleBounds(portal.getBoundingClientRect(),[],null).bounds.width,240,'negative control overflows into the dock');
+ } finally {globalThis.document=saved;globalThis.getComputedStyle=savedStyle;}
+});

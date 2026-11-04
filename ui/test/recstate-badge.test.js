@@ -111,12 +111,12 @@ export const WALL_HOOK = [
     "import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';\nimport RecordingBadge from '../recording/RecordingBadge.vue';\n"],
   [`    <span
       :id="badgeId"
-      class="mv-tile-chrome__badge"
+      class="mv-tile-chrome__badge" :class="{ 'mv-tile-chrome__badge--header': headerTarget }"
       :data-variant="badgeVariant"
       role="status"
       :data-semantic-anchor="badgeAnchor"
       :title="badgeTitle"
-    >{{ badgeText }}</span>`,
+    >{{ phase === 'error' ? 'Error' : badgeText }}</span>`,
   '    <RecordingBadge :capsule-id="props.capsuleId" :capture-state="props.captureState" />'],
 ];
 
