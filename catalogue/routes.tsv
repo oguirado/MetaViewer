@@ -219,6 +219,7 @@ launcher-two-kinds.md	changes/unreleased/launcher-two-kinds.md
 main-rss-headroom.md	changes/unreleased/main-rss-headroom.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
 microvm-53bb2ce5a10d	changes/unreleased/microvm-agent-attachment.md
+microvm-8ac60d061bdc	changes/unreleased/microvm-agent-mark-observation.md
 microvm-host-agent.md	changes/unreleased/microvm-host-agent.md
 microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
 microvm-2ad050142531	changes/unreleased/microvm-rewind-theme.md
@@ -2920,6 +2921,7 @@ microvm-9d05fa323787	ui/test/microvm-agent-host-profile.test.js
 microvm-6c4892fc1489	ui/test/microvm-agent-prompt-delivery.test.js
 microvm-f8ba8f8cfb46	ui/test/microvm-agent-prompt-recipe.test.js
 microvm-07f31d8d2e40	ui/test/microvm-agent-prompt.test.js
+microvm-42de163b3796	ui/test/microvm-rewind-passive-mark.test.js
 microvm-b270d5ac69d2	ui/test/microvm-tile-controls.test.js
 multica-199756b14b9b	ui/test/multicap-profile-picker.test.js
 multisl-cc0b2c69edc0	ui/test/multislot-u5a-ui.test.js
