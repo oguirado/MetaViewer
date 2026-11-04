@@ -212,6 +212,7 @@ launcher-role-step.md	changes/unreleased/launcher-role-step.md
 launcher-two-kinds.md	changes/unreleased/launcher-two-kinds.md
 main-rss-headroom.md	changes/unreleased/main-rss-headroom.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
+microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
 mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
 mw-readback-textof.md	changes/unreleased/mw-readback-textof.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
@@ -2472,6 +2473,7 @@ test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
 test_meta_site.py	tests/test_meta_site.py
+testmic-3835fbfca5c2	tests/test_microvm_scripted_scene.py
 test_multi_capsule.py	tests/test_multi_capsule.py
 test_mv_demo.py	tests/test_mv_demo.py
 test_mv_demo_flow.py	tests/test_mv_demo_flow.py
@@ -2540,6 +2542,7 @@ generat-f7334b59521f	tools/generate_guest_command_sdk.py
 generat-4f785fccb627	tools/generate_headless_contracts.py
 generat-d976ac2a00ac	tools/generate_rewind_bindings.py
 generat-59ec76fa9902	tools/generate_rewind_sdk.py
+microvm-759c305ea218	tools/microvm_scripted_scene.py
 mv_demo.py	tools/mv_demo.py
 mv_identity.py	tools/mv_identity.py
 mv_ram_admission.py	tools/mv_ram_admission.py
@@ -2732,6 +2735,7 @@ capsuleId.js	ui/src/wall/capsuleId.js
 capsulePanelRouter.js	ui/src/wall/capsulePanelRouter.js
 guestWorkloadTile.js	ui/src/wall/guestWorkloadTile.js
 layout.js	ui/src/wall/layout.js
+restoreDuration.js	ui/src/wall/restoreDuration.js
 rewindS-318a0fc2e8fa	ui/src/wall/rewindStateControls.js
 tileCapture.js	ui/src/wall/tileCapture.js
 tileStates.js	ui/src/wall/tileStates.js
@@ -3129,6 +3133,7 @@ renderer-asar.test.js	ui/test/renderer-asar.test.js
 rendere-0907683c0d40	ui/test/renderer-ready.test.js
 reopena-3e5702fcbea8	ui/test/reopen-app-create.test.js
 reopenh-952d4999527b	ui/test/reopen-host-create.test.js
+restore-6e46f0e3e85f	ui/test/restore-duration.test.js
 rewindc-8f1ae7f269b8	ui/test/rewind-core-optin.test.js
 rewind-header.test.js	ui/test/rewind-header.test.js
 rewind-host.test.js	ui/test/rewind-host.test.js

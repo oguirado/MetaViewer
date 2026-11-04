@@ -13,7 +13,7 @@ async function component(inlineTemplate,mockLifecycle=false){
  const vueURL=pathToFileURL(require.resolve('vue')).href;
  if(mockLifecycle){const shim="export * from '"+vueURL+"';export const onMounted=fn=>globalThis.__rw27Hooks.mount.push(fn);export const onUnmounted=fn=>globalThis.__rw27Hooks.unmount.push(fn);";const shimURL='data:text/javascript;base64,'+Buffer.from(shim).toString('base64');code=code.replaceAll("from 'vue'",`from '${shimURL}'`);}
  code=code.replaceAll("from 'vue'",`from '${pathToFileURL(require.resolve('vue')).href}'`).replaceAll('from "vue"',`from '${pathToFileURL(require.resolve('vue')).href}'`);
- for(const [old,path] of [['../../electron/guestCommandValues.js','../electron/guestCommandValues.js'],['../wall/rewindStateControls.js','../src/wall/rewindStateControls.js']])code=code.replaceAll(`from '${old}'`,`from '${new URL(path,import.meta.url).href}'`);
+ for(const [old,path] of [['../../electron/guestCommandValues.js','../electron/guestCommandValues.js'],['../wall/rewindStateControls.js','../src/wall/rewindStateControls.js'],['../wall/restoreDuration.js','../src/wall/restoreDuration.js']])code=code.replaceAll(`from '${old}'`,`from '${new URL(path,import.meta.url).href}'`);
  return (await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64'))).default;
 }
 const Panel=await component(false),SSR=await component(true);
