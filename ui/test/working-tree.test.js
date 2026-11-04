@@ -27,7 +27,9 @@ test('Host program and Desktop window warnings are retained even with pending st
  const state=createDesktopState();state.assignments={host:{view:'human',desktop:1},desktop:{view:'human',desktop:1},regular:{view:'human',desktop:1}};
  const caps=build([row('host',{hostXpra:true}),row('desktop',{hostWindow:{state:'active'}}),row('regular')],state,['host'],[])[0].desktops[0].capsules;
  assert.deepEqual(caps.map(c=>c.notIsolated),[true,true,false]);assert.equal(caps[0].status,'Needs you');
- assert.match(source,/capsule\.notIsolated \? 'Not isolated' : capsule\.status/);
+ assert.match(source, /class="mv-tree-capsule-status"[^>]*>\{\{ capsule.status \}\}/);
+ assert.match(source, /v-if="capsule.notIsolated" class="mv-tree-isolation">Not isolated/);
+ assert.doesNotMatch(source, /capsule\.notIsolated \? 'Not isolated' : capsule\.status/);
 });
 const navigation=extract('async function selectTreeCapsule(', '// Reconcile only changed');
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
