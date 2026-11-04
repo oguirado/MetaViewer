@@ -186,7 +186,15 @@ const props = defineProps({surfaceId:{type:String,required:true},label:{type:Str
 const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control','stored-data','recordings']);
 const progress = ref(''), confirmed = ref(false), recordingPaused = ref(false);
 const storedDataProfile = ref('');
+const storedDataMenuProfile = ref('');
 function openStoredData() { if (storedDataProfile.value && !hostXpra.value && !hostWindow.value) emit('stored-data', storedDataProfile.value); }
+function openStoredDataMenu() { if (storedDataMenuProfile.value && !hostXpra.value && !hostWindow.value) emit('stored-data', storedDataMenuProfile.value); }
+/** @param {any} status */
+function readStoredData(status) {
+  const profile=status.storedData?.profileId===status.profileId && !status.hostWindow && !status.hostXpra ? status.profileId : '';
+  storedDataMenuProfile.value=profile || '';
+  storedDataProfile.value=status.storedData?.available===true ? profile || '' : '';
+}
 const overlays = /** @type {ReturnType<typeof import('./overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
 const hiddenSessions = /** @type {ReturnType<typeof import('./hiddenSessions.js').createHiddenSessionPool>|null} */ (inject('hiddenSessionPool', null));
 const menuOpen = ref(false), menuHost = ref(/** @type {HTMLElement|null} */ (null)), headerTarget = ref(/** @type {Element|null} */ (null)), resourceReleased = ref(false);
@@ -264,7 +272,7 @@ async function sync() {
       if (!current()) return;
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
       hostXpra.value = status.hostXpra === true;
-      storedDataProfile.value = status.storedData?.available === true && status.storedData.profileId === status.profileId && !status.hostWindow && !status.hostXpra ? status.profileId : '';
+      readStoredData(status);
       if (status.hostWindow !== undefined) {
         hostWindow.value = status.hostWindow || null;
         if (status.hostWindow?.state === 'lost') {
@@ -473,7 +481,7 @@ onMounted(async () => {
     if (!alive || generation !== syncGeneration || progress.value || ended) return;
     if (!['human','agent'].includes(status.role)) throw Error(status.code || 'CAPSULE_ROLE_UNPROVEN');
     hostXpra.value = status.hostXpra === true;
-    storedDataProfile.value = status.storedData?.available === true && status.storedData.profileId === status.profileId && !status.hostWindow && !status.hostXpra ? status.profileId : '';
+    readStoredData(status);
     if (status.hostWindow) {
       hostWindow.value = status.hostWindow;
       if (status.hostWindow.state === 'lost') {
@@ -522,7 +530,7 @@ onBeforeUnmount(() => { viewportResizeObserver?.disconnect(); stopOverlaySubscri
         <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
         <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
           <button v-if="recordingAvailable" type="button" role="menuitem" :id="`tile-recordings-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/recordings`" @click="runMenu(() => emit('recordings'))">Recordings and screenshots</button>
-          <button v-if="storedDataProfile && !hostXpra && !hostWindow" type="button" role="menuitem" :id="`tile-stored-data-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/stored-data`" title="Manage saved data for this identity; saving or loading requires a stopped capsule" :disabled="!!progress" @click="runMenu(openStoredData)">Stored data</button>
+          <button v-if="storedDataMenuProfile && !hostXpra && !hostWindow" type="button" role="menuitem" :id="`tile-stored-data-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/stored-data`" title="Manage saved data for this identity; saving or loading requires a stopped capsule" :disabled="!!progress" @click="runMenu(openStoredDataMenu)">Stored data</button>
           <div class="mv-role-compact-actions">
             <span>{{ hostWindow ? (hostWindow.state === 'lost' ? 'Window closed' : control === 'human' ? 'Human' : 'Agent') : role }}</span>
             <span v-if="recordingPaused" role="status">Recording paused (size limit)</span>
