@@ -81,6 +81,7 @@ if sub_valid "$SUB"; then :; else usage; fi # MUT:JUDGE_USAGE
 # ---------------------------------------------------------------- environment
 JUDGE_HOME=${MV_JUDGE_HOME:-${XDG_DATA_HOME:-$HOME_DIR/.local/share}/metaviewer-judge}
 case $JUDGE_HOME in
+    *[[:space:]]*) fail JUDGE_USAGE "MV_JUDGE_HOME must not contain whitespace" "export MV_JUDGE_HOME=/absolute/path-without-whitespace" ;;
     '' | / | "$HOME_DIR" | "$HOME_DIR"/) fail JUDGE_USAGE "MV_JUDGE_HOME '$JUDGE_HOME' would be the whole home or root" "unset MV_JUDGE_HOME or point it at a dedicated directory" ;;
     /*) ;;
     *) fail JUDGE_USAGE "MV_JUDGE_HOME must be an absolute path" "export MV_JUDGE_HOME=/absolute/path" ;;
