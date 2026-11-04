@@ -1,269 +1,128 @@
-# First run: Use MetaViewer -> mw_run perplexity ask
+# First run of mw_run
 
-One page for the operator. `$MV_OPERATOR_REPO` is the MetaViewer checkout the app
-was started with, and `$MV_WENDER_ROOT` is the wender-agent checkout at its
-`deps.lock` commit. Both come from your launcher environment file.
+Answers: how do I run mw_run the first time; what should mw_run print; what do I send back when mw_run fails.
 
-## Steps
+**Answer first: run one bounded goal on a Program capsule, read the one JSON line it prints, and stop on any refusal.** `mw_run` is the engine behind the Use MetaViewer buttons [CITED: agents/metaviewer_agents/mw_run.py:1]. It has two modes: goal mode (one exact observed control name, no stored workflow, no account needed with `--planner rules`) and stored-workflow mode (`--site` and `--workflow` from an admitted MemoryWeb home). Why an AI should drive MetaViewer this way is in [AI_AT_THE_CONTROLS.md](AI_AT_THE_CONTROLS.md).
 
-1. **Start MetaViewer** with your usual launcher. The top bar separates
-   **Humans** (default view, desktop `1`) and **Agents** (desktop `1`, toggled
-   with **Agents** or `Ctrl+Tab`). A cold start without a staged opening mode
-   auto-creates the first `mv-live-1` browser capsule in `agent` mode on the
-   **Agents** view. To sign in to Perplexity **by hand** first, open
-   `mv-live-1` in **Human (login & browse)** mode (or open the tile menu `⋮`
-   and choose **Switch to human mode**), sign in, optionally choose **Mark as
-   logged in** in the tile menu `⋮`, and then choose **Switch to agent mode**
-   in the tile menu `⋮` so `mv-live-1` is active on the **Agents** view on the
-   Perplexity home page with an empty composer. Keep only one MetaViewer app
-   running.
-2. **Check the MemoryWeb home** (from `$MV_OPERATOR_REPO`):
+`$MV_OPERATOR_REPO` is the MetaViewer checkout or installed operator resources the app was started with, and `$MV_WENDER_ROOT` is the pinned wender-agent dependency. Both come from the launcher environment and the app attachment; never guess them. Tags: [MEASURED], [CITED: path], [TARGET]; unknown facts read `ABSENT — do not invent`.
 
-   ```bash
-   python3 tools/mw_home_check.py --repo . --workflow perplexity/ask
-   ```
+| You want | Section |
+|---|---|
+| The shortest first run | [Goal mode on a Program capsule](#goal-mode-on-a-program-capsule) |
+| Replay a stored workflow | [Stored-workflow mode](#stored-workflow-mode) |
+| What success looks like | [Expected result](#expected-result) |
+| A refusal code | [Common refusals](#common-refusals) |
+| What to report | [If it fails, send back](#if-it-fails-send-back) |
+| The STALE_FRAME known issue | [STALE_FRAME: idle metadata fence](#stale_frame-idle-metadata-fence) |
 
-   Expected: `{"schema":"metaviewer.mw_home/v1",...,"ok":true,"code":null,"faults":[]}`.
-   If you see `"code":"MW_PROVENANCE"`, do step 3 once, then repeat step 2.
-3. **One-time provenance fix (only if step 2 asks for it).** The imported
-   definitions name a document that is not in the home, so the pinned MemoryWeb
-   gate refuses them (`MW_GATE_IO`). If you vouch for these definitions, record
-   that yourself. Write the notes file **before** pinning it:
+## Goal mode on a Program capsule
+
+Answers: how do I click a button in a program with mw_run; what is the minimal mw_run command; do I need a Muse account.
+
+1. **Start MetaViewer** and open a **Program** or **Host program** capsule (plain start; `--arm64` offers VM and MicroVM only [MEASURED, operator session 4 Nov 2026]). Agent programs start agent controlled; if you pressed **Take control**, press **Release control** first.
+2. **Copy ID for AI** on the tile. You get `CAPSULE=<surfaceId>  IDENTITY=<profileId>` [CITED: ui/src/wall/capsuleId.js:69].
+3. **Source the app attachment and observe** with the read-only recipe in [AGENT_ENTRY.md#observe-the-selected-capsule](AGENT_ENTRY.md#observe-the-selected-capsule) for browsers, or the observation steps in [tools/mw_run_program.md](../tools/mw_run_program.md) for programs. Pick one control name that is actually visible.
+4. **Run one step** from `$MV_OPERATOR_REPO`, in the same subshell:
 
    ```bash
-   cd "$MV_OPERATOR_REPO/memoryweb/sites/perplexity"
-   cp "$MV_OPERATOR_REPO/tests/e2e/fixtures/mw_perplexity/repair/NOTES.md" PROVENANCE.md
-   # Optional: reword PROVENANCE.md in your own words; keep its six "## " headings.
-   python3 - <<'EOF'
-   import hashlib, json
-   notes = open('PROVENANCE.md', 'rb').read()
-   for name in ('site.json', 'workflows/ask.json'):
-       value = json.load(open(name, encoding='utf-8'))
-       value['provenance'].update(source='human', source_ref='PROVENANCE.md', receipt_sha256=None,
-                                  quote_sha256=hashlib.sha256(notes).hexdigest())
-       open(name, 'wb').write((json.dumps(value, sort_keys=True, separators=(',', ':'),
-                                          ensure_ascii=False) + '\n').encode())
-   EOF
+   export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-goal.XXXXXX)"
+   PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --surface-kind program \
+     --identity '<profile>' --planner rules --goal '<exact observed name>' --steps 1
    ```
 
-4. **Copy the prompt.** Copy the fenced text from [AGENT_ENTRY.md](AGENT_ENTRY.md)
-   and paste it into the external AI. Give it `MV_OPERATOR_REPO` and `MV_WENDER_ROOT` when it asks.
-   Source the live app attachment in a subshell as documented in
-   [AGENT_ENTRY.md](AGENT_ENTRY.md#attachment-and-identity); never guess app values.
+5. **Read the JSON line, then observe again.** rc 0 means the bounded click had a visible effect, not that a task is done [CITED: tools/mw_run_program.md].
 
-## Before the first run on a site: check the anchors
+Text into a focused field: `--goal focused --text 'hello' --steps 1`. Arrow or Enter on a Host program: `--goal focused-key --key Right --steps 1 --planner rules`, no text [CITED: tools/mw_run_program.md:68]. Browser goals: [tools/mw_run_browser_goal.md](../tools/mw_run_browser_goal.md). `--planner muse` needs an authenticated Muse Code CLI and is never a fallback from `rules`.
 
-Before dispatching `mw_run`, take a single read-only AX snapshot on the live
-capsule and compare the page's accessible names with the workflow's declared
-anchors (so locale drift is caught before any input):
+## Stored-workflow mode
 
-```bash
-python3 tools/mw_ax_dump.py --repo . --capsule mv-live-1 --site perplexity \
-  --workflow ask --out /tmp/mv-ax-dump.json
-```
+Answers: how do I replay a stored workflow; how do I check a MemoryWeb home; how do I check workflow anchors before running.
 
-- `rc 0`: every workflow AX name anchor is present on the page; `/tmp/mv-ax-dump.json`
-  is written with mode `0600` (without row values).
-- `rc 3` (`MW_AX_ANCHOR_DRIFT`): at least one anchor is missing; the printed
-  `MW_AX_DUMP` JSON summary lists `candidates` from the live AX tree so the UI
-  language or workflow anchors can be aligned before running.
+Stored workflows live under the admitted MemoryWeb home as `sites/<site>/site.json` and `sites/<site>/workflows/<workflow>.json`; they are data, never commands [CITED: docs/AGENT_ENTRY.md, section Shared workflow guidance]. This page names no particular site.
 
-5. **Watch the run.** The AI runs, from `$MV_OPERATOR_REPO/agents`:
+1. **Check the home** from `$MV_OPERATOR_REPO`:
 
    ```bash
-   MV_WENDER_ROOT=... python3 -m metaviewer_agents.mw_run --identity mv-live-1 \
-     --site perplexity --workflow ask --slot 'prompt=<your question>'
+   python3 tools/mw_home_check.py --repo . --workflow '<site>/<workflow>'
    ```
 
-   Expected on stderr first: `mw_run: perplexity/ask acts on identity mv-live-1
-   (network legacy) in 10 s; interrupt now to cancel`. Press Ctrl+C within those
-   10 s to cancel before any input. Then the capsule shows a click on the
-   composer, the pasted question, and Return.
+   Expected: `{"schema":"metaviewer.mw_home/v1",...,"ok":true,"code":null,"faults":[]}`. A `"code":"MW_PROVENANCE"` means the definitions name a provenance document that is missing from the home; only a person who vouches for those definitions may record it. Do not invent provenance.
+2. **Check the anchors** against the live capsule with one read-only accessibility (AX) snapshot, so a language or layout change is caught before any input:
+
+   ```bash
+   python3 tools/mw_ax_dump.py --repo . --capsule '<identity>' --site '<site>' \
+     --workflow '<workflow>' --out /tmp/mv-ax-dump.json
+   ```
+
+   rc 0: every anchor is present, the file is written with mode 0600 and without row values. rc 3 `MW_AX_ANCHOR_DRIFT`: an anchor is missing; the printed summary lists live candidates [CITED: tools/mw_ax_dump.py:399].
+3. **Run the workflow** from `$MV_OPERATOR_REPO/agents`:
+
+   ```bash
+   python3 -m metaviewer_agents.mw_run --identity '<identity>' \
+     --site '<site>' --workflow '<workflow>' --slot 'name=<operator value>'
+   ```
+
+   Pass only slots the workflow declares and the person supplies. Stderr first announces the site, workflow, identity and a notice period; Ctrl+C during that notice cancels before any input.
 
 ## Expected result
 
-- stdout, one line: `{"schema":"metaviewer.mw_run/v1","rc":0,"verdict_code":"VERIFIED","receipt":".../memoryweb-run.json","report":".../report.json"}`.
-- `report.json`: `"attach":"discovered"`, `"corpus":"staged_builtin_schemas"`,
-  `"notice_s":10`, `"network":{"effective_mode":"legacy",...}`, and
-  `"answer":{"captured":true,"path":".../answer.txt",...}`.
-- `memoryweb-run.json`: `"steps_total":3`, `"steps_verified":3`, `"rc":0`.
-- `answer.txt` holds the answer's visible text (owner-only file).
-- A sign-in dialog or a CAPTCHA gives `rc 4`, `HUMAN_HANDOFF`, and a handoff
-  record path in `receipt`. Nothing on the wall is clicked or typed. Deal with it
-  by hand in the capsule, then start a new run if you want.
+Answers: what does a successful mw_run print; where are the receipt and report.
+
+- stdout, one line: `{"schema":"metaviewer.mw_run/v1","rc":0,"verdict_code":...,"receipt":...,"report":...}` [CITED: tools/mw_run_backend.py:1049].
+- `report.json` holds codes, paths and the network witness, never the slot text.
+- The receipt counts steps; a verified run has every step verified and rc 0.
+- A sign-in dialog or a CAPTCHA gives rc 4 `HUMAN_HANDOFF` and a handoff record in `receipt` [CITED: tools/mw_run_backend.py:982]. Nothing is clicked or typed. The person deals with it in the capsule, releases control, and a new run may start.
 
 ## Common refusals
 
-| Code | Meaning | Fix |
+Answers: what does MW_RUN_ATTACH mean; what does rc 5 mean; why did mw_run refuse.
+
+| rc / code | Meaning | Fix |
 | --- | --- | --- |
+| 5 `INPUT_UNCERTAIN` | The input may already have been delivered | Never retry; observe and reconcile [CITED: agents/metaviewer_agents/mw_refusals.py:36] |
+| 4 `HUMAN_HANDOFF` | Login wall or CAPTCHA | The person handles it |
 | `MW_RUN_ATTACH` | No app, several apps, the app quit, or a caller value differs | Keep exactly one MetaViewer running; unset the variables named on stderr |
-| `MW_DEPENDENCY` | `MV_WENDER_ROOT` unset or not at the `deps.lock` commit | Export the pinned checkout |
-| `MW_HOME_*` | MemoryWeb home not admitted | Run step 2 and follow its code |
-| `MW_GATE_IO` | Provenance file missing (message names the file) | Step 3 |
-| `MW_NETWORK` | Start witness missing or mismatched, or network setting changed | Restart after a network change; for a container binding mismatch, see below |
-| `MW_RUN_NO_SURFACE` / `MW_RUN_AMBIGUOUS` | Zero or several live surfaces for `mv-live-1` | Keep one capsule for the identity |
-| `MW_WALL_DEADLINE` | Run exceeded the wall-clock deadline (`rc 6`) because a native, socket, or sleep seam blocked | Inspect `report.json` and check core and capsule responsiveness before retrying |
+| `MW_RUN_CONFIG` (rc 6) | Configuration refused before running | Read the message [CITED: tools/mw_run_backend.py:1006] |
+| `MW_DEPENDENCY` | `MV_WENDER_ROOT` unset or not at the `deps.lock` commit | Export the pinned dependency |
+| `MW_HOME_*` | MemoryWeb home not admitted | Run the home check and follow its code |
+| `MW_GATE_IO` | A provenance file is missing; the message names it | See the home check above |
+| `MW_NETWORK` | Start witness missing or mismatched, or network setting changed | Restart after a network change; report both container IDs if the witness and native receipt disagree; never edit a running capsule's witness |
+| `MW_RUN_NO_SURFACE` / `MW_RUN_AMBIGUOUS` | Zero or several live surfaces for the identity | Keep one capsule for the identity |
+| `MW_PROGRAM_NO_VISIBLE_EFFECT` | The click changed nothing outside clocks | Observe again and choose another name [CITED: tools/mw_run_program.md] |
+| `MW_WALL_DEADLINE` (rc 6) | The run exceeded its wall-clock budget | Inspect `report.json`; check core and capsule responsiveness before a new run [CITED: agents/metaviewer_agents/mw_run.py:1] |
+| `MW_PRIVATE_OUTPUT` (rc 6) | Evidence would leave the private RAM directory | Use a fresh `/dev/shm` directory [CITED: tools/mw_run_backend.py:1056] |
 
-### Packaged rehearsal finding
+The complete list of codes is the D6 document `docs/ERRORS.md` (another lane; if it is missing on your tree: ABSENT — do not invent).
 
-The packaged P12 build `e5c474cef` also refuses `MW_NETWORK` when the adapter's
-start witness names `srf-id-mv-live-1` but the native control receipt and Docker
-identify an opaque `srf-id-…` container. The real attach path reports
-`"attach":"discovered"`; refusal happens before the countdown or workflow input.
-Restarting does not repair this producer mismatch. Report both container IDs
-from the start witness and native control receipt, without sending identity
-store or browser profile files. The adapter must bind the witness to the
-container returned by native start before publishing it. Do not edit a running
-capsule's witness to bypass the refusal.
-
-The P11h.1 packaged rehearsal (`f5a5c11fc`) confirms that the witness now names
-the actual native container. Its operator checkout still returns
-`OUT_OF_SUPPORT` after the countdown: native AX requires explicit store and
-registry context, but the backend does not forward the discovered context to
-its subprocess. The backend fix in this worktree discovers
-`SRF_PROXY_REGISTRY` alongside the store path and forwards both to read-only
-native calls, without changing the caller environment. The conductor must
-integrate that fix into the operator checkout before repeating the packaged
-answer and handoff rehearsal. Verified answers and visible handoffs remain
-unproven on this package; do not treat the matching witness as E1 success.
-
-The packaged rehearsal driver is `tests/e2e/rehearse_e1_packaged.py`; supply
-`--launcher`, `--run-dir`, `--operator-repo`, `--wender-root`, and
-`--proxy-registry` (the launcher's explicit registry path, passed to native
-setup without reading its contents), and `--fixture-host` (a local host
-interface reachable from the capsule). With `--control-cycle`, it switches from
-the initial **Humans** view to **Agents** (`--agents-view-at`), opens the agent
-tile menu `⋮` (`--tile-menu-at`), clicks **Take control (emergency)**
-(`--take-control-at`), verifies core `human` ownership, and clicks the input
-indicator **Release** button (`--release-control-at`) to return ownership to
-`agent` without switching capsule role. It uses
-the dedicated rehearsal display, temporary fixture definitions, and the
-unmodified operator CLI. Its guard checks run with `--self-test`. A successful
-rehearsal must prove both the captured answer and a newly visible handoff notice.
-
-## Forward diagnostics
-
-Use `--forward-probe` on the packaged rehearsal driver to retain failed stages
-and continue into the login fixture. It writes `stages.jsonl`, native AX results,
-and instrumented backend traces in the printed private temporary directory.
-A failed HTTP fixture load remains a failure. Diagnostic continuation copies
-only the tracked public HTML fixtures into the owned capsule's writable temporary
-directory and opens local files; it does not change proxy policy. Continuation
-results carry `forced: true` and cannot certify the original HTTP workflow.
-
-The fixture pages declare UTF-8 so the native AX composer name matches the
-workflow exactly. The direct continuation uses native paste for the Unicode
-prompt and checks focus and character length before submitting. Missing OCR
-language data fails the display oracle but does not suppress the login workflow.
-
-A failed owner may return no selected receipt. The CLI then retains its failure
-verdict with `receipt: null`; `report.json` preserves the diagnostic and any core
-proposal refusal code. This is not a verified run. A successful owner without a
-receipt is refused as `receipt path absent`. A stale-frame refusal requires fresh
-observation and target verification; the diagnostic driver never rebases a
-proposal or retries uncertain core input. The owner backend may now retry only an
-explicit STALE_FRAME refusal after fresh perception and target verification.
-
-## Focused E1 receipt path
-
-[TARGET] Each perception acquisition now shares one native AX
-snapshot across Wender state, handoff detection and AX predicates. Repeated AX
-reads could exhaust Wender's fixed locate deadline before dispatch; the deadline
-is unchanged. The forward trace records grounding deadline and remaining time.
-`--redundant-ax-mutant` restores those reads as a diagnostic negative control.
-
-Before binding a newer frame, the backend allows a single solid black caret
-column inside the uniquely focused editor, with a flat surrounding background
-and a bounded height. AX identity, geometry, focus, states and text/value must
-still match. Other pixel changes refuse; pre-submission pixel races may trigger
-bounded reacquisition. Input with an uncertain outcome is never retried.
-
-A native editor with `value_len: null` and no `value`/`text` cannot prove an
-empty slot. The length gate refuses `MW_SLOT_LENGTH`; absence is never treated
-as zero. Clicking an already focused editor can also leave pixels unchanged,
-which the current core pixel expectation refuses despite valid native input.
-
-The core's frozen wait result deliberately removes embedded `native_evidence`.
-Its validated result-level focus, monotonic input timestamp and frame hash are
-consumed through the tools receipt wrapper. The original wire receipt is kept
-unchanged; missing or contradictory witnesses refuse. Cleanup stops only the
-proven owned native capsule before terminating the app, releasing its lease.
+Known open bug: after an `mw_run`, the package gains `__pycache__` directories and a later `--arm64` start holds with "exhaustive manifest inventory". Workaround: remove the bytecode directories from the package [MEASURED, operator session 4 Nov 2026].
 
 ## If it fails, send back
 
+Answers: what should I report after a failed run; what must I never send.
+
 1. The stdout JSON line and every `mw_run:` stderr line.
-2. `report.json`. It holds codes, paths and the network witness, never the
-   question text.
-3. The handoff record (`memoryweb-run.handoff.json`) if `rc` was 4.
-4. The output of step 2.
+2. `report.json`.
+3. The handoff record if rc was 4.
+4. The output of the home check, for stored workflows.
 
-Do not send `answer.txt` unless you choose to. Never send the identity store,
-tokens, keys or `auth.json`.
+Never send the identity store, tokens, keys, `auth.json` or captured page text you did not choose to share.
 
+The packaged rehearsal driver for maintainers is `tests/e2e/rehearse_e1_packaged.py`; run its guards with `--self-test`. Its `--forward-probe` option retains failed stages for diagnosis; forced continuations never certify a workflow.
 
 ## STALE_FRAME: idle metadata fence
 
-[TARGET] The host backend re-perceives before submission and
-checks the same AX identity, role, name, geometry and focus. It binds the latest
-verified frame only if its pixels and dimensions still match that perception.
-At most three submissions [TARGET] fit within the original delivery budget;
-only an explicit `STALE_FRAME` refusal permits another attempt. Changed target,
-focus, pixels, or a human wall refuses; timeouts and receipt failures never retry.
-Exhaustion raises `MW_STALE_FRAME_EXHAUSTED`; the owner reports `INPUT_UNCERTAIN`.
-Frame-only assembly callers retain their existing single submission path.
+Answers: why are proposals refused with refresh_after while the capsule is idle; what is the STALE_FRAME known issue.
 
-This does **not** repair the packaged idle-fence defect. On the unchanged
-P12-f5a5c11fc package, the local-file forward probe observed generation 5,
-tick 7 [MEASURED], digest
-`b146ac68cef52081169514359e1ab64eeadac13ef300f2d85df4de5c4716750a`.
-There were 31 samples over 4.087242296 seconds and no advancing verified frame
-[MEASURED]. The generation was current, yet proposals at core sequences 97,
-101 and 105 were refused with `refresh_after: 80` [MEASURED]. Lifecycle updates
-at sequences 39, 54 and 80 set that fence [MEASURED]. A subsequent diagnostic
-native click changed pixels and generation 6 at sequence 106 cleared it
-[MEASURED]; this forced action is not a workflow receipt.
+**Answer: an unchanged idle capsule can carry a `refresh_after` fence that only a new verified frame clears, so proposals are refused although nothing changed.** On one packaged build, three proposals were refused over about 4 s with no advancing verified frame, and a forced native click that changed pixels cleared the fence [MEASURED, earlier packaged rehearsal; build and figures in this file's history]. The backend re-perceives and may resubmit only on an explicit `STALE_FRAME`, at most three submissions within the original budget [TARGET]; exhaustion reports `INPUT_UNCERTAIN`.
 
-The cause spans these read-only diagnosis coordinates:
+Where to look; these coordinates were rechecked on this tree, and the line numbers in older revisions of this file are stale:
 
-- `ui/electron/hostBindings.js:588` sends a list heartbeat every 10000 ms [CITED].
-- `daemon-adapter/internal/daemon/dispatch.go:52` routes list responses through
-  `listSnapshots`; line 134 changes `created` snapshots to `state_changed`.
-- `core/src/serve/mod.rs:1357` applies that metadata as a lifecycle update.
-- `core/src/admission/mod.rs:401` sets `refresh_after` even for an unchanged
-  active/agent snapshot; line 659 refuses proposals while it remains set.
-- `daemon-adapter/internal/daemon/environment.go:1272` suppresses unchanged
-  verified publications after initial confirmations. Only a subsequent Frame
-  transition clears the fence (`core/src/admission/mod.rs:445`).
+| Step | Coordinate |
+| --- | --- |
+| The UI sends a periodic list heartbeat | `ui/electron/hostBindings.js:763` (10000 ms timer) |
+| List snapshots become `state_changed` events | `daemon-adapter/internal/daemon/dispatch.go:122`, line 148 |
+| Core applies lifecycle updates | `core/src/serve/mod.rs:2201` (`lifecycle`) |
+| Admission sets the fence | `core/src/admission/mod.rs:994`, line 1152 |
+| A later frame clears it | `core/src/admission/mod.rs:1021` |
 
-The separate DISPLAY stream is not the proposal source: `tools.observe` obtains
-core's verified `frame_ref`, and `core/src/serve/tools.rs:822` joins it to the
-current authority frame. DISPLAY updates cannot clear the verified-frame fence.
-The sampled source published 0 advancing frames/s [MEASURED]; its next-frame
-period is ABSENT — do not invent. Observation-entry-to-core-submit was 2.680178165 seconds; perception-return-to-
-submit was 1.739014699 seconds [MEASURED]. Independent preserved boundary
-witnesses show metadata intervals of 10.006900617 and 9.996868696 seconds
-[MEASURED]. Reducing that delay cannot clear an already-set fence.
-
-Minimal adapter change [TARGET, outside this unit]: when a list snapshot emits
-`state_changed`, capture and publish a fresh verified confirmation frame through
-`Manager.Capture` and `Publisher.Publish` (as the create branch already does),
-in surface-lock order after the metadata and before further input dispatch.
-Do not deduplicate this required confirmation. Keep all core admission checks.
-Alternatively, make the UI heartbeat use a separately acknowledged no-lifecycle
-path; the existing core-tagged keepalive demonstrates that separation.
-Regression gate [TARGET]: idle snapshot -> fence -> forced verified confirmation
--> revalidated proposal -> verified receipt; removing the confirmation must
-leave STALE_FRAME. No adapter/core change or package rebuild was made here.
-
-Answer capture now excludes standalone captions of AX buttons and links in the
-selected answer container. It preserves matching words within answer prose and
-fails capture on ambiguous caption placement. The live local-file diagnostic
-produced exactly the fixture answer [MEASURED], without `Copiar`.
-
-`rehearse_e1_packaged.py --forward-probe --file-fixture` goes straight to tracked
-HTML files copied into the owned capsule. It samples verified frames and retains
-session journal/checkpoint and selected authority transitions with their small
-boundary witnesses before package cleanup. A forced native continuation never
-certifies receipt verification. Missing OCR language data remains a display
-oracle failure. These findings are scoped to the supplied checkout, fixed
-package, and local-fixture evidence.
+Suggested repair [TARGET, outside this document]: publish a fresh verified confirmation frame when a list snapshot emits `state_changed`, or move the heartbeat to a path that does not count as a lifecycle change. Keep every core admission check. Read the code before stating the cause: these are leads, not proof.
