@@ -4,9 +4,9 @@ For refusal codes and source-backed next steps, see [Judge troubleshooting](JUDG
 
 After installation, follow the [Judge tour](JUDGE_TOUR.md) with your AI.
 
-This page takes a hackathon judge from a clean Linux machine (such as an 8-core,
-16 GiB RAM x64 laptop) to a running MetaViewer wall with live browser and program
-capsules.
+This page installs the app-only wall (T1) or the live capsule kit (T2) on Linux x64.
+Live capsules need local rootful Docker Engine. A source clone alone contains
+neither the packaged application nor the private compiled runtimes.
 
 - **Point your own AI at [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md)**: a single,
   self-contained guide that lets your AI install, configure, verify, and explain
@@ -17,7 +17,7 @@ capsules.
 - Operator walkthrough: [USER_GUIDE.md](USER_GUIDE.md).
 
 Supported architecture: Linux `x86_64` (`x64`) or `aarch64` (`arm64`); the release
-assets are x64 only, so arm64 means a source build ([Path E](#path-e-linux-arm64)). The verified
+recipes below target x64; arm64 requires a source build ([Path E](#path-e-linux-arm64)). The verified
 host is Ubuntu 24.04 LTS. Debian 12/13 is a candidate platform and emits an
 unverified-host warning. Windows 11 uses WSL2 + WSLg with rootful Docker Engine
 inside the Ubuntu distro (Docker Desktop is not supported). macOS is not supported.
@@ -28,8 +28,14 @@ Hub and requirement table: [JUDGES.md](JUDGES.md).
 
 Answers: how do I install, install steps, which commands, expected output, install on Ubuntu, install on WSL, install on arm64, headless install
 
-Pick exactly one row; each path is complete. Run every command as your normal
-user from the root of the cloned tag, never with `sudo` in front of the launcher.
+Choose a path for your platform and intended tier. Run as your normal user,
+never with `sudo` in front of the launcher. Before the commands below, verify
+that the [matching release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6)
+exists and supplies the required assets and the independent `SHA256SUMS` digest.
+The checkout targets `0.2.6` [CITED: VERSION]; publication of that release is a
+prerequisite, not a result proved by this source tree. If the tag, assets or digest
+are missing, stop: `ABSENT — do not invent`. Never use an older package with these
+instructions. For an unattended agent, use the [authorized paste block](JUDGES.md#what-do-i-paste-into-my-own-ai).
 
 | Platform | Tier | Path |
 | --- | --- | --- |
@@ -71,7 +77,7 @@ Answers: install with docker, live capsules, T2 commands, browser capsules
 
 Before step 2, make Docker Engine work for your user: `docker info` must succeed
 without sudo ([Docker](#docker-tier-t2-only)). Then use Path A with `--capsules`
-on every launcher and fetch command:
+on doctor, fetch and install. Run and stop use no tier flag:
 
 | Step | Command | Success marker |
 | --- | --- | --- |
@@ -108,21 +114,26 @@ doctor refuses `JUDGE_XDG_RUNTIME`.
 
 Answers: arm64, aarch64, raspberry, ARM laptop, VM, MicroVM
 
-The release has no arm64 assets: fetch and install have nothing to unpack. Build
-from source with [INSTALL.md](INSTALL.md); ARM64 VM, MicroVM and rewind need the
-[developer setup](ARM64_CAPSULE_SETUP.md) with KVM and verified local assets.
+No public arm64 compiled asset set is established here: do not fetch the x64 kit
+or rename its files. [INSTALL.md](INSTALL.md#3-building-from-source-and-running-the-gate)
+describes a source build with pinned toolchains, cached dependencies, the matching
+UI kit and local Electron. Those prerequisites are not supplied by a source clone.
+A public source build does not supply the private capsule runtimes; if their
+matching arm64 assets are unavailable, stop at the app build. ARM64 VM, MicroVM
+and rewind additionally need [developer setup](ARM64_CAPSULE_SETUP.md), KVM and
+verified local assets. None is promised by the judge kit.
 
 ### What did the maintainer run on this checkout?
 
 Answers: was this tested, verification of these instructions
 
-On a cloud box (x64, 4 CPUs, 16 GiB RAM, no KVM, no Docker daemon, no sudo for the
-test user) `doctor --before-install` printed `JUDGE_DOCTOR_OK tier=T1 phase=before-install`
-for a non-root user with a runtime directory [MEASURED]; as root it refused
-`JUDGE_ROOT` [MEASURED]; without `/run/user/<uid>` it refused `JUDGE_XDG_RUNTIME`
-[MEASURED]; `--capsules` refused `JUDGE_DOCKER` [MEASURED]; install stopped at the
-declined package step with `JUDGE_SUDO` [MEASURED]; `stop` with nothing running
-printed `JUDGE_STOP_CLEAN` [MEASURED]. Install, run and T2 were not run there.
+A prior maintainer report describes host-doctor refusals and an app-only
+pre-install check. Its raw receipt is not public, so it does not establish a
+successful install on your host. The parser and documentation checks in
+`tests/test_install_docs.py` and `tests/test_judge_tour_docs.py` validate command
+syntax and source references; they do not run a live installation. Require the
+markers above on your machine [CITED: tests/test_install_docs.py,
+tests/test_judge_tour_docs.py].
 
 ## 0. Licence
 
@@ -162,13 +173,14 @@ then `cd MetaViewer` and run `scripts/judge/fetch_assets.py` as shown below.
 
 Set these variables from the maintainer's matching release notes before fetching.
 The [v0.2.6 release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6)
-is the judge release; its compiled assets are x64 only and carry the names the
+is the target release. Once published, its x64 assets must carry the names the
 launcher expects (`metaviewer-linux-x64.tar.gz`, `node-linux-x64.tar.xz`,
 `opensuperficies-linux-x64.tar.gz`, `images-linux-x64.tar`, `vision-engine.tar.gz`,
 `wender-agent.tar.gz`, `SHA256SUMS`) [CITED: scripts/judge/metaviewer-judge.sh:25].
-Set `RELEASE_TAG=v0.2.6`. The launcher downloads from the release named by the
-checkout's `VERSION`, so a clone of one tag never mixes with another tag's assets
-[CITED: scripts/judge/metaviewer-judge.sh:128]. The matching asset base URL is:
+Set `RELEASE_TAG=v0.2.6`. The launcher defaults its download URL to the checkout's `VERSION`, but local
+assets and URL overrides are also accepted. Keep the tag, notes and asset set
+matched yourself; the URL default alone does not prove they match
+[CITED: scripts/judge/metaviewer-judge.sh]. The matching asset base URL is:
 
 ```bash
 export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.6
@@ -183,7 +195,10 @@ For a local release directory, use `--source "$RELEASE_ASSET_DIRECTORY"` instead
 Do not assume that a GitHub Actions artifact is a published release. Fetch refuses
 incomplete or corrupt sets. Checksums protect integrity, not publisher authenticity.
 The explicit fetch command authorizes the transfer; install still asks before
-downloading missing assets. No install begins until the selected set is verified.
+downloading missing assets unless `--yes` is supplied. Fetch verifies the entire
+selected set before publishing it into the destination. Install separately checks
+each archive before use; it can perform prerequisite work before discovering a
+later missing asset [CITED: scripts/judge/fetch_assets.py, scripts/judge/metaviewer-judge.sh].
 
 Fetch maps the architecture printed by `uname -m` (`aarch64` to `arm64`,
 `x86_64` to `x64`) and writes verified files into `assets/`. A kit for the wrong architecture is
@@ -216,8 +231,11 @@ Answers: prerequisites, run as root, sudo, XDG_RUNTIME_DIR, asset directory, MV_
 - Use a desktop/logind session with an existing, user-owned `XDG_RUNTIME_DIR`.
   On WSL2, enable systemd and use WSLg. A display alone does not supply the runtime
   directory [CITED: `scripts/judge/preflight.sh`].
-- `install --yes` accepts administrator steps, including `apt-get update` and
-  package installation. Omit `--yes` to review each request [CITED: `scripts/judge/metaviewer-judge.sh`].
+- `install --yes` accepts downloads and administrator steps, including package
+  installation, AppArmor and the compatible Open firewall. It does not supply a
+  sudo password. Omit `--yes` to review each request. Package-tool dependencies
+  may be fetched with `npm ci --ignore-scripts` without a separate prompt
+  [CITED: `scripts/judge/metaviewer-judge.sh`].
 - To keep downloads outside the checkout, set `MV_JUDGE_ASSET_DIR` to an absolute
   writable directory and pass `--dest "$MV_JUDGE_ASSET_DIR"` to fetch. Fetch does
   not read that variable itself. `MV_JUDGE_HOME` selects a separate absolute
@@ -237,8 +255,16 @@ bash scripts/judge/preflight.sh --tier T2 --phase static
 This host-only check is also available as
 `bash scripts/judge/metaviewer-judge.sh doctor --capsules --before-install`.
 
+The direct preflight prints `JUDGE_PREFLIGHT_OK tier=T2 phase=static` on success;
+the doctor wrapper then prints
+`JUDGE_DOCTOR_OK tier=T2 phase=before-install (installed runtime not checked)`
+[CITED: scripts/judge/preflight.sh, scripts/judge/metaviewer-judge.sh].
+
 Every refusal is printed as `JUDGE_<CODE>: <problem> -- fix: <command>` and exits
-with code `2`. Non-fatal resource advisories on smaller laptops are printed as
+with code `2` [CITED: scripts/judge/preflight.sh]. Unknown shell subcommands or
+options exit `64`; invalid `MV_JUDGE_HOME` values instead exit `2`
+[CITED: scripts/judge/metaviewer-judge.sh]. Fetch argument errors exit `2`
+[CITED: scripts/judge/fetch_assets.py]. Non-fatal resource advisories on smaller laptops are printed as
 `JUDGE_NOTE: warning (JUDGE_<CODE>): ...` without blocking execution. Fix any
 host refusals and re-run. `--before-install` checks host requirements only and does
 not require installed images, profiles or proxy state. Missing tools are installed by
@@ -251,7 +277,7 @@ print `JUDGE_DOCTOR_OK tier=<T1|T2>`. T0 uses the separate fixture below.
 | --- | --- |
 | T0 | Offline conversation fixture only; no display or Docker, but requires the local private `wender-agent` checkout in `MV_MW_WENDER_ROOT`; not part of the public judge kit ([JUDGES.md](JUDGES.md)) |
 | T1 | The packaged app: wall, core and adapter. Creating a capsule fails with a clear, correlated error: expected |
-| T2 | T1 plus up to 4 concurrent live browser and Linux program capsules (Docker, images, network, sudo-free profiles) |
+| T2 | T1 plus live browser and Linux program capsules; the default browser pool has 4 slots [CITED: scripts/judge/metaviewer-judge.sh]. Available memory gates every launch. |
 
 ## 3. Install (asks before every sudo step)
 
@@ -374,7 +400,7 @@ center wall and paired terminal dock. Storyboard is not available in live naviga
 The launcher shows installed host apps. Custom grid (⋯) sets snapping rows and columns; newly
 floating tiles use the next free cell where possible.
 
-The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
+T2 provides a default 4-slot browser profile pool [CITED: scripts/judge/metaviewer-judge.sh] (`judge` on `:100`, `mv-live-2` on
 `:101`, `mv-live-3` on `:102`, `mv-live-4` on `:103`):
 
 - Use the left **`Humans`** / **`Agents`** tree to select desktops and capsules, create virtual
@@ -428,7 +454,7 @@ Answers: windows, WSL2 setup, wsl.conf, .wslconfig
 3. Install Docker Engine (`docker-ce`) inside Ubuntu and add yourself to the `docker` group.
    Do not use Docker Desktop.
 4. In `%UserProfile%\.wslconfig` give WSL at least 12 GB memory and 4 processors
-   [TARGET; no WSL2 host has been measured].
+   [TARGET; not a measured minimum].
 5. Follow steps 1–5 above.
 
 Windows needs WSLg for the display. Without systemd the runtime directory is missing and
@@ -490,9 +516,9 @@ The kit never installs these optional host packages automatically.
 
 | Code | Meaning and fix |
 | --- | --- |
-| `PKG_ARCH_MISMATCH` | Kit for the wrong architecture; download the other one |
+| `PKG_ARCH_MISMATCH` | Use assets built for the host architecture; if no matching set is published, follow Path E or stop. Renaming an archive does not convert it. |
 | `RAM_ADMISSION_REFUSED` | Free memory, or run `python3 tools/mv_ram_admission.py reclaim --dry-run` to review stale reservations |
-| `NET_OPEN_PREREQ` | Open network prerequisites are missing; the firewall step was declined or the build is not Open-ready; use legacy |
+| `NET_OPEN_PREREQ` | Restore the compatible Open image, runtime and firewall prerequisites before retrying. Legacy can open a local capsule but grants no public destinations. |
 | `TERMINAL_UNAVAILABLE` | The paired terminal dock and drawer cannot open a session in this build; the rest of the wall is unaffected |
 
 Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_admission.go`,

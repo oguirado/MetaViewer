@@ -1,9 +1,15 @@
 # Judges: start here
 
 MetaViewer is a Linux desktop wall of live capsules: browser and program windows
-that a human or an AI agent controls, with every action admitted and journaled by
-a Rust core. This page routes a judge, or a judge's AI, to the one document that
+that a human or an AI agent controls. Agent action proposals pass through a Rust
+authority core; human control and agent proposals are distinct input paths
+[CITED: core/src/admission/mod.rs]. This page routes a judge, or a judge's AI, to the one document that
 answers each question.
+
+Capsules give the agent a named surface, current frame and explicit control
+state. The core can refuse an action when its frame is stale or the human owns
+control. This makes computer use inspectable while keeping human takeover
+available [CITED: core/src/admission/mod.rs].
 
 **A finding tells you where to look. Only the code proves it.**
 
@@ -35,37 +41,50 @@ Start with the row that matches your question; each linked section can be read a
 
 Answers: let my AI install it, prompt for my coding agent, AI install, agent instructions
 
-Paste this block into the coding agent you trust, in a terminal on the Linux
-machine where MetaViewer should run, as your normal user (not root).
+Paste this block into a coding agent with terminal access on the target Linux
+machine. It authorizes the ordinary installation steps up front. A missing
+release, password, incompatible host or failed check remains a real blocker.
 
 ```text
-Install and run this repository; start at llms.txt.
-Repository: https://github.com/oguirado/MetaViewer (tag v0.2.6).
-Rules:
-1. Read llms.txt, then docs/JUDGES.md, then docs/JUDGE_QUICKSTART.md section
-   "Judge paths by platform and tier". Do not open whole documents you do not need.
-2. Run as my normal user. Never use sudo for the launcher and never add --no-sandbox.
-   The launcher prints every administrator command and asks first; show me each
-   one and wait for my yes before answering it.
-3. Run `bash scripts/judge/metaviewer-judge.sh doctor --before-install` first
-   (add --capsules only if Docker Engine works for my user).
-4. After each command, compare the output with the success marker in the
-   quickstart. On any `JUDGE_<CODE>:` line, look the code up in
-   docs/JUDGE_TROUBLESHOOTING.md, explain the cause to me in plain words, and
-   apply only the fix printed after `-- fix:` when I agree.
-5. To explain a refusal, find the code in the source file the troubleshooting row
-   links, read that code, and quote path:line. A routed finding is a lead,
-   not proof.
-6. Report what ran, the exact markers seen, and what you could not run.
+Install and launch MetaViewer from https://github.com/oguirado/MetaViewer,
+version 0.2.6. Work as my normal user. You may clone the matching tag, download
+and verify its release assets, and run the judge installer with --yes. This
+includes its printed system-package, AppArmor and optional Open-firewall steps.
+Do not ask me to approve those steps again. Do not publish, remove unrelated
+state, enter credentials or change Docker group membership.
+
+1. Inspect uname -m, /etc/os-release, the graphical session and docker info.
+   Use T2 on Linux x64 when my user can reach local rootful Docker Engine;
+   otherwise use T1 (app only). Do not disable Electron's sandbox. On arm64,
+   report that public compiled assets are absent and read the source-build
+   prerequisites in docs/INSTALL.md; stop if a pinned dependency is unavailable.
+2. Verify that tag v0.2.6 and its matching release assets exist before cloning.
+   Obtain the SHA256SUMS digest independently from that release's notes or its
+   publisher-provided asset digest. If the release or digest is absent, report
+   the missing prerequisite and stop. Never substitute another version or
+   compute the trusted digest from the downloaded manifest itself.
+3. Clone that tag, read llms.txt and docs/JUDGE_QUICKSTART.md, and run doctor
+   --before-install (with --capsules for T2). Fix only documented prerequisites
+   within the permission above; a sudo password or session restart is a blocker.
+4. Run fetch_assets.py with the release URL and --sums-sha256, adding --capsules
+   for T2. Run install --yes, adding --capsules for T2; then run full doctor with
+   the same tier. Check each exit status and the quickstart's success markers.
+5. Launch with `bash scripts/judge/metaviewer-judge.sh run` in a persistent
+   terminal. It stays in the foreground. Require METAVIEWER_RENDERER_READY and
+   METAVIEWER_MAIN_READY; do not equate an empty wall with working capsules.
+6. On failure, find the exact code in docs/JUDGE_TROUBLESHOOTING.md and read its
+   cited implementation. Apply a fix only within this authorization; otherwise
+   preserve the diagnostic and report the blocker. Never guess a cleanup PID
+   or delete a resource to force a passing result.
+7. Leave the app running for me. Report the installed version, tier, network
+   mode, observed markers and remaining limits, then point to docs/JUDGE_TOUR.md.
 ```
 
-What the AI should do, in order: confirm the platform with `uname -m` and
-`/etc/os-release`; clone the tag; run doctor; fetch assets with the release's
-SHA256SUMS digest; install; full doctor; run; then follow
-[JUDGE_TOUR.md](JUDGE_TOUR.md). The code map at `route/route_query.py` locates code
-for a symptom (`python3 route/route_query.py error "<code>"`); its rows are pinned
-to an older commit and marked FRESH or STALE per file [CITED: route/README.md], so
-the AI must read the current file before stating anything.
+The exact command paths and expected outputs are in the
+[quickstart](JUDGE_QUICKSTART.md#judge-paths-by-platform-and-tier). The code map
+at `route/route_query.py` locates a symptom with
+`python3 route/route_query.py error "<code>"`; read the returned current source
+before explaining a cause. Findings are leads, not proof [CITED: route/README.md].
 
 ## What does my machine need?
 
@@ -107,11 +126,15 @@ run on your computer and are not isolated.
 
 A judge does not get VM or MicroVM capsules from the kit. The developer launcher
 (not the judge kit) offers, on a plain start, browsers, Host program and Program;
-with `--arm64` it offers VM and MicroVM only [MEASURED].
+with `--arm64` it offers VM and MicroVM only
+[CITED: README.md, maintainer report; raw receipt absent].
 
 ## What is not in this release?
 
 Answers: limitations, what is missing, VM, MicroVM, rewind, arm64 assets, public browsing
+
+The public judge kit does not supply the developer-only environments below;
+its compiled workflows and network paths also have explicit limits.
 
 | Not available to a judge | Why or what instead |
 | --- | --- |
@@ -123,11 +146,9 @@ Answers: limitations, what is missing, VM, MicroVM, rewind, arm64 assets, public
 | Windows or macOS as hosts | Windows only through WSL2 + WSLg; macOS unsupported |
 | Source of `wender-agent`, `vision-engine`, `OpenSuperficies` | Private; only compiled x64 evaluation builds, under [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md) |
 
-The maintainer reports Rewind on an ARM64 MicroVM in developer setup: 3 files deleted, Back
-restored them, 387.5 ms shown by the app, and `mv-replay` returned rc 0 on that
-session journal [CITED: README.md, maintainer report only]. This was not reproduced here;
-receipts and video takes are not published in this repository, and their public
-location is `ABSENT — do not invent`. That is not a judge install path.
+Developer-only observations and their evidence limits are in
+[the tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot). Live results are
+maintainer-reported; receipts and video takes are not published in this repository.
 
 ## Is there an offline fixture?
 

@@ -8,8 +8,7 @@ oguirado <247666607+oguirado@users.noreply.github.com>
 
 Messages must be English and imperative. The subject starts with `core:`,
 `contracts:`, `ui:`, `ci:`, `docs:`, `deps:` or `tools:`, followed by a space and
-an imperative verb. The subject is at most **72 characters** [CITED: task
-requirements]. Example:
+an imperative verb. The subject is at most **72 characters** [CITED: `tools/check_laws.py`, `check_message`]. Example:
 
 ```text
 contracts: add frame reference schema
@@ -23,6 +22,10 @@ product features may name their runtime dependencies without author attribution.
 
 ## Versions and tags
 
+`VERSION` names the release; tags and changelog entries must agree with it.
+
+Answers: release version; tag naming; changelog fragments; dependency pins
+
 Per L2, `VERSION` is the source of semantic versioning [CITED: `../LAWS.md` L2]. Tags are `v<VERSION>`. Every tag requires a dated changelog
 section with the exact version. An unreleased entry is acceptable before a tag;
 replace `unreleased` with the actual release date before tagging. Component pins
@@ -31,7 +34,7 @@ belong in `deps.lock`; a commit changing a pin must use `deps:`.
 Each unit that changes product code adds a changelog fragment at
 `changes/unreleased/<slug>.md` (lowercase `[a-z0-9-]`, one file per unit)
 containing one or more `- ` bullet lines in `CHANGELOG.md` style (see
-`changes/README.md`). At integration or release, the conductor assembles all
+`changes/README.md`). At integration or release, the release maintainer assembles all
 fragments into `CHANGELOG.md` under `## [Unreleased]`, sorted by fragment file
 name after the existing lines, and deletes the consumed fragments:
 
@@ -44,9 +47,13 @@ python3 tools/changelog_assemble.py --check
 `tools/check_laws.py` rejects product-code commits that add no fragment. During
 the transition for in-flight units, `ALLOW_DIRECT_CHANGELOG = True` in
 `tools/check_laws.py` (or `MV_CHANGELOG_ALLOW_DIRECT=1`) keeps direct
-`CHANGELOG.md` edits valid until the conductor flips that switch to `False`.
+`CHANGELOG.md` edits valid until the release maintainer changes that setting to `False`.
 
 ## Enforcement
+
+The commit hook checks proposed messages and identities; CI also checks history.
+
+Answers: commit hook; CI enforcement; supported verbs; limits of automated checks
 
 Install `.githooks/commit-msg` with `git config core.hooksPath .githooks`.
 The hook validates the proposed message and checks the effective identities from
@@ -63,6 +70,10 @@ automatically enforce tag dates, release-note attribution, branch fast-forward
 policy or the `deps:`-only pin-change rule; these remain release/review gates.
 
 ## Repair a rejection
+
+Fix the reported message, identity or version mismatch and rerun the checker.
+
+Answers: rejected commit; maintainer identity; message-file validation
 
 Read the named failure, edit the message and rerun
 `python3 tools/check_laws.py --message-file <message-file>`. Use an allowed scope,

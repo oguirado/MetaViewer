@@ -13,29 +13,37 @@ browser/program capsules or an agent completing a goal.
 
 Answers: download T1 assets, fetch command, which release
 
-Use the [v0.2.6 source tag and release assets](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6).
-Copy the `SHA256SUMS` digest from that release's notes into `SHA256SUMS_DIGEST`
-before running fetch. The release has no ARM64 compiled assets. For T1,
+Use the matching source tag and release assets only after confirming the
+[target publication](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6)
+is available. Copy its independently published `SHA256SUMS` digest into
+`SHA256SUMS_DIGEST`. If the tag, assets or digest are missing, stop with
+`ABSENT — do not invent`; do not substitute an older package. No public ARM64
+compiled set is established here. For T1,
 `SHA256SUMS`, `metaviewer-linux-x64.tar.gz` and `node-linux-x64.tar.xz` are always
 fetched. The Node archive is installed only when host Node is missing or older
 than `24` [CITED: scripts/judge/fetch_assets.py:26, scripts/judge/metaviewer-judge.sh:353].
 Run from the root of a clone of the same tag
 (`git clone --branch v0.2.6 --depth 1 https://github.com/oguirado/MetaViewer.git`):
+execute each command only after the previous one succeeded. A nonzero exit
+means stop and resolve its diagnostic before continuing.
 
 ```bash
+: "${SHA256SUMS_DIGEST:?Set the independently published manifest digest first}"
 export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.6
-python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --sums-sha256 "$SHA256SUMS_DIGEST"
 bash scripts/judge/metaviewer-judge.sh doctor --before-install
+python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --sums-sha256 "$SHA256SUMS_DIGEST"
 bash scripts/judge/metaviewer-judge.sh install
 bash scripts/judge/metaviewer-judge.sh doctor
 bash scripts/judge/metaviewer-judge.sh run
 ```
 
-Expected markers, in order: `JUDGE_FETCH_OK arch=x64 tier=T1`;
+Expected markers, in order:
 `JUDGE_DOCTOR_OK tier=T1 phase=before-install (installed runtime not checked)`;
+`JUDGE_FETCH_OK arch=x64 tier=T1`;
 `METAVIEWER_MAIN_SMOKE_OK` and `JUDGE_INSTALL_OK tier=T1 network=legacy receipt=…`;
-`JUDGE_DOCTOR_OK tier=T1`; then the app window
-[CITED: scripts/judge/metaviewer-judge.sh:792, scripts/judge/fetch_assets.py:67].
+`JUDGE_DOCTOR_OK tier=T1`; then `METAVIEWER_RENDERER_READY`, `METAVIEWER_MAIN_READY` and the app window.
+The run command remains in the foreground; use a separate terminal to stop it
+[CITED: scripts/judge/metaviewer-judge.sh, scripts/judge/fetch_assets.py, ui/electron/main.js].
 Any other line beginning `JUDGE_<CODE>:` is a refusal: look it up in
 [troubleshooting](JUDGE_TROUBLESHOOTING.md#kit-install-and-run).
 
@@ -90,4 +98,4 @@ binary list does not promise a bundled `mv-replay` executable; build it from
 source with cached dependencies when needed. Do not claim a replay or tamper
 check from wall startup alone. `mv-replay` needs the absolute real path of the
 session directory: relative, symlinked or copied session paths give Invalid
-[MEASURED].
+[CITED: README.md, maintainer report; raw receipt absent].

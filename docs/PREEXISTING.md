@@ -1,121 +1,111 @@
 # Pre-existing work declaration
 
-## Current assembly and historical boundary
+The repository history distinguishes a pre-event scaffold from the later
+MetaViewer application. External components are separate projects; their current
+pins do not establish when work inside those projects was done.
 
-The current candidate is **0.2.5** [CITED: `../VERSION`]. This declaration
-separates the pre-event documentation baseline from the implemented assembly.
-Kickoff was **October 26, 2026** [CITED: operator schedule]. The historical
-baseline below describes **0.1.1** [CITED: git `ebc5546`]; statements about empty
-skeletons and TBD pins apply to that baseline, not the current tree.
+## What is the current assembly and historical boundary?
 
-The assembly now contains runtime code in `core/src/`, `daemon-adapter/`,
-`agents/metaviewer_agents/`, and `ui/`, plus packaging, judge tooling and tests.
-See [CHANGELOG.md](../CHANGELOG.md), [pending fragments](../changes/unreleased/),
-and [README.md](../README.md) for current behavior and limits. Presence of code
-is not evidence of a live acceptance pass or event eligibility.
+Use [VERSION](../VERSION) for the current release and the historical commits
+below for the earlier scaffold. This declaration does not decide event eligibility.
 
-## Historical in-repository scaffold
+Answers: pre-existing work; current version; historical baseline; event eligibility
 
-Committed as `a01a420` on **2026-10-22** [CITED: git log], **49 files**
-[CITED: git show --stat]. Laws, contracts, schema tooling, tests, CI and
-design. No application code.
+The current assembly includes the Rust core, Go daemon adapter, Python agent
+adapters and Electron/Vue wall. Their source directories are [core](../core/),
+[daemon-adapter](../daemon-adapter/), [agents](../agents/) and [ui](../ui/).
+[CHANGELOG.md](../CHANGELOG.md) describes release changes.
 
-| Item | Contents |
+The historical documentation baseline is release `0.1.1`
+[CITED: git `ebc5546:VERSION`]. Inspect it without modifying the checkout:
+
+```sh
+git show --stat a01a420
+git show --stat e06d627
+git show ebc5546:VERSION
+git ls-tree -r --name-only ebc5546 core ui agents daemon-adapter
+```
+
+## What did the initial repository contain?
+
+The initial commit contained laws, contracts, checkers, tests, CI and design;
+the application directories contained READMEs rather than runtime source.
+
+Answers: initial scaffold; code present before the application; repository provenance
+
+Commit `a01a420562af9d79f03411bba17a9fe8142af515`, dated `2026-10-22`
+[CITED: git commit], introduced the following material:
+
+| Area | Historical contents |
 | --- | --- |
-| `LAWS.md` | Repository laws L1-L6 |
-| `docs/COMMIT_LAWS.md` | Commit identity, message and version policy |
-| `contracts/v0.1/` | **10** closed, versioned JSON schemas [CITED: tree] |
-| `contracts/examples/` | **20** synthetic fixtures: one valid and one invalid example per schema [CITED: tree] |
-| `tools/check_laws.py` | Commit, identity and version checks |
-| `tools/check_contracts.py` | Schema audit and example checks |
-| `tests/` | Unit tests for both checkers |
-| `.github/workflows/ci.yml` | Laws, version, contracts and unit-test gates |
-| `docs/ARCHITECTURE.md` | Authority, IPC, capture and replay design |
-| `docs/ROADMAP.md` | Event plan, rewritten as the public roadmap in this release |
-| `CHANGELOG.md`, `VERSION` | Release identity |
-| `deps.lock` | Component pins; OpenSuperficies entries are TBD |
-| `core/`, `ui/`, `agents/`, `daemon-adapter/` | Empty skeleton directories; READMEs only, no code |
-| `.githooks/commit-msg`, `.gitignore` | Commit-message hook and ignore rules |
+| Laws and release identity | `LAWS.md`, commit rules, `VERSION`, changelog and dependency declaration |
+| Contracts | Closed schemas and synthetic valid/invalid examples |
+| Verification | Schema and law checkers, their unit tests and CI configuration |
+| Design | Architecture and roadmap documents |
+| Runtime directories | `core/README.md`, `daemon-adapter/README.md`, `agents/README.md`, `ui/README.md` |
 
-## Pre-event design and research notes
+The checkers and tests were executable code. The narrower historical claim is
+that the application runtime was absent from those directories at that commit.
+[CITED: git `a01a420` tree]
 
-Committed as `e06d627` on **2026-10-25** [CITED: git log], **13 files**
-[CITED: git show --stat]. Design and research notes only; no runtime code.
+## What design work preceded the application?
 
-| Item | Contents |
-| --- | --- |
-| `docs/UI_ARCHITECTURE.md` | Shared capsule visual architecture: specified behavior, not installed APIs |
-| `docs/ROUTER_BOOTSTRAP.md` | Context-router bootstrap notes for the shared UI |
-| `docs/RESEARCH_LOG.md` | Visual-layer research ledger |
-| `docs/DEMO_RECURSIVE_SCRIPT.md` | Draft hackathon video concept script |
-| `docs/research/` | **8** supporting files [CITED: tree]: acceptance review, terminal-workspace synthesis, UI seal decisions, research handoff, npm pins evidence, UI architecture report, **2** query logs |
+A later documentation commit added UI design, router notes and research material;
+it did not add the application runtime.
 
-## Historical external private components
+Answers: pre-event design; research notes; documentation baseline
 
-These components predate the event, stay in their own private repositories,
-and are integrated through versioned contracts. The following pins are historical [CITED: git `ebc5546:deps.lock`],
-not the current lock. Their source stays in separate repositories; packaging may
-include external runtime material subject to its own permission.
+Commit `e06d627481e540ecb7786872e239fc94ae110959`, dated `2026-10-25`
+[CITED: git commit], added the UI architecture, router bootstrap, research notes
+and a draft demonstration script. Commit
+`ebc554677d44b3202fb7596d913f27bdf3099f58` recorded the declaration and release
+`0.1.1` [CITED: git commit and `ebc5546:VERSION`]. These are historical states;
+current documents may have been rewritten since then.
 
-| Component | Role | How MetaViewer consumes it |
+Private planning records are not independently reviewable from this repository.
+Their detailed chronology is **ABSENT — do not invent**. Public reported tool
+usage is discussed in [META_AI_USAGE.md](../META_AI_USAGE.md), with its own
+evidence limits.
+
+## Which components existed outside this repository?
+
+The private runtimes and the public capsule UI kit are separate projects consumed
+by the assembly. Their source and licensing boundaries are unchanged by this
+declaration.
+
+Answers: external pre-existing components; private runtimes; integration pins
+
+| Component | Current source of its integration identity | Public audit boundary |
 | --- | --- | --- |
-| wender-agent | AI input execution | Private repo `oguirado/wender-agent`, pin `v0.1.1` / `f24bda5` [CITED: git `ebc5546:deps.lock`]; reached through versioned contracts only |
-| vision-engine | Perception: capture, change detection, localisation | Private repo `oguirado/vision-engine`, pin `v0.1.1` / `cff8f3a` [CITED: git `ebc5546:deps.lock`]; reached through versioned contracts only |
-| OpenSuperficies | Isolated capsule backend (Go surface daemon) | Pins TBD in `deps.lock` [CITED: git `ebc5546:deps.lock`]; reached through versioned contracts only |
-| Shared capsule UI kit | Maintainer's UI kit for the wall: shell, capsules, overlay terminal (multislot in build) [CITED: docs/DEMO_RECURSIVE_SCRIPT.md] | Consumed as a compiled bundle; never copied |
+| `wender-agent` | [deps.lock](../deps.lock) | Separate private program |
+| `vision-engine` | [deps.lock](../deps.lock) | Separate private program |
+| `OpenSuperficies` | [deps.lock](../deps.lock) | Separate private program |
+| `capsule-ui-kit` | [ui/kit.lock.json](../ui/kit.lock.json) | Separate public repository |
 
-The baseline planned to finalise pins in a `deps:` commit [TARGET, historical plan]. Per L2, a pin changes only in a commit whose message starts with
-`deps:` [CITED: LAWS.md].
+Current pins are integration identities. They do not establish that the pinned
+revisions, or every change in them, predate the event. Public-source evidence for
+the event-period history of the private components is **ABSENT — do not invent**.
+Evaluation rights for supplied compiled components are defined only in
+[NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
 
-## Pre-event planning with Meta models
+## What was added to the application after the scaffold?
 
-Before kickoff I used Meta Muse Spark 1.3 for planning only: **55 lanes**
-[MEASURED: META_AI_USAGE.md] on **October 25** (21:12-22:14 CET) and
-**October 26** (16:53 CET, before the 17:00 kickoff). Every lane is listed
-with its start time, purpose and cost in `META_AI_USAGE.md` (phase
-"pre-event").
+The subsequent history adds the authority core, daemon adapter, agent tools and
+wall; the current source makes those implementations inspectable.
 
-| Room | Lanes | Output |
-| --- | --- | --- |
-| `mv0ri` | 8 | Research notes on the eight hard engineering areas |
-| `mv0cf` | 6 | Audit of the architecture norm |
-| `mv0rvb` | 6 | Review of the build plan: critical path, risks, demo plan |
-| `mv0pk1`-`mv0pk3` | 24 | Context packs: specifications and source citations for the build-period writers |
-| `mv0api` | 6 | Extracts of the installed APIs of the pre-existing components |
-| `mv0kit` | 2 | Theme token proposal (design data) and the UI kit needs list |
-| `mv0v011` | 3 | The 0.1.1 release documents (`ebc5546`) |
+Answers: application implementation; work after the scaffold; built during the event
 
-No product code was written before kickoff. Apart from the 0.1.1 documents,
-these outputs stay in my private planning workspace and are not committed
-here; the context packs and research notes were inputs for the writers of
-the build period.
+The following commands expose the additions and their commit dates without
+relying on a retrospective count:
 
-## Current external pins
+```sh
+git log --reverse --format='%h %cs %s' -- core/src/lib.rs
+git log --reverse --format='%h %cs %s' -- daemon-adapter/cmd/mv-daemon-adapter/main.go
+git log --reverse --format='%h %cs %s' -- agents/metaviewer_agents/tools.py
+git log --reverse --format='%h %cs %s' -- ui/src/App.vue
+```
 
-These are integration pins, not evidence that each pinned revision predates kickoff.
-External components are pre-existing projects; the event-period changes in their
-private repositories are not established by this declaration. MetaViewer source is
-licensed under [AGPL-3.0-only](../LICENSE). The separate proprietary programs
-`wender-agent`, `vision-engine` and `OpenSuperficies` are fully private; `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only`. [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md) grants judges
-limited evaluation permission for supplied compiled external components, without
-granting redistribution rights in those components.
-
-| Component | Version [CITED] | Commit [CITED] | Source |
-| --- | --- | --- | --- |
-| vision-engine | `v0.2.0` | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` | `deps.lock` |
-| wender-agent | `v0.3.0` | `96120967b435b72fc6d29635f3844dae140388a9` | `deps.lock` |
-| OpenSuperficies | `os-cu-w9-mv1` | `3cb86d752f38457b6730eefd235d4da4c4039721` | `deps.lock` |
-| capsule-ui-kit | `0.2.1` | `aaada9dedc177b096e8b4764959e258e76c1ef02` | `ui/kit.lock.json` |
-
-## Built during the event
-
-The MetaViewer assembly implements the Rust authority core, Go daemon adapter,
-Python agent adapters and Electron/Vue wall. These were absent from the historical
-scaffold and now exist in the directories listed above [CITED: current tree;
-git `a01a420`, `e06d627`]. The claim concerns the product assembly; pre-event schema
-tooling and tests already contained executable code.
-
-Current integration includes observe/propose/verify, journal replay, capture,
-control handoff and the terminal. Host programs and attached desktop windows are
-not isolated; live display and external runtime prerequisites still apply.
-See [README.md](../README.md#isolation-and-evaluation-limits) for limitations.
+Commit dates and source history support this repository's chronology. They do
+not prove a live acceptance pass, private-component chronology or compliance
+with an external event's rules. See [EVIDENCE.md](EVIDENCE.md) for what is publicly
+verifiable and [TESTING.md](TESTING.md) for reproduction commands.

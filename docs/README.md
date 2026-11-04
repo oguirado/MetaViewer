@@ -1,37 +1,55 @@
 # Documentation index
 
-- [Judge tour](JUDGE_TOUR.md): guided product flows and architecture verification status after installation.
+Start with [Judges](JUDGES.md) for installation, requirements and a paste block
+for your own AI. After installation, use the [Judge tour](JUDGE_TOUR.md).
 
 ## Judge reading order
 
-- [Project status and limits](../README.md): what exists and what remains unmeasured.
-- [Pre-existing work](PREEXISTING.md): historical scaffold and current integration pins.
-- [Licensing and external component notice](../NOTICE-EVALUATION.md): MetaViewer source is AGPL-3.0-only; compiled external components have limited judge evaluation permission.
-- [Judge Quickstart](JUDGE_QUICKSTART.md): asset verification, host doctor, installation and live wall.
-- [Offline fixture](JUDGES.md): hosted simulation, requiring a locally available locked Wender checkout.
+Answers: where to start, judge guide, installation, evidence
 
-The public [v0.2.5 pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
-provides x64 compiled assets; its notes give the checksum manifest digest [CITED: release].
-ARM64 compiled assets for that release are **ABSENT — do not invent**. A clone alone
-contains no packaged application or private runtime. Use [the no-Docker route](JUDGE_NO_DOCKER.md)
-for app-only installation, and [the evidence guide](EVIDENCE.md) to distinguish
-source checks from reported live qualification. Live wall evaluation requires a
-graphical session; Host program and Desktop window are not isolated.
+Read the judge hub, choose your installation tier, then run the tour.
+
+| Question | Document |
+| --- | --- |
+| What is MetaViewer and why use capsules? | [Project overview](../README.md) |
+| Can my AI install it? | [Judge hub and authorized paste block](JUDGES.md#what-do-i-paste-into-my-own-ai) |
+| Which commands and outputs should I expect? | [Judge Quickstart](JUDGE_QUICKSTART.md) |
+| Can I try it without Docker? | [App-only route](JUDGE_NO_DOCKER.md) |
+| What can I demonstrate after install? | [Judge tour](JUDGE_TOUR.md) |
+| What does a refusal mean? | [Troubleshooting](JUDGE_TROUBLESHOOTING.md) |
+| What was actually verified? | [Evidence and limits](EVIDENCE.md) |
+| What may I use or redistribute? | [Evaluation notice](../NOTICE-EVALUATION.md) and [pre-existing work](PREEXISTING.md) |
+
+The source targets `0.2.6` [CITED: `../VERSION`]. Verify that its matching tag,
+release assets and manifest digest are published before following its download
+commands. The [earlier public release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
+has its own instructions and x64 assets; it does not prove availability or behavior
+of a later package. A source clone supplies neither the packaged app nor private
+runtimes. ARM64 compiled assets are `ABSENT — do not invent` here.
 
 ## Build and operate
 
-- [Install and package](INSTALL.md), [operator guide](USER_GUIDE.md), and [AI operator guide](AI_OPERATOR_GUIDE.md).
-- [Testing](TESTING.md), [demo runbook](DEMO_RUNBOOK.md), and [adapter input limits](ADAPTER_INPUT_LIMITS.md).
-- [Architecture](ARCHITECTURE.md), [UI architecture](UI_ARCHITECTURE.md), and [contracts](../contracts/v0.2/README.md).
-- [Commit laws](COMMIT_LAWS.md), [release history](../CHANGELOG.md), and [pending fragment workflow](../changes/README.md).
+Answers: source build, operator commands, AI operation, architecture
+
+Use the build guide for source prerequisites and the operator guides for runtime work.
+
+| Need | Document |
+| --- | --- |
+| Build and package | [Install](INSTALL.md) |
+| Operate the wall | [User guide](USER_GUIDE.md) |
+| Give an AI the runtime contract | [AI operator guide](AI_OPERATOR_GUIDE.md) and [agent entry](AGENT_ENTRY.md) |
+| Run checks and a demonstration | [Testing](TESTING.md) and [demo runbook](DEMO_RUNBOOK.md) |
+| Understand input limits | [Adapter input limits](ADAPTER_INPUT_LIMITS.md) |
+| Read the public design | [Architecture](ARCHITECTURE.md), [UI architecture](UI_ARCHITECTURE.md), [contracts](../contracts/v0.2/README.md) |
+| Prepare a contribution | [Commit laws](COMMIT_LAWS.md), [release history](../CHANGELOG.md), [change fragments](../changes/README.md) |
 
 ## Historical design and research
 
-[Roadmap](ROADMAP.md) is the pre-event plan, not a completion record.
-[Research](research/), [research log](RESEARCH_LOG.md), [router bootstrap](ROUTER_BOOTSTRAP.md),
-the Xpra design notes and the recursive demo script preserve planning context.
-They do not establish current APIs or live acceptance results.
+Answers: roadmap, research, old plans, source lookup
 
-The [generated code map](../route/README.md) supplies source coordinates that
-must be checked against this tree. It is distinct from `router/` tooling and
-`catalogue/` identity data; the agent entry still declares context routing unavailable.
+Historical plans explain earlier decisions; current code and tests establish behavior.
+
+[Roadmap](ROADMAP.md), [research](research/), [research log](RESEARCH_LOG.md) and
+[router bootstrap](ROUTER_BOOTSTRAP.md) preserve planning context. They are not
+completion receipts. The [generated code map](../route/README.md) returns source
+coordinates; read the current cited bytes before relying on a finding.

@@ -1,8 +1,11 @@
 # MetaViewer AI Operator Guide
 
-Give this single file to your own AI (or read it directly) so it can install,
-configure, verify, operate, and explain every feature of MetaViewer on a standard
-Linux desktop or laptop.
+Use this guide to navigate the UI, select a capsule and connect an external AI.
+For the executable task protocol use [AGENT_ENTRY.md](AGENT_ENTRY.md); for
+repeatable game, drawing and commentary sessions use the
+[computer-use playbook](COMPUTER_USE_PLAYBOOK.md).
+
+Answers: how do I operate the MetaViewer UI and attach my AI.
 
 This guide describes the repository interfaces. Live verification is limited to
 the architecture support table in [Judge tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
@@ -13,7 +16,9 @@ unknown facts read `ABSENT — do not invent`.
 
 ## 0. Reading map
 
-Answers: where do I start; which document answers my question as an AI operator.
+Choose the document that matches the next operation.
+
+Answers: where should an AI operator start.
 
 | You want | Go to |
 |---|---|
@@ -25,192 +30,181 @@ Answers: where do I start; which document answers my question as an AI operator.
 | Capsule kinds | [Section 6](#6-adding-capsules-browser-program-and-desktop-window) |
 | Roles and takeover | [Section 7](#7-human-and-agent-roles-hand-off-and-emergency-takeover) |
 | Limits | [Section 13](#13-what-is-not-supported-honest-limitations) |
-| Find code for a symptom | `python3 route/route_query.py locate "<symptom>"`; findings are pinned to an older commit, read the code [CITED: route/README.md] |
+| Find code for a symptom | `python3 route/route_query.py any "<symptom>"`; read returned source coordinates before relying on a finding [CITED: route/README.md] |
 
 ---
 
 ## 1. What MetaViewer Is (and How to Explain It to a Person)
 
-Answers: what is MetaViewer; how do I explain MetaViewer to a judge; what are human and agent roles.
+MetaViewer puts named live tasks on a shared desktop wall.
 
-MetaViewer is a Linux desktop wall of live capsules. Instead of letting an
-automation script take over your personal browser or desktop session, MetaViewer runs
-each browser session or Linux program inside its own container (`OpenSuperficies`)
-with its own virtual X11 display and streams the live surface into
-an interactive tiled canvas.
+Answers: how do I explain MetaViewer to a judge.
 
-MetaViewer's source is `AGPL-3.0-only`. `wender-agent`, `vision-engine` and
-`OpenSuperficies` are proprietary and fully private: only their compiled forms are
-supplied, for evaluation, as stated in [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
+The capsule kind selects
+the execution boundary: a browser, a container program, a Host program, an
+existing desktop window, or an available ARM64 guest. Host program runs as your
+host user and is not isolated; a Desktop window is an existing real X11 window
+[CITED: ui/src/catalog/catalogModel.js].
 
-A person and an AI work side by side on the same wall:
+MetaViewer's source is `AGPL-3.0-only`. The external components are supplied under
+[NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md); that notice defines their
+compiled evaluation permission.
 
-- **Human role (`Role: human`)**: The person logs into a site, solves 2FA/CAPTCHAs,
-  or uses an application directly. While a capsule is in human mode, agent
-  automation is blocked at the daemon boundary.
-- **Agent role (`Role: agent`)**: Once the person clicks **`Mark as logged in`**
-  (or **`Switch to agent mode`**), an external AI or `mw_run` can observe and act on
-  that specific capsule while the person watches live in read-only mode or takes
-  back control at any moment with **`Take control (emergency)`**.
+A Human-role capsule is for direct interaction. In an Agent-role capsule the
+person watches, can take manual control, and can release it again. The program
+runner rejects input without agent control [CITED: tools/mw_run_program.py].
+Use [section 7](#7-human-and-agent-roles-hand-off-and-emergency-takeover) for the
+controls, and [WHY_CAPSULES.md](WHY_CAPSULES.md) for their purpose.
 
 ---
 
 ## 2. Target Hardware and Tier Thresholds (Typical x64 / arm64 Linux Laptop)
 
-Answers: what hardware do I need; which tier fits my machine.
+Check the actual host with the installer before opening live capsules.
 
-MetaViewer is designed for standard Linux machines (`x86_64` / `x64` and `aarch64` /
-`arm64`) such as an **8-core, 16 GiB RAM laptop** running Ubuntu 24.04 LTS or
-Debian 12/13 under an X11 or XWayland desktop session (`DISPLAY` set).
+Answers: how do I check whether my host supports the required capsule tier.
 
-| Check | Tier 1 (App shell only) | Tier 2 (`--capsules`, live browser & program capsules) | Refusal Code |
-| :--- | :--- | :--- | :--- |
-| OS & Arch | Linux (`ubuntu`/`debian` 24.04/12/13; other distros warn) on `x86_64` or `aarch64` | Same | `JUDGE_OS`, `JUDGE_ARCH`, `JUDGE_BUNDLE_ARCH` |
-| CPU pinning | **None required** (`MV_JUDGE_REQUIRE_CPUSET` defaults to `none`; >= 8 logical CPUs recommended) | **None required** (`MV_JUDGE_REQUIRE_CPUSET` defaults to `none`) | `JUDGE_CPUSET` (only if `MV_JUDGE_REQUIRE_CPUSET` is explicitly set) |
-| Available RAM | `floor = min(MemTotal / 4, 20 GiB)`. Hard minimum: `MemAvailable >= floor + 512 MiB` (`4.5 GiB` on a 16 GiB laptop) [MEASURED]. Warns below `floor + 4 GiB` (`8 GiB` on a 16 GiB laptop) [TARGET]. | Same admission floor (`floor + 512 MiB` hard minimum; warns below `floor + 4 GiB`). Each running browser capsule uses up to ~2 GiB RAM. | `JUDGE_RAM`, `JUDGE_RAM_STALE` |
-| `/dev/shm` (`tmpfs`) | Hard minimum: `>= 512 MiB` (`536,870,912` B) [TARGET] | Hard minimum: `>= 1 GiB` (`1,073,741,824` B) [TARGET]; warns below `2.5 GiB` (`2,684,354,560` B) [TARGET] | `JUDGE_SHM` |
-| Free disk space | `>= 2 GB` (`2,000,000,000` B) on `MV_JUDGE_HOME` | Hard minimum: `>= 15 GB` (`15,000,000,000` B) on `MV_JUDGE_HOME` and `/var/lib/docker`; warns below `30 GB` (`30,000,000,000` B) [TARGET] | `JUDGE_DISK` |
-| Display & Runtime | Reachable X11/XWayland `DISPLAY`; private `XDG_RUNTIME_DIR` (`0700`, owned by current UID) | Same | `JUDGE_DISPLAY`, `JUDGE_XDG_RUNTIME` |
-| Docker Engine | Not required | Rootful local Docker Engine (`>= 24.0`) with user in `docker` group; no `DOCKER_HOST`/`DOCKER_CONTEXT`; not rootless or Docker Desktop | `JUDGE_DOCKER`, `JUDGE_DOCKER_HOST`, `JUDGE_DOCKER_DESKTOP` |
-
-If `/dev/shm` is smaller than 1 GiB on a laptop, resize it without rebooting:
+App-shell readiness and capsule readiness are different; the installer reports the
+specific unmet precondition [CITED: scripts/judge/metaviewer-judge.sh].
 
 ```bash
-sudo mount -o remount,size=4G /dev/shm
+bash scripts/judge/metaviewer-judge.sh doctor --capsules
 ```
+
+Requirements, storage thresholds and supported architectures are maintained in
+[INSTALL.md](INSTALL.md). Live results are limited to the
+[architecture support table](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
+An available catalog card is not proof that guest assets or every program are
+installed. Do not infer support from the processor name alone.
 
 ---
 
 ## 3. Release Assets and Building Them Locally
 
-Answers: which release assets exist; how do I build the assets.
+Install matching verified release assets; local assembly is a maintainer operation.
 
-`scripts/judge/metaviewer-judge.sh` verifies every archive against `assets/SHA256SUMS`
-before unpacking:
+Answers: which release assets should I use.
 
-| Asset Name | Tier | Contents |
-| :--- | :--- | :--- |
-| `metaviewer-linux-<x64\|arm64>.tar.gz` | T1 & T2 | `MetaViewer-linux-<arch>/` app bundle and `MetaViewer-linux-<arch>.sha256` |
-| `node-linux-<x64\|arm64>.tar.xz` | T1 & T2 | Node.js `>= 24` runtime (`*/bin/node`), unpacked only if host `node` is missing or `< 24` |
-| `opensuperficies-linux-<x64\|arm64>.tar.gz` | T2 | `opensuperficies/bin/srf*` binaries (`srf-identity-surface`, `srf-identity-admin`, etc.) and `opensuperficies/firewall/` |
-| `images-linux-<x64\|arm64>.tar` | T2 | `docker save` archive with `opensuperficies-identity-browser-<arch>:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, and `opensuperficies-desktop-<arch>:1.1.0` |
-| `vision-engine.tar.gz` | T2 | `vision-engine/` at the commit pinned in `deps.lock` |
-| `wender-agent.tar.gz` | T2 | `wender-agent/` at the commit pinned in `deps.lock` |
-| `SHA256SUMS` | T1 & T2 | SHA-256 manifest of the release assets |
+Use the release asset manifest and matching architecture described in
+[INSTALL.md](INSTALL.md). The installer checks archive hashes before unpacking
+[CITED: scripts/judge/metaviewer-judge.sh].
 
-To build all release assets and `SHA256SUMS` from local artifacts (without embedding
-any host path, and checking GitHub's 2 GiB per-asset limit):
+| Asset family | Purpose |
+|---|---|
+| `metaviewer-linux-<arch>.tar.gz` | App and operator resources |
+| `node-linux-<arch>.tar.xz` | Runtime when a suitable host runtime is absent |
+| `opensuperficies-linux-<arch>.tar.gz` | Compiled native capsule commands |
+| `images-linux-<arch>.tar` | Images including `opensuperficies-identity-browser-<arch>` and `opensuperficies-program-host-<arch>` |
+| `vision-engine.tar.gz`, `wender-agent.tar.gz` | Dependencies pinned by `deps.lock` |
+| `SHA256SUMS` | Release asset hashes |
 
-```bash
-python3 tools/build_release_assets.py \
-  --out-dir ./assets \
-  --arch x64 \
-  --app-dir /path/to/MetaViewer-linux-x64 \
-  --node-tarball /path/to/node-v24.14.0-linux-x64.tar.xz \
-  --opensuperficies-dir /path/to/opensuperficies/bin \
-  --firewall-dir /path/to/opensuperficies/deploy/firewall \
-  --vision-engine-dir /path/to/vision-engine \
-  --wender-agent-dir /path/to/wender-agent
-```
+The maintainer can assemble assets with `tools/build_release_assets.py` from
+already supplied artifacts [CITED: tools/build_release_assets.py]. This does not
+grant access to private source or fetch unavailable components. See the
+[release instructions](INSTALL.md) for the full command and provenance checks.
 
 ---
 
 ## 4. Installing, Running, and Stopping MetaViewer (`metaviewer-judge.sh`)
 
-Answers: how do I install MetaViewer; how do I start and stop it; when is sudo used.
+Use the installer lifecycle commands from the checkout.
 
-All four lifecycle subcommands live in `scripts/judge/metaviewer-judge.sh`:
+Answers: how do I manage the app lifecycle.
+
+Use the installer to check, install, start and stop the app. Run from the
+repository containing the script [CITED: scripts/judge/metaviewer-judge.sh].
 
 ```bash
-# 1. Check the machine (read-only; changes nothing on disk)
 bash scripts/judge/metaviewer-judge.sh doctor --capsules
-
-# 2. Install Tier 2 (app + capsules, images, and sudo-free profile directories)
 bash scripts/judge/metaviewer-judge.sh install --capsules
-
-# 3. Launch MetaViewer (blocks while the app is open)
 bash scripts/judge/metaviewer-judge.sh run
-
-# 4. Stop MetaViewer and any running srf-* capsules cleanly
 bash scripts/judge/metaviewer-judge.sh stop
 ```
 
+For initial setup and download failures, follow [INSTALL.md](INSTALL.md).
+
 ### What `install --capsules` Does and When `sudo` Is Used
 
-- **Profile provisioning is 100% `sudo`-free**: `install --capsules` provisions
-  `$SRF_IDENTITY_STORE_ROOT/profiles/{judge,mv-live-1,mv-live-2,mv-live-3,mv-live-4}`
-  as mode `0700` owned by container UID `10001:10001` using a one-shot local Docker
-  bind-mount (`opensuperficies-identity-browser-<arch>:0.1.1`) with `--network none`.
-- **`sudo` is only requested when genuinely required by the OS**, and the exact
-  command is always printed before asking `Run this administrator command? [y/N]`:
-  1. Missing `apt-get` system packages (`JUDGE_SYSDEP`).
-  2. Loading the AppArmor profile `/etc/apparmor.d/metaviewer-judge` on Ubuntu 24.04+
-     when `kernel.apparmor_restrict_unprivileged_userns=1` (`JUDGE_USERNS`).
-  3. Optional open-mode egress firewall (`srf-open-egress.service`). If you decline
-     this prompt or pass `--no-firewall`, `install --capsules` automatically falls
-     back to the legacy Docker bridge network (`srf-idnet`) with zero `sudo` steps.
-- Pass `--yes` only when you want unattended consent for those prompts.
-- Every refusal exits with code `2` and prints a single line:
-  `JUDGE_<CODE>: <problem> -- fix: <exact command>`.
+Install prepares the app and capsule dependencies; inspect its requested system
+changes before accepting administrator commands.
+
+Answers: what does capsule installation change.
+
+The installer separates profile provisioning from administrator setup. Its
+printed refusal or approval request names the action and remedy. Read the
+[current installation procedure](INSTALL.md) before using unattended consent
+or changing firewall settings [CITED: scripts/judge/metaviewer-judge.sh].
 
 ### Default Multi-Capsule Pool Launched by `run`
 
-`metaviewer-judge.sh run` configures browser profile slots `judge`, `mv-live-2`,
-`mv-live-3` and `mv-live-4` in `MV_SRF_PROFILES`, sharing
-`$MV_JUDGE_SHM_DIR/vqa-ramws/opensuperficies/os-cu-0`. Up to **16 capsules** can run at
-once. Before each container capsule, MetaViewer checks that the host has 6 GiB of free
-memory (4 GiB RAM plus 2 GiB shm) and refuses with a reason naming what to close.
+Run configures profile slots; opening a capsule still requires an available slot
+and host resources.
+
+Answers: why can adding another capsule be refused.
+
+The app reports `CAPSULE_SLOT_UNAVAILABLE` or `RAM_ADMISSION_REFUSED` when its
+admission checks fail [CITED: ui/src/App.vue]. Stop an unneeded capsule or free
+host resources, then inspect the refusal again. Hiding a tile does not stop its
+capsule. Do not treat a configured pool size as a promise of simultaneous live
+performance.
 
 ---
 
 ## 5. Navigating the UI: Views, Desktops, and Tile Presets
 
-Answers: how do I switch views or desktops; how do I move or resize tiles.
+Select a view and desktop, then arrange its live tiles.
 
-When the MetaViewer window opens, the top bar (`42 px` height) controls the workspace:
+Answers: how do I navigate the wall.
+
+Use the navigation tree to choose a view and desktop, then the visible preset
+buttons to arrange its tiles [CITED: ui/src/App.vue].
 
 ### Views (`Humans` vs `Agents`)
 
-- **`Humans`** tab: Workspace for capsules you interact with directly.
-- **`Agents`** tab: Workspace for capsules operated by AI agents.
-- **Keyboard shortcut**: Press **`Ctrl+Tab`** to toggle between `Humans` and `Agents`
-  (when focus is outside a terminal).
+Choose **Humans** for direct-use capsules or **Agents** for agent work.
+
+Answers: how do I switch workspace views.
+
+`Ctrl+Tab` switches views when focus is outside terminal input. Verify the
+selected view before adding or moving a capsule [CITED: ui/electron/desktopShortcuts.js].
 
 ### Numbered Desktops (`1..16`)
 
-- Each view has up to **16 independent virtual desktops** shown as numbered pills
-  (`1`, `2`, …).
-- Click **`+`** (`New desktop`) to add a desktop (up to 16).
-- Double-click a desktop pill to rename it (up to 24 characters).
-- Hover a desktop pill and click **`✕`** to close it (when more than one desktop
-  exists; capsules on that desktop are moved to a remaining desktop).
-- **Keyboard shortcuts**: Press **`Ctrl+1`** through **`Ctrl+9`** to jump directly
-  to desktop 1–9.
+Each view keeps its own desktops and capsule assignments.
+
+Answers: how do I add or select a desktop.
+
+Use the navigation tree's desktop controls to add, select or rename a desktop.
+The limit is **16 per view** [CITED: ui/electron/desktopLayout.js]. `Ctrl+1`
+selects the first desktop; the remaining numbered shortcuts follow the same
+scheme [CITED: ui/electron/desktopShortcuts.js].
 
 ### Tile Presets and Moving/Resizing Tiles
 
-Click the **`Layout:`** dropdown in the top bar to switch the active desktop's
-arrangement:
+Select a preset by its current visible button, not by an old layout screenshot.
 
-| Preset Label | Preset ID | Behavior |
-| :--- | :--- | :--- |
-| **`Single`** | `single` | One active capsule fills the canvas; switch between capsules via the top strip |
-| **`Side by side`** | `split-h` | Even horizontal columns |
-| **`Grid`** | `grid-2x2` | Balanced 2×2 / multi-cell grid (`auto`, default) |
-| **`Focus + strip`** | `main-right` | Primary capsule on the left (`68%` width), vertical stack of secondary capsules on the right (`32%` width) |
-| **`Floating`** | `free` | Overlapping draggable/resizable windows with 8-direction resize handles (`N`, `S`, `E`, `W`, `NE`, `NW`, `SE`, `SW`) |
-| **`Manual`** | `custom` | Activated automatically when you drag a tile header to swap positions or drag a gap handle (`6 px` gutter) between adjacent tiles |
+Answers: how do I arrange tiles.
 
-- **Fullscreen a tile**: Click **`⛶`** in the tile header (or press **`Escape`** /
-  click **`⊡`** to exit fullscreen).
-- **Move a capsule to another desktop**: Open the tile's **`⋮`** menu and use **`Move to desktop`**
-  and pick the target desktop (`1..N`).
+| Visible label [CITED: ui/src/App.vue] | Arrangement |
+|---|---|
+| `1` | Single tile |
+| `2` | Side by side |
+| `2×2` | Grid |
+| `3×2` | Larger grid |
+| `Focus` | Focus + strip |
+| `Float` | Floating windows |
+
+Manual arrangement means moving or resizing tiles directly. The tile menu also
+offers desktop movement. Layout changes alter click coordinates: capture again
+before input. Closing a tile hides it; **Stop capsule** ends its running surface.
 
 ---
 
 ## 6. Adding Capsules: Browser, Program, and Desktop Window
 
-Answers: how do I add a browser, a program or a desktop window capsule.
+Choose the capsule kind that matches the required execution boundary.
+
+Answers: how do I add the capsule kind my task needs.
 
 Click **`＋ Add capsule`** in the top bar (or **`＋ Add capsule`** inside an empty
 desktop). The dialog also offers Host program, which runs on your computer and
@@ -218,11 +212,15 @@ is not isolated. The other launch choices are:
 
 ### A. `Identity browser` (`kind: "browser"`)
 
+Choose Identity browser and a configured identity, then launch its capsule.
+
+Answers: how do I open an identity browser.
+
 1. Choose **`Identity browser`**.
 2. Pick an existing identity from the list (for example `judge`, `mv-live-2`,
    `mv-live-3`, `mv-live-4`, or any identity created in **`Identities`**), or create
    a new one inline:
-   - **`Identity name`**: lowercase letters, digits, and hyphens (`^[a-z0-9][a-z0-9-]{1,39}$`), not starting with `mv-`.
+   - **`Identity name`**: lowercase letters, digits, and hyphens (`^[a-z0-9][a-z0-9-]{1,39}$`) [CITED: tools/mv_identity.py], not starting with `mv-`.
    - **`Display label`**: human-readable label (e.g. `Work GitHub`).
    - **`Initial domain`**: bare domain (e.g. `github.com` or `example.com`).
 3. Click **`Launch`**.
@@ -232,7 +230,13 @@ is not isolated. The other launch choices are:
 
 ### B. `Program` (`kind: "desktop_capsule"`, program `host-exec`)
 
-Runs a Linux GUI program from the host's `/usr` inside its own container, with no network:
+Choose Program or Host program, set the role and start its installed binary.
+
+Answers: how do I open a program with the intended execution boundary.
+
+Program uses the configured container program profile; Host program runs the
+selected program on the host and is not isolated [CITED: ui/src/catalog/CatalogLauncher.vue].
+Choose the kind before entering its binary:
 
 1. Choose **`Program`**, then **`Create Capsule`**.
 2. Choose **`Role`**: `Human` (default, you use it directly) or `Agent`.
@@ -245,24 +249,30 @@ with the reason.
 
 ### C. `Desktop window` (`kind: "desktop_capsule"`, native kind `host-window`)
 
+Select an existing X11 window to display it in a tile.
+
+Answers: how do I attach an existing X11 window.
+
 Attaches a window that is already open on your real X11 desktop into a tile. No Docker.
 
 1. Choose **`Desktop window`**, then **`Create Capsule`**.
 2. Choose a window from the list; filter by title or program. MetaViewer itself is excluded.
 3. Click **`Add`**. Nothing is attached without this click.
 
-- The tile says **`Real desktop — not isolated`**. Unlike other capsules, this is the real
-  window, with whatever it is logged in to and can reach.
+- The tile says **`Real desktop — not isolated`**. It retains the original
+  window's sessions and access.
 - **`Stop`** on the tile detaches immediately and never closes the window.
-- Acting on the window raises it in front of your other windows and moves the real pointer,
-  so do not use the desktop while an AI drives it.
+- Manual interaction affects the real window. The `mw_run` program lane does
+  not support Desktop-window automation.
 - X11 only. Native Wayland windows are not listed and are refused.
 
 ---
 
 ## 7. Human and Agent Roles, Hand-off, and Emergency Takeover
 
-Answers: how do I hand a capsule to the agent; how do I take control back.
+Switch roles to grant or revoke agent access; take control to interrupt input.
+
+Answers: how do I grant or take back capsule control.
 
 Every browser capsule enforces a strict role state machine (`Role: human` vs
 `Role: agent`) with a per-capsule menu (`⋮` in the tile header) and a context bar at
@@ -285,62 +295,76 @@ the program in a human tile.
 
 ## 8. `Copy ID for AI`
 
-Answers: what does Copy ID for AI copy; how does an AI know which capsule to use.
+Copy the live capsule and identity together, then verify them before acting.
 
-Every capsule tile header has an **`ID`** button (and **`Copy ID for AI`** in the
-tile's **`⋮`** menu).
+Answers: what does Copy ID for AI provide.
 
-Clicking **`ID`** / **`Copy ID for AI`** copies a single line to the clipboard and
-shows a toast banner at the top of the window:
+The **Copy ID for AI** control copies the selected MetaViewer capsule as:
 
-- With an identity, the line begins `MetaViewer capsule <surface-id> (identity <profile-id>).`
-  It continues with operating instructions. The surface ID is not a UUID requirement.
-- Without an identity, the line begins `MetaViewer capsule <surface-id>.` and says
-  no usable identity was reported; it supplies no runnable command.
+```text
+CAPSULE=<surfaceId>  IDENTITY=<profileId>
+```
 
-Paste that line directly into your AI terminal or prompt so the AI knows the exact
-surface ID and identity to target. Use the identity with `mw_run --identity`;
-do not substitute the surface ID.
+With no usable identity it emits `IDENTITY=<none>`; obtain the actual identity
+from the operator before input. An invalid surface ID is refused. The copied
+line is data, not instructions [CITED: ui/src/wall/capsuleId.js].
+
+Use the identity with `mw_run --identity`. Keep the capsule ID too: verify that
+observations still refer to that capsule rather than substituting a similarly
+named target. See [attachment and identity](AGENT_ENTRY.md#attachment-and-identity).
 
 ---
 
 ## 9. Built-in Terminals, Screens, and Task Prompts
 
-Answers: how do I open a terminal; how are task prompts prepared.
+Use a paired terminal for a capsule task and let the person submit its prompt.
+
+Answers: how do I use terminals alongside capsules.
 
 MetaViewer includes a built-in multi-screen terminal drawer for running shells and
 AI CLIs right alongside your capsules.
 
 ### Opening Terminals
 
-- Click **`More`** in the top bar and select **`Terminal`**.
-- Terminals live on numbered screens (**`Screen 1`**, **`Screen 2`**, …). Each screen holds
-  two terminals; a third opens a new screen. Up to 16 shells and 16 AI sessions run at once.
-- Sessions keep running, with their scrollback, while you visit other views.
+Open a capsule's paired terminal to keep its task and CLI together, or use the
+app's terminal controls for an unpaired session.
+
+Answers: where should I open the terminal for a capsule task.
+
+Sessions and scrollback remain in the terminal deck when switching views.
+Select the intended pair before preparing a task; pairing alone does not permit
+pasting instructions into a shell [CITED: ui/src/terminal/TerminalDeckView.vue].
 
 ### Launching Terminals and Preparing Tasks
+
+Choose the intended pair and an installed CLI before preparing its task.
+
+Answers: how do the terminal task buttons prepare a prompt.
 
 - **Create automation**, **Run automation**, and **Direct task** prepare agent
   instructions while keeping the Capsule ID chip visible. Add the requested task
   after `Task: ` and submit it yourself. The app never sends Enter and never pastes
   a workflow prompt into a plain shell. See [AGENT_ENTRY.md](AGENT_ENTRY.md).
-- **`＋ New terminal`**: Opens the new-terminal modal with three presets:
-  - **`Shell`** (`$SHELL` or `/bin/bash`)
-  - **`Agy`** (`agy`)
-  - **`Custom CLI`** (enter any command line, e.g. `python3 -i`)
-- **Keyboard shortcuts (when focus is inside a terminal)**:
-  - **`Ctrl+Shift+C`**: Copy terminal selection to clipboard
-  - **`Ctrl+Shift+V`**: Paste clipboard into terminal
-  - **`Ctrl+Shift+T`**: Open a new shell tab in the current screen
-  - **`Ctrl+Shift+W`**: Close the active terminal tab
+- **`＋ New terminal`** offers Shell, configured host providers, and **Custom CLI**.
+  An unavailable provider is omitted; do not assume a particular CLI is installed
+  [CITED: ui/src/terminal/terminalDeckModel.js].
+- **`Ctrl+Shift+C`** copies a selection; **`Ctrl+Shift+V`** pastes;
+  **`Ctrl+Shift+T`** opens a shell and **`Ctrl+Shift+W`** closes the active terminal
+  [CITED: ui/src/terminal/terminalDeckModel.js].
 
 ---
 
 ## 10. Managing Browser Identities (`Identities` Dialog and `tools/mv_identity.py`)
 
-Answers: how do I create, list or release a browser identity.
+Manage identities through the app or through its same attached store.
+
+Answers: how do I manage browser identities.
 
 ### From the UI (`Identities`)
+
+Use Identities to inspect and manage the app's configured identity store.
+
+Answers: how do I manage an identity in the UI.
 
 Click **`Identities`** in the top bar  to:
 
@@ -353,6 +377,10 @@ Click **`Identities`** in the top bar  to:
   are reserved and protected from deletion).
 
 ### From the CLI (`tools/mv_identity.py`)
+
+Source the app attachment so CLI commands use the same store as the app.
+
+Answers: how do I run identity commands against the app store.
 
 Use the same bindings as the running app. Read the attachment path from the
 `METAVIEWER_ATTACH <path>` line printed in the terminal running
@@ -398,10 +426,13 @@ python3 tools/mv_identity.py \
 
 ## 11. `Use MetaViewer`: Attaching Any External AI (`docs/AGENT_ENTRY.md`)
 
-Answers: how do I attach an external AI; where is the attachment file.
+Source the intended running app before listing or operating its capsules.
 
-Copy the fenced prompt from [AGENT_ENTRY.md](AGENT_ENTRY.md) for your external AI.
-The sidebar entry button is not available in this release.
+Answers: how do I attach an external AI to the running app.
+
+Use the task-specific section of [AGENT_ENTRY.md](AGENT_ENTRY.md) for your
+external AI. Its fenced reference prompt is for stored-workflow mode; it is not
+a general command for every capsule kind.
 
 While MetaViewer is running, it publishes owner-only `current.env` and
 `current.json` in the host runtime's `metaviewer/attach/` directory. The JSON
@@ -462,13 +493,20 @@ send invented raw capsule commands to the core socket.
 
 ## 12. Automation with `mw_run` and MemoryWeb
 
-Answers: how do I run mw_run; how do I record and replay a workflow; how do I automate a program.
+Choose goal mode or a preflighted stored workflow; do not mix their flags.
 
-MetaViewer integrates with **MemoryWeb (`wender-agent`)** to compile recorded
-demonstrations into repeatable site graphs (`site.json` + `workflows/<workflow>.json`)
-and execute them inside an isolated identity capsule via `metaviewer_agents.mw_run`.
+Answers: which runner mode should I use.
+
+Use goal mode for a current observed control, or stored-workflow mode for an
+authored MemoryWeb workflow. These modes have different preconditions and flags
+[CITED: agents/metaviewer_agents/mw_run.py]. The complete first-run procedure is
+in [MW_RUN_FIRST_RUN.md](MW_RUN_FIRST_RUN.md).
 
 ### A. Check MemoryWeb Home Readiness (`tools/mw_home_check.py`)
+
+Check the workflow home before replaying stored automation.
+
+Answers: how do I preflight the workflow home.
 
 ```bash
 python3 tools/mw_home_check.py --repo .
@@ -480,15 +518,23 @@ planner. Refusal includes `code`; repair that precondition before continuing.
 
 ### B. Dump Accessibility Tree from a Running Browser Capsule (`tools/mw_ax_dump.py`)
 
+Read the live browser accessibility tree before choosing workflow anchors.
+
+Answers: how do I inspect live browser anchors without input.
+
 ```bash
 python3 tools/mw_ax_dump.py \
   --repo . \
-  --capsule srf-id-judge \
+  --capsule judge \
   --site example-site \
   --out /tmp/ax_snapshot.json
 ```
 
 ### C. Record and Compile a Demo (`tools/mv_demo.py`)
+
+Record the person's demonstration, generate authoring instructions and check the resulting workflow.
+
+Answers: how do I author a workflow from a demonstration.
 
 Source the running app attachment as in the goal instructions below. Set
 `MV_MW_HOME` to the admitted MemoryWeb home and `MV_MEMORYWEB_REPO` to the
@@ -509,6 +555,10 @@ Success returns rc `0`; `DEMO_REFUSED` returns rc `6` [CITED:
 before trying again; never fabricate a demonstration.
 
 ### D. Run a Compiled MemoryWeb Workflow (`metaviewer_agents.mw_run`)
+
+Replay a reviewed stored workflow only after its home and live anchors pass.
+
+Answers: how do I replay a stored workflow.
 
 Here “compiled workflow” means a stored site/workflow, not the compiled Wender
 runtime. Source the running app attachment and select an admitted workflow from
@@ -537,26 +587,19 @@ systemd-run --user --scope -q -p MemoryHigh=6G -p MemoryMax=8G -p MemorySwapMax=
 
 ### E. Browser Goal Runs (No Stored Workflow)
 
-The Terminal buttons keep their distinct purposes: **Create automation** prepares instructions to create a
-reviewed workflow from a demonstration, **Run automation** prepares a stored-workflow prompt, and **Direct task** prepares
-a goal prompt without storing a workflow. With a matching pair, choose an installed
-agent profile; the host launches it and pastes only after recognizing its input
-prompt, without sending Enter. Unpaired prompts copy to the clipboard.
-For an account-free judge, choose `--planner rules` (the default). It invokes the
-locked Wender rules CLI without Muse. `--planner muse` needs Muse Code installed
-and authenticated with a Muse account; it sends marks to that provider. There is
-no automatic fallback from rules to Muse.
+Use a unique observed browser control name for a bounded goal.
 
-Read `tools/mw_run_browser_goal.md`. Copy the selected capsule's **Copy ID for AI**
-identity and the attachment path from the `METAVIEWER_ATTACH <path>` line printed
-in the terminal running `metaviewer-judge.sh run`. Source that absolute path in a subshell with
-`set -a; . "<copied-current.env-path>"; set +a`; it changes `XDG_RUNTIME_DIR`. It supplies
-`MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`, `MV_SRF_STATE_DIR`, `MV_SRF_BIN_DIR`,
-`SRF_IDENTITY_STORE_ROOT`, and configured dependency roots. Missing pinned roots
-must come from the operator. Release human control before running.
+Answers: how do I run a browser goal without a stored workflow.
 
-From the checkout, replace the placeholders and choose one unique exact visible
-AX control name, one goal per run:
+Use [Attachment and identity](AGENT_ENTRY.md#attachment-and-identity) and the
+[read-only browser observation](AGENT_ENTRY.md#observe-the-selected-capsule)
+first. Keep the person present and release manual control before input.
+`--planner rules` uses the locked rules planner without a model account;
+`--planner muse` explicitly selects authenticated Muse Code
+[CITED: agents/metaviewer_agents/mw_run.py].
+
+From the attached operator root, replace the placeholders and choose a unique
+observed control name:
 
 ```sh
 export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-goal.XXXXXX)"
@@ -569,7 +612,7 @@ The example bounds actions at one [TARGET]. For a text field add explicit
 `--text 'Synthetic value' --key Enter --steps 3` [TARGET], replacing the existing
 steps flag. Omit Enter and use `--steps 2` [TARGET] for focus and typing only.
 Exact native text readback gates Enter. Never combine goal mode with stored
-`--site`, `--workflow` or `--slot` flags. Vision cross-checking is not implemented.
+`--site`, `--workflow` or `--slot` flags. This example does not establish visual task completion; inspect the fresh result.
 
 The pinned Linux x64 compiled runtime supports browser goals with rules or
 Muse through the goal runner. Stored browser workflows remain restricted and
@@ -580,13 +623,15 @@ Judge tour architecture table for the supplied live results.
 
 ### F. Programs and Host program (`--surface-kind program`)
 
-Read `tools/mw_run_program.md`. Start an Agent program capsule in the UI,
-including **Host program** for host-xpra, and copy its returned identity. Release
-human control and verify `control:'agent'`. Source the same app attachment and
-supply locked dependencies, including `VQA_VE_ROOT` for a checkout setup. Host
-program uses `MV_SRF_STATE_DIR`; legacy container programs also need their native
-identity configuration. This runner does not launch a program or attach an
-arbitrary Desktop window. Choose a unique currently observed element name:
+Use the program runner on a live Agent program with its copied identity.
+
+Answers: how do I run a supported program action.
+
+Start an Agent **Program** or **Host program**, copy its identity and verify
+agent control. Follow [the read-only program observation](AGENT_ENTRY.md#observe-a-program-without-input)
+to choose a current element name. Missing dependencies or custody stop the run;
+this command does not launch a program or attach a Desktop window
+[CITED: tools/mw_run_program.py].
 
 ```sh
 export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-program.XXXXXX)"
@@ -597,7 +642,9 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
 
 This requests one click. Programs also accept operator-supplied `--text` with
 `--steps 1`, using `--goal focused` only for an already focused field, or a unique
-observed field name for focus and typing. Program `--key` is unsupported. Text
+observed field name for focus and typing. Agent Host programs also accept `--goal focused-key --key Right --steps 1`
+with `--planner rules` and no text. Allowed keys are Enter and the arrows;
+container programs do not support this mode [CITED: tools/mw_run_program.py]. Text
 readback is `exact`, `mismatch`, or `not_readable`; mismatch refuses and
 not_readable remains explicitly uncertified. Both
 goal lanes require owned private RAM evidence under `/dev/shm`, without symlink
@@ -623,7 +670,9 @@ A traceback without JSON also requires stopping and operator inspection.
 
 ## 13. What Is Not Supported (Honest Limitations)
 
-Answers: what does MetaViewer not support; what are the known limits.
+Use only the admitted Linux capsule kinds and bounded command paths.
+
+Answers: what are the supported operating boundaries.
 
 When explaining MetaViewer to a user or judge, state these boundaries clearly:
 
@@ -649,38 +698,28 @@ When explaining MetaViewer to a user or judge, state these boundaries clearly:
 4. **Rootless Docker and Docker Desktop Are Refused for Tier 2**:
    OpenSuperficies capsule isolation requires the local rootful Linux Docker daemon
    (`JUDGE_DOCKER`, `JUDGE_DOCKER_DESKTOP`, `JUDGE_DOCKER_HOST`).
-5. **Session and Mode Limits Seen Live** [MEASURED, operator session 4 Nov 2026]:
-   a plain start offers browsers, Host program and Program; `--arm64` offers VM and
-   MicroVM only, and there is no x64 VM, MicroVM or rewind. Switching a Host program
-   between human and agent restarts it. A full journal ends the session; use a fresh
-   session per long run ([JOURNAL_END.md](JOURNAL_END.md)).
-6. **Open Bugs** [MEASURED, operator session 4 Nov 2026]: after an `mw_run` the
-   package gains `__pycache__` and a later `--arm64` start holds with "exhaustive
-   manifest inventory"; remove the bytecode directories. A paired terminal exited
-   after a very long typed line; cause unknown. More in
-   [AI_AT_THE_CONTROLS.md#8-limits-and-negative-results](AI_AT_THE_CONTROLS.md#8-limits-and-negative-results).
+5. **Guest and Session Limits**:
+   ARM64 guest cards require admitted host support and configured assets
+   [CITED: ui/src/catalog/catalogModel.js]. Their command binding is distinct
+   from graphical program goals. A full journal ends the session; preserve it
+   and follow [JOURNAL_END.md](JOURNAL_END.md).
+6. **Evidence Limits**:
+   Live results remain maintainer-reported. The portable examples have offline
+   checks; this guide does not certify live display input or provider access.
+   See [the evidence boundary](AI_AT_THE_CONTROLS.md#8-limits-and-negative-results).
 
 ### Legacy kit proxy setup
 
-The sudo-free fallback calls the kit's `srf-identity-surface net up` with
-`--proxy-bin` pointing to the kit's `srf-egress-proxy`. The launcher selects the
-proxy entrypoint, internal network and bridge attachment and verifies
-`EGRESS_PROXY_READY`; it refuses an existing incompatible proxy without replacing it.
-Private metadata lives under `$MV_JUDGE_HOME/network`: separate `policy/`,
-`registry/` and `audit/` directories (mode `0700`), with policy and registry files
-at `0600`. The x64 source runs the proxy with the CLI caller's UID/GID, so these
-files stay owned by the judge user. Profile directories still use Docker to
-provision the browser UID separately. Run passes this same registry to capsules.
+Use the network mode and compiled kit supported by your installation; do not
+change a running capsule's network witness to bypass a refusal.
 
-The initial `policy/policy.json` uses `browserid.proxy-policy/v1` with empty
-`approved`, `denied` and `connect_ports` collections. It grants no destinations.
-Existing policy files are retained. This upstream schema supports exact capsule
-IDs and normalized hosts only: public browsing requires explicit `approved`
-entries and HTTPS `connect_ports` entries for each capsule and host. Leave
-`private_targets` absent to retain LAN/host blocking. Arbitrary public browsing
-is not available through this policy schema; no wildcard policy is implied.
+Answers: where do I find compatible network setup.
 
-The x64 kit supplies browser image `0.1.1`. If a binary advertises Open and the
-firewall witness is present, preflight requires `0.2.0` and refuses that image set.
-Retagging `0.1.1` would not establish Open support; the upstream source disables
-Open for its default image. Use `--no-firewall` with that kit.
+Follow [INSTALL.md](INSTALL.md) for setup and [DEBUG.md](DEBUG.md) for the reported
+network refusal. Stored workflows require a matching start witness and refuse
+`MW_NETWORK` if that evidence is absent or changes
+[CITED: tools/mw_run_backend.py]. Restart through the supported setup after an
+operator-approved network change.
+
+This guide covers the supplied repository's public UI and command interfaces;
+live behavior is bounded by the linked architecture results and installed kit.

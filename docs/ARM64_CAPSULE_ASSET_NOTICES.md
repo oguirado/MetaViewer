@@ -1,58 +1,75 @@
 # ARM64 capsule asset notices
 
-Draft for local-asset setup; not a redistribution clearance or source offer.
-MetaViewer and its original guest-command broker remain AGPL-3.0-only.
-External asset licenses do not change MetaViewer's license or grant rights to private components.
-The current setup references operator-local artifacts with `redistribute=false`; these binaries/images are not added to the public repository or bundled by this draft.
+Local setup admits operator-provided artifacts; it does not supply new rights to
+distribute them. MetaViewer's source licence and the separate private-component
+evaluation permission are stated in [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
 
 ## Recorded assets
 
-SHA256 values below identify measured local bytes unless explicitly marked as a retained image identifier.
+The setup descriptor records exact local artifact identities and operator-supplied
+licence, source and evidence fields. Those fields are assertions to review, not
+proof that a binary is redistributable.
 
-| Asset | Identity | License evidence and status |
-|---|---|---|
-| Firecracker ARM64 | v1.17.0; `fe726e0b43c04363ac07e358be4dee982c3947c65ed3ae10c770fef5e1cd756c` [MEASURED] | Apache-2.0; upstream release LICENSE, NOTICE and THIRD-PARTY must remain together when conveying this asset. THIRD-PARTY contains Chromium BSD terms; NOTICE also identifies libseccomp LGPLv2.1 build-time/cBPF content. |
-| Linux guest kernel | Linux 6.18.52 Image; `43597af54cfbca19bcd7d7d91666a0a55e5a33632eada679827b9ac43393edcf` [MEASURED] | Kernel COPYING: GPL-2.0-only with Linux-syscall-note; other per-file licenses also apply. Built from the pinned upstream archive and recorded configuration. |
-| BusyBox executable | Ubuntu busybox-static package 1:1.36.1-6ubuntu3.1 arm64; `52151e7f322f926b64049cdaa1410dc3ea6485525e0624b05813791c219ae933` [MEASURED] | Installed package copyright declares GNU GPL version 2. The executable is named busybox; package naming is not an additional executable path guarantee. |
-| Original guest-command broker | `9c6e47d2fd7dd7b609edda29139d02f9637155ccc67163939f4eb9daf3de98e0` [MEASURED] | AGPL-3.0-only, declared in its public Cargo.toml; Cargo.lock and third-party runtime notices must accompany any future distribution assessment. |
-| Rewind guest-command broker | `0b3a451d79a01d74497038d48b9d2d5c3e47c645bb873d2c5cd2b0f7d66cd5c6` [MEASURED] | AGPL-3.0-only, declared by the public guest-command-broker Cargo.toml. Separate `rewind-command-broker` binary with the `rewind-profile` feature; operator-local reference only, not a redistribution clearance. |
-| Operator VM image | Docker image ID `sha256:91a8a4b921aa078450cdeb9c97fecc7cfc7eac457dd7648def6343f495be3730` [CITED: retained VM receipt] | License, origin, complete component/source inventory and redistribution permission are UNKNOWN. Operator-local use only; no download/import/redistribution permission is implied. |
-| Private native/VE/Wender/OpenSuperficies tools | Existing operator-provided compiled tools, under their separate grants | Not relicensed by MetaViewer; existing judge/evaluation authorization is not a public source or redistribution grant. No private source is incorporated into these notices. |
+Answers: which assets must have provenance before local setup?
 
-Firecracker provenance: official [v1.17.0 release](https://github.com/firecracker-microvm/firecracker/releases/tag/v1.17.0), archive SHA256 `e351ebe4f7a16b5873bbd51005d2e6767103cff4d5ebc829df2d3f95a93e2256` [MEASURED against retained receipt].
-Kernel provenance: [Linux 6.18.52 source archive](https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.52.tar.xz), SHA256 `2b69564f7d4fea0c859b1959ba33709ee6e9139bd100e30a853b57159a8221b8` [MEASURED]. The retained source acquisition verified a published checksum, not a source signature; do not describe it as signature-verified.
+| Asset | Public admission requirement | What remains outside that check |
+| --- | --- | --- |
+| Engine, kernel, broker and BusyBox | Protected artifact paths and matching digests | Complete upstream provenance and rights for the exact binaries |
+| VM image | Exact locally available image identity | Image contents, component notices and distribution rights |
+| Native tools | Pinned protected executables | Private implementation and its separate licence |
+| Browser/Program image recipes | Exact local image identity and declared source/licence/evidence | Permission to redistribute the image and all included components |
+
+[CITED: `tools/arm64_capsules.py:139`, `tools/arm64_capsules.py:180`,
+`tools/arm64_capsules.py:196`]. Configuration requires
+`scope: "operator-provided-local-only"`, `operator_local_use_confirmed: true`
+and `redistribute: false`. It checks that required evidence strings are present;
+it does not authenticate their legal meaning [CITED:
+`tools/arm64_capsules.py:196`].
+
+Hashes previously reported for local builds are not a public artifact inventory.
+Reproducible binaries and their complete source/notice bundles are
+**ABSENT — do not invent** unless supplied separately with the evaluated package.
 
 ## Recorded Rewind broker build
 
-The local Rewind broker above was built from the public `daemon-adapter/guest-command-broker` source. Its seventeen recorded source, manifest, lock and test files match the source audited at commit `8b44747c83f0ad760aed2550277aa88cd417fb30` [MEASURED]. This is source-byte correspondence, not a reproducible-build or complete binary-license clearance.
+The public manifest defines a separate Rewind broker binary behind the
+`rewind-profile` feature. The manifest establishes source configuration, not a
+verified correspondence with an unpublished local executable.
 
-The recorded Cargo.toml SHA256 is `e877da354619e2d7fdda688cf933f42910d2c29bbb7d5030639f15068e53632e`; Cargo.lock is `1393b1c67a8410d158ac0c379c42df9c1587a33775598a475550dfa9e4917ce5` [MEASURED]. The separate source entry is `src/bin/rewind-command-broker.rs`, SHA256 `9d91dbd8db67cd3e5c66b1922caa88c87e6142dcfcc895dbc31df7a604106f0b` [MEASURED].
+Answers: what can be checked about the Rewind broker from this source tree?
 
-The retained build used the `aarch64-unknown-linux-gnu` release target, `--offline --features rewind-profile --bin rewind-command-broker`, and `RUSTFLAGS='-C target-feature=+crt-static -C relocation-model=static'` [CITED: retained local build receipt]. Its ELF has no interpreter or dynamic program segment [MEASURED]. The dependency and static-runtime assessment below still applies; no new runtime or redistribution clearance follows. No Rewind broker, kernel or image binary is committed or bundled by these notices.
+`daemon-adapter/guest-command-broker/Cargo.toml` declares the package licence as
+`AGPL-3.0-only` and the `rewind-command-broker` entry point
+[CITED: `daemon-adapter/guest-command-broker/Cargo.toml`]. Review that manifest,
+its lockfile and `src/bin/rewind-command-broker.rs` together. A build receipt,
+artifact digest and complete source correspondence are separate evidence.
 
 ## Broker dependency notices
 
-The actual Cargo.lock SHA256 is `1393b1c67a8410d158ac0c379c42df9c1587a33775598a475550dfa9e4917ce5` [MEASURED].
-Its 21 registry packages [MEASURED] have locally retained source manifests/license files and registry archives whose hashes match the lock checksums. The lock graph includes build/proc-macro packages; this is not a claim that every package is linked into the final executable.
+The lockfile identifies dependency versions; it is not a complete licence
+inventory for every byte of a built executable.
 
-| Declared license expression | Locked packages |
-|---|---|
-| MIT OR Apache-2.0 | block-buffer 0.10.4; cfg-if 1.0.5; cpufeatures 0.2.17; crypto-common 0.1.7; digest 0.10.7; itoa 1.0.18; libc 0.2.191; proc-macro2 1.0.107; quote 1.0.47; serde/serde_core/serde_derive 1.0.229; serde_json 1.0.154; sha2 0.10.9; syn 3.0.9; typenum 1.20.1 [MEASURED manifests] |
-| MIT | generic-array 0.14.7; zmij 1.0.23 [MEASURED manifests] |
-| Unlicense OR MIT | memchr 2.8.3 [MEASURED manifest] |
-| (MIT OR Apache-2.0) AND Unicode-3.0 | unicode-ident 1.0.27 [MEASURED manifest]; retain the Unicode notice in addition to the chosen alternative license. |
-| MIT/Apache-2.0 | version_check 0.9.5 [MEASURED manifest spelling]; retain its upstream license texts rather than silently changing that declaration. |
+Answers: does the broker's package licence cover all linked content?
 
-Cargo metadata is not a complete binary license inventory. The broker was built for the GNU target with static CRT, and its symbol table contains __libc_start_main. A future redistributor must identify the exact C runtime, Rust standard-library/compiler runtime contributions and applicable exceptions/notices. The local glibc package identifies LGPL-2.1-or-later for most library code with further component terms; the full static-link compliance gate is not closed by this draft.
+No such conclusion follows from its package licence. The manifest and
+`Cargo.lock` are the public starting points [CITED:
+`daemon-adapter/guest-command-broker/Cargo.toml`,
+`daemon-adapter/guest-command-broker/Cargo.lock`]. Any assessment of a supplied
+binary must use its actual build, dependencies and accompanying notices.
+Previously retained private build records are not published evidence here.
 
 ## Before any future redistribution
 
-- Preserve applicable copyright notices and complete license texts; for Apache-2.0 retain applicable NOTICE material and mark modifications as required by its section 4.
-- For kernel/BusyBox object-code conveyance, satisfy GPLv2 section 3 using a valid corresponding-source route. Keep the exact source, patches, generated build configuration and build scripts needed for the conveyed artifact. A generic upstream homepage or this document is not a source offer.
-- For broker conveyance, satisfy AGPLv3 section 6; assess section 13 when offering a modified program for remote network interaction. Preserve the separate dependency notices. This draft supplies no invented source URL or written offer.
-- For statically linked LGPL-covered runtime content, resolve LGPLv2.1 section 6 requirements, including the applicable modification/relinking route and notices; do not treat a Cargo license list as sufficient.
-- Obtain the operator VM image's actual provenance, component licenses, source obligations and distribution authorization before enabling redistribution. Unknown does not mean permissive.
-- Resolve exact build/source correspondence: the retained broker source pins match code/lock files, but its old Cargo.toml hash differs from the current public manifest. Preserve that discrepancy; rebuild or document it before claiming a complete corresponding-source bundle.
-- Private components remain outside public source packaging. Any proposed distribution or combination requires its own authorized license review; existing local evaluation grants are not expanded.
+Local configuration and judge evaluation must not be treated as a general
+redistribution grant.
 
-No binary blob, private source, private host path, credential, or new distribution permission is supplied by this notice.
+Answers: which permission does this repository actually provide?
+
+Use [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md) for MetaViewer's licence and
+the limited permission concerning supplied private components. Obtain and
+review the actual licence and source materials for separately supplied guest
+artifacts before making a distribution claim. Unknown provenance or rights
+remain **ABSENT — do not invent**; setting a descriptor flag cannot resolve them.
+
+This notice is limited to the public source declarations and admission checks
+cited above. It supplies no binaries, private source or additional permission.

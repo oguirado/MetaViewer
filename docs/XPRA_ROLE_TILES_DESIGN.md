@@ -1,52 +1,43 @@
 # XPRA role tiles
 
-Roles are immutable per admitted identity profile. `MV_SRF_PROFILES` accepts an additive `role` property (`agent` by default, or `human`). Add capsule chooses the role and an available configured identity; it cannot reinterpret an existing capsule. Human profiles require 1280×900 [TARGET]. Provisioned Chromium profile directories must be private and owned by the native capsule UID; identity provisioning remains an operator prerequisite. The adapter creates them with human ownership, before publishing the surface. The core records human-owned creation as an immutable human role and refuses proposals as Policy at the existing ownership gate. Emergency Control/Release on agent-created surfaces keeps its existing fences.
+Xpra supplies a live client view for supported capsule roles. It does not make
+Host programs isolated. Use [the user guide](USER_GUIDE.md) for operation and
+[the UI architecture](UI_ARCHITECTURE.md) for the wider design.
 
-Electron resolves the capsule and socket through private adapter binding records under `MV_SRF_STATE_DIR/human-bindings`; renderer IPC carries surface ids and bounds only. A token stays in Electron main and is injected into child requests by session hooks. The bridge listens on loopback only, strips credentials before the Unix-socket upstream, and destroys HTTP and upgraded WebSocket connections on close. No tokenless native view listener is used. Debian clients missing the jquery symlink use the public host asset `/usr/share/javascript/jquery/jquery.js`, with an optional host-only `MV_XPRA_JQUERY` override.
+## What does client readiness establish?
 
-Human tiles mount a sandboxed native xpra child view; the canvas input path is absent. Agent tiles retain DISPLAY and verified frames. Their optional watch view has both a server-side readonly acknowledgement and main-process input suppression. Agent emergency control first closes a watch overlay; its existing canvas input path remains intact.
+Readiness checks the connected client, requested read/write mode, matching
+viewport dimensions, a window and a canvas with nonzero dimensions. It does not establish
+that an application task succeeded.
 
-Human input is appended immediately to a private JSONL file in the existing `MV_RECORDING_DESTINATION` directory. Missing destination refuses the human view. Printable keys are redacted before IPC; main redacts again. Trace failure closes the child and bridge. Geometry uses the fixed capsule coordinate space, with tile coordinates recorded separately. Tile removal, hiding, capsule loss and window teardown revoke the overlay.
+Answers: Xpra readiness; connecting tile; client viewport; read-only view
 
-## Verification gates
+The checks and timeout are implemented in
+[xpraClient.js](../ui/electron/xpraClient.js), `xpraReadyExpression` and
+`waitForXpraClient`. Invalid keyboard layout input, lost role authority and
+readiness timeout are refusals. No external Xpra implementation is documented
+or certified here.
 
-- Lock isolation: isolated HOME and XDG_CONFIG_HOME under the authorized temporary root; reject SINGLE_INSTANCE or BOOT_REFUSED, never retry against the operator profile.
-- Ownership: human creation yields human control and Policy for agent proposals; contrast: bypass role protection must fail tests.
-- View lifecycle: human mounts native writable view and agent watch acknowledges readonly before mounting; contrast: forwarded key/click must fail.
-- Trace: event lines exist before close and sensitive keys are absent; contrast: retain a printable key or delay flushing until close must fail.
-- Cleanup: closing tile destroys bridge and upgraded sockets; contrast: leave a WebSocket open must fail.
-- Existing emergency tests and frozen contract checks must remain green; no tests are weakened.
+## What happens when the view disconnects?
 
-The execution header permits one own capsule, so live work must use at most one own capsule and cannot perform the later requested simultaneous pair. The requested design filename was AUSENTE; this file is the selected design artifact. Scope is limited to the supplied worktrees and authorized isolated runtime.
+The host marks the view as reconnecting and retries while the same role remains
+authorized. A refused reconnect does not count as a recovered view.
 
-## R2: native client viewport and startup admission
+Answers: reconnecting tile; lost client; Xpra recovery
 
-The isolated reproduction used the pinned product attachment and its original query. It connected, but its requested page zoom was reset to `1` [MEASURED] during navigation. In a `601×422` tile [TARGET], the resulting fitted view and client desktop were `600×422` [MEASURED], while its remote window and canvas were `1280×900` [MEASURED]. Adding the full connection query alone retained that mismatch [MEASURED]. The exact operator-reported blank was not reproduced: the dedicated demo delivered changing pixels. Attribution of that exact blank remains ABSENT — do not invent.
+[xpraRecovery.js](../ui/electron/xpraRecovery.js), `createXpraRecovery`, owns
+that retry loop. [roleHost.js](../ui/electron/roleHost.js) owns role lifecycle;
+[xpraHumanTile.js](../ui/electron/xpraHumanTile.js) binds the child view.
+Focus and visibility changes alone are not recovery signals.
 
-The bridge now serves an authenticated, host-owned wrapper at `/metaviewer-tile.html`. Its same-origin iframe has a fixed `1280×900` layout viewport [TARGET]. A CSS transform fits and centers that frame within the tile, while Electron page zoom remains `1` [TARGET]. Browser hit testing maps native input through the transform. The frame receives the full connect/worker/RGB/unlimited-bandwidth query with clipboard and notifications disabled; watch adds `readonly=1` [TARGET]. Neither wrapper HTML nor its URL contains the bridge token. The existing request hook supplies that capability only from main.
+## How can this behavior be verified?
 
-Admission waits for a connected, healthy client, the acknowledged role mode, matching iframe and desktop dimensions, a native remote window, and a native canvas. The deadline is `30 s` [TARGET] and also bounds an evaluation that never answers. Until admission, trace recording and host focus remain inactive. Failure removes the child view and propagates `XPRA_CLIENT_READY_TIMEOUT` through the existing role IPC, exposing a visible status and explicit retry. The renderer latches that failure instead of remounting repeatedly. Negative contrasts are loaded HTML, a wrong mode, missing remote window/canvas, non-native geometry, and an unresponsive renderer; none admits the tile.
+Read the relevant source and run the Xpra-focused UI tests before drawing a
+conclusion about a changed build. A code-level pass does not prove a working
+live desktop session.
 
-The main-frame trace preload observes the same-origin frame's DOM without exposing an API or enabling Node in subframes. Event dimensions and coordinates come from that native frame. A physical click at `(60,148)` [MEASURED] produced native trace coordinates `(127,315)` [MEASURED], identical to the recorded capsule coordinates. Printable keys remained redacted. Trace viewport dimensions now describe the native iframe rather than the presentation rectangle.
+Answers: Xpra tests; live verification; design-note status
 
-The corrected product attachment showed matching iframe, client desktop, remote window and canvas dimensions inside the small tile [MEASURED]. A remote marquee and binary counter yielded `878` decoded counter changes over `30.0212 s`, or `29.246` changed frames per second [MEASURED]. This measures remote canvas changes, not host animation callbacks. Native typing changed the exact-text marker from red to green; settled hover changed cyan/orange/cyan [MEASURED]. The watch variant acknowledged readonly mode and retained the green marker after attempted typing [MEASURED]. Its native mode switch requires reopening the bridge after the Unix socket is recreated, matching the existing product session order. An earlier harness attempt reused the old socket pin and correctly timed out; that attempt is retained in command receipts.
-
-Focused role, query, readiness, deadline, visible failure, input suppression and teardown tests pass [MEASURED]. Query omission and readiness bypass mutants are rejected [MEASURED]. The full UI baseline already fails on the pinned source, including fixture boot/static-import assumptions; these tests were neither removed nor weakened. The broad changed run also crossed the RSS budget slightly, while an isolated rerun passed both its normal and retained-leak controls [MEASURED]. The full core retry passes its library suite but stops at the unchanged `rv11v_f1_frame_bounds` Policy/OutOfBounds expectation conflict. Frozen contracts, adapter tests, focused core role tests, type checking and the UI build pass [MEASURED]. No OpenSuperficies source change is required for this correction.
-
-Teardown obtained the readonly acknowledgement, closed the bridge, removed the sole dedicated capsule and its transient helpers, and found no recorded experiment PID remaining [MEASURED]. The existing backing display was preserved. Changes remain uncommitted. Packaging this worktree is the remaining operator action; a running packaged application does not acquire these source edits automatically.
-
-This supplement is limited to the supplied worktrees, pinned reference source, command receipts and explicitly isolated own-capsule experiment.
-
-## R3: recovery and child-view containment
-
-The installed HTML5 client cannot own recovery reliably: `XpraClient.prototype.do_reconnect` in `/usr/share/xpra/www/js/Client.js` reads `win.minimized` without establishing `win`. Its retry policy is also finite. The role query therefore disables that reconnect path. Main monitors the already-admitted client and reloads its authenticated wrapper after connection loss. The retry delays are `0.5`, `1`, `2`, `4`, then `5` seconds [TARGET], measured after a failed attempt; each attempt must pass the existing readiness deadline before trace recording resumes. A reconnect never requests host focus.
-
-The session reuses a healthy bridge. A closed listener or changed Unix-socket identity requires closing the old bridge and opening a replacement through the original adapter-binding validation. The replacement creates a fresh capability in main. Request admission and header injection follow the current origin atomically; old origins are refused. Closing during replacement revokes the replacement before any view can use it. Failure does not transfer ownership or acknowledge readiness.
-
-The wrapper paints a visible `Reconnecting…` status while recovery is pending. The additive role status reply carries `view`, governed by `role_view_state.schema.json`. Child `render-process-gone` and `unresponsive` events remove only that native view, stop recovery and recording, close its session bridge, and expose `XPRA_VIEW_CRASHED` or `XPRA_VIEW_UNRESPONSIVE` with an explicit `Reopen` action. Epoch checks reject callbacks from a previous view after reopening. Trace failure uses the same contained path with `XPRA_TRACE_FAILED`.
-
-Writable child contents ignore Electron menu shortcuts in their own `before-input-event` scope without preventing the DOM event. Watch contents retain key and mouse suppression. Background throttling is disabled for the live child. Blur does not revoke its lease. Bounds changes resize the existing view; duplicate mounts reuse it. Temporary clipping and hidden layout retain the session via the additive `visibility` request. Actual tile removal, explicit watch closure, capsule loss and ownership changes still close it.
-
-Verification gates require successful readiness after a transport cut, visible recovery state before admission, remote paint after bridge replacement, typed child errors with a working reopen action, native remote key receipt, and stable contents across focus changes. Negative controls remove retry scheduling, bypass reconnect readiness, retain a dead bridge, ignore each child failure event, enable menu accelerators, swallow writable keys, or revoke a temporarily clipped tile. The original session's initiating transport-loss event is not available from the authorized corpus; the design does not attribute it to blur alone.
-
-This supplement is limited to the supplied worktrees, installed client source, and explicitly isolated own-capsule verification.
+[TESTING.md](TESTING.md) explains the UI test runner.
+[DEBUG.md](DEBUG.md) explains symptom collection. This page replaces the former
+implementation-wave checklist; it is not a completed live-test receipt.

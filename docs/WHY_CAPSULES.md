@@ -1,411 +1,333 @@
 # Why capsules
 
-MetaViewer runs each application a person or an AI agent works with as a
-**capsule**: one live, addressable surface with an owner, frame stream and
-journal entries, shown as one tile on a wall. Its execution boundary depends
-on the kind; Host program and Desktop window are not isolated. This
-document answers why the product is built that way, what each capsule kind
-isolates and what it does not, and what an agent builder gains or loses
-compared with the usual alternatives.
+A capsule gives a running application an addressable surface, explicit control
+ownership and a record of admitted actions. It lets a person and an agent work
+against named targets on the same wall. The execution boundary depends on the
+kind: **Host program and Desktop window are not isolated**.
 
-A finding tells you where to look. Only the code proves it. Every coordinate
-below was read on the `docs/v026-base` tree; numbers carry [MEASURED],
-[CITED: path] or [TARGET]; anything not established reads
-`ABSENT — do not invent`.
+The source citations below describe implemented checks, not live qualification.
+Private executor internals cannot be audited from this checkout. See
+[NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md) for that boundary.
 
 <a id="reading-map"></a>
 ## 0. Reading map
 
-Answers: where do I start; which section answers my question about capsules.
+Start with the design reason, then choose an execution boundary and read its
+limits before running an agent.
 
-| You want to know | Go to |
+Answers: where should I start reading about capsules?
+
+| Question | Section |
 | --- | --- |
-| The short answer: why capsules at all | [1](#short-answer) |
-| Words used here (capsule, core, surface, frame, journal) | [2](#terms) |
-| What one capsule kind isolates, who can drive it, what it costs | [3](#kinds) and its subsection |
-| Which kind to choose for a task | [4](#choose-a-kind) |
-| Why not a plain desktop, many tabs, containers, a VM per task, remote desktop | [5](#alternatives) |
-| Why rendering, execution and authority are separate | [6](#separation) |
-| What "fresh frame" means and why stale actions are refused | [7](#frame-freshness) |
-| What the journal records and how replay checks it | [8](#journal-and-replay) |
-| What Rewind restores and what it cannot | [9](#rewind) |
-| Why a refusal is a feature, with a worked example | [10](#refusal-is-a-feature) |
-| What this document does not claim | [11](#limits) |
+| Why make applications into capsules? | [Short answer](#short-answer) |
+| What do the terms mean? | [Terms](#terms) |
+| Which kind fits my task? | [Kinds](#kinds), [selection](#choose-a-kind) |
+| What does this add to other approaches? | [Alternatives](#alternatives) |
+| Who decides whether input is allowed? | [Authority](#separation), [freshness](#frame-freshness) |
+| What can I check afterwards? | [Journal](#journal-and-replay), [refusals](#refusal-is-a-feature) |
+| What can be restored or remains unproved? | [Rewind](#rewind), [limits](#limits) |
 
-Action rule: read the section, then open the cited code before repeating a
-claim. Process and wire detail lives in [ARCHITECTURE.md](ARCHITECTURE.md);
-error codes and symptoms live in the debug documents of the docs index
-([docs/README.md](README.md)).
+For operation, use [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md). For process and
+wire details, use [ARCHITECTURE.md](ARCHITECTURE.md).
 
 <a id="short-answer"></a>
 ## 1. Why capsules exist: the short answer
 
-Answers: why does MetaViewer generate capsules; what is the advantage of
-capsules; why not just let the AI use my desktop.
+Capsules make the target, control owner and evidence for an action explicit.
+They are useful for computer use because a click needs more context than a
+coordinate: which application, who controls it, and which observed state the
+agent used to choose that click.
 
-An AI agent that controls a computer needs three things a normal desktop does
-not give it: a **target it cannot confuse with another**, **proof that it is
-acting on what it last saw**, and **a record a human can check afterwards**.
-A capsule supplies all three per application:
+Answers: why does MetaViewer use capsules instead of giving an agent the desktop?
 
-| Property | How a capsule supplies it | Coordinate |
+| Need | Implemented check | Cost or limit |
 | --- | --- | --- |
-| One target, one owner | Each surface has one owner (human or one registered agent); agent proposals for a surface the agent does not own are refused `SURFACE_NOT_AGENT_CONTROLLED` | `core/src/admission/mod.rs:1313-1315` |
-| Act only on what was seen | A proposal names the frame digest and generation it was based on; any mismatch is refused `STALE_FRAME` | `core/src/admission/mod.rs:1316-1321` |
-| Human always wins | Taking control cancels in-flight agent proposals for that surface | `core/src/serve/mod.rs:1791-1830`, [ARCHITECTURE.md#fold-unfold-pin-and-take-control](ARCHITECTURE.md#fold-unfold-pin-and-take-control) |
-| Contained damage | Identity browsers and Programs run in containers started by the private OpenSuperficies runtime; VM and MicroVM run in a guest | `daemon-adapter/internal/capsule/manager.go:845-854` |
-| Checkable afterwards | Every admission, refusal and outcome is appended to a hash-chained journal that `mv-replay` re-verifies offline | `core/src/journal/mod.rs:3864-3867`, `core/src/bin/mv-replay.rs:1-45` |
-| Many at once, side by side | Up to 16 live surfaces [CITED: `ui/electron/profilePicker.js:46`] on one wall, each with its own tile, owner and frame stream | `ui/electron/profilePicker.js:18-21` |
+| Address the intended application | Proposals name a surface; the core checks its owner and live state | A valid target still needs a configured native executor |
+| Act on current evidence | Admission and dispatch compare the frame digest and generation and reject a pending refresh | The application can still change after capture |
+| Share control with a person | Take control cancels undispatched work; dispatched or unknown work must drain | Takeover cannot undo an input already delivered |
+| Audit the decision | The core records admitted state transitions and their witnesses for replay | A consistent journal does not prove that a semantic task succeeded |
 
-Generating capsules this way, rather than handing an agent the whole desktop,
-means a wrong click lands in one application with one owner, at one known
-frame, and leaves a journal entry. That is the gain. The cost is setup:
-container images, RAM reservations and, for VMs, KVM.
+Evidence: [CITED: `core/src/admission/mod.rs:1262`, `core/src/admission/mod.rs:1307`, `core/src/admission/mod.rs:1514`, `core/src/serve/mod.rs:1791`].
+
+This gives an agent builder a common admission boundary across applications.
+It also introduces setup, capture, verification and storage work. Capsules do
+not turn every executor into a sandbox or every application into a reliable API.
 
 <a id="terms"></a>
 ## 2. Terms used once
 
-Answers: what is a capsule; what is a surface; what is the core; what is a
-frame generation.
+A capsule is the running workload; its surface is the identity the core uses to
+address it; its tile is the wall's presentation of it.
 
-| Term | Meaning here |
+Answers: what are capsule, surface, tile, frame and journal?
+
+| Term | Meaning |
 | --- | --- |
-| Capsule | One running application plus its native boundary (container, guest, or none for host routes) as managed by the daemon adapter |
-| Surface | The live, addressable identity of a capsule inside the core: id, kind, owner, current frame |
-| Tile | The picture of a surface on the wall. Presentation only; moving or folding a tile changes no authority |
-| Core | The Rust process that alone decides admission, ownership, budgets and journal order (`core/`) |
-| Daemon adapter | The Go process that starts and stops capsules and publishes frames (`daemon-adapter/`) |
-| Frame | An immutable RGB24 picture in `/dev/shm` with a SHA-256 digest and a generation number |
-| Generation | A per-surface counter that only increases; a newer picture always has a larger one |
-| Journal | The append-only, hash-chained session record written by the core |
-| Refusal | A typed "no" from the core, journalled with a reason code |
-| Human / Agent role | Who may send input to a surface: the person at the wall, or the one registered agent |
+| Capsule | A running workload managed through an executor; its boundary can be a container, guest or host process |
+| Surface | Core-visible target with an identity, lifecycle, owner and frame state |
+| Tile | UI presentation of a surface; layout does not grant input authority |
+| Frame | Captured pixels with geometry, digest and generation used for admission |
+| Core | Rust authority over admission and recorded state transitions |
+| Adapter | Go bridge to native lifecycle, input and capture operations |
+| Journal | Ordered session archive with state transitions and retained evidence |
+| Refusal | A typed rejection; its meaning depends on whether dispatch already occurred |
+
+Evidence: [CITED: `core/src/admission/mod.rs`, `core/src/serve/layout.rs`, `daemon-adapter/internal/capsule/manager.go`, `core/src/journal/mod.rs`].
 
 <a id="kinds"></a>
 ## 3. The capsule kinds
 
-Answers: what capsule kinds exist; what does each kind isolate; which kinds
-are isolated; which kinds are available on x64 and on ARM64.
+Choose a kind by where the workload runs, not by how its tile looks. The
+launcher exposes the kinds below; guest choices depend on host capability and
+protected setup [CITED: `ui/src/catalog/catalogModel.js:98`, `ui/electron/guestCommandProfile.js:47`].
 
-The launcher's closed kind list is `ui/src/catalog/catalogModel.js:98-135`.
-Plain start offers Identity browser, Program and Host program (plus Desktop
-window attachment); `--arm64` start offers VM and MicroVM only [MEASURED:
-operator live run, 4 Nov 2026]. VM and MicroVM are filtered out unless the
-host reports them available (`ui/src/catalog/catalogModel.js:150-151`) and
-require an ARM64 host (`ui/electron/guestCommandProfile.js:11`). There is no
-x64 VM or MicroVM in this release.
+Answers: what does each capsule kind give me, and what does it cost?
 
-| Kind | Isolated? | Boundary | x64 | ARM64 |
-| --- | --- | --- | --- | --- |
-| [Identity browser](#identity-browser) | Yes, container | OpenSuperficies browser container per identity | Plain start | Plain start |
-| [Program](#program) | Yes, container | OpenSuperficies program container; the executable must be in its image | Plain start | Plain start |
-| [Host program](#host-program) | **No** | Separate Xvfb display via Xpra on the operator's computer | Plain start | Plain start |
-| [Desktop window](#desktop-window) | **No** | Attaches an existing X11 window | X11 required | X11 required |
-| [ARM64 VM](#arm64-vm) | Yes, guest | Graphical guest via the private VM executor, needs KVM | Not available | `--arm64` only |
-| [MicroVM](#microvm) | Yes, guest | Firecracker guest, command console, needs KVM | Not available | `--arm64` only |
+| Kind | Execution boundary | Benefit | Cost or exposure |
+| --- | --- | --- | --- |
+| [Identity browser](#identity-browser) | Private browser-container executor | Separate persistent identity and browser workload | Runtime, image, profile and network setup; signed-in data remains sensitive |
+| [Program](#program) | Private program-container executor | Graphical program behind the same surface admission model | Program must be admitted and available in the image |
+| [Host program](#host-program) | Host process with Xpra presentation | Use an installed host binary | **Not isolated**; host files and permissions remain relevant |
+| [Desktop window](#desktop-window) | Existing host window | Attach an already running application | **Not isolated**; input affects the real window |
+| [ARM64 VM](#arm64-vm) | Graphical guest executor | Work inside a guest desktop | Supported host, KVM and protected guest assets |
+| [MicroVM](#microvm) | Guest command runtime | Bounded command sessions with guest lifecycle and Rewind support | Supported host, KVM and protected assets; no graphical observation stream |
 
-Memory and start time per kind: per-capsule container limits are cited below;
-measured start times per kind are `ABSENT — do not invent`. The adapter
-reserves 512 MiB per running capsule above a free-memory floor of
-min(20 GiB, MemTotal / 4) [CITED: `daemon-adapter/internal/daemon/ram_admission.go:33`, `docs/INSTALL.md`].
+The public adapter validates kind/profile/geometry mappings before a native
+start [CITED: `daemon-adapter/internal/capsule/manager.go:395`, `daemon-adapter/internal/capsule/manager.go:818`]. Its validation is not a proof
+of the private runtime's containment internals.
 
 <a id="identity-browser"></a>
 ### Identity browser
 
-Answers: what does a browser capsule isolate; can the agent see my personal
-browser; where do cookies live.
+An Identity browser uses a configured browser profile through the private
+container executor. Profile data and live surface ownership are separate:
+losing a frame does not establish that an identity is free.
 
-- **Isolates:** a browser running inside its own container from the private
-  OpenSuperficies runtime, with its own display, its own persistent identity
-  profile and a network mode chosen per profile through an egress record
-  (`daemon-adapter/internal/capsule/manager.go:942-969`). Your personal browser
-  profile is not used.
-- **Does not isolate:** what the site itself does with your account, and
-  anything you type into it. Stored-data slots save the stopped profile
-  including credentials; copying them needs human confirmation
-  (`daemon-adapter/internal/capsule/slots/store.go:278-279`).
-- **Person:** types and clicks through the tile after taking control.
-- **Agent:** proposes actions bound to a frame; the core admits or refuses
-  each one. A login wall or bot check stops the workflow for the person
-  ([REFERENCE.md#handoff](REFERENCE.md#handoff)).
-- **Core sees:** surface id, owner, frame digest and generation, each
-  proposal, verdict and receipt.
-- **Cost:** Docker limit 4 GiB memory plus 2 GiB `/dev/shm` per capsule
-  [CITED: `ui/electron/profilePicker.js:48-52`]; the UI refuses a create when
-  free memory is below that 6 GiB [CITED: `ui/electron/profilePicker.js:22-24`].
-  Start time `ABSENT — do not invent`.
-- **Source:** kind `browser` mapping `daemon-adapter/internal/capsule/manager.go:396-399`.
+Answers: why use an Identity browser, and where is its persistent state?
+
+Stopped profile slots can carry credentials and signed-in sessions. The slot
+store requires human confirmation and custody checks; it does not save a live
+browser process. Evidence: [CITED: `daemon-adapter/internal/capsule/slots/store.go:274`].
+
+The picker uses a container memory limit of 4 GiB and shared-memory limit of
+2 GiB, with a combined free-memory admission threshold of 6 GiB [CITED: `ui/electron/profilePicker.js:48`]. These are configured limits, not measured
+resident memory or startup time. A login wall or bot check requires the person
+at the controls; see [handoff](REFERENCE.md#handoff).
 
 <a id="program"></a>
 ### Program
 
-Answers: what does a Program capsule isolate; why does Program need the
-binary in the image; difference between Program and Host program.
+Program runs an admitted graphical program through the private program-container
+executor. Use it when the application belongs in that image rather than in the
+host environment.
 
-- **Isolates:** a graphical Linux program inside an OpenSuperficies program
-  container (`desktop_capsule` kind with native kind `program`,
-  `daemon-adapter/internal/capsule/manager.go:400-403`). Only admitted programs
-  run; the executable must exist in the capsule image.
-- **Does not isolate:** files you copy in or out yourself; anything the
-  program sends over the network it is allowed to reach.
-- **Person and agent:** the same role model as the browser. The Human/Agent
-  role is chosen at start; a role switch is served only for `browser` and
-  `desktop_capsule` surfaces (`core/src/serve/role_switch.rs:29-30`).
-- **Core sees:** the same as the browser.
-- **Cost:** the same container limits as the browser [CITED:
-  `ui/electron/profilePicker.js:48-52`]. Start time `ABSENT — do not invent`.
+Answers: how is Program different from Host program?
+
+The adapter requires the program mapping before starting it [CITED: `daemon-adapter/internal/capsule/manager.go:400`]. Container setup and compatible
+application assets are required. Importing files or allowing network access
+creates effects outside a purely local task; the tile does not erase them.
 
 <a id="host-program"></a>
 ### Host program
 
-Answers: is Host program isolated; why does switching a Host program between
-human and agent restart it; why use Host program at all.
+Host program runs a host binary through the Xpra route. It is **not isolated**.
 
-- **Isolates: nothing.** It runs an executable on the operator's own
-  computer under Xpra with a separate Xvfb display
-  (`daemon-adapter/internal/capsule/host_xpra.go:1-6`). The launcher and tile
-  say "Runs on your computer — not isolated"
-  (`ui/src/catalog/CatalogLauncher.vue:319`, `ui/src/surfaces/RoleSurface.vue:532`).
-  Browsers started this way get a fresh temporary profile in RAM, never your
-  personal profile; that is a privacy measure, not a sandbox.
-- **Why it exists:** any installed program can be shown on the wall and driven
-  with the same frame, ownership and journal rules, without building an image.
-- **Person and agent:** the role is chosen before start. Switching between
-  human and agent restarts the program [MEASURED: operator live run, 4 Nov
-  2026]; unsaved program state is lost.
-- **Core sees:** the same surface, frame and verdict records as other kinds.
-- **Cost:** no container limit applies; it uses host memory. Measured
-  footprint `ABSENT — do not invent`.
+Answers: why offer a host route, and what does it expose?
+
+It lets an installed application participate in the wall without putting that
+binary in a container image. The process retains its host permissions. A
+separate display is presentation, not filesystem or network containment.
+Evidence: [CITED: `ui/src/catalog/catalogModel.js:117`, `daemon-adapter/internal/capsule/manager.go:805`].
 
 <a id="desktop-window"></a>
 ### Desktop window
 
-Answers: what is Desktop window; can it move my real mouse; why is it not
-isolated.
+Desktop window attaches an existing X11 window. It is **not isolated**, and
+input can affect the real application and pointer.
 
-- **Isolates: nothing.** It attaches an already open X11 window from your
-  desktop into a tile (`daemon-adapter/internal/capsule/host_window.go`).
-  Native Wayland windows are not listed
-  (`ui/src/catalog/catalogModel.js:123-129`). Input can move the real pointer
-  and raise the real window; the tile says "Real desktop — not isolated"
-  (`ui/src/surfaces/RoleSurface.vue:533`).
-- **Why it exists:** to bring one existing window under the same frame and
-  journal rules without restarting it.
-- **Cost:** no capsule is started. Footprint `ABSENT — do not invent`.
+Answers: can I attach an existing window safely as though it were a container?
+
+Use this route only with the intended host window. Native Wayland windows are
+not listed by this launcher [CITED: `ui/src/catalog/catalogModel.js:125`]. A
+verified frame does not remove the host exposure of attachment.
 
 <a id="arm64-vm"></a>
 ### ARM64 VM
 
-Answers: what does the ARM64 VM capsule isolate; why is there no x64 VM.
+The graphical VM route presents a configured guest display. Availability is
+conditional on supported host setup; it is not inferred from a successful
+cross-build [CITED: `ui/electron/guestCommandProfile.js:47`].
 
-- **Isolates:** a full graphical Linux guest behind KVM, run through the
-  private VM executor in an `srf-vm-<profile>` container
-  (`daemon-adapter/internal/capsule/manager.go:404-407`, `daemon-adapter/internal/capsule/manager.go:852-853`).
-- **Does not isolate:** what the guest sends over a network you give it.
-- **Available:** ARM64 hosts with `/dev/kvm` and the protected local setup in
-  [ARM64_CAPSULE_SETUP.md](ARM64_CAPSULE_SETUP.md). Not available on x64.
-- **Cost:** the launcher session helper runs under MemoryHigh 6 GiB, MemoryMax
-  8 GiB, two CPUs, and requires a 32 GiB free-memory floor [TARGET, CITED:
-  `docs/ARM64_CAPSULE_SETUP.md#packaged-launcher-interface`]. Start time
-  `ABSENT — do not invent`.
+Answers: when should I use the graphical VM?
+
+Use it for work that needs a guest desktop and graphical observations. Guest
+assets and the private executor are additional prerequisites. Follow
+[ARM64_CAPSULE_SETUP.md](ARM64_CAPSULE_SETUP.md); source inspection alone does
+not qualify the deployed guest.
 
 <a id="microvm"></a>
 ### MicroVM
 
-Answers: what is a MicroVM capsule; can the AI run shell commands; what does
-Rewind need.
+MicroVM provides guest command sessions with a lifecycle distinct from graphical
+surface input [CITED: `core/src/serve/guest_command.rs`].
 
-- **Isolates:** a Firecracker guest on ARM64 KVM. Commands run as guest UID
-  10000 inside the guest, not on the host
-  ([ARM64_GUEST_COMMANDS.md](ARM64_GUEST_COMMANDS.md)). No graphical desktop,
-  no SSH, not an interactive PTY.
-- **Person and agent:** both send commands through the core
-  (`core/src/serve/guest_command.rs`); the SDK entry is
-  `metaviewer_agents.guest_command.GuestCommandSession`. Neither supplies host
-  paths, images or resource overrides.
-- **Core sees:** each command request, acceptance, result, cancel and stop,
-  with owner and generation.
-- **Rewind:** see [9](#rewind).
-- **Cost:** same guardian scope as the VM [TARGET]. A Back restore took
-  387.5 ms as shown by the app [CITED: README.md, maintainer report; receipts absent].
+Answers: what does MicroVM add if it is not a graphical application?
+
+It provides a guest execution boundary for commands and a place to restore guest
+state with Rewind. Command output is not a captured desktop frame. See
+[ARM64_GUEST_COMMANDS.md](ARM64_GUEST_COMMANDS.md) and
+[ARM64_MICROVM_REWIND.md](ARM64_MICROVM_REWIND.md).
 
 <a id="choose-a-kind"></a>
 ## 4. Which kind to choose
 
-Answers: which capsule should I use for a website; for a desktop app; for
-shell commands; when is Host program acceptable.
+Use the narrowest available execution environment that contains the task's
+required application and data.
 
-| Task | Choose | Because |
+Answers: which capsule kind fits my task?
+
+| Task requirement | Candidate | Check first |
 | --- | --- | --- |
-| A website, with a separate login per identity | Identity browser | Container per identity, persistent profile, network mode per profile |
-| A Linux GUI program you can put in an image | Program | Container boundary, same rules as browsers |
-| A program already installed on your computer, trusted | Host program | No image needed; **not isolated** |
-| A window that is already open | Desktop window | Attach without restart; **not isolated**, real pointer |
-| A whole graphical Linux system, ARM64 | ARM64 VM | Guest boundary |
-| Shell commands an agent may get wrong, with undo, ARM64 | MicroVM with Rewind | Guest boundary plus checkpoints |
+| Separate browser identity | Identity browser | Profile custody, runtime and network configuration |
+| Graphical program available in an image | Program | Admitted program mapping and image contents |
+| Installed host binary | Host program | Host exposure is acceptable |
+| Already open X11 application | Desktop window | Correct window and real pointer effects |
+| Guest graphical desktop | ARM64 VM | Host capability and protected setup |
+| Guest commands or guest checkpoint restore | MicroVM | Command/runtime availability and restore scope |
 
 <a id="alternatives"></a>
 ## 5. Compared with what an agent builder would otherwise use
 
-Answers: why not computer use on a plain desktop; why not one browser with
-many tabs; why not Docker; why not one VM per task; why not a remote desktop.
+MetaViewer adds a common control and evidence model around workloads. The
+comparison is about that model, not measured superiority over other products.
 
-No head-to-head numbers were measured; each row is a design comparison read
-from the code, not a benchmark. Comparative performance:
-`ABSENT — do not invent`.
+Answers: what do capsules add to tabs, containers, VMs or remote desktops?
 
-| Alternative | What it offers | Comparison with MetaViewer's contracts |
+| Approach | What MetaViewer adds | What it still depends on |
 | --- | --- | --- |
-| Plain desktop with computer use | Access to existing host applications | A desktop alone does not establish MetaViewer's per-surface ownership, frame-bound admission and journal contracts; other tooling may add checks. |
-| One browser, many tabs | Shared browser session and tab navigation; process layout depends on the browser | Tabs in one profile can share login state. Tabs alone do not establish MetaViewer's per-surface ownership or admission journal. |
-| Containers alone (Docker) | Process and filesystem boundaries, depending on configuration | Container isolation alone does not establish the frame stream, human takeover or admission journal that MetaViewer adds. |
-| One VM per task | Guest boundary and, with supporting tooling, snapshots | A snapshot alone does not identify the frame on which an action was admitted. MetaViewer's VM and MicroVM integrations require the documented ARM64 setup. |
-| Remote desktop (VNC, RDP) | Remote viewing and input, with access controls depending on server configuration | Remote access controls do not by themselves establish MetaViewer's owner, frame-binding and journal contracts; integrations may add their own policies. |
+| Direct desktop control | Named surfaces and explicit control ownership | Correct host targeting and careful treatment of external effects |
+| Browser tabs | A workload/profile boundary separate from wall layout | Browser and account behavior |
+| Containers | Shared admission, frame checks and a journal around native execution | Runtime configuration and private executor behavior |
+| VM per task | A common wall and control protocol for guest and other workloads | Guest provisioning and host resources |
+| Remote desktop | Frame-bound proposals and core admission in addition to pixels/input | The display transport and target application |
 
-[CITED: `core/src/admission/mod.rs`, `core/src/journal/mod.rs`, `daemon-adapter/internal/capsule/manager.go`]
-
-What MetaViewer loses in exchange: setup cost (Docker, images, RAM floor,
-KVM for guests), Linux only, and Host program and Desktop window do not give
-isolation at all.
+Head-to-head reliability, performance and containment benchmarks are
+**ABSENT — do not invent**. A different tool may be simpler when the task only
+needs a narrow application API.
 
 <a id="separation"></a>
 ## 6. Rendering, execution and authority are separate
 
-Answers: why is the UI not allowed to inject input; who decides whether an
-action happens; what happens if the UI crashes.
+The UI presents and requests, the core admits, and the adapter executes. This
+keeps moving a tile separate from permission to send input.
 
-| Role | Process | May | May not |
-| --- | --- | --- | --- |
-| Rendering | Electron UI (`ui/`) | Show verified frames; send intents | Inject input into capsules; read frame paths over IPC |
-| Execution | Go daemon adapter (`daemon-adapter/`) | Start, stop and drive capsules after admission | Decide whether an agent action is allowed |
-| Authority | Rust core (`core/`) | Admit or refuse; own ownership, budgets, journal order | Draw pixels or run programs |
+Answers: why not let the renderer or the agent inject input directly?
 
-The core enforces role checks for registered messages. These processes share the host-user trust boundary; this is not containment against a compromised component.
-[CITED: `core/src/transport/mod.rs:157`, `core/src/serve/mod.rs:2670`, `ui/electron/hostBindings.js:174`] Details:
-[ARCHITECTURE.md#process-and-transport-model](ARCHITECTURE.md#process-and-transport-model)
-and [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md).
+The core can apply the same ownership, frame, lease and budget checks to agent
+proposals before native execution [CITED: `core/src/admission/mod.rs:1307`].
+Layout requests have a separate path [CITED: `core/src/serve/layout.rs:29`].
+The UI's appearance is therefore not evidence of authority.
+
+This is a protocol boundary between cooperating processes. It is not containment
+against a compromised process with the same host-user privileges, nor a reason
+to trust untrusted screen text as instructions.
 
 <a id="frame-freshness"></a>
 ## 7. Frame freshness
 
-Answers: what is STALE_FRAME; why was my agent action refused as stale; how
-does MetaViewer know a screenshot is current.
+A proposal must match the latest accepted digest and generation for its surface,
+with no refresh pending. The core checks this before admission and again for
+dispatch [CITED: `core/src/admission/mod.rs:1307`].
 
-Each frame is published once, immutable, with `(sha256, generation, width,
-height)`. The core keeps the current frame per surface and refuses an older
-or equal generation as `STALE_FRAME` (`core/src/serve/mod.rs:995-1006`). An
-agent proposal carries `based_on_frame`; admission refuses it when the
-surface has no frame, a refresh is pending, or the digest or generation
-differs from the current one (`core/src/admission/mod.rs:1307-1321`). Three
-layers verify the bytes before use: the adapter publisher, the core witness
-reader (`core/src/serve/mod.rs:806-842`, 64 MiB cap [CITED: `core/src/serve/mod.rs:806`]) and the Electron
-reader (`ui/electron/frameReader.js`).
+Answers: what does a fresh frame prove?
 
-Gain: admission compares the proposal with the latest accepted frame for that
-surface and refuses it while a refresh is pending. This does not prove the
-screen stayed unchanged between capture and input delivery. Cost: a slow agent
-sees more refusals and must observe again [CITED: `core/src/admission/mod.rs:1307`].
+It binds the proposal to the core's accepted observation. It does **not** prove
+that the application stayed unchanged between capture and input delivery.
+Pixel integrity and task meaning are also separate: a correct digest proves
+which bytes were checked, not that a button has the intended effect.
+
+A stale proposal is refused as `STALE_FRAME`. Observe again and plan from the
+new state. Do not blindly reuse the old coordinates.
 
 <a id="journal-and-replay"></a>
 ## 8. Journal and replay
 
-Live game and Rewind results below are **maintainer-reported**, not reproduced
-here. Session receipts and video takes are not published in this repository;
-their public location is `ABSENT — do not invent`. Numeric live results are
-[CITED: README.md, maintainer report only], not independent verification.
+The journal lets a reader reconstruct the core's recorded decisions and inspect
+the evidence retained for them. It does not rerun the application.
 
-Answers: what does the journal record; how do I verify a session; why does
-mv-replay say Invalid; what happens when the journal is full.
+Answers: what can a judge verify after a session?
 
-The core appends every admission, refusal and outcome to a hash-chained
-journal; each record carries the previous record's SHA-256
-([ARCHITECTURE.md#core-authority-and-replay](ARCHITECTURE.md#core-authority-and-replay)).
-`mv-replay --journal <file> --witness-root <dir> [--verify-only]` rebuilds
-state offline and prints its digest (`core/src/bin/mv-replay.rs:1-45`); exit
-2 is invalid input, 3 duplicate evidence, 4 witness failure.
+The archive binds ordered records, state transitions and witnesses; the scanner
+checks those relationships [CITED: `core/src/journal/mod.rs:3123`, `core/src/journal/mod.rs:3867`]. Keep the session archive together: journal text
+alone is not the complete replay input.
 
-| Observation | Meaning |
-| --- | --- |
-| `mv-replay` rc=0 on a Rewind session journal | [CITED: README.md, maintainer report; receipts absent] |
-| `Invalid` with a relative, symlinked or copied session path | Give absolute real paths to the original session directory [CITED: README.md, maintainer report; receipts absent] |
-| `JOURNAL_FULL` | Admission closes for that session for good; accepted records stay replayable; start a fresh session for long runs ([JOURNAL_END.md](JOURNAL_END.md), `core/src/serve/journal_end.rs:128`) |
+```bash
+mv-replay --journal <session-journal> --witness-root <session-root> --verify-only
+```
 
-Gain: a judge can check what the agent was allowed to do without trusting the
-agent's own log.
+The command exits nonzero on invalid input, duplicate evidence or witness failure
+[CITED: `core/src/bin/mv-replay.rs:42`]. A successful scan establishes consistency
+of the supplied archive, not independent authenticity of its origin or semantic
+task completion. When session capacity is exhausted, `JOURNAL_FULL` closes new
+work and requests a fresh session [CITED: `core/src/serve/journal_end.rs:128`].
 
 <a id="rewind"></a>
 ## 9. Rewind
 
-Answers: what does Rewind restore; can Rewind undo a network request; is
-there rewind on x64.
+Rewind restores supported MicroVM guest state through an authenticated restore
+path. It does not rewind the core's journal, host state or external services.
 
-Rewind exists for the ARM64 MicroVM only. Mark seals full guest memory and
-machine state into a RAM checkpoint; Back pauses the guest, restores the
-checkpoint and resumes. Routing is authenticated in the core
-(`core/src/serve/rewind.rs:1`); the journal, request history and restore
-authority do not travel backwards.
+Answers: what can Back undo?
 
-| Fact | Tag |
-| --- | --- |
-| 3 files created, deleted, Back restored all 3 | [CITED: README.md, maintainer report; receipts absent] |
-| Restore shown by the app: 387.5 ms | [CITED: README.md, same maintainer report; receipts absent] |
-| `mv-replay` rc=0 on that session journal | [CITED: README.md, same maintainer report; receipts absent] |
-| Network effects, host changes, anything outside the guest | Not restored ([ARM64_MICROVM_REWIND.md](ARM64_MICROVM_REWIND.md)) |
-| x64 rewind | Not available |
+A guest checkpoint can recover guest-local work. It cannot retract a network
+request, an external write or an input already delivered outside that guest.
+The core keeps restore authority and recorded history moving forward [CITED: `core/src/serve/rewind.rs`, `core/src/rewind_flow.rs`]. Protected runtime setup is
+required; follow [ARM64_MICROVM_REWIND.md](ARM64_MICROVM_REWIND.md).
 
-Checkpoints are local, disposable and disappear when the session closes.
-Setup: [ARM64_CAPSULE_SETUP.md#rewind-in-the-normal-wall](ARM64_CAPSULE_SETUP.md#rewind-in-the-normal-wall).
+Live Rewind results are maintainer-reported; their session receipts are not
+published in this checkout. Publicly reproducible live performance is
+**ABSENT — do not invent**.
 
 <a id="refusal-is-a-feature"></a>
 ## 10. Why a refusal is a feature
 
-Answers: why did MetaViewer refuse my action; is a refusal a bug; how do I
-explain a refusal to a judge.
+A refusal tells the caller which required fact could not be established. Keeping
+that result explicit prevents missing evidence from becoming apparent success.
 
-A pre-dispatch admission refusal means the proposed input was not sent. A
-post-dispatch uncertain result is different: input may already have reached
-the application. For example, a focus click can be delivered before typing is
-refused, and `mw_run_program` preserves the result as `INPUT_UNCERTAIN`
-[CITED: `tools/mw_run_program.py:1283`]. Observe and reconcile the actual state;
-do not replay the whole step or assume no effect.
+Answers: how should an agent handle a refusal or uncertain result?
 
-| Code | What the core could not prove | Coordinate |
+| Result | Meaning | Next action |
 | --- | --- | --- |
-| `STALE_FRAME` | The proposal matches the latest accepted frame, with no refresh pending | `core/src/admission/mod.rs:1316-1321` |
-| `SURFACE_NOT_AGENT_CONTROLLED` | The agent owns this surface now (human took control, or it is not live) | `core/src/admission/mod.rs:1313-1315` |
-| `LOCKED_BY_OTHER` | No other action holds the display | `core/src/admission/mod.rs:1322-1331` |
-| `BUDGET_EXCEEDED` | The session still has budget, retries and time | [ARCHITECTURE.md#core-authority-and-replay](ARCHITECTURE.md#core-authority-and-replay) |
-| `POLICY` | The operation is supported for this sender and state | same |
-| `INPUT_UNCERTAIN` | Delivery or its effect could not be confirmed; some input may already have occurred | `tools/mw_run_program.py:1283` |
-| `JOURNAL_FULL` | The session can still record what happens | [JOURNAL_END.md](JOURNAL_END.md) |
+| `STALE_FRAME` | Accepted observation no longer matches | Observe and plan again |
+| `SURFACE_NOT_AGENT_CONTROLLED` | Owner or live state does not permit this agent | Check control and lifecycle |
+| `LOCKED_BY_OTHER` | Surface/display lease conflicts | Wait for settlement and observe |
+| `BUDGET_EXCEEDED` | Time or execution budget fails admission | Inspect the bound before new work |
+| `POLICY` | Sender, operation or state is not admitted | Inspect the specific refusal |
+| `INPUT_UNCERTAIN` | Input may already have reached the application | Observe and reconcile; do not replay the entire step |
+| `JOURNAL_FULL` | Session cannot admit further recorded work | Start a fresh session after cleanup |
 
-Worked example: a game driven by a scripted model loop, each key verified by
-the core, reached 40 of 42 verified steps in one run with 2 reported
-`INPUT_UNCERTAIN` [CITED: README.md, maintainer report; receipts absent]. The two
-uncertain steps were reported as uncertain, not counted as success.
+Admission evidence: [CITED: `core/src/admission/mod.rs:1307`]. Uncertainty
+handling: [CITED: `tools/mw_run_program.py:1283`, `agents/metaviewer_agents/mw_refusals.py:36`].
 
-To explain a refusal: name the code, whether dispatch occurred or remains
-uncertain, the fact that could not be proved, and the cited line; then observe
-and reconcile before planning another action. The full code list belongs to the
-generated error reference linked from [docs/README.md](README.md).
+For example, a focus click may be delivered before typing fails. The program
+runner preserves `INPUT_UNCERTAIN` instead of calling the combined step a clean
+refusal [CITED: `tools/mw_run_program.py:1283`]. That distinction is why counting
+accepted inputs is not enough to claim a successful task.
 
 <a id="limits"></a>
 ## 11. What this document does not claim
 
-Answers: what is not proven; which known bugs touch capsules.
+The public source establishes admission and adapter behavior. It does not prove
+private executor internals, live platform qualification or a task's semantic
+success.
 
-- Host program and Desktop window are not isolated.
-- No x64 VM, x64 MicroVM or x64 rewind.
-- Per-kind start times and resident memory: `ABSENT — do not invent`.
-- Head-to-head comparison with the alternatives in [5](#alternatives):
-  `ABSENT — do not invent`.
-- Isolation inside the private OpenSuperficies and VM executors is a boundary
-  contract; their source is private ([NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md)).
-- Open bug: after `mw_run` the package gains `__pycache__` and `--arm64` then
-  holds with "exhaustive manifest inventory"; workaround: remove the bytecode
-  directories from the package [CITED: README.md, maintainer report; receipts absent].
-- Open bug: a paired terminal exited after a very long typed line; cause
-  unknown [CITED: README.md, maintainer report; receipts absent].
-- Not run while writing this document: no capsule, VM or MicroVM was started
-  here (the writing host had no KVM and no Docker daemon); every coordinate
-  was read, not executed.
+Answers: where should a skeptical engineer withhold confidence?
+
+- Host routes retain host exposure.
+- Guest routes require supported architecture and protected assets.
+- Startup time, resident memory and comparative reliability need measured runs.
+- Same-user process compromise is outside the admission protocol's containment.
+- Live results without published receipts remain maintainer reports.
+
+The mandate of this document is limited to the cited public repository and
+explicitly attributed reports.

@@ -1,44 +1,55 @@
 # ARM64 MicroVM rewind
 
-Core routing for Rewind is in this tree (`core/src/serve/rewind.rs`, `core/src/rewind_flow.rs`). An earlier developer-controlled ARM64 packaged application at commit `8b44747c83f0ad760aed2550277aa88cd417fb30` completed real Create, guest commands, Mark, header Back restoration, Pause, Resume and confirmed Stop with closed resources [MEASURED]. Normal end-user setup, the next integrated package, whole gate and hosted CI remain separate acceptance gates.
+## What does Rewind do, and what does it not undo?
 
-The goal is to add a MicroVM from **Add capsule**, work inside its command console, mark a known state and return to it with **Back**. The MicroVM command header provides the classic double-left rewind icon and a short list of timed checkpoints. Its optional header slot exposes `{capabilities, onRestore(point_id)}` so the shared frontend can place the same controls without acquiring native authority. A selected checkpoint requests one return operation; a running guest is explicitly paused first, and restoration proceeds only after that pause is confirmed. Commands remain fenced while the operation is uncertain.
+Rewind restores a MicroVM's guest RAM and machine state to a checkpoint you marked. It does not undo network requests, host files, or the journal.
 
-The ARM64 rewind profile uses an immutable boot image and a mutable RAM workspace. Checkpoints contain full guest memory and machine state. They are local, disposable and disappear when the owning session closes. They are not durable save slots. Writable block disks, graphical Firecracker desktops and x64 rewind are not enabled by this profile.
+Answers: what Rewind restores; what it cannot reverse; how long checkpoints live.
 
-External effects are not rewound. A completed network request or a change outside the guest cannot be reversed by restoring guest memory. A failed restore retains the last verified checkpoint. A new manual restore is offered only after the failed native attempt is confirmed closed; uncertainty does not trigger retries or replay commands.
+- Flow: Add capsule → MicroVM → run commands → **Mark** a state → **Back** to it. The command header shows a double-left rewind icon and a short list of timed checkpoints.
+- Profile: immutable boot image plus a mutable RAM workspace. Checkpoints hold full guest memory and machine state, are local, and disappear when the owning session closes. They are not save slots.
+- Not enabled: writable block disks and graphical desktops.
+- A completed network request or any change outside the guest stays. Restoring guest memory cannot reverse it.
+- A failed restore keeps the last verified checkpoint. A new manual restore is offered only after the failed native attempt is confirmed closed. Uncertainty never triggers retries or command replay.
+
+Code: core routing is `core/src/serve/rewind.rs` and `core/src/rewind_flow.rs`; the guest side is `daemon-adapter/rewind_runtime/`. Why Rewind is limited to guest state: [WHY_CAPSULES.md#rewind](WHY_CAPSULES.md#rewind).
 
 ## Live result
 
-Answers: has Rewind been run; how long does Back take; does replay verify a Rewind session.
+Live Rewind demonstrations are maintainer-reported. Raw session receipts are not
+published in this checkout, so this page does not claim independent timing or
+packaged-runtime qualification.
 
-| Observation | Tag |
-| --- | --- |
-| Three files created in the guest, deleted, then **Back** restored all three | [MEASURED: operator live run on ARM64 MicroVM, 4 Nov 2026] |
-| Restore time shown by the app: 387.5 ms | [MEASURED: same run] |
-| `mv-replay` exit 0 on that session journal | [MEASURED: same run] |
-| `mv-replay` with relative, symlinked or copied session paths gives `Invalid`; pass absolute real paths of the original session | [MEASURED: same run] |
+Answers: has Rewind been demonstrated, and what can a reader reproduce?
 
-The raw receipt of that run is not in this repository. Why rewind is restricted to guest state: [WHY_CAPSULES.md#rewind](WHY_CAPSULES.md#rewind).
+Public tests can check the contracts, state transitions and injected failure
+paths. A live result needs the matching protected artifacts and a recorded
+Create, command, Mark, Back and Stop cycle, including cleanup evidence. Source
+checks alone do not establish those runtime results. Publicly reproducible live
+measurements are **ABSENT — do not invent**.
 
-## Controls and evidence
+## What do Pause, Resume, Mark, Back and Stop do?
 
-- Pause waits for the guest command channel to close and reach a quiescent state before pausing the native machine.
-- Resume establishes a new guest session and reseeds it before accepting commands.
-- Mark seals a full checkpoint in the protected RAM ring. Rotation replaces only an unreferenced point after the new point is verified. Memory used by a restored machine remains held until that machine closes.
-- Back lists available points with their host-observed age. Unknown age is displayed as unavailable. The displayed guest counter is the last confirmed guest observation; it is not a timer fabricated by the frontend.
-- Stop remains available for cleanup, including uncertain operations. Ownership is released only after native closure is confirmed.
+Each is one operation the core fences; commands stay blocked while an operation is uncertain.
 
-The core retains authority outside the restored memory: request history, command generation and restore authority do not travel backwards. The UI and SDK use the same authenticated connection and must discard stale results. Checkpoint paths, entropy and boot tokens do not cross the renderer interface.
+Answers: what each control does; who holds authority; what the ring holds.
 
-## Preparation and integration boundary
+- **Pause** waits for the guest command channel to close and quiesce, then pauses the native machine. A running guest is paused before any restore.
+- **Resume** opens a new guest session and reseeds it before accepting commands.
+- **Mark** seals a full checkpoint in the protected RAM ring. The ring is capped at 1 GiB [CITED: `daemon-adapter/rewind_runtime/native.py`]. Rotation replaces only an unreferenced point, after the new one is verified. Memory of a restored machine stays held until that machine closes.
+- **Back** lists points with their host-observed age (unknown age shows as unavailable). The guest counter shown is the last confirmed guest observation, not a frontend timer.
+- **Stop** stays available for cleanup, including after uncertain operations. Ownership is released only after native closure is confirmed.
 
-The feature requires a protected, hash-checked host profile, an admitted local ARM64/KVM backend, verified kernel and broker artifacts, and the application guardian. Availability is capability-driven and absent on x64. Existing graphical VM and other capsule paths keep their own setup and contracts.
+Authority stays outside the restored memory: request history, command generation and restore authority do not travel backwards. UI and SDK share one authenticated connection and discard stale results. Checkpoint paths, entropy and boot tokens never cross to the renderer.
 
-The current profile preparer is a developer tool, not a turnkey image installer. Download/import catalogues and a normal end-user setup flow are not claimed by the source tests. Private Wender, Vision and OpenSuperficies implementations remain external; their source and private images are not included in this public repository. No VM image or kernel binary is added by this feature branch.
+## What does Rewind need, and what is not provided?
 
-The shared native-surface header remains owned by the frontend. MicroVM workloads use the agreed command-header slot, with `capabilities.back` projected from validated current snapshots and one restore action built from the current target on each click. The presentation router uses the kit’s existing CapsulePanel and stable session identity; floating, hiding and showing a tile do not change its workload identity. The timeline retains Pause, Resume and Mark. Both header and timeline were observed in that bounded packaged proof; the next integrated application requires its own acceptance.
+It needs a protected, hash-checked host profile, an admitted local ARM64/KVM backend, verified kernel and broker artifacts, and the application guardian. Availability follows reported capabilities. Start it with `--rewind` ([ARM64_CAPSULE_SETUP.md#rewind-in-the-normal-wall](ARM64_CAPSULE_SETUP.md#rewind-in-the-normal-wall)).
 
-A developer profile must name the exact application guardian cgroup that exists before adapter startup. The native runner verifies its separate service cgroup and replaces the template path before constructing the controller. Runtime roots must fit the backend’s existing Unix-socket path limit; shortening a fresh private RAM root is required rather than relaxing that limit.
+Answers: what must exist before Rewind is offered; what the repository does not ship; which tests count as evidence.
 
-Tests of contracts, state reducers and fault injection are source evidence. A feature is usable in the packaged application only after a separate live Create, command, checkpoint, restore and Stop cycle confirms its visible behavior and closed resources.
+- The profile preparer is a developer tool, not an image installer. No download/import catalogue or turnkey end-user flow is claimed.
+- No VM image or kernel binary is in this repository. Private Wender, Vision and OpenSuperficies sources and images stay external.
+- The MicroVM header slot is `{capabilities, onRestore(point_id)}`. `capabilities.back` comes from validated current snapshots; each click builds one restore request from the current target. The slot gives the frontend no native authority.
+- A developer profile must name the application guardian cgroup that exists before adapter startup. Runtime roots must fit the backend's Unix-socket path limit; shorten the private RAM root rather than relaxing the limit.
+- Tests of contracts, reducers and fault injection are source evidence only. A feature counts as usable in the packaged app after a live Create, command, Mark, Back and Stop cycle shows the visible behaviour and closed resources.

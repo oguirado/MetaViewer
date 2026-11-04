@@ -1,243 +1,234 @@
 # Debugging MetaViewer
 
-How to go from a symptom to the code, tell a bug from a refusal, and explain it. Source-discovered codes have lookup rows and selected reviewed explanations in [ERRORS.md](ERRORS.md). That page is generated from source by
-`tools/gen_errors_doc.py`.
+Start with the exact symptom and error code, then read the public source that
+emits it. A refusal is a decision about a request; it is not automatically a bug.
+An absent receipt is not proof that input never reached the application.
 
-**A finding tells you where to look. Only the code proves it.**
+The generated [error reference](ERRORS.md) maps discovered codes to source.
+For ordinary operation, use [the user guide](USER_GUIDE.md).
 
-Terms used once here: a *capsule* is one running program, browser or VM shown as a tile on the
-wall. The *core* is the Rust authority that admits or refuses every action and journals it. The
-*adapter* is the Go daemon that starts and stops the native side of capsules. A *refusal* is a
-deliberate "no" with a code. A *bug* is behaviour that contradicts the cited code or its contract.
+## Where should I start?
 
-## Reading map
+Choose the path that matches the evidence you have.
 
-Answers: where do I start debugging; which page has which answer
+Answers: debugging entry; error lookup; install failure; session recovery
 
-| You have | Go to |
-|---|---|
-| An error or refusal code | [ERRORS.md](ERRORS.md), search for the exact code |
-| A visible symptom, no code | [Symptom table](#symptom-table) |
-| A judge install or doctor failure | [Install failures](#install-failures) and [JUDGE_TROUBLESHOOTING.md](JUDGE_TROUBLESHOOTING.md) |
-| A session that stopped accepting work | [Session ended](#session-ended-journal_full) |
-| A journal to check | [Replay a journal with mv-replay](#replay-a-journal-with-mv-replay) |
-| Free text, no idea where the code is | [Find code with route_query](#find-code-with-route_query) |
-| Something to report | [What to collect for a report](#what-to-collect-for-a-report) |
+| Evidence | Start here |
+| --- | --- |
+| Exact refusal or error code | Search [ERRORS.md](ERRORS.md) for that code |
+| Visible symptom without a code | [Symptom table](#what-does-the-visible-symptom-tell-me) |
+| Install or doctor failure | [Install failures](#how-do-i-diagnose-an-install-failure) |
+| Session stopped accepting work | [Full session](#what-does-journal_full-mean) |
+| Preserved journal | [Replay](#replay-a-journal-with-mv-replay) |
+| Suspected package changes | [Package inventory](#package-inventory-hold) |
+| Reproducible candidate bug | [Report contents](#what-should-a-bug-report-contain) |
 
-## Symptom table
+## What does the visible symptom tell me?
 
-Answers: blank tile; black tile; capsule says Lost; no agent CLI in the terminal; keys refused; install fails; session ended
+A visible symptom narrows the investigation; it does not establish a cause by
+itself. Check the authoritative state and result before attempting a repair.
 
-Causes marked *unconfirmed* were read from code but not reproduced for this page.
+Answers: blank tile; black tile; Lost; no agent CLI; input refused; terminal unavailable
 
-| Symptom | What it usually means | First check | Code to read |
-|---|---|---|---|
-| Blank or white tile (tile chrome present) | **Unresolved triage.** White pixels alone do not identify the cause. Missing presentation evidence, a destroyed source or context loss are branches to inspect | Collect tile status, presented frame handle/digest and dimensions, and `METAVIEWER_SURFACE_CREATE_REFUSED` from the app terminal before choosing a repair | `ui/src/App.vue:1549`, `ui/src/surfaces/SurfaceCanvas.vue:158` |
-| Black tile | *Unconfirmed.* The UI repaints the retained frame on canvas re-attach so a tile should not go black (`ui/src/surfaces/tileScheduler.js:1666`); a black picture is then the capsule's own content (for example a VM still booting) or a display problem in the capsule | Wait for the capsule to finish starting; check the adapter log line for the capsule | `ui/src/surfaces/tileScheduler.js:1666` |
-| Tile shows "Lost" badge | Either the backend lifecycle is `lost`, or a previously admitted row disappeared from a live/stale snapshot. Elapsed time does not prove journal exhaustion | Check the session notice and `journal-ended.json`; if the session ended, preserve/replay it and start a fresh session. Otherwise inspect the retained capsule and use **Stop lost capsule**, requiring confirmed cleanup before reopening | `ui/src/wall/tileStates.js:240`, `ui/src/App.vue:1090`, `core/src/serve/journal_end.rs:125` |
-| "No agent CLI available from this terminal host" | Discovery yielded no usable profile: executable resolution failed, or ARM host-environment validation returned early | Check executable resolution in the app login and the next row for ARM validation. Per-provider setup failures are also omitted, so installation alone does not prove availability | `ui/src/terminal/TerminalDeckView.vue:1154`, `ui/electron/agentProviders.js:31` |
-| Same, in `--arm64` mode | The trusted OS account home or runtime directory fails absolute/normalized-path checks, or the composed search path fails segment/byte limits; discovery catches this and returns empty | Inspect the OS account home, actual `XDG_RUNTIME_DIR`, and validated search path in the app login. Changing only shell `HOME` does not change the trusted account home | `ui/electron/agentProviders.js:20` |
-| Keys or clicks refused | Possible pre-dispatch refusal: human control, stale frame or unsupported key request; a post-dispatch failure requires reconciliation | Read the code: `SURFACE_NOT_AGENT_CONTROLLED`, `STALE_FRAME`, `MW_PROGRAM_KEY_REQUEST`, `MW_PROGRAM_CONTROL` in [ERRORS.md](ERRORS.md) | `core/src/serve/mod.rs:182`, `agents/metaviewer_agents/mw_refusals.py:26` |
-| rc 5 `INPUT_UNCERTAIN` | The input may already have been delivered; MetaViewer will not prove either way | Observe the capsule; never resend blindly | `agents/metaviewer_agents/mw_run.py:21` |
-| Install or doctor fails | The judge launcher stopped on a named precondition | The stderr line `JUDGE_<CODE>: <problem> -- fix: <fix>` holds the fix | `scripts/judge/metaviewer-judge.sh:48` |
-| Everything refused, session notice says journal is full | The session journal reached capacity; admission is closed | Start a new session | `core/src/serve/journal_end.rs:125` |
-| A Host program restarted when switching human and agent | Expected: switching a Host program between human and agent restarts it [MEASURED] | None | ABSENT — do not invent (restart site not cited here) |
+| Symptom | Check next | Public source |
+| --- | --- | --- |
+| Blank, white or black tile | Capsule lifecycle, frame availability and presented frame identity. Pixel color alone cannot identify a failed layer | [SurfaceCanvas.vue](../ui/src/surfaces/SurfaceCanvas.vue), [tile scheduler](../ui/src/surfaces/tileScheduler.js) |
+| Lost tile, possibly retaining a frame | Session notice and backend lifecycle. A retained picture does not prove a live capsule | [tile states](../ui/src/wall/tileStates.js), [journal end](../core/src/serve/journal_end.rs) |
+| No usable agent profile | Executable discovery and host-environment validation. Installation alone does not prove discovery succeeded | [agentProviders.js](../ui/electron/agentProviders.js) |
+| `TERMINAL_UNAVAILABLE` | The package needs usable native terminal support; copying a task prompt does not launch a terminal | [terminalHost.js](../ui/electron/terminalHost.js) |
+| Keys or clicks refused | Ownership, stream freshness and the returned code; take control before human input | [input port](../ui/src/input/inputPort.js), [App.vue](../ui/src/App.vue) |
+| `INPUT_UNCERTAIN` | Observe what the application actually did before any retry | [program runner](../tools/mw_run_program.py), [workflow runner](../agents/metaviewer_agents/mw_run.py) |
+| Network reports `legacy` | No network mode is enforced; do not assume host or LAN blocking | [network copy](../ui/src/netmode/networkCopy.js) |
+| Everything refused after the journal fills | Preserve the accepted history, verify cleanup, and start a fresh session | [journal end](../core/src/serve/journal_end.rs) |
 
-## Bug or refusal
+## How do I distinguish a refusal from a bug?
 
-Answers: is this a bug or a refusal; how do I tell a bug from a refusal
+Read the emitting condition and compare it with the state that accompanied the
+request. A bug contradicts the implemented contract; a refusal may enforce it.
 
-A pre-dispatch refusal has a code and rejects the proposed action. A later failure may follow
-earlier effects: `INPUT_UNCERTAIN` can mean input already arrived, including a delivered focus
-click before a text failure (`tools/mw_run_program.py:1274`). Observe and reconcile before
-retrying. A bug contradicts the cited code or its contract; the presence of a code alone does
-not decide that question.
+Answers: bug or refusal; uncertain input; safe retry; missing receipt
 
-| Observation | Verdict |
-|---|---|
-| A reviewed code explanation matches the observed state | Follow its remedy; for uncertain delivery, reconcile existing effects before further input |
-| A code is printed but the precondition it names is true (for example `CAPSULE_SLOT_UNAVAILABLE` with free slots) | Candidate bug. Read the raise site to confirm |
-| An action takes effect but its final receipt is missing | Possible uncertain completion; inspect admission, dispatch and settlement evidence before diagnosing a bug |
-| The process exits or hangs with no code | Candidate bug. Collect the items below |
-| The code is not in [ERRORS.md](ERRORS.md) | Either the page is stale (`python3 tools/gen_errors_doc.py --check`) or the code is built at run time; search the code with route_query |
+A pre-dispatch refusal can prevent an action. A later failure can follow effects
+already delivered. In particular, program text input may deliver a focus click
+before a later operation becomes uncertain. `INPUT_UNCERTAIN` uses exit status
+`5` [CITED: [program runner](../tools/mw_run_program.py)]; observe and reconcile
+before sending more input.
 
-Unknown mw_run codes still read as refusals: `refusal_sentence` gives them a generic remedy
-(`agents/metaviewer_agents/mw_refusals.py:120`).
+| Observation | Interpretation |
+| --- | --- |
+| State matches the refusal's precondition | Follow the documented remedy |
+| State contradicts the refusal's precondition | Candidate bug; verify the raise site and preserve a reproduction |
+| Application changed but the final result is missing | Uncertain completion; do not resend blindly |
+| Process exits or hangs without a code | Collect process output and the minimal reproduction |
+| Code is absent from the generated reference | Search current source; a generated index can be stale |
 
-## Install failures
+The current runner source, not the code's name alone, decides whether retry is
+safe. Use [the error reference](ERRORS.md) for coordinates.
 
-Answers: install fails; doctor fails; what does JUDGE_ mean; where are the judge logs
+## How do I diagnose an install failure?
 
-Launcher `fail` prints `JUDGE_<CODE>: <problem> -- fix: <fix>` on stderr and exits with status
-2 [CITED: scripts/judge/metaviewer-judge.sh:48]. Usage errors exit with status
-64 [CITED: scripts/judge/metaviewer-judge.sh:57]. The fix text is the command to run. Each source-discovered code has a
-lookup row in [ERRORS.md](ERRORS.md#family-judge-judge-launcher-failures) with source coordinates; reviewed entries include the matching problem and fix
-strings from source. Per-code advice for judges is in
-[JUDGE_TROUBLESHOOTING.md](JUDGE_TROUBLESHOOTING.md#kit-install-and-run).
+Read the launcher's `JUDGE_<CODE>: <problem> -- fix: <fix>` line and correct that
+specific prerequisite before re-running the doctor.
 
-| Item | Location |
-|---|---|
-| Launcher state | `$MV_JUDGE_HOME`, default `$XDG_DATA_HOME/metaviewer-judge` or `~/.local/share/metaviewer-judge` (`scripts/judge/metaviewer-judge.sh:82`) |
-| Smoke log | `$MV_JUDGE_HOME/logs/smoke.log` (`scripts/judge/metaviewer-judge.sh:554`) |
-| Re-check after a fix | `bash scripts/judge/metaviewer-judge.sh doctor`, success marker `JUDGE_DOCTOR_OK` |
+Answers: install fails; doctor fails; JUDGE code; smoke log
 
-## Session ended (JOURNAL_FULL)
+The launcher's `fail` function exits with status `2`; usage errors exit with
+status `64` [CITED: [metaviewer-judge.sh](../scripts/judge/metaviewer-judge.sh)].
+The fix text explains the required action; it is not always a shell command.
 
-Answers: session ended; everything is refused; journal is full; what does JOURNAL_FULL mean
+| Evidence | Location or check |
+| --- | --- |
+| Launcher state | `$MV_JUDGE_HOME`, otherwise `$XDG_DATA_HOME/metaviewer-judge` or `$HOME/.local/share/metaviewer-judge` |
+| Smoke output | `logs/smoke.log` beneath the launcher state directory |
+| Re-check after a fix | `bash scripts/judge/metaviewer-judge.sh doctor` with the same selected options |
 
-The core journals every admitted record before it takes effect. When the journal is full, the
-core closes admission for that session, stops capsules in order, and keeps the accepted journal
-replayable. The UI shows: "Session journal is full. New work is refused (POLICY). Capsules are
-stopping in order; the accepted journal remains replayable. Start a new session."
-(`core/src/serve/journal_end.rs:125`). Capacity exhaustion ends admission for that session [CITED: core/src/serve/journal_end.rs].
+Source: [judge launcher](../scripts/judge/metaviewer-judge.sh). Use
+[JUDGE_TROUBLESHOOTING.md](JUDGE_TROUBLESHOOTING.md) for the installation path
+that produced the refusal.
 
-- Fix: start a new session; use a fresh session per long run.
-- Verify: inspect the session notice and `journal-ended.json` when present, then replay the
-  accepted journal. Marker persistence is best effort; absence does not prove the session is
-  live (`core/src/serve/journal_end.rs:147`). A successful replay returns rc
-  0 [CITED: core/src/bin/mv-replay.rs].
-- If a stop stays unconfirmed you get `JOURNAL_STOP_FAILED`; close MetaViewer and stop the
-  remaining capsules with operating system tools. Details: [JOURNAL_END.md](JOURNAL_END.md).
+## What does JOURNAL_FULL mean?
 
-## Read logs and the journal
+The session's journal capacity has been reached. The core closes admission,
+stops capsules in order and retains the accepted journal for replay.
 
-Answers: where are the logs; where is the session journal; how do I read the journal
+Answers: JOURNAL_FULL; session ended; POLICY; cleanup; JOURNAL_STOP_FAILED
 
-| Source | Where | What to look for |
-|---|---|---|
-| App stdout and stderr | The terminal that started MetaViewer | Lines starting `METAVIEWER_`, for example `METAVIEWER_SURFACE_CREATE_REFUSED code=<code> detail=<detail>` (`ui/electron/roleHost.js:78`) |
-| Session journal | `$XDG_STATE_HOME/metaviewer/sessions/<session_id>/journal.jsonl` (fallback `~/.local/state/metaviewer/...`) | One JSON record per line, hash chained; append only |
-| Session end marker | `journal-ended.json` in the same session directory | Present after `JOURNAL_FULL`; a hint only, replay decides |
-| Judge launcher | `$MV_JUDGE_HOME/logs/` | `smoke.log` after install |
-| mw_run | stdout: one `metaviewer.mw_run/v1` JSON line; stderr: the remedy sentence; `report.json` in its evidence directory | `verdict_code` and rc |
+Close and reopen MetaViewer through its normal entry to start a fresh session.
+If cleanup remains unconfirmed, close the app and stop remaining capsules with
+operating-system controls before reopening. Frozen frames do not establish that
+a capsule is still running.
 
-The journal is the record of what the core admitted. Do not edit it; copy nothing into it.
+`journal-ended.json` is a best-effort marker. Its absence does not prove that
+admission remains open, and its presence does not replace journal verification.
+See [JOURNAL_END.md](JOURNAL_END.md). Source:
+[journal_end.rs](../core/src/serve/journal_end.rs).
+
+## Where are logs and the journal?
+
+Start with the launching terminal and the session directory; preserve original
+records rather than editing them into a passing result.
+
+Answers: stdout; stderr; METAVIEWER messages; journal path; end marker
+
+| Source | Location | Useful evidence |
+| --- | --- | --- |
+| Application output | Terminal that started MetaViewer | `METAVIEWER_` messages, including surface-create refusals |
+| Session journal | `$XDG_STATE_HOME/metaviewer/sessions/<session-id>/journal.jsonl`, or the corresponding `$HOME/.local/state` path | Accepted records and their chain |
+| Session-end marker | `journal-ended.json` beside the journal, when written | Cleanup progress and session-end hint |
+| Judge launcher | `logs/smoke.log` beneath launcher state | Installation smoke result |
+| Program runner | Its output and private evidence directory | `verdict_code`, exit status and observed effects |
+
+Sources: [roleHost.js](../ui/electron/roleHost.js), `default_state_dir` in
+[journal module](../core/src/journal/mod.rs),
+[judge launcher](../scripts/judge/metaviewer-judge.sh),
+[program runner](../tools/mw_run_program.py).
 
 ## Replay a journal with mv-replay
 
-Answers: how do I run mv-replay; why does mv-replay say Invalid; verify a session journal
+Run `mv-replay` against the preserved journal and its own session directory.
+A passing replay validates the recorded history, not current application state.
 
-```bash
-mv-replay --journal "$(realpath "$STATE/sessions/$SID/journal.jsonl")" --witness-root "$(realpath "$STATE/sessions/$SID")"
+Answers: run mv-replay; invalid replay path; corrupt journal; witness mismatch
+
+From a source checkout with the binary built, replace these placeholders with
+absolute real paths:
+
+```sh
+./target/debug/mv-replay --journal /absolute/state/sessions/SESSION/journal.jsonl \
+  --witness-root /absolute/state/sessions/SESSION
 ```
 
-Here `STATE` is the state directory (for example `$XDG_STATE_HOME/metaviewer`) and `SID` the
-session id. In a source checkout the binary is `./target/debug/mv-replay` after `cargo build`.
-Add `--verify-only` to check the chain without printing the state hash.
+| Result | Meaning |
+| --- | --- |
+| Exit `0` with a state hash | Replay verified; `--verify-only` suppresses the hash |
+| Exit `2` | Invalid arguments or paths, unreadable data, or malformed/corrupt history |
+| Exit `3` | Duplicate record |
+| Exit `4` | Witness mismatch |
 
-| Result | Meaning | Source |
-|---|---|---|
-| rc 0 and a 64-hex state hash | Replay verified | `core/src/bin/mv-replay.rs:41` |
-| rc 2 `Invalid` | Bad arguments or a path that fails the private-path rules | `core/src/bin/mv-replay.rs:22` |
-| rc 2 `Corrupt(...)` | Torn, empty, oversize or malformed journal | `core/src/journal/mod.rs` Display impl |
-| rc 3 | Duplicate record | `core/src/bin/mv-replay.rs:45` |
-| rc 4 | Witness mismatch | `core/src/bin/mv-replay.rs:46` |
+Exit values are [CITED: [mv-replay.rs](../core/src/bin/mv-replay.rs)]. Symlinks
+and parent traversal are refused. The state directory, `sessions`, the session
+directory, `events` and `artifacts` must belong to the effective user and have
+mode `0700` [CITED: `private_archive` and `private_directory_for_uid` in
+[journal module](../core/src/journal/mod.rs)]. Preserve journal and witness
+contents when copying, then verify the copy's hierarchy, ownership and modes.
+Do not create substitute witnesses or rewrite the journal.
 
-Pass absolute real paths. Symlinks and parent traversal are refused
-[CITED: `core/src/journal/mod.rs`]. The archive must preserve the required hierarchy:
-state, `sessions`, the session directory, `events` and `artifacts` must be owned by
-the current user with mode `0700` [CITED: `core/src/journal/mod.rs:1309`,
-`core/src/journal/mod.rs:1317`]. A preserved copy can pass these checks; copying is
-not itself a refusal condition. Keep journal and witness contents unchanged and
-verify the copy's paths, ownership and private modes before replay.
+## How do I find the current source?
 
-Live replay of the release candidate is not established by this documentation review.
-The replay result, not the session marker alone, verifies the journal.
+Use the repository router for coordinates, then read the returned source before
+drawing a conclusion.
 
-## Find code with route_query
+Answers: find error source; route_query; source coordinates; generated errors
 
-Answers: how do I find the code for an error; how do I use route_query error and locate
-
-`route/route_query.py` searches a routed map of the repository. It reads only, standard library
-only.
-
-```bash
-python3 route/route_query.py error "MW_PROGRAM_RAM_REQUIRED" --k 3
+```sh
+python3 route/route_query.py error "MW_PROGRAM_RAM_REQUIRED"
+python3 route/route_query.py any "terminal unavailable"
 ```
 
-```bash
-python3 route/route_query.py locate "Stop lost capsule" --k 5
-```
+`show` reads a returned reference. Router results and model-written findings are
+leads; stale or absent results do not prove a feature is absent. For contributor
+workflow and index checks, see [AGENTS.md](../AGENTS.md) and
+[route/README.md](../route/README.md). The generated
+[ERRORS.md](ERRORS.md) is another entry point, not an independent runtime test.
 
-| Subcommand | Use it for |
-|---|---|
-| `error "<code or message text>"` | Exact text of a refusal or error message: returns path, line and the matching text |
-| `locate "<words>"` | Where a feature or UI string lives |
-| `ask "<question>"`, `find "<words>"` | Wider questions and findings |
-| `stats` | Which commit the findings are pinned to |
+## What should a bug report contain?
 
-Findings are pinned to an older commit (`stats` prints `study_pin`) and many read STALE
-[MEASURED] A row is a lead, not proof. Open the cited line and read it before you state
-anything. For codes, [ERRORS.md](ERRORS.md) is generated from the current tree and is the
-faster lookup.
+Include a minimal reproduction and the evidence needed to compare the observed
+state with the source predicate.
 
-## What to collect for a report
+Answers: bug report; reproduction; required evidence; private data
 
-Answers: what do I include in a bug report; what to collect before reporting
+- Exact message, code and exit status.
+- Release version or checkout commit, platform and selected launch mode.
+- Capsule kind, role and lifecycle when the action was attempted.
+- Steps from a fresh session and the resulting state.
+- Relevant application output, launcher smoke result and replay result if available.
+- Source or error-reference entry whose behavior does not match the observation.
 
-1. The exact code and message, copied, plus the rc.
-2. Mode and platform: plain start or `--arm64`; x64 or ARM64; capsule kind (browser, Host
-   program, Program, VM, MicroVM). Record the actual catalog and selected profile; mode alone does not prove that a
-   profile, kind or geometry is admitted (`daemon-adapter/internal/capsule/manager.go:819`).
-3. The steps, starting from a fresh session.
-4. The `METAVIEWER_` lines from the app terminal and, for the launcher, `logs/smoke.log`.
-5. `mv-replay` result on the session journal (absolute real paths).
-6. `git rev-parse HEAD` of the checkout or the release version.
-7. The [ERRORS.md](ERRORS.md) section you read and why the situation does not match it.
+These fields follow the distinct launch, ownership and replay checks described
+above. Do not publish raw journals, recordings, identity stores or login data.
+Use synthetic or scrubbed reproduction material, as required by
+[LAWS.md](../LAWS.md).
 
-Do not attach journals, recordings or identity stores to a public report: they can hold your
-browsing data. Describe them instead.
+## Which issues and limits are currently established?
 
-## Explain a bug to a judge in two sentences
+The table distinguishes source-established behavior from unresolved symptoms.
+It is not a claim that every host or live workload has been tested.
 
-Answers: how do I explain this bug to a judge; explain a refusal briefly
+Answers: known issues; status; limitations; unresolved symptoms
 
-Use this form: sentence one says what happened and which rule or code path decided it, with a
-coordinate; sentence two says what the user does now and how we know it worked.
+| Issue or limit | Status | Action | Evidence |
+| --- | --- | --- | --- |
+| Blank or black tile without a proven cause | Unresolved until lifecycle and frame evidence identify the failing path | Collect the symptom evidence above | [canvas](../ui/src/surfaces/SurfaceCanvas.vue), [scheduler](../ui/src/surfaces/tileScheduler.js) |
+| Host program restarts when its Human/Agent role changes | Implemented behavior | Save work before the role switch | `switchMode` in [roleHost.js](../ui/electron/roleHost.js) |
+| Session journal reaches capacity | Implemented limit | Confirm cleanup and start a fresh session | [journal end](../core/src/serve/journal_end.rs) |
+| Package gains unmanifested files | Implemented integrity rejection | Verify the exact mismatch; restore the trusted package | [package verifier](../ui/tools/package.js) |
+| Terminal support absent from a package | Explicit unavailable result | Use a package with native terminal support | [terminalHost.js](../ui/electron/terminalHost.js) |
+| Network capability reports legacy | No enforced network mode | Check deployment requirements before relying on a policy | [network copy](../ui/src/netmode/networkCopy.js) |
 
-- Refusal example: "The core refused the key because the frame the agent used was older than the
-  capsule's current frame (`STALE_FRAME`, `core/src/serve/mod.rs`). The agent observes again and
-  re-plans; an admitted verdict confirms it."
-- Bug example: "Running Python tools from the package can create unmanifested bytecode; the
-  campaign launcher then rejects its exact file inventory. Remove only that generated bytecode
-  and recheck the unchanged manifest; prevent recurrence with `python3 -B` or
-  `PYTHONDONTWRITEBYTECODE=1` for package-side Python tools."
-
-## Known issues and their status
-
-Answers: known bugs; open issues; what is broken right now
-
-| Issue | Status | Workaround | Evidence |
-|---|---|---|---|
-| After package-side Python tools run, `__pycache__` causes "exhaustive manifest inventory" | Cause identified; launch discipline still required | Remove only the generated bytecode, keep the manifest unchanged, and use `python3 -B` or `PYTHONDONTWRITEBYTECODE=1` for Python tools in the package | Campaign verifier `manifest_rows()`; see [package inventory](#package-inventory-hold) |
-| Paired terminal exited after a very long typed line | Open, cause unknown | Keep typed lines short | [MEASURED]; cause ABSENT — do not invent |
-| Human mode on a browser took about 20 s, and one site was unreachable | Not diagnosed | Wait; check the capsule network setting | [MEASURED]; cause ABSENT — do not invent |
-| Switching a Host program between human and agent restarts it | Expected behaviour | Save work in the program before switching | [MEASURED] |
-| A full journal ends the session | Expected behaviour | Fresh session per long run | [MEASURED], `core/src/serve/journal_end.rs:125` |
-| mv-replay refuses an invalid archive path or private hierarchy | Expected validation, see [mv-replay](#replay-a-journal-with-mv-replay) | Use absolute paths without symlinks or traversal; preserve the hierarchy, ownership and private modes when copying | [CITED: `core/src/journal/mod.rs`] |
-
+A symptom without a reproducible trace remains undiagnosed. Do not assign a
+cause from timing, pixel color or a previous release's report.
 
 ## Package inventory hold
 
-Answers: exhaustive manifest inventory; __pycache__; package rejected after mw_run
+A package inventory rejection means installed files do not match the trusted
+manifest. It does not identify the cause without the mismatching path.
 
-The literal emitter is the campaign-side `manifest_rows()` in
-`w1/codex-rewind-arm64-1103/rw185-operator-launcher/operator_demo.py:71`.
-`ctl/p17dev_arm64.py:34` loads that pinned verifier and `prepare()` calls its
-`copy_package()` before launch. These coordinates are relative to the operator's campaign,
-not files shipped in this public repository. The predicate compares every file under the
-package with the manifest's file set. Any extra or missing file fails it, so the message alone
-does not identify bytecode as the cause.
+Answers: exhaustive manifest inventory; PKG_MANIFEST_MISMATCH; __pycache__; changed package
 
-For the reported incident, running Python tools from the package wrote `__pycache__` into
-that package. Those extra files violate the inventory. Remove only the generated bytecode
-identified by comparing the inventory; do not delete unfamiliar files or regenerate the
-manifest to hide changes. Then re-run the same verifier. Prevent recurrence with
-`python3 -B` or `PYTHONDONTWRITEBYTECODE=1` on package-side Python invocations.
+The public `verifyInstall()` walks the package and compares file presence,
+digests and modes with its companion manifest. Extra or changed files produce
+`PKG_MANIFEST_MISMATCH`; missing files produce `PKG_MANIFEST_MISSING`.
+Source: [ui/tools/package.js](../ui/tools/package.js).
 
-A synthetic file-inventory check passed before adding an unmanifested bytecode file, failed
-with the exact message after adding it, and passed after removing it [MEASURED]. This verifies
-the predicate and remedy, not a live capsule restart. The public equivalent is
-`verifyInstall()` in `ui/tools/package.js:1882`: it walks the package and rejects unknown,
-changed or mode-mismatched files with `PKG_MANIFEST_MISMATCH`. The judge launcher invokes it
-through `--verify-install` (`scripts/judge/metaviewer-judge.sh:560`).
+Python can create `__pycache__` inside an installed tree. Use `python3 -B` or
+`PYTHONDONTWRITEBYTECODE=1` for package-side Python commands. If generated
+bytecode is the verified extra file, remove only that identified bytecode and
+re-run the same verifier. Otherwise restore the trusted package through the
+[installation procedure](INSTALL.md). Do not rebuild a manifest to bless an
+unexplained change.
+
+The phrase “exhaustive manifest inventory” comes from external campaign tooling;
+its implementation and incident receipts are not shipped here. The public
+package verifier establishes the integrity rule, not a live reproduction of
+that external incident.

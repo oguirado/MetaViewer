@@ -2,18 +2,13 @@
 
 <a id="metaviewer-a-live-wall-of-capsules-where-a-human-and-an-ai-share-one-desktop-under-one-authority"></a>
 
-MetaViewer gives humans and AI agents a Linux wall of browser and program capsules, with checked agent actions and a replayable journal.
+MetaViewer is a Linux desktop wall of application capsules that a person and an AI agent can operate under explicit control. It gives agent input a named target, checks the frame the agent saw, and records decisions in a verifiable journal.
 
-Version `0.2.6` | licence `AGPL-3.0-only` | Linux x64 and ARM64 | release [v0.2.6](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6)
+Version `0.2.6` [CITED: `VERSION`] · `AGPL-3.0-only` [CITED: `LICENSE`] · [Release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6)
 
-> **Wall screenshot:** pending publication here. **Walkthrough video:** pending publication here.
+**Choose an install:** [x64 packaged kit](#quick-start), with or without Docker capsules; [ARM64 source setup](docs/INSTALL.md#3-building-from-source-and-running-the-gate), with [additional KVM setup for VM and MicroVM](docs/ARM64_CAPSULE_SETUP.md).
 
-<!-- IMAGE_SLOT: wall screenshot with capsules, Humans/Agents tree and paired terminal dock -->
-<!-- VIDEO_SLOT: wall walkthrough, human takeover and journal verification -->
-
-**Choose an install:** [x64 packaged kit](#quick-start), with or without Docker capsules; [ARM64 source setup](docs/INSTALL.md#3-building-from-source-and-running-the-gate), with [separate KVM prerequisites for VM/MicroVM](docs/ARM64_CAPSULE_SETUP.md).
-
-**A finding tells you where to look. Only the code proves it.**
+**Find an answer:** [judge tour](docs/JUDGE_TOUR.md) · [operate with an AI](docs/AGENT_ENTRY.md) · [capsule design](docs/WHY_CAPSULES.md) · [troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
 
 <!-- MV:BEGIN mv.node.v1 -->
 ```json
@@ -29,42 +24,56 @@ Version `0.2.6` | licence `AGPL-3.0-only` | Linux x64 and ARM64 | release [v0.2.
   "doctor_marker": "JUDGE_DOCTOR_OK",
   "stop_marker": "JUDGE_STOP_CLEAN",
   "tiers": {
-    "T1": "app only: wall, Rust core, Go adapter, mv-replay; no container capsules",
-    "T2": "T1 plus isolated browser and program capsules; needs rootful Docker",
-    "ARM64-dev": "graphical VM, MicroVM and Rewind; linux-arm64 with KVM, developer setup only",
-    "source": "build from source with the pinned toolchains"
+    "T1": "app only; no Docker capsules",
+    "T2": "app plus browser and program containers; rootful Docker required",
+    "ARM64-dev": "source setup; graphical VM, MicroVM and Rewind need KVM",
+    "source": "build with the repository's pinned toolchains"
   },
   "router": "python3 route/route_query.py any \"<question>\"",
+  "router_read": "python3 route/route_query.py show \"<reference>\"",
   "router_check": "python3 route/route_query.py check",
   "router_check_marker": "ROUTE_OK",
   "laws_check": "python3 tools/check_laws.py",
   "offline_gate": "bash tools/gate.sh",
-  "licence": "AGPL-3.0-only; private components under NOTICE-EVALUATION.md"
+  "licence": "AGPL-3.0-only; external components under NOTICE-EVALUATION.md"
 }
 ```
 <!-- MV:END mv.node.v1 -->
 
----
+<a id="0-reading-map"></a>
+## Where should I start?
 
-## 0. Reading map
+Install through [Quickstart](#quick-start), or go directly to the guide for your task below.
 
-Answers: where do I start; what is MetaViewer; how do I read this repository; which document answers my question.
+Answers: where do I start; which document answers my question.
 
-**Action rule.** Install with the judge kit and wait for `JUDGE_INSTALL_OK`. To find code, ask the router (`route/route_query.py`) and treat each answer as coordinates; open the cited span and read it before you state a cause. Never open a document whole: follow the anchors below. If a fact is not in the code or a cited receipt, say `ABSENT — do not invent`.
+| Task | Read next |
+|---|---|
+| Evaluate the app as a judge | [Judge tour](docs/JUDGE_TOUR.md), with expected observations |
+| Install or build on my platform | [docs/INSTALL.md](docs/INSTALL.md) |
+| Let an AI operate a running capsule | [Executable agent entry](docs/AGENT_ENTRY.md) |
+| Understand why capsules exist | [Why capsules](docs/WHY_CAPSULES.md) |
+| Understand the computer-use workflow | [AI at the controls](docs/AI_AT_THE_CONTROLS.md) |
+| Resolve a failure | [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md), then [exact errors](docs/ERRORS.md) |
+| Inspect architecture or a message | [Architecture](docs/ARCHITECTURE.md), [reference](docs/REFERENCE.md), `contracts/v0.2/` |
+| Find code or change the repository | [Agent protocol](AGENTS.md), then [router commands](route/README.md) |
+| Assess evidence and limits | [Evidence](docs/EVIDENCE.md), then [limits below](#isolation-and-evaluation-limits) |
 
 <a id="quick-start"></a>
 ## Quickstart
 
-Answers: how do I install MetaViewer; what commands do I run; how do I know it worked.
+Use the packaged x64 judge kit after obtaining the release assets and the publisher's manifest digest; use the [source-build instructions](docs/INSTALL.md#3-building-from-source-and-running-the-gate) for ARM64.
 
-**x64 packaged kit:** the commands below install the capsule tier. Obtain the digest from the release notes independently of the downloaded manifest and replace the placeholder before running them. **ARM64:** use the [source-build commands](docs/INSTALL.md#3-building-from-source-and-running-the-gate); these x64 release assets are not an ARM64 installer [CITED: `docs/JUDGE_QUICKSTART.md#1-release-assets-and-verification`].
+Answers: how do I install MetaViewer; what commands do I run; how do I know installation succeeded.
+
+The example selects Docker capsules (tier T2). Obtain the `SHA256SUMS` digest independently from the release publisher and replace the placeholder. If that digest or a required asset is unavailable, stop; do not substitute a digest computed from the downloaded manifest. The fetcher verifies the manifest and selected assets [CITED: `scripts/judge/fetch_assets.py`, `docs/JUDGE_QUICKSTART.md`].
 
 ```bash
 git clone --branch v0.2.6 --depth 1 https://github.com/oguirado/MetaViewer.git
 cd MetaViewer
 export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.6
-SHA256SUMS_DIGEST='<paste the SHA256SUMS digest from the v0.2.6 release notes>'
-python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
+SHA256SUMS_DIGEST='<publisher-provided SHA256SUMS digest>'
+python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --arch x64 --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
 bash scripts/judge/metaviewer-judge.sh doctor --before-install --capsules   # JUDGE_DOCTOR_OK
 bash scripts/judge/metaviewer-judge.sh install --capsules                   # JUDGE_INSTALL_OK
 bash scripts/judge/metaviewer-judge.sh doctor --capsules                    # JUDGE_DOCTOR_OK
@@ -72,255 +81,55 @@ bash scripts/judge/metaviewer-judge.sh run
 bash scripts/judge/metaviewer-judge.sh stop                                 # JUDGE_STOP_CLEAN
 ```
 
-Drop `--capsules` everywhere for tier T1 (no Docker). Keep it the same across `fetch`, `doctor` and `install`. The subcommands are exactly `doctor|install|run|stop` with flags `--before-install --capsules --yes --no-firewall` [CITED: `scripts/judge/metaviewer-judge.sh:55`]. Operational failures use `fail()`, print `CODE: problem -- fix: remedy` and exit `2`; usage errors exit `64` [CITED: `scripts/judge/metaviewer-judge.sh:48`, `scripts/judge/metaviewer-judge.sh:55`]. Full per-platform steps with expected output: [docs/INSTALL.md](docs/INSTALL.md) and [docs/JUDGES.md](docs/JUDGES.md). Continue with the [Judge tour](docs/JUDGE_TOUR.md); use [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md) for refusals.
+For the app without Docker capsules (tier T1), remove `--capsules` from fetch, doctor and install. Keep the tier consistent throughout. A graphical Linux session is required; full prerequisites and the Windows WSL route are in [docs/INSTALL.md](docs/INSTALL.md).
 
-### Which question goes to which tool
+An operational failure in the judge script prints `CODE: problem -- fix: remedy` and exits `2` [CITED: `scripts/judge/metaviewer-judge.sh:48`]; a usage error exits `64` [CITED: `scripts/judge/metaviewer-judge.sh:55`]. Follow the remedy before continuing. After installation, use the [Judge tour](docs/JUDGE_TOUR.md); for a refusal, use [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
 
-Answers: which command finds the code for a bug; where is the error explained; which doc tells an AI how to drive the app.
+<a id="1-abstract-and-result-contract"></a>
+<a id="3-how-it-works"></a>
+## Why capsules?
 
-| You want to know | Use | Answer is |
-|---|---|---|
-| What MetaViewer is, in five minutes, as a judge | [docs/JUDGES.md](docs/JUDGES.md) | A guided path with markers |
-| How to install any tier on my platform | [docs/INSTALL.md](docs/INSTALL.md) | Commands with expected output |
-| Which files to open for a symptom | `python3 route/route_query.py locate "<symptom>"` | Ranked files with FRESH or STALE |
-| What an exact error or log line means | `python3 route/route_query.py error "<text>"`, then [docs/ERRORS.md](docs/ERRORS.md) | Code coordinates; meaning, cause, fix |
-| What must hold in some code, how it fails | `python3 route/route_query.py ask "<question>"` | Model-written findings with code spans |
-| Where a symbol is defined | `python3 route/route_query.py find <name>` | Symbol ids and spans |
-| Everything about one file | `python3 route/route_query.py file <path>` | Findings and symbols of that file |
-| How to go from a symptom to a fix | [docs/DEBUG.md](docs/DEBUG.md) | Symptom table and known issues |
-| How an AI should operate MetaViewer | [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md), [docs/AI_AT_THE_CONTROLS.md](docs/AI_AT_THE_CONTROLS.md) | Protocol and limits; summary in [§6](#6-agent-operating-protocol) |
-| Why capsules, and what that design gains | [docs/WHY_CAPSULES.md](docs/WHY_CAPSULES.md) | Tradeoffs with coordinates; summary in [§3](#3-how-it-works) |
-| What is proven and where the receipt is | [§7](#7-measured-results), [docs/EVIDENCE.md](docs/EVIDENCE.md) | Tagged claims |
-| Architecture and wire contracts | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/REFERENCE.md](docs/REFERENCE.md), `contracts/v0.2/` | Processes, schemas, examples |
-| ARM64 VM, MicroVM, Rewind | [docs/ARM64_CAPSULE_SETUP.md](docs/ARM64_CAPSULE_SETUP.md), [docs/ARM64_MICROVM_REWIND.md](docs/ARM64_MICROVM_REWIND.md) | Developer setup |
-| How to edit this repository | [AGENTS.md](AGENTS.md), [LAWS.md](LAWS.md), [docs/COMMIT_LAWS.md](docs/COMMIT_LAWS.md) | Laws and gates |
+A capsule gives each task an addressable application surface with its own control state, so an agent can name what it intends to operate [CITED: `core/src/admission/mod.rs:96`, `core/src/admission/mod.rs:1297`]. Browser and Program capsules use container boundaries, while Host program and Desktop window expose host applications without isolation [CITED: `daemon-adapter/internal/capsule/manager.go`, `ui/src/surfaces/RoleSurface.vue`]. This separates the choice of execution boundary from the human-or-agent control protocol; the tradeoffs and alternatives are in [Why capsules](docs/WHY_CAPSULES.md).
 
-The router reads the tree and writes nothing; it needs Python standard library only [CITED: `route/README.md`]. Its findings are pinned to an older commit and many rows read `STALE` [MEASURED: `route_query.py ask` on this tree]; a stale row is a lead, not a fact.
+Answers: why does MetaViewer use capsules; what does a capsule provide.
 
-### Prerequisites
+<a id="2-definitions-and-gates"></a>
+### What do surface, frame and journal mean?
 
-Answers: what do I need before installing; what must I understand before installing.
+A **surface** is the target tracked by the core; a **frame** is an observed image with a generation and digest; the **journal** records core events for verification.
 
-| You need | Why | Where |
-|---|---|---|
-| Linux with a graphical session (X11, XWayland, WSLg, or `Xvfb` for smoke) | The wall is an Electron window | [docs/INSTALL.md](docs/INSTALL.md) |
-| Rootful Docker (tier T2 only) | Browser and program capsules are containers | [docs/INSTALL.md](docs/INSTALL.md) |
-| `linux-arm64` with KVM (ARM64 tier only) | VM and MicroVM need hardware virtualisation | [docs/ARM64_CAPSULE_SETUP.md](docs/ARM64_CAPSULE_SETUP.md) |
-| Python 3 | `fetch_assets.py`, router, checks | `scripts/judge/fetch_assets.py` |
-| The idea of a frame `generation` | Every agent action names the frame it saw | [§2](#2-definitions-and-gates) |
-| The boundary of each capsule kind | Browser and Program use containers; Host program and Desktop window are not isolated | [§5](#5-coverage-and-domain-contracts) |
-
-### Reading tracks
+Answers: what is a surface; what is a frame generation; what does the journal record.
 
-Answers: what should a judge read; what should an AI agent read; what should a contributor read.
+The Electron wall presents surfaces, the Rust core decides whether input may proceed, and the Go adapter runs capsules and exchanges frames and input. An agent proposal includes `surface_id` and `based_on_frame`; the core checks ownership, liveness, generation and digest before dispatch [CITED: `core/src/admission/mod.rs:1297`]. `mv-replay` checks the saved journal and frame witnesses; it is a verifier, not a command to repeat application actions [CITED: `core/src/bin/mv-replay.rs`]. Process and wire details: [Architecture](docs/ARCHITECTURE.md) and [Reference](docs/REFERENCE.md).
 
-- **Judge:** [Quick start](#quick-start), then [§1](#1-abstract-and-result-contract), then [§7](#7-measured-results), then [§9](#9-limitations); for a guided tour, [docs/JUDGES.md](docs/JUDGES.md).
-- **AI agent installing, debugging or explaining:** [§6](#6-agent-operating-protocol), then [§4 Panel 2](#panel-2-negative-knowledge), then [docs/DEBUG.md](docs/DEBUG.md) and [docs/ERRORS.md](docs/ERRORS.md).
-- **AI agent at the controls of the app:** [§6](#6-agent-operating-protocol), then [docs/AI_AT_THE_CONTROLS.md](docs/AI_AT_THE_CONTROLS.md).
-- **Contributor:** [AGENTS.md](AGENTS.md), [§2 gates](#2-definitions-and-gates), [§4 Panel 3](#panel-3-reference-implementation-and-oracle), [§10](#10-reproducibility).
+<a id="6-agent-operating-protocol"></a>
+## Why computer use with an AI at the controls?
 
-### Notation and evidence tags
+The maintainer recommends an AI at the controls because MetaViewer routes its proposals through frame and ownership checks, giving the agent feedback about whether an action may proceed [CITED: `core/src/admission/mod.rs:1297`]. A person can take control of a live surface, cancelling pending agent work; agent work requires explicit release of control and a fresh frame before it resumes [CITED: `core/src/admission/mod.rs:1136`, `core/src/admission/mod.rs:1159`]. The intended workflow is observe, propose, inspect the result, and hand back to the person when needed; [AI at the controls](docs/AI_AT_THE_CONTROLS.md) explains it and [Agent entry](docs/AGENT_ENTRY.md) provides the executable recipes.
 
-Answers: what does [MEASURED] mean; what does ABSENT mean.
+Answers: why is MetaViewer focused on computer use; should I put an AI at the controls.
 
-| Tag or term | Meaning |
-|---|---|
-| `[MEASURED]` | Read from the tree, a stored receipt, or a command that was run |
-| `[CITED: path]` | Stated in that file; read it to check |
-| `[TARGET]` | A chosen limit or something not yet achieved |
-| `ABSENT — do not invent` | Not known or not measured. Never means zero |
-| `path:line` | A coordinate in this tree; line numbers can drift, so re-find by the quoted name |
-| FRESH, STALE | Router states: cited code is identical, or has changed since the router pin |
+### How does an AI operate a running capsule?
 
----
+Use the running app's attachment and copied capsule identity, then follow [docs/AGENT_ENTRY.md](docs/AGENT_ENTRY.md) for the selected task.
 
-## 1. Abstract and result contract
+Answers: how does an AI attach; what is Direct task; how do I drive a capsule.
 
-Answers: what problem does MetaViewer solve; what does it promise; what does it not promise.
+1. Open a capsule and its paired terminal. Choose an installed agent CLI or a shell.
+2. Use **Copy ID for AI** and **Direct task**. Complete the task text, review it, and submit it yourself. The app prepares text without pressing Enter [CITED: `ui/src/terminal/workflowPrompts.js`, `ui/src/terminal/terminalDeckModel.js:1751`].
+3. Follow the attachment and observation recipe in [Agent entry](docs/AGENT_ENTRY.md). Confirm the live capsule identity and control state; do not guess missing values.
+4. Execute a supported, bounded step, inspect its verdict and observe the resulting state. Stop on a refusal. After `INPUT_UNCERTAIN`, inspect before considering any further input [CITED: `agents/metaviewer_agents/mw_refusals.py`].
+5. At a login or challenge, hand control to the person. Acknowledge only hides the notice; it does not resume the run [CITED: `ui/src/handoff/handoffModel.js`].
 
-When an AI agent uses a computer, three things go wrong silently: it acts on a screen that has already changed, a human and the agent both drive the same window, and afterwards nobody can prove what happened. MetaViewer answers all three in code. An agent never injects raw input; it sends a proposal bound to one surface and to the exact frame it saw (`generation` and `sha256`). The Rust core refuses the proposal with `STALE_FRAME` if that frame is no longer current, and with `SURFACE_NOT_AGENT_CONTROLLED` if a human has taken control [CITED: `core/src/admission/mod.rs:1308`, `core/src/admission/mod.rs:1314`]. Every admitted or refused outcome is appended to a hash-chained journal that the separate `mv-replay` binary verifies [CITED: `core/src/bin/mv-replay.rs:41`].
+Browser and program tasks, authored workflows, and ARM64 MicroVM commands have different recipes. The limits of `mw_run` are specific to that runner and mode; they are not a list of every action supported by the core [CITED: `agents/metaviewer_agents/mw_run.py:339`]. See [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) for the full workflow.
 
-Each browser or program capsule runs in its own container, so a crash, a login or a download in one stays out of the others, and every surface has one owner at a time. Host programs and attached desktop windows are the exception: they run on your computer and are labelled not isolated.
-
-### Result contract
+### How do I submit a reviewed proposal from the CLI?
 
-| Item | Contract |
-|---|---|
-| **Input** | A clone of this repository at tag `v0.2.6` and the release assets for your architecture |
-| **Output** | A running wall; for T2, live browser and program capsules; a session journal under the state directory |
-| **Authority** | One Rust process admits every agent action; the UI only submits closed `ui_intent/v0.2` intents [CITED: `docs/ARCHITECTURE.md`] |
-| **Tamper response** | `mv-replay` exits `0` on a valid chain, `2` on corrupt input, `3` on a duplicate, `4` on a witness mismatch [CITED: `core/src/bin/mv-replay.rs:44`] |
-| **Scope** | Linux x64 and ARM64; Windows only as a Linux session under WSL2 + WSLg |
-| **Not promised** | Isolation for Host programs or attached desktop windows; VM, MicroVM or Rewind on x64; that a routed finding is correct |
+Use `mvctl propose` with a reviewed proposal file and the registered values from the running app.
 
----
-
-## 2. Definitions and gates
+Answers: how do I send an action proposal; which CLI submits a proposal.
 
-Answers: what is a capsule; what is a surface; what is a generation; what checks must pass.
-
-| Term | Definition |
-|---|---|
-| **Capsule** | A live, addressable surface with an owner, frame stream and journal entries. Browser and Program use containers; ARM64 VM and MicroVM use guests; Host program and Desktop window run on the host and are not isolated [CITED: `docs/JUDGES.md`, `daemon-adapter/internal/capsule/manager.go`] |
-| **Host program** | A program on your own computer shown on the wall through Xpra. **Not isolated** and labelled so in the UI [CITED: `ui/src/catalog/CatalogLauncher.vue:319`, `ui/src/surfaces/RoleSurface.vue:532`] |
-| **Desktop window** | An existing X11 window attached to the wall. **Not isolated** [CITED: `ui/src/surfaces/RoleSurface.vue:533`] |
-| **Surface** | Anything on the wall that has frames and an owner |
-| **Owner** | Human or Agent, never both. Take control moves a surface to Human and cancels pending agent work [CITED: `core/src/admission/mod.rs:1136`] |
-| **Frame generation** | A counter plus SHA-256 of the pixels an agent saw; a proposal must name the current one [CITED: `core/src/admission/mod.rs:1316`] |
-| **Journal** | Append-only JSONL, each record hashed into the next, `metaviewer.journal/v1` [CITED: `docs/REFERENCE.md`] |
-| **Contract** | A versioned JSON schema with one valid and one invalid example; components talk only through these [CITED: `LAWS.md`] |
-| **Router** | `route/route_query.py`, a deterministic code map plus model-written findings [CITED: `route/README.md`] |
-
-### Verification gates
-
-Answers: how do I check the repository; which command proves what.
-
-| Gate | Command | Passes when |
-|---|---|---|
-| Laws | `python3 tools/check_laws.py` | Checks commit history: maintainer author/committer, allowed message scope and imperative verb, forbidden message patterns, and required changelog fragments for covered product commits. It does not scan file contents for English or secrets [CITED: `tools/check_laws.py:237`] |
-| Version laws | `python3 tools/check_laws.py --version` | Validates `VERSION` syntax, its `CHANGELOG.md` section and unreleased fragments; does not compare every manifest or README version [CITED: `tools/check_laws.py:192`] |
-| Contracts | `python3 tools/check_contracts.py` | 41 v0.2 schemas validate their examples [MEASURED: `contracts/v0.2/*.schema.json`] |
-| Offline gate | `bash tools/gate.sh` | All legs green; `--self-test` checks the harness itself |
-| Router freshness and links | `python3 route/route_query.py check` | Prints `ROUTE_OK` after checking the indexed docs and references [CITED: `route/README.md`] |
-| Legacy router coverage | `python3 tools/router_index.py --check` | Checks the selected source inventory, stored hashes and links; prints `METAVIEWER_ROUTER_COVERAGE 100% N files` only on success. Source selection at `e26c00eca6` contains 3,431 files [MEASURED: `tools/router_index.py`]; this count alone is not a passing gate |
-| Install | `metaviewer-judge.sh install` | Prints `JUDGE_INSTALL_OK tier=...` [CITED: `scripts/judge/metaviewer-judge.sh:792`] |
-| Journal | `mv-replay --journal <abs path> --witness-root <abs path>` | Exit `0` |
-
-An offline gate pass does not prove live capsule behaviour or frame rate [CITED: `docs/EVIDENCE.md`].
-
----
-
-## 3. How it works
-
-Answers: how is MetaViewer built; why are capsules generated this way; what does that design gain.
-
-```text
-Electron + Vue wall           Rust core (authority)            Go daemon adapter
-renders snapshots,      ──►   admits or refuses,        ──►   starts capsules, moves
-sends ui_intent/v0.2          journals every outcome           frames, save slots
-        ▲                            ▲                                │
-        │ frame_port/v1 (RGB24)      │ action_proposal/v0.2           ▼
-        └──────────── frames ────────┴──── Python agent loop    capsules (containers via
-                                            (mvctl, mw_run)      private OpenSuperficies)
-```
-
-1. **Rendering, execution and authority are three processes.** The UI cannot act on a capsule; it asks the core. The adapter cannot decide; it executes what the core admitted [CITED: `docs/ARCHITECTURE.md`].
-2. **Capsules are generated per identity, on demand, in RAM-backed work areas.** The adapter accepts only `/dev/shm` work paths [CITED: `daemon-adapter/internal/capsule/manager.go:434`]. A capsule's browser profile, cookies and sign-ins stay with that identity and can be saved to a slot only when it is stopped [CITED: `daemon-adapter/internal/capsule/slots/store.go`].
-3. **Why this design.** One capsule per identity means a site, a crash or a download stays inside that capsule; one owner per surface means human and agent never fight over a pointer; frame-bound proposals mean an agent cannot act on a screen it did not see; the journal means a judge can check afterwards what was admitted and what was refused. The full argument, with alternatives and their costs: [docs/WHY_CAPSULES.md](docs/WHY_CAPSULES.md).
-4. **Where it costs.** Capsules need Docker and RAM; concurrent capsules are admitted against a free-memory floor [CITED: `docs/INSTALL.md#concurrent-identities-and-ram-admission`]. Host programs trade isolation for convenience and are labelled.
-
----
-
-## 4. Engineering triptych
-
-Answers: what can I trust; what must I not do; how is correctness checked.
-
-### Panel 1: epistemic contract
-
-Answers: what is proven by code; what is only reported.
-
-| Kind of statement | Proven by | Strength |
-|---|---|---|
-| Refusal behaviour (`STALE_FRAME`, takeover, `POLICY`) | Rust code and tests, e.g. `core/src/serve/b1_stale_frame_tests.rs` | Public source and tests |
-| Journal integrity | `mv-replay` exit codes, `core/tests/` | Public source and tests |
-| Wire shapes | `contracts/v0.2/` with valid and invalid examples | Schema check |
-| Live behaviour (capsules, rewind, games) | Maintainer live runs | Maintainer-reported; independent verification receipts in this tree: `ABSENT — do not invent` unless cited |
-| Private component internals | Nothing public | Outside this repository |
-| Router findings | A model, no human review [CITED: `route/README.md`] | Leads only |
-
-### Panel 2: negative knowledge
-
-Answers: what mistakes do agents make here; what should I not assume.
-
-| Do not | Because | Do instead |
-|---|---|---|
-| Call a Host program or desktop window isolated | It runs on your computer; the UI says "not isolated" | Use a `program` capsule for isolation |
-| Expect VM, MicroVM or Rewind on x64 | Disabled on non-ARM hosts [CITED: `ui/electron/guestCommandProfile.js:47`] | Use a `linux-arm64` host with KVM |
-| Pass relative, symlinked or copied session paths to `mv-replay` | Reported as `Invalid` [CITED: docs/AI_AT_THE_CONTROLS.md, maintainer report only; receipts absent] | Pass absolute real paths of the original session directory |
-| Keep one session for a very long run | A full journal ends the session with `JOURNAL_FULL` [CITED: `core/src/serve/journal_end.rs:128`] | Start a fresh session per long run |
-| Resend after `INPUT_UNCERTAIN` | The input may already have landed [CITED: `agents/metaviewer_agents/mw_refusals.py:36`] | Observe, reconcile, then decide |
-| Treat a router row as proof | Findings are model-written and often `STALE` | Read the cited span |
-| Switch a Host program between human and agent mid-task | The switch restarts the program [MEASURED live] | Choose the mode before starting |
-| Read "acknowledge" on a handoff banner as resume | It only hides the notice [CITED: `ui/src/handoff/handoffModel.js`] | Release control explicitly |
-
-### Panel 3: reference implementation and oracle
-
-Answers: where is the reference logic; what decides if behaviour is right.
-
-| Behaviour | Reference implementation | Oracle |
-|---|---|---|
-| Admission of a proposal | `core/src/admission/mod.rs:1297` (`fn check`) | `core/tests/admission_matrix.rs` |
-| Human takeover | `core/src/admission/mod.rs:1136` | `core/src/journal/mod.rs` takeover tests |
-| Journal chain | `core/src/journal/mod.rs` | `mv-replay`, `core/tests/t1_journal_verify.rs` |
-| Save slots after stopping | `daemon-adapter/internal/capsule/slots/store.go` | `daemon-adapter/internal/capsule/slots/store_test.go` |
-| Agent program input | `agents/metaviewer_agents/mw_run.py:340` | `agents/tests/test_mw_run.py` |
-| Judge install | `scripts/judge/metaviewer-judge.sh` | Its `MUT:` mutation markers and judge tests |
-
----
-
-<a id="status"></a>
-## 5. Coverage and domain contracts
-
-Answers: which capsule kinds exist; what runs on x64; what runs on ARM64; what is in each start mode.
-
-<!-- IMAGE_SLOT: capsule launcher showing isolated capsule kinds beside Host program entries marked not isolated -->
-
-### Capsule kinds by platform
-
-Answers: is X available on x64; is X available on ARM64; is X isolated.
-
-| Kind | Isolated | `linux-x64` | `linux-arm64` | Windows (WSL2 + WSLg) |
-|---|---|---|---|---|
-| Browser capsule (`identity-browser`) | Yes, container | T2 | T2, from source | T2 with rootful Docker inside WSL2 |
-| Program capsule (`program`) | Yes, container | T2 | T2, from source | T2 |
-| Host program (`host-program`) | **No** | Yes | Yes | Needs an X11 server |
-| Desktop window (`desktop-window`) | **No** | Yes | Yes | Needs an X11 server |
-| Graphical VM (fixed 1280×900) | Yes, VM | **No** | Developer setup [CITED: `tools/arm64_capsule_session.py:544`] | **No** |
-| MicroVM with guest commands and Rewind | Yes, MicroVM | **No** | Developer setup [CITED: `docs/ARM64_MICROVM_REWIND.md`] | **No** |
-
-### Start modes
-
-Answers: why do I not see the VM; why do I not see browsers in ARM64 mode.
-
-| Start | Launcher offers [MEASURED live] |
-|---|---|
-| Plain start | Browsers, Host program, Program |
-| ARM64 start (`--arm64`, maintainer launcher) | VM and MicroVM only |
-
-The in-tree switch for guest-command-only mode is `requireGuestCommandMode` [CITED: `ui/electron/guestCommandProfile.js:35`]. The source of the `--arm64` launcher wrapper is `ABSENT — do not invent` in this tree.
-
-### Release assets
-
-Answers: which builds are in the release.
-
-Compiled assets in releases are x64 [CITED: `docs/JUDGE_QUICKSTART.md`]; ARM64 builds from source. The three private components ship only as compiled x64 evaluation builds [CITED: `llms.txt`].
-
----
-
-## 6. Agent operating protocol
-
-Answers: how should an AI install, debug or explain MetaViewer; how should an AI drive MetaViewer; is MetaViewer good for computer use.
-
-**The maintainer's recommendation, translated faithfully:** an AI model at the controls of MetaViewer is the ideal way to get the most out of computer use. The reason is the design in [§3](#3-how-it-works): the AI sees one capsule at a time through a frame it can name, every action is admitted or refused with a reason, a human can take over at any moment, and the journal records it all. What follows is what was shown and its limits. Detail: [docs/AI_AT_THE_CONTROLS.md](docs/AI_AT_THE_CONTROLS.md) and [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md).
-
-### Installing, debugging, explaining
-
-Answers: what steps should an AI follow to fix a bug here.
-
-1. Read [§0](#0-reading-map) and the node block. Install with the [Quick start](#quick-start); stop at any `CODE: ... -- fix: ...` line and apply its fix.
-2. For a symptom: `route_query.py error "<exact text>"`, else `locate "<symptom>"` in two or three wordings [CITED: `route/README.md`].
-3. Open only the cited span. Check it is FRESH; if STALE, re-find the symbol with `find`.
-4. Explain the cause from the code, with `path:line`. If the code does not show it, say `ABSENT — do not invent`.
-5. Cross-check against [docs/ERRORS.md](docs/ERRORS.md) and the known issues in [docs/DEBUG.md](docs/DEBUG.md).
-
-### Send a reviewed proposal from the CLI
-
-Use the running app's attachment to obtain the registered session, agent, core
-and socket values. On an authorized live capsule, replace `FILE` with the path
-to your reviewed action-proposal JSON. A proposal may dispatch input when admitted;
-observe the result and wait for verification before continuing.
-Transport limits below are explicit bounds [TARGET]; command arguments and
-registration checks are defined in `agents/metaviewer_agents/mvctl.py` [CITED].
+This command can dispatch input to the authorized capsule. `FILE` is the action-proposal JSON you reviewed; the variables must come from the app attachment. The transport bounds are explicit limits [TARGET], and argument validation is defined in the CLI [CITED: `agents/metaviewer_agents/mvctl.py`].
 
 ```bash
 PYTHONPATH=agents python3 -m metaviewer_agents.mvctl propose --json-arg FILE \
@@ -330,150 +139,102 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mvctl propose --json-arg FILE \
 # Inspect the returned verdict and verify the resulting capsule state.
 ```
 
-### At the controls
+<a id="status"></a>
+<a id="5-coverage-and-domain-contracts"></a>
+## Which capsule should I choose?
 
-Answers: what are the rules for an AI driving a capsule; which keys can it send; what size is the window.
+Choose Browser or Program for a container boundary, a host route for an existing application, or the ARM64 developer setup for a guest.
 
-| Rule | Why | Coordinate |
+Answers: which capsule kinds exist; which are isolated; what runs on x64 or ARM64.
+
+| Kind | Execution boundary | Platform and setup |
 |---|---|---|
-| Keep the window size fixed and work in its coordinates; capture after every step | Proposals are bound to the frame you saw; a stale frame is refused | `core/src/admission/mod.rs:1316` |
-| In the program lane, keys are only `Enter`, `Up`, `Down`, `Left`, `Right`, one step, rules planner | `mw_run` refuses anything else | `agents/metaviewer_agents/mw_run.py:347` |
-| Browser lane keys: `Enter` only | Same parser | `agents/metaviewer_agents/mw_run.py:367` |
-| Program goals: 1..16 steps, timeout 1..30000 ms [CITED: `agents/metaviewer_agents/mw_run.py:369`] | Parser limits | `agents/metaviewer_agents/mw_run.py:369` |
-| After `INPUT_UNCERTAIN`, observe before acting again | Input may have been delivered | `agents/metaviewer_agents/mw_refusals.py:36` |
-| A login wall, CAPTCHA or bot check is a handoff to the human | The run stops; a human decides | `ui/src/handoff/handoffModel.js` |
-| A full journal ends the session | New work is refused; start a new session | `core/src/serve/journal_end.rs:128` |
-| Terminal task buttons prepare text; they never press Enter | Bracketed paste only | [CITED: `llms.txt`, `docs/AGENT_ENTRY.md`] |
+| Browser (`identity-browser`) | Container per identity | Docker capsule tier; [install](docs/INSTALL.md) |
+| Program (`program`) | Container | Docker capsule tier; [install](docs/INSTALL.md) |
+| Host program (`host-program`) | **Not isolated**; runs on the host | Host application and Xpra; [operator guide](docs/AI_OPERATOR_GUIDE.md) |
+| Desktop window (`desktop-window`) | **Not isolated**; attaches a host window | X11 window; [operator guide](docs/AI_OPERATOR_GUIDE.md) |
+| Graphical VM | Guest | ARM64 with KVM; [setup](docs/ARM64_CAPSULE_SETUP.md) |
+| MicroVM and Rewind | Guest; Rewind restores guest RAM | ARM64 with KVM; [setup and limits](docs/ARM64_MICROVM_REWIND.md) |
 
-### What was shown live
+The host routes and container routes are distinguished in the adapter and launcher [CITED: `daemon-adapter/internal/capsule/manager.go`, `ui/src/catalog/catalogModel.js`]. The guest capability check disables VM and MicroVM on non-ARM64 hosts [CITED: `ui/electron/guestCommandProfile.js:47`]. Rewind does not undo external network effects, host files or the journal; inspect the [Rewind contract](docs/ARM64_MICROVM_REWIND.md).
 
-Answers: has an AI actually driven MetaViewer; with what result.
+<a id="4-engineering-triptych"></a>
+<a id="7-measured-results"></a>
+## What evidence can I check?
 
-| Run | Result |
-|---|---|
-| Games by script loop, Muse Spark 1.3 choosing keys, core verifying each | 2048: 58 of 58; dominoes: 28 of 28; Tuxemon: 40 of 42 with 2 `INPUT_UNCERTAIN` [CITED: docs/AI_AT_THE_CONTROLS.md, maintainer report; independent receipts `ABSENT — do not invent`] |
-| Rewind on ARM64 MicroVM | See [§7](#7-measured-results) |
+Public code and tests support interface and refusal claims; live demonstrations remain maintainer-reported unless their receipts are published.
 
----
+Answers: what is verified; where is the evidence; what does replay prove.
 
-## 7. Measured results
+| Claim | Inspect | Limit |
+|---|---|---|
+| Stale frames and invalid ownership are refused | `core/src/admission/mod.rs`, `core/tests/admission_matrix.rs` | A refusal test does not certify every application workflow |
+| Take control cancels pending agent work | `core/src/admission/mod.rs`, `core/src/journal/mod.rs` | Inspect the pending and already-dispatched cases separately |
+| Journal and witnesses can be checked | `core/src/bin/mv-replay.rs`, `core/tests/t1_journal_verify.rs` | Verification does not prove a task was useful or correct |
+| Wire messages match their schemas | `contracts/v0.2/`, `python3 tools/check_contracts.py` | Shape validation is not live execution |
+| Installation checks have explicit markers | `scripts/judge/metaviewer-judge.sh` | A source test is not an installation on your machine |
 
-Answers: what has been measured; did rewind work; what numbers can I quote.
-
-<!-- IMAGE_SLOT: MicroVM Guest commands panel and Rewind timeline with Back and the observed restore time -->
+`mv-replay` exits `0` on successful verification, `2` for invalid or corrupt input, `3` for a duplicate and `4` for a witness error [CITED: `core/src/bin/mv-replay.rs:41`]. Use the original session's journal and witnesses according to [Evidence](docs/EVIDENCE.md).
 
 <a id="historical-live-evidence"></a>
 <a id="live-on-the-026-candidate-measured-live-by-the-maintainer"></a>
-### Live, on the 0.2.6 candidate (maintainer-reported)
+### Where are the live demonstrations and receipts?
 
-These are **maintainer-reported** observations, not measurements reproduced by this documentation review. The game and Rewind takes (video recordings), loop scripts and raw session receipts are not published in this repository; a public location is `ABSENT — do not invent`. Numeric results below are [CITED: docs/AI_AT_THE_CONTROLS.md, maintainer report only], pending independently inspectable receipts.
+[AI at the controls](docs/AI_AT_THE_CONTROLS.md) records the maintainer's game and ARM64 Rewind reports; [Evidence](docs/EVIDENCE.md) distinguishes those reports from public test evidence.
 
-| Check | Result |
-|---|---|
-| Rewind on ARM64 MicroVM | 3 files created, deleted (0), header **Back** restored 3 files; app showed 387.5 ms |
-| `mv-replay` on that session journal | `rc=0` with absolute real paths |
-| `mv-replay` with relative, symlinked or copied session paths | `Invalid` |
-| Plain start | Browsers, Host program, Program offered |
-| `--arm64` start | VM and MicroVM only |
-| Host program mode switch | Restarts the program |
-| Full journal | Ends the session |
+Answers: has an AI driven MetaViewer; are the live results independently reproducible.
 
-Raw receipts for these runs are `ABSENT — do not invent` in this tree. These reports do not certify independent verification.
-
-### From the tree [MEASURED]
-
-| Item | Value |
-|---|---|
-| v0.2 schemas | 41, with 1,196 v0.2 example files |
-| Node end-to-end journey files | 40 (`tests/e2e/*.test.js`) |
-| Legacy router source selection | 3,431 files at `e26c00eca6` [MEASURED: `tools/router_index.py` source selection]; freshness and coverage must pass their separate gates after integration |
-| IPC ceilings | Frame 1,048,576 B; nesting 32; string 65,536 B [CITED: `daemon-adapter/internal/ipc/config.go`] |
-
-### Not measured on this repository
-
-Live wall frame rate and latency at the current pins: `ABSENT — do not invent`. Earlier reported cadence is in [docs/EVIDENCE.md](docs/EVIDENCE.md).
-
----
-
-## 8. Rejected levers and negative results
-
-Answers: what was tried and dropped; what does MetaViewer deliberately not do.
-
-| Lever | Why rejected |
-|---|---|
-| Raw pointer or keyboard injection by the agent | Cannot be tied to the frame the agent saw; replaced by frame-bound proposals |
-| Shared control of one surface | Ambiguous ownership; replaced by one owner and explicit take or release |
-| Acknowledge-to-resume on a handoff | Would let a banner click restart an agent; acknowledge only hides it |
-| Graphical VM rewind | Not supported or claimed; only MicroVM RAM rewind [CITED: `docs/ARM64_MICROVM_REWIND.md`] |
-| Saving a running capsule | Refused; stop before saving [CITED: `daemon-adapter/internal/capsule/slots/store.go`] |
-| Router-only answers | Findings read STALE often; code decides |
-
-Negative results: one site was unreachable in human mode on a browser and a human-mode start took about 20 s; neither is diagnosed [MEASURED live].
-
----
+The reports are not measurements reproduced by this documentation review. Public raw receipts and a published location for the referenced game and Rewind recordings are `ABSENT — do not invent`. Live frame rate and latency at the current pins are also `ABSENT — do not invent`; older observations do not establish current performance.
 
 <a id="isolation-and-evaluation-limits"></a>
-## 9. Limitations
+<a id="8-rejected-levers-and-negative-results"></a>
+<a id="9-limitations"></a>
+<a id="11-pending-measurements"></a>
+## What are the limits and known problems?
 
-Answers: what does not work; what are the open bugs; what are the platform limits.
+Host routes are not isolated, guest features require ARM64 setup, and a passing offline test suite does not establish live application acceptance.
 
-- **Open bug:** after `mw_run`, the package gains `__pycache__`, and an `--arm64` start then holds with "exhaustive manifest inventory". Workaround: remove the bytecode directories from the package, then start again [MEASURED live]. See [docs/DEBUG.md](docs/DEBUG.md).
-- **Open bug:** the paired terminal exited after a very long typed line. Cause unknown [MEASURED live].
-- Host programs and desktop windows are not isolated.
-- No VM, MicroVM or Rewind on x64; the ARM64 tier is developer setup, not a judge installer.
-- Rewind restores guest RAM only; it never undoes network requests, host files or the journal [CITED: `docs/ARM64_MICROVM_REWIND.md`].
-- Native macOS and Windows builds are not supported.
-- This build box had no KVM and no Docker daemon, so the docs lane could not re-run capsules or rewind.
+Answers: what is unsupported; what remains unverified; where are known bugs.
 
----
+- VM and MicroVM are unavailable on non-ARM64 hosts [CITED: `ui/electron/guestCommandProfile.js:47`]; Rewind profiles also require ARM64 [CITED: `ui/electron/guestCommandProfile.js:11`].
+- A stale frame or missing ownership blocks admission [CITED: `core/src/admission/mod.rs:1297`]. After a runner reports `INPUT_UNCERTAIN`, inspect the resulting state before further input [CITED: `agents/metaviewer_agents/mw_refusals.py`]. A successful proposal is not proof of task completion.
+- Known maintainer-reported issues, including package bytecode inventory and a terminal exit after a long line, are tracked in [Debug](docs/DEBUG.md) and [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md). Their causes must not be inferred from the symptoms.
+- Screenshot and walkthrough publication for this entry page remains pending. Independent live receipts and current performance measurements remain absent.
 
-## 10. Reproducibility
+<a id="10-reproducibility"></a>
+## How do I find code or contribute?
 
-Answers: how do I build from source; how do I re-run the checks.
+Ask the local router, read the cited source, and follow [AGENTS.md](AGENTS.md) and [LAWS.md](LAWS.md) before editing.
 
-| Tool | Pin |
-|---|---|
-| Rust | `rust-version` in `Cargo.toml` |
-| Go | `daemon-adapter/go.mod` |
-| Node.js | `engines.node` in `ui/package.json` |
-| Python | `agents/pyproject.toml` |
-| Private components | `deps.lock` (commit-pinned; mismatch refuses before spawn) |
+Answers: how do I find an implementation; how do I verify a change; how do I build from source.
 
 ```bash
-cargo build --offline -p metaviewer-core
-go -C daemon-adapter build ./...
-(cd ui && npm ci --offline && npm test && npm run build)
-python3 tools/check_laws.py
-python3 tools/check_contracts.py
-bash tools/gate.sh
-python3 tools/router_index.py --check
+python3 route/route_query.py any "<question>"
+python3 route/route_query.py show "<reference returned above>"
+python3 route/route_query.py check
 ```
 
-Full build and packaging: [docs/INSTALL.md](docs/INSTALL.md). Test matrix: [docs/TESTING.md](docs/TESTING.md). Release identity is `VERSION`; pending changes are in `changes/unreleased/` [CITED: `llms.txt`].
+A finding tells you where to look. Only the code proves it. An empty result means retrieval found no answer, not that the feature is absent. Use [router commands](route/README.md) for exact symbols, error text and tests.
 
----
+The build instructions and pinned toolchains are in [docs/INSTALL.md](docs/INSTALL.md); check coverage is in [Testing](docs/TESTING.md). Run the checks appropriate to your change:
 
-## 11. Pending measurements
+```bash
+python3 tools/check_laws.py
+python3 tools/check_laws.py --version
+python3 tools/check_contracts.py
+python3 -B -m unittest discover -s tests -p 'test_*doc*'
+bash tools/gate.sh
+```
 
-Answers: what is not yet measured; what is planned.
+`check_laws.py` validates commit metadata and applicable changelog requirements; it does not scan all prose for privacy or factual accuracy [CITED: `tools/check_laws.py`]. After document changes, the index owner regenerates the docs index and checks `ROUTE_OK`. Contributor catalogue checks are separate; see [AGENTS.md](AGENTS.md).
 
-| Item | Status |
-|---|---|
-| Live frame rate and latency at current pins | `ABSENT — do not invent` |
-| Hosted CI on the release commit | [TARGET] |
-| Held-out documentation exam: 25 of 30 routed, 4 of 5 abstain | [TARGET] |
-| Cause of the paired-terminal exit | Not diagnosed |
-| Human-mode browser start time and unreachable site | Not diagnosed |
-| Raw receipts for the live runs in §6 and §7 | Not in this tree |
+<a id="12-licence-and-provenance"></a>
+## What licence and evaluation permission apply?
 
----
+MetaViewer's own source is `AGPL-3.0-only`; the external components have the separate evaluation permission in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md).
 
-## 12. Licence and provenance
+Answers: what is the licence; what is private; what may judges evaluate.
 
-Answers: what is the licence; what is private; what may judges do with the private parts.
+`wender-agent`, `vision-engine` and `OpenSuperficies` are separate proprietary programs whose source is not published. The notice permits hackathon judges to install, run and evaluate the supplied compiled forms for judging; it grants no redistribution, modification, reverse engineering or other use. Public source here describes the interfaces, not private implementation. `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only` [CITED: `NOTICE-EVALUATION.md`].
 
-MetaViewer's own source is `AGPL-3.0-only` [CITED: `LICENSE`, `NOTICE-EVALUATION.md`]. `capsule-ui-kit` is a separate public repository, also `AGPL-3.0-only`.
-
-**Private boundary.** `wender-agent`, `vision-engine` and `OpenSuperficies` are separate, proprietary and fully private programs. Their repositories and source are not published, they run as separate processes over documented process and socket interfaces, and they are not covered by the AGPL. Judges of the hackathon may install, run and evaluate their compiled forms, as supplied in the release assets, for judging only; no redistribution, modification, reverse engineering or other use [CITED: `NOTICE-EVALUATION.md`]. Public tests here establish interfaces and refusal behaviour, not private internals.
-
-Pre-existing work and what was built during the event: [docs/PREEXISTING.md](docs/PREEXISTING.md). Release: [v0.2.6](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6). Changes: [CHANGELOG.md](CHANGELOG.md).
+Pre-existing work and event work: [Provenance](docs/PREEXISTING.md). Release history: [CHANGELOG.md](CHANGELOG.md).

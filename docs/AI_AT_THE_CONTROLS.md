@@ -1,175 +1,186 @@
 # An AI at the controls of MetaViewer
 
-Answers: should an AI drive MetaViewer; why use MetaViewer for computer use; how does an AI operate MetaViewer; what was shown live.
+MetaViewer gives an AI a named capsule to operate, a live wall for the person to
+watch, and checked action results to inspect before continuing. The AI still
+needs a concrete task, the correct live binding and a check of the final outcome.
+This page explains that operating model; it is not a live verification report.
 
-**Recommendation of the operator: when a model has to use a computer, give it MetaViewer as the computer.** The model gets one named target per task, every action passes through a core that admits it, checks the visible effect and journals it, and a person watching the same wall can take control at any moment. This document explains that recommendation from the code, shows what was done live, and states the limits.
+Answers: why should an AI use MetaViewer for computer use.
 
-**A finding tells you where to look. Only the code proves it.** Coordinates below are `path:line` on the `docs/v026-base` tree; read the code before repeating a claim. Tags: [MEASURED] observed, [CITED: path] read from that file, [TARGET] a design decision, not a measurement. Unknown facts are written `ABSENT — do not invent`.
-
-Terms used once and then reused:
-
-| Term | Meaning |
-|---|---|
-| Capsule | One live surface on the wall (a browser, a Program, a Host program, an ARM64 VM or MicroVM) with a surface ID and, when bound, an identity |
-| Core | The Rust process `metaviewer-core` that admits or refuses every action and writes the session journal [CITED: core/src/bin/metaviewer-core.rs] |
-| Journal | The append-only record of a session; `mv-replay` re-checks it [CITED: core/src/bin/mv-replay.rs] |
-| Refusal | A verdict such as `HUMAN_HANDOFF`; `INPUT_UNCERTAIN` means input may already have been delivered |
-| Agent CLI | A command-line AI program started in a paired terminal, such as Codex or Muse |
+A **capsule** is a named live task surface or guest session. A **player** acts
+inside one capsule; a **director** arranges and observes the wall. These are
+roles in a workflow, not additional built-in agents. Capsule kinds and their
+boundaries are defined in [WHY_CAPSULES.md](WHY_CAPSULES.md) and
+[CITED: ui/src/catalog/catalogModel.js]. Host programs run as the host user;
+their separate display is not an isolation boundary.
 
 ## 0. Reading map
 
-Answers: where do I start; which section answers my question.
+Choose the document for the next operation; the command protocol lives in
+[AGENT_ENTRY.md](AGENT_ENTRY.md).
 
-| You want | Go to |
+Answers: which document should an AI or judge read next.
+
+| Need | Document |
 |---|---|
-| Why MetaViewer suits an AI that uses a computer | [Section 1](#1-why-metaviewer-suits-computer-use) |
-| Which agent CLIs the app can start | [Section 2](#2-which-agent-clis-work) |
-| What Copy ID for AI and Direct task produce | [Section 3](#3-what-copy-id-for-ai-and-direct-task-give-the-ai) |
-| The steps an AI follows | [Section 4](#4-recipe-an-ai-operating-one-capsule) |
-| What the core and `mw_run` check | [Section 5](#5-what-the-core-and-mw_run-check) |
-| How to read a refusal or a journal | [Section 6](#6-refusals-and-journals-what-the-ai-must-respect) |
-| What was shown live | [Section 7](#7-what-was-shown-live) |
-| What this does not prove | [Section 8](#8-limits-and-negative-results) |
-| Full command reference | [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md), [AGENT_ENTRY.md](AGENT_ENTRY.md), [MW_RUN_FIRST_RUN.md](MW_RUN_FIRST_RUN.md) |
+| Understand the reason for capsules | [Why capsules](WHY_CAPSULES.md) |
+| Arrange the wall, open capsules and use controls | [UI operator guide](AI_OPERATOR_GUIDE.md) |
+| Attach an AI and follow a task button | [Agent entry protocol](AGENT_ENTRY.md) |
+| Run a bounded goal and read its result | [First run](MW_RUN_FIRST_RUN.md) |
+| Build a game, drawing or commentary session | [Computer-use playbook](COMPUTER_USE_PLAYBOOK.md) |
+| Run the portable example programs | [Example entry points](../examples/computer-use/README.md) |
+| Inspect recorded development usage | [Meta AI usage](../META_AI_USAGE.md) |
 
 ## 1. Why MetaViewer suits computer use
 
-Answers: why is MetaViewer good for computer use; what does an AI gain from capsules; why not let the model drive the desktop directly.
+The checked runners bind actions to a particular live capsule and verify their
+results, while the wall keeps the person able to observe and take control.
+They do not make arbitrary desktop coordinates reliable.
 
-An AI that drives a whole desktop by screenshots and clicks has no named target, no check that its click did anything, and no record a person can replay. MetaViewer gives each of those a mechanism:
+Answers: what do capsules add to an AI computer-use loop.
 
-| Problem of raw desktop control | What MetaViewer does | Where |
+| Need | Mechanism | Public source |
 |---|---|---|
-| Which window is the target? | One line `CAPSULE=<surfaceId>  IDENTITY=<profileId>` names it; the runner refuses a different capsule | [CITED: ui/src/wall/capsuleId.js:69], [AGENT_ENTRY.md#observe-the-selected-capsule](AGENT_ENTRY.md#observe-the-selected-capsule) |
-| Did the click do anything? | Program clicks pass only with a visible change, checked by the core and an independent frame comparison; otherwise `MW_PROGRAM_NO_VISIBLE_EFFECT` | [CITED: tools/mw_run_program.md] [TARGET, unit decision] |
-| Was the input delivered twice? | A possibly delivered input returns `INPUT_UNCERTAIN`, rc 5, and must not be retried; it survives the wall deadline | [CITED: agents/metaviewer_agents/mw_refusals.py:36], [CITED: agents/metaviewer_agents/mw_run.py:46] |
-| Who is in control? | Agent input is refused while a person holds control; the person can take control at any time | [CITED: ui/src/surfaces/RoleSurface.vue:561], [CITED: ui/src/activity/activityModel.js:59] |
-| Login, CAPTCHA | The run stops with rc 4 `HUMAN_HANDOFF`; the person handles it | [CITED: tools/mw_run_backend.py:982] |
-| What happened, afterwards? | Every admitted action is journaled; a full journal ends the session and stays replayable | [CITED: core/src/serve/journal_end.rs:125], [JOURNAL_END.md](JOURNAL_END.md) |
-| Many applications at once | The wall shows several capsules side by side on numbered desktops | [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md#5-navigating-the-ui-views-desktops-and-tile-presets) |
+| Select the intended target | Copied capsule and identity, checked against live bindings | [capsuleId.js](../ui/src/wall/capsuleId.js), [program runner](../tools/mw_run_program.py) |
+| Ground a click | A unique observed control name and current frame | [browser runner](../tools/mw_run_browser_goal.py), [program runner](../tools/mw_run_program.py) |
+| Check visible change | Program click verification compares retained frames and rejects clock-only changes | [program runner](../tools/mw_run_program.py) |
+| Keep human control | Agent input is refused during human takeover | [RoleSurface.vue](../ui/src/surfaces/RoleSurface.vue), [program runner](../tools/mw_run_program.py) |
+| Avoid duplicate uncertain input | Stop on `INPUT_UNCERTAIN`; inspect before deciding what follows | [mw_refusals.py](../agents/metaviewer_agents/mw_refusals.py) |
+| Inspect a session afterward | Journal verification with `mv-replay` | [mv-replay.rs](../core/src/bin/mv-replay.rs), [journal lifecycle](JOURNAL_END.md) |
 
-What it costs: the AI acts only through the supported actions (clicks on observed names, explicit text, a few keys), not arbitrary input; each step waits for verification; setup needs the running app and its attachment file. Why capsules are built this way is the subject of the D5 document `docs/WHY_CAPSULES.md` (another lane; if it is missing on your tree: ABSENT — do not invent).
-
-Host programs are real programs on your desktop, started without a container. Do not describe them as isolated [CITED: docs/AI_OPERATOR_GUIDE.md, section 6].
+The cost is deliberate: use supported actions, keep attachment and identity
+current, wait for verification, and inspect the outcome. UI clicks that arrange
+the wall are a separate control path from checked input inside a capsule.
 
 ## 2. Which agent CLIs work
 
-Answers: which AI CLIs does MetaViewer support; can I use Codex, Gemini, OpenCode or Muse; why is my agent not offered.
+The paired terminal offers installed host profiles for the following CLIs;
+a missing executable is omitted, not replaced by another program.
 
-The paired terminal offers exactly four host-owned agent CLI profiles, each only when its binary is installed on the host [CITED: ui/electron/agentProviders.js:7]:
+Answers: which installed agent CLIs can the paired terminal start.
 
-| Profile id | Binary | Ready when the terminal shows | Notes |
-|---|---|---|---|
-| `agent-codex` | `codex` | `OpenAI Codex` or `Ask Codex to do anything`, and a prompt sign | On ARM64 the runtime directory is passed through Codex's own `-c` option [CITED: ui/electron/agentProviders.js:46] |
-| `agent-gemini` | `gemini` | `Type your message` | |
-| `agent-opencode` | `opencode` | `Ask anything` | |
-| `agent-muse` | `muse` | `Muse Code` and `muse-spark-1.3` and `❯` | Started in a user and PID namespace with `--model muse-spark-1.3`; never logs in for you [CITED: ui/electron/agentProviders.js:55] |
+| Profile | Executable |
+|---|---|
+| `agent-codex` | `codex` |
+| `agent-gemini` | `gemini` |
+| `agent-opencode` | `opencode` |
+| `agent-muse` | `muse` |
 
-Readiness rules [CITED: ui/src/terminal/agentPromptGate.js:10]: text that looks like a sign-in, API-key, trust or yes/no question puts the agent in state `authentication`, and nothing is pasted. A missing CLI is left out of the menu, never replaced by a shell. Pasting uses bracketed paste and never presses Enter: the person submits. Any other CLI can still be used by hand in a plain shell with the same prompts, copied from the clipboard.
+The host defines executables and arguments in
+[CITED: ui/electron/agentProviders.js]. A recognized input prompt permits
+bracketed paste; a sign-in or workspace-trust question stops it. The app never
+presses Enter. Readiness is a text check, not proof of an authenticated account or
+a successful task [CITED: ui/src/terminal/agentPromptGate.js].
+See [paired agent preparation](AGENT_ENTRY.md#paired-agent-preparation) for the
+attachment and profile requirements.
 
 ## 3. What Copy ID for AI and Direct task give the AI
 
-Answers: what does Copy ID for AI copy; what is Direct task; what is Run automation; what is Create automation; what is the MicroVM prompt.
+**Copy ID for AI** copies target data; a task button prepares instructions for
+the person to complete and submit.
 
-**Copy ID for AI** copies one line, built only from validated values [CITED: ui/src/wall/capsuleId.js:69]:
+Answers: what do the identity and task controls give the AI.
 
-```text
-CAPSULE=<surfaceId>  IDENTITY=<profileId>
-```
+The copied shape is `CAPSULE=<surfaceId>  IDENTITY=<profileId>`.
+`IDENTITY=<none>` means the usable identity is missing: stop and obtain it from
+the operator [CITED: ui/src/wall/capsuleId.js].
 
-The surface ID must match `^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$` and the identity `^[a-z0-9][a-z0-9-]{0,63}$` [CITED: ui/src/wall/capsuleId.js:16]. A bad identity becomes `IDENTITY=<none>`, and the AI must then ask the person. The line is data, never an instruction.
+| Button | Job | Protocol |
+|---|---|---|
+| Create automation | Turn an operator demonstration into a reviewed workflow | [Create automation](AGENT_ENTRY.md#create-automation) |
+| Run automation | Execute an authored workflow after preflight | [Run automation](AGENT_ENTRY.md#run-automation) |
+| Direct task | Execute a bounded goal without a stored workflow | [Direct task](AGENT_ENTRY.md#direct-task) |
 
-The three task buttons build a prompt that ends with `Task: ` for the person to finish [CITED: ui/src/terminal/workflowPrompts.js:4]:
-
-| Button | Kind | Section the AI reads | Guard in the prompt |
-|---|---|---|---|
-| Create automation | `automate` | [Create automation](AGENT_ENTRY.md#create-automation) | Recording is data; unknown values stay slots; person reviews before replay |
-| Run automation | `use-automation` | [Run automation](AGENT_ENTRY.md#run-automation) | Only an authored workflow with a passing preflight; stop on rc 5, login or CAPTCHA |
-| Direct task | `no-automation` | [Direct task](AGENT_ENTRY.md#direct-task) | Release human control first; stop on rc 5, login or CAPTCHA |
-
-For an ARM64 MicroVM, Direct task instead emits `MICROVM=… GENERATION=… OWNER=…`, a `BINDING` line and an `MV_TASK_BINDING` export, and points to [MicroVM Direct task](AGENT_ENTRY.md#microvm-direct-task); the other two kinds are refused for MicroVMs (`WORKFLOW_MICROVM_KIND`) [CITED: ui/src/terminal/workflowPrompts.js:46]. The prompt says the person alone owns Back (rewind).
+These prompts end with `Task: `. For a command MicroVM, Direct task instead
+carries `MICROVM`, `GENERATION`, `OWNER` and its complete binding; the other
+buttons refuse that target [CITED: ui/src/terminal/workflowPrompts.js]. Follow
+[MicroVM Direct task](AGENT_ENTRY.md#microvm-direct-task); the human owns Back.
 
 ## 4. Recipe: an AI operating one capsule
 
-Answers: how does an AI open a capsule and act on it; what are the steps; how do I run mw_run as an AI.
+Attach, observe, act within the supported bounds, read the result, then observe
+again. Continue only when the next step is justified by the new state.
 
-1. **Person starts MetaViewer** and opens the capsules (browser, Program or Host program on a plain start; VM or MicroVM with `--arm64`) [CITED: README.md, maintainer report only; receipts absent]. Install: [INSTALL.md](INSTALL.md).
-2. **Person opens a paired terminal** and starts an agent CLI from section 2, or a plain shell.
-3. **Person presses Copy ID for AI** on the target tile, then a task button, pastes the identity line where the prompt asks, and writes the task after `Task: `.
-4. **AI sources the attachment** in a subshell, once per task: `ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env; set -a; . "$ENV"; set +a`. It stops if the file is missing or its PID is not live [CITED: docs/AGENT_ENTRY.md, section Attachment and identity].
-5. **AI observes without acting**, using the read-only recipe in [Observe the selected capsule](AGENT_ENTRY.md#observe-the-selected-capsule). It stops with `CAPSULE_IDENTITY_MISMATCH` if the bound surface is not the copied capsule. The observation contains the accessibility snapshot and a bound frame.
-6. **Person releases control** if they took it; the AI checks that control is `agent`.
-7. **AI runs one bounded step** with `mw_run` from `$MV_OPERATOR_REPO`, evidence in a fresh RAM directory:
+Answers: what loop should an AI follow from task to verified outcome.
 
-   ```sh
-   export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-goal.XXXXXX)"
-   PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --surface-kind program \
-     --identity '<profile>' --planner rules --goal '<exact observed name>' --steps 1
-   ```
+1. The person opens the intended capsule and supplies the task and copied ID.
+2. The AI reads the matching section in [AGENT_ENTRY.md](AGENT_ENTRY.md), sources
+   the live attachment in a task subshell and verifies the binding.
+3. The AI observes the target before input. A missing or ambiguous target stops
+   the task. Browser observation and program observation use different backends.
+4. The person releases manual control before agent input. The AI selects a
+   supported action from the current observation, not remembered coordinates.
+5. The AI runs a bounded goal as shown in [MW_RUN_FIRST_RUN.md](MW_RUN_FIRST_RUN.md).
+6. The AI reads the result, report and receipt, and inspects the fresh visible
+   state. A verified action alone does not establish task completion.
+7. The AI either chooses the next supported step, reports the verified outcome,
+   or stops with the exact refusal and evidence needed by the person.
 
-   Options are fixed by the parser [CITED: agents/metaviewer_agents/mw_run.py:339]: `--surface-kind browser|program`, `--goal`, `--text` (1 to 65536 bytes), `--key Enter|Up|Down|Left|Right`, `--steps 1..16`, `--planner rules|muse`. Program keys need `--goal focused-key --steps 1 --planner rules` and no text [CITED: agents/metaviewer_agents/mw_run.py:362], for Host programs only [CITED: tools/mw_run_program.md:68].
-8. **AI reads the single JSON line** `metaviewer.mw_run/v1` with `rc`, `verdict_code`, `receipt` and `report` [CITED: tools/mw_run_backend.py:1049], then observes again. A verified action is not a finished goal.
-9. **On a refusal, the AI stops and reports** (section 6). The person decides what happens next.
+For wall layout, model players and multi-capsule sessions, use the separate
+[playbook](COMPUTER_USE_PLAYBOOK.md#choose-the-control-level).
 
 ## 5. What the core and `mw_run` check
 
-Answers: what does the core verify; how is an AI action checked; what stops a wrong action.
+Checks cover action admission and bounded results, not arbitrary user goals.
 
-| Check | Effect if it fails | Where |
+Answers: which action checks do the core and runner enforce.
+
+| Check | Refusal or result boundary | Source |
 |---|---|---|
-| Argument grammar: goal mode excludes `--site`, `--workflow`, `--slot`; step and timeout bounds | Parser error before any contact with the app | [CITED: agents/metaviewer_agents/mw_run.py:356] |
-| Capsule and identity match the live binding | `CAPSULE_IDENTITY_MISMATCH`, no input | [AGENT_ENTRY.md#observe-the-selected-capsule](AGENT_ENTRY.md#observe-the-selected-capsule) |
-| Agent holds control | `SURFACE_NOT_AGENT_CONTROLLED`, shown as "Take control before proposing this action." | [CITED: ui/src/activity/activityModel.js:59] |
-| Goal names one unique observed element | Refusal; a task description is not grounded | [CITED: tools/mw_run_program.md] |
-| Click had a visible effect outside clocks | `MW_PROGRAM_NO_VISIBLE_EFFECT` | [CITED: tools/mw_run_program.md] |
-| Typed text reads back exactly before optional Enter | Refusal | [CITED: tools/mw_run_browser_goal.md] |
-| Run-level wall deadline | rc 6 `MW_WALL_DEADLINE`, unless the input is uncertain, then rc 5 is kept | [CITED: agents/metaviewer_agents/mw_run.py:1] |
-| Evidence stays private | rc 6 `MW_PRIVATE_OUTPUT` | [CITED: tools/mw_run_backend.py:1056] |
-| Journal has room | `JOURNAL_FULL`: new work refused, capsules stop, journal stays replayable | [CITED: core/src/serve/journal_end.rs:125] |
+| Parser and action budget | Goal mode excludes stored-workflow flags | [mw_run.py](../agents/metaviewer_agents/mw_run.py) |
+| Live identity and control | Wrong binding or human control prevents input | [program runner](../tools/mw_run_program.py), [backend](../tools/mw_run_backend.py) |
+| Browser text | Exact native readback is required before optional Enter | [browser runner](../tools/mw_run_browser_goal.py) |
+| Program text | Readback can be `exact`, `mismatch` or `not_readable`; the last is explicitly uncertified | [program runner](../tools/mw_run_program.py) |
+| Program click | No qualifying visible change returns `MW_PROGRAM_NO_VISIBLE_EFFECT` | [program runner](../tools/mw_run_program.py) |
+| Focused navigation | Host program only, rules planner, no text and a bounded key | [program runner](../tools/mw_run_program.py) |
+| Session capacity | `JOURNAL_FULL` ends admission; preserve the journal | [journal_end.rs](../core/src/serve/journal_end.rs) |
 
 ## 6. Refusals and journals: what the AI must respect
 
-Answers: what does rc 4, rc 5 or rc 6 mean; can the AI retry; how do I replay a session journal; what happens when the journal is full.
+Stop on refusals, and never repeat an input whose delivery is uncertain.
 
-| rc | Code | The AI must |
-|---|---|---|
-| 0 | bounded actions verified | Observe again; check the goal independently |
-| 4 | `HUMAN_HANDOFF` | Stop; the person handles login or CAPTCHA, releases control, then a fresh observation [CITED: tools/mw_run_backend.py:982] |
-| 5 | `INPUT_UNCERTAIN` | Never retry; observe and reconcile first [CITED: agents/metaviewer_agents/mw_refusals.py:36] |
-| 6 | other refusal, such as `MW_RUN_CONFIG` | Read the message, repair the cause, do not work around it [CITED: tools/mw_run_backend.py:1006] |
+Answers: how must an AI handle refusals and session journals.
 
-The full code list and fixes are the D6 documents `docs/ERRORS.md` and `docs/DEBUG.md` (another lane; if missing on your tree: ABSENT — do not invent).
+| Result [CITED: agents/metaviewer_agents/mw_refusals.py, tools/mw_run_backend.py] | Required response |
+|---|---|
+| `rc 0` | Inspect the verdict as well: program text can remain uncertified. Verify the requested outcome. |
+| `rc 4`, `HUMAN_HANDOFF` | The person handles login or CAPTCHA, releases control, then the AI observes afresh. |
+| `rc 5`, `INPUT_UNCERTAIN` | Stop. Input may already have arrived; reconcile the state with the operator. |
+| `rc 6`, refusal | Read the named cause and repair its precondition before a fresh run. |
 
-Journals: a full journal ends the session; start a new session for each long run [CITED: README.md, maintainer report only; receipts absent], [JOURNAL_END.md](JOURNAL_END.md#start-another-session). `mv-replay` re-checks a session journal; it needs absolute real paths: relative, symlinked or copied session paths give `Invalid` [CITED: README.md, maintainer report only; receipts absent].
+A journal is evidence, not a saved host filesystem. Preserve the original private
+session and use [replay instructions](DEBUG.md#replay-a-journal-with-mv-replay).
+For exhaustion, follow [JOURNAL_END.md](JOURNAL_END.md); do not edit the journal to
+continue it.
 
 ## 7. What was shown live
 
-Answers: what did the demo show; did an AI really drive MetaViewer; what were the game results.
+The published descriptions of games, wall operation and guest recovery are
+**maintainer-reported**; this page does not reproduce those runs.
 
-All rows: **maintainer-reported**, not reproduced here. Numeric results are [CITED: README.md, maintainer report only]. Session receipts and video takes are not published in this repository; their public location is `ABSENT — do not invent`.
+Answers: what live evidence is public.
 
-| What | Result | How |
-|---|---|---|
-| AI drove the app UI | Clicked and typed in the app; opened six applications on one wall | Fixed screen coordinates at 1920x1080, a screen capture after each step; some clicks missed |
-| Person and AI together | A person typed requests; the AI opened programs and commentated | Same wall, same session |
-| 2048 (by Gabriele Cirulli, MIT) | 58 of 58 moves verified by the core | Muse Spark 1.3 chose each key through `muse exec` in a script loop; each key sent as a verified action |
-| Dominoes | 28 of 28 verified | Same loop |
-| Tuxemon | 40 of 42 in one run; 2 returned `INPUT_UNCERTAIN` and were not retried | Same loop |
-| Rewind on ARM64 MicroVM | 3 files deleted, Back restored them, 387.5 ms shown by the app; `mv-replay` rc 0 on that journal | [ARM64_MICROVM_REWIND.md](ARM64_MICROVM_REWIND.md) |
-
-Read these results with their conditions: the boards and loop scripts were written for the demo, except the game 2048 itself and Tuxemon; the loop gave the model the list of legal moves; the model picked a key, the core verified that the key was delivered and had an effect. That shows verified delivery of model-chosen keys, not game skill. The loop scripts are not in this repository [MEASURED: no tracked `.py`, `.md`, `.sh` or `.js` file names Tuxemon]; their source: ABSENT — do not invent.
+The [playbook](COMPUTER_USE_PLAYBOOK.md#evidence-limits) states the demonstration
+conditions and links to portable examples. [META_AI_USAGE.md](../META_AI_USAGE.md)
+records the reported game results separately from development usage. Public run
+receipts and original video takes: **ABSENT — do not invent**. Offline example
+tests do not prove GUI input delivery or provider availability.
 
 ## 8. Limits and negative results
 
-Answers: what does this not prove; what failed; known bugs when an AI drives MetaViewer.
+Use the checked paths only within their documented scope, and report any unmet
+precondition instead of claiming a completed task.
 
-- UI driving by coordinates is fragile: it depends on 1920x1080 and missed clicks at times [CITED: README.md, maintainer report only; receipts absent]. The supported path is `mw_run` on observed names, not screen coordinates.
-- A verified action is not a finished task. No task completion, game skill or planning quality is claimed.
-- Supported program actions are clicks, explicit text and, on Host programs, Up, Down, Left, Right, Enter. Desktop-window automation is unsupported [CITED: docs/AGENT_ENTRY.md, section Attachment and identity].
-- Switching a Host program between human and agent restarts it [CITED: README.md, maintainer report only; receipts absent].
-- A plain start offers browsers, Host program and Program; `--arm64` offers VM and MicroVM only [CITED: README.md, maintainer report only; receipts absent]. There is no x64 VM, MicroVM or rewind in this release.
-- Open bug: after an `mw_run`, the package gains `__pycache__`, and a later `--arm64` start then holds with "exhaustive manifest inventory". Workaround: remove the bytecode directories from the package [CITED: README.md, maintainer report only; receipts absent].
-- Open bug: a paired terminal exited after a very long typed line; cause unknown [CITED: README.md, maintainer report only; receipts absent].
-- The AI never types credentials, never solves CAPTCHAs, and never retries an uncertain input. This document makes no claim about automating any website.
-- `wender-agent`, `vision-engine` and `OpenSuperficies` are private; only the boundary in [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md) is stated.
-- Not run in this lane: the app itself. The writing box has no KVM and no docker daemon.
+Answers: where does this operating model stop.
+
+| Boundary | Consequence |
+|---|---|
+| Host program uses host permissions | Do not describe it as isolated. |
+| Desktop window is an existing X11 window | The program runner is not a supported automation path for it. |
+| Command MicroVM has its own binding | Use its SDK recipe; graphical goal commands do not apply. |
+| Model chooses from an observation | Slow inference can outlive the observed state; inspect again. |
+| Fixed-coordinate wall examples | Geometry and labels must be checked before each action. |
+| Unpublished live receipts | Do not turn reported results into independently verified claims. |
+
+The operating claims here are limited to the public code and documentation in
+this repository; live results retain their stated maintainer-reported status.

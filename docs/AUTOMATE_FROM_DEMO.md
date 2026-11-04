@@ -1,61 +1,121 @@
 # Automate from a demo
 
-An attached CLI requires the matching app's private demo-control socket. `DEMO_HOST_UNAVAILABLE` means that the attachment is stale, the app has exited, or the running package predates host-controlled CLI recording. Start the matching package and copy/source its fresh attachment; never fall back to a detached recorder while claiming app-owned recording. Standalone CLI recording without an app attachment retains its direct native mode. The evidence directory and its MetaViewer parent must be owner-only; `UNSAFE_CONTROL_PATH` refuses an unsafe state directory before native recording starts. The owner must repair the selected state path rather than relaxing that gate. The host uses the operator state home captured by the launcher for durable evidence; prompt and check attach to that same controller environment.
+Record a manual demonstration, generate a constrained authoring prompt, then
+validate the resulting site. A checked site is still data: authoring it does
+not authorize replay. The implementation is [tools/mv_demo.py](../tools/mv_demo.py).
 
-Before starting, resolve `ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env` from the original terminal runtime and source it in the tool subshell with `set -a; . "$ENV"; set +a`. Stop if the attachment is absent or its recorded app PID is no longer live; `METAVIEWER_ATTACH` is a launcher stdout prefix, not a UI control. The attachment and a live Agent capsule are prerequisites; a paired shell does not automatically inherit them. `MV_OPERATOR_REPO` selects the operator resources, `MV_MEMORYWEB_REPO` selects the installed authoring checkout, and `MV_MW_HOME` selects private site data. These are different directories. Require `python3 tools/mw_home_check.py --repo .` to pass before authoring.
+## What must be ready before recording?
 
-If Run automation reports `admitted_sites_directory_absent`, no authored site is available in the selected home. This is a model diagnostic, not a successful preflight. Use Create automation to author and check the site there first; do not select a builtin substitute. For a new checkout home, the person can create the gitignored destination with `install -d -m 700 memoryweb/sites` from the MetaViewer checkout, then repeat home admission. An existing home with unsafe permissions, links, tracked files or browser profiles must be repaired by its owner; creating an empty directory does not admit a workflow. [CITED: `tools/mw_home_check.py`, `agents/metaviewer_agents/mw_home.py`]
+You need a running capsule with an active identity, a private evidence directory
+and the correct application attachment. Recording does not create an identity
+or log in for you.
 
-Use a neutral public page for a rehearsal and verify that it actually loads before demonstrating. `http_port_denied` on a local fixture means navigation was refused; it is not a recorded success and does not authorize changing network policy. Do not enter credentials. A stored identity is saved browser data, not an already running capsule. `SURFACE_CREATE_IDENTITY_UNAVAILABLE` means a live or abandoned holder must be resolved before a new start; wait for shutdown to finish, and never delete its lease or stop an unrelated holder. [CITED: `daemon-adapter/internal/capsule/identity_profiles.go`, `tools/mv_identity.py`]
+Answers: demo prerequisites; active identity; app attachment; MemoryWeb home
 
-1. Configure `SRF_IDENTITY_STORE_ROOT`, `MV_SRF_BIN_DIR`, and
-   `MV_SRF_STATE_DIR` as for `tools/mv_identity.py`. Select an existing identity
-   with an active capsule. Complete login yourself before recording; no AI types
-   credentials. Frames can show visible field contents: demonstrate with dummy data.
-2. Run `python3 tools/mv_demo.py record --identity example --demo example-demo`.
-   Open the printed loopback viewer URL and demonstrate the task manually.
-   When attached to the app, the CLI uses its existing host recording controller.
-   The tile and tree show **Recording automation** with the record icon only
-   after the owned recording process announces its viewer. Their **Stop**
-   controls and Ctrl+C in the CLI use the same SIGINT-and-seal operation.
-   Wait for sealing and fresh Agent capture before authoring or replaying.
-   The host wait is unbounded by design: the operator stops the recording.
-3. Stop with Ctrl+C or the tile/tree Stop control and wait for native read-only restoration. A successful
-   recording is exported from RAM to
-   `$XDG_STATE_HOME/metaviewer/demos/example-demo` (default state base:
-   `$HOME/.local/state`). Evidence is private, with per-file SHA-256 digests.
-   Existing demos, symlinks, unknown files, raw event text and incomplete seals refuse.
-4. Set `MV_MEMORYWEB_REPO` to your existing MemoryWeb authoring checkout.
-   Set `MV_MW_HOME` if overriding the gitignored `memoryweb/` home. Run
-   `python3 tools/mv_demo.py prompt --demo example-demo --site example`.
-   Give that fenced prompt and private recording access to your chosen AI.
-5. Have the AI write the site into the admitted home's `sites/example/`.
-   Set `MV_MEMORYWEB_REPO` to an existing MemoryWeb checkout with
-   `sites/README.md`, `templates/site/`, `standards/schemas/mw.v1.schema.json`,
-   and `tools/build_index.py`. No dependency download occurs.
-6. Run `python3 tools/mv_demo.py check --site example`. Home admission runs first;
-   the host copies the checkout, overlays your site, builds its temporary index,
-   then runs the current Python interpreter with
-   `-I tools/build_index.py --root <copy> --check`.
-   Only a successful JSON result admits the authored site for later operator
-   review and replay. This command never runs a workflow or alters the original
-   checkout or site. For Run automation, also author the executable
-   `workflows/<workflow>.json` in the installed `mw.workflow.v1` format and run
-   `python3 tools/mw_home_check.py --repo . --workflow <site>/<workflow>`.
-   An anchored Markdown workflow alone is not an executable workflow. Restore
-   the demonstrated starting page before replay, observe its anchors again,
-   and require the run's receipt and result rather than the model's verdict.
-   Each interactive step must set `locate_wait_ms: 5000`, matching the builtin
-   sites. The site check refuses nonpositive or missing acting-step locate waits
-   before admission with `ACTING_STEP_LOCATE_WAIT_REQUIRED` and a fix hint.
-   Correct the authored data and check again before replay. This selects the
-   builtin acquisition window; runtime/test budgets and schema limits stay fixed.
-   [CITED: `memoryweb-builtin/sites/sample-chat/workflows/new-chat.json`, `tools/mv_demo.py`]
+For a packaged app, follow its fresh attachment as described in
+[AGENT_ENTRY.md](AGENT_ENTRY.md). The pointer is
+`$XDG_RUNTIME_DIR/metaviewer/attach/current.env`; a paired terminal does not
+necessarily inherit it. Source it only in the task subshell and stop if the
+attachment is missing or stale. When `MV_SESSION_ID` is set, the demo CLI uses
+the matching app's controller. It refuses an unavailable controller instead of
+starting a detached recorder. [CITED: ../ui/src/terminal/workflowPrompts.js;
+../tools/mv_demo.py, `remote_demo`]
 
-[TARGET] The following is the single prompt template used by the
-host and the later button. The host substitutes the marked values after checking
-home admission and recording digests. Numeric format requirements below are
-[CITED: MemoryWeb sites/README.md and tools/mwsem.py at the inspected checkout].
+| Setting | Role |
+| --- | --- |
+| `MV_OPERATOR_REPO` | Operator resources selected by the app attachment |
+| `MV_MEMORYWEB_REPO` | Existing MemoryWeb authoring checkout |
+| `MV_MW_HOME` | Optional private site-data home override |
+| `SRF_IDENTITY_STORE_ROOT`, `MV_SRF_BIN_DIR`, `MV_SRF_STATE_DIR` | Native identity and recorder configuration for standalone use |
+
+The authoring checkout must contain the files and template directory checked by
+`authoring_checkout`. It is distinct from the private site-data home. In a source
+checkout, verify the home before authoring:
+
+```sh
+python3 tools/mw_home_check.py --repo .
+```
+
+Use dummy data. Event rows omit typed characters, but captured frames can still
+show them. [CITED: ../tools/mv_demo.py, `validate_events`, `export_demo`]
+
+## How do I record and seal a demonstration?
+
+Run `record`, demonstrate the task in the printed local viewer, then stop and
+wait for the sealed evidence result.
+
+Answers: record demonstration; stop recording; private evidence
+
+```sh
+python3 tools/mv_demo.py record --identity example --demo example-demo
+```
+
+Use an actual active identity in place of `example`. The command prints a
+loopback viewer URL. Stop with Ctrl+C; in an attached app the recording controls
+use the same host-owned stop operation. Wait for completion before authoring.
+[CITED: ../tools/mv_demo.py, `record`, `remote_demo`;
+../ui/electron/demoControl.js, `installDemoControl`]
+
+The export goes under `$XDG_STATE_HOME/metaviewer/demos/<demo>`; the state-home
+fallback is `~/.local/state`. It contains sealed event data, available frames
+and `digests.json`. Existing demo names, unsafe paths, unknown files, leaked
+text fields and incomplete seals refuse. Do not edit the evidence to make it
+pass. [CITED: ../tools/mv_demo.py, `evidence_root`, `export_demo`]
+
+## How do I turn the demonstration into a checked site?
+
+Generate the prompt, let the chosen AI author only inside the admitted site
+directory, then run the checker. Validation does not execute the workflow.
+
+Answers: author from demo; generate prompt; check site; executable workflow
+
+After setting `MV_MEMORYWEB_REPO` to the existing authoring checkout:
+
+```sh
+python3 tools/mv_demo.py prompt --demo example-demo --site example
+python3 tools/mv_demo.py check --site example
+```
+
+`prompt` verifies the evidence digests before substituting its paths into the
+template below. `check` admits the home, copies the site into a disposable copy
+of the authoring checkout, builds its index and checks it. The original checkout
+and site are not changed by that validation.
+[CITED: ../tools/mv_demo.py, `prompt`, `check`]
+
+A replayable workflow needs `workflows/<workflow>.json` in the installed
+`mw.workflow.v1` format; Markdown instructions alone are not executable.
+Each acting step needs a positive `locate_wait_ms`. The template uses
+`5000` ms [CITED: ../tools/mv_demo.py, checker hint and prompt policy]. Then run
+`python3 tools/mw_home_check.py --repo . --workflow <site>/<workflow>` before
+operator-reviewed replay. Restore the demonstrated starting state and observe
+its controls again. See [MW_RUN_FIRST_RUN.md](MW_RUN_FIRST_RUN.md).
+
+## What does a refusal mean here?
+
+A refusal means the recording, attachment or authored data has not passed its
+required check. Repair the named prerequisite; do not substitute fabricated
+evidence or a different site.
+
+Answers: demo refuses; stale attachment; site missing; acting-step wait
+
+| Result or condition | Status and next step |
+| --- | --- |
+| `DEMO_HOST_UNAVAILABLE` | Missing or mismatched live controller; obtain the current app attachment |
+| `DEMO_REFUSED` | Generic failed precondition; inspect the selected identity, private paths, sealed evidence and authoring checkout |
+| `ACTING_STEP_LOCATE_WAIT_REQUIRED` | Invalid acting-step wait; correct the authored workflow and rerun `check` |
+| `admitted_sites_directory_absent` during later replay | No authored site in the selected home; finish authoring and validation first |
+| Input completion becomes uncertain during replay | Keep the result and inspect current state before any further input |
+
+The CLI reports refusals as JSON with `ok: false`. The code deliberately avoids
+returning raw recorder data in its error message.
+[CITED: ../tools/mv_demo.py, `main`; ../agents/metaviewer_agents/mw_owner.py]
+
+## Which authoring prompt does the command produce?
+
+The command uses this template after checking the home and recording digests.
+The placeholders are replaced with the selected private paths and demo name.
+
+Answers: demo authoring prompt; template; variable slots; review before replay
 
 <!-- PROMPT -->
 ```text
@@ -65,7 +125,9 @@ Write only inside this admitted destination: @SITE_DIR@
 Use the MemoryWeb checkout selected by MV_MEMORYWEB_REPO: read sites/README.md,
 templates/site/ and standards/schemas/mw.v1.schema.json before authoring.
 
-The recording has events.jsonl, README.md, final.png and event before/after PNGs.
+The recording has events.jsonl, README.md, a final PNG (final.png or
+final_w<N>.png), and any available event before/after PNGs. Use only files
+actually present; missing event images are not evidence to reconstruct.
 Events are click, dblclick, drag, scroll, key, text and terminal stop. Text rows
 contain text_len only; recorded characters do not exist. Non-printable keys and
 modifier chords may have keysym. Frames are private visual evidence: never copy
@@ -103,13 +165,3 @@ python3 tools/mw_home_check.py --repo . --workflow <site>/<workflow>
 before proposing operator-reviewed replay.
 ```
 <!-- /PROMPT -->
-
-Source verification: OpenSuperficies HEAD matched `3cb86d7` [MEASURED]. The
-contract's view section, CLI record/login dispatch, `ViewRecord`, `DemoEvent`,
-`demoDir`, and README were re-read there. CLI dispatch line positions drifted
-from the context brief; the flags and behavior agree. The recorder regex also
-requires an initial lowercase letter or digit, which the brief omitted; the host
-uses that stricter inspected shape. MemoryWeb's demo semantic
-checks and site folder contract were re-read at the installed checkout. The
-conductor's draft method builds before checking; this host follows that method.
-The mandate is limited to the supplied corpus and the inspected local sources.

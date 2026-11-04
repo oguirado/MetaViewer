@@ -3,15 +3,18 @@
 Answers: error, refusal, failed, why did it fail, what does this code mean, fix
 
 Every refusal of the judge launcher and preflight is a line
-`JUDGE_<CODE>: <problem> -- fix: <command>` on stderr with exit code 2
-[CITED: scripts/judge/metaviewer-judge.sh:48]; `JUDGE_USAGE` for a bad
-subcommand exits 64. Find the code below, read the linked source, then apply the
+`JUDGE_<CODE>: <problem> -- fix: <command>` on stderr with exit code `2`
+[CITED: scripts/judge/metaviewer-judge.sh]. Unknown shell subcommands or options exit `64`, while invalid `MV_JUDGE_HOME`
+values exit `2` [CITED: scripts/judge/metaviewer-judge.sh]. Fetch argument errors exit `2`
+[CITED: scripts/judge/fetch_assets.py]. Warnings and success markers are not refusals. Find the code below, read the linked source, then apply the
 printed fix. The table rows are checked against their source files by
 `tests/test_judge_troubleshooting_docs.py`.
 
 ## Which table do I look in?
 
 Answers: symptom index, where is my error, I saw a message, what was I doing
+
+Choose the table for the operation that failed, then match its exact code.
 
 | What you were doing | Table |
 | --- | --- |
@@ -26,6 +29,8 @@ Answers: symptom index, where is my error, I saw a message, what was I doing
 ## How do I explain a refusal to someone?
 
 Answers: explain a bug, why does this happen, explain to a judge, root cause
+
+Explain the failed source condition and the observed value before proposing a fix.
 
 1. Copy the exact line, including the text after `-- fix:`.
 2. Find the code in the tables below and open the file in its **Source** column.
@@ -53,13 +58,13 @@ from the diagnostic or release maintainer; never paste them literally.
 [Quickstart](JUDGE_QUICKSTART.md) · [Tour and architecture verification table](JUDGE_TOUR.md#architecture-support-at-this-snapshot)
 
 The tour’s architecture table scopes live verification. The release-package x64
-WSL2 evaluation at c26/c27 [CITED: maintainer evaluation] measured browser rules
-goals 10 of 10 [MEASURED]; Open network with its firewall step reached a public
-site with HTTP 200 [MEASURED], with local network and Docker bridge blocked.
+WSL2 evaluation [CITED: maintainer evaluation; raw receipt absent] reported browser rules
+goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent]; Open network with its firewall step reached a public
+site with HTTP 200 [CITED: maintainer evaluation; raw receipt absent], with local network and Docker bridge blocked.
 Agent `gnome-calculator` launched through both Host program and isolated Program;
 Desktop window `gedit` attach, type, resize and closed message, login wall
 `HUMAN_HANDOFF`, and clean stop were observed. Typed calculator `2+3` exited
-with rc 0 [MEASURED] but `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; do not certify
+with rc 0 [CITED: maintainer evaluation; raw receipt absent] but `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; do not certify
 readback or arithmetic. Muse on x64 and real mouse drag under a window manager
 remain unverified. Arm64 kit installation is not separately attested.
 “No known remedy” means stop and preserve the diagnostic, not guess a command
@@ -101,14 +106,16 @@ state before continuing; no source-backed code-specific remedy is available.
 
 Answers: doctor failed, install failed, JUDGE codes, sudo declined, node too old, display not set
 
+Use the failing command’s exact diagnostic; retain its paths and tier when retrying.
+
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
 | `JUDGE_PREFLIGHT_FAIL` | The selected preflight phase found refusals; the count is a summary, not a separate diagnosis. | Read each preceding `JUDGE_…` diagnostic and its `-- fix:`, then run `bash scripts/judge/metaviewer-judge.sh doctor --capsules --before-install` for host prerequisites, or `bash scripts/judge/metaviewer-judge.sh doctor --capsules` for the installed runtime. | [code](../scripts/judge/preflight.sh) |
-| `JUDGE_USAGE` | Invalid command, options, HOME or installation directory. | Run `bash scripts/judge/metaviewer-judge.sh doctor --capsules --before-install`; for an invalid home, `unset MV_JUDGE_HOME`. | [code](../scripts/judge/preflight.sh) |
+| `JUDGE_USAGE` | Invalid command, options, HOME or installation directory. | Correct the option named in the diagnostic; shell subcommands are doctor, install, run and stop. For fetch syntax run `python3 scripts/judge/fetch_assets.py --help`. Restore a normal login HOME; use a dedicated absolute MV_JUDGE_HOME without whitespace or unset that override. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_SUDO` | An administrator step was declined, unavailable or failed; package setup may have failed at sudo authorization or apt-get. | Inspect the printed command and its error. If sudo needs a password or refuses this user, ask an administrator to install the listed packages, then rerun install as your normal user. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_PIDFILE` | The launcher cannot lock or publish its owned process record. | Make the directory named in the diagnostic writable, then rerun the same command. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_RUNNING` | The app or another launcher already owns the run. | For a running app: `bash scripts/judge/metaviewer-judge.sh stop`; for an active launcher: wait for it to finish. | [code](../scripts/judge/metaviewer-judge.sh) |
-| `JUDGE_ASSET` | A release asset, checksum, extraction or receipt cannot be trusted or written. | Follow this occurrence’s printed `-- fix:`; missing sums: `python3 scripts/judge/fetch_assets.py --source "<complete-release-directory>"` (replace the placeholder with the maintainer’s directory). | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_ASSET` | A release asset, checksum, extraction or receipt cannot be trusted or written. | Follow this occurrence’s printed `-- fix:`. For HTTPS fetch, require the matching published release and its independent --sums-sha256 digest; a missing release or digest is a blocker. A local --source directory must contain the complete matching set. Never repair a mismatch by editing SHA256SUMS. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_SYSDEP` | A required system tool or package installation is missing or failed. | Run the exact `sudo apt-get install -y …` printed in `-- fix:`. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_NODE` | The Node runtime is missing or too old. | Run `bash scripts/judge/metaviewer-judge.sh install` to install the kit runtime. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_USERNS` | The required AppArmor profile or loader is unavailable. | Run `bash scripts/judge/metaviewer-judge.sh install`; if the loader is missing, `sudo apt-get install -y apparmor`. | [code](../scripts/judge/preflight.sh) |
@@ -120,7 +127,7 @@ Answers: doctor failed, install failed, JUDGE codes, sudo declined, node too old
 | `JUDGE_NET` | Capsule routes, network, proxy or private proxy metadata are not ready. | Run `bash scripts/judge/metaviewer-judge.sh install --capsules` for missing network setup. For overlapping routes or a mismatched existing proxy, follow the printed operator recovery diagnostic; no general automatic repair is supplied. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_NOT_INSTALLED` | The app or valid installation receipt is absent. | Run `bash scripts/judge/metaviewer-judge.sh install` (add `--capsules` for live capsules). | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_ARCH` | The machine architecture is unsupported. | Use Linux x64 or arm64; no command converts an incompatible host. | [code](../scripts/judge/preflight.sh) |
-| `JUDGE_BUNDLE_ARCH` | The kit or its binaries target a different architecture. | Obtain the tarball for the architecture printed by the script, then run `bash scripts/judge/metaviewer-judge.sh install`. | [code](../scripts/judge/preflight.sh) |
+| `JUDGE_BUNDLE_ARCH` | The kit or its binaries target a different architecture. | Obtain assets for the architecture printed by the script, then rerun install. If no matching assets are published, use the documented source-build prerequisites or stop; never rename x64 files to arm64. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_DISPLAY` | No reachable X display is proved. | For headless installation: `xvfb-run -a bash scripts/judge/metaviewer-judge.sh install --capsules`; if xdpyinfo is missing: `sudo apt-get install -y x11-utils`. For visible use, choose a reachable desktop DISPLAY. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_XDG_RUNTIME` | The login runtime directory is absent or foreign-owned. | Use a desktop logind session; on WSL enable `systemd=true` under `[boot]` in `/etc/wsl.conf`, then run `wsl --shutdown` from Windows. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_SHM` | Shared memory is not tmpfs or has insufficient free capacity. | Free shared memory; for an existing tmpfs at the normal location the source suggests `sudo mount -o remount,size=4g /dev/shm` [CITED: preflight.sh]. Follow the printed path if configured differently. | [code](../scripts/judge/preflight.sh) |
@@ -461,7 +468,7 @@ it. The x64 observation is not permission to bypass the binding check
 | `XPRA_BINDING_REFUSED` | The requested surface cannot use this Xpra binding. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_BOUNDS_REFUSED` | The Xpra tile geometry is invalid or outside supported bounds. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_HOST_CLOSED` | The host tile closed while the operation was pending. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
-| `XPRA_MODE_REFUSED` | Changing the native Xpra input mode failed; on x64, Human Program `gedit` closed its window with this refusal [CITED: operator evaluation, c26/c27]. | Preserve the diagnostic and stop that tile. Human Program `gedit` is not a verified demo route; use the measured Agent calculator or attach an existing harmless `gedit` through Desktop window for those distinct flows. | [code](../ui/electron/roleHost.js) |
+| `XPRA_MODE_REFUSED` | Changing the native Xpra input mode failed; on x64, Human Program `gedit` closed its window with this refusal [CITED: maintainer evaluation; raw receipt absent]. | Preserve the diagnostic and stop that tile. Human Program `gedit` is not a verified demo route; use the measured Agent calculator or attach an existing harmless `gedit` through Desktop window for those distinct flows. | [code](../ui/electron/roleHost.js) |
 | `XPRA_MODE_UNPROVEN` | The native acknowledgement did not prove the requested Xpra input mode. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_PAYLOAD_REFUSED` | The Xpra operation payload is unsupported or invalid. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_ROLE_OWNERSHIP` | The Xpra role or current surface ownership cannot authorize the operation. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
@@ -651,7 +658,7 @@ This troubleshooting mandate is limited to the linked source code and the suppli
 
 Answers: known issues, open bugs, unexplained, pycache, terminal closed, journal full
 
-These were observed on live runs and are not fixed in this release [MEASURED].
+These were observed on live runs and are not fixed in this release [CITED: maintainer evaluation; raw receipt absent].
 
 | Symptom | Cause | Workaround |
 | --- | --- | --- |

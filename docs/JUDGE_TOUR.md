@@ -9,11 +9,16 @@ Commands run from the MetaViewer checkout or the installed public operator tree
 supplied in [AGENT_ENTRY.md](AGENT_ENTRY.md); judge launcher commands run from the kit root.
 Use a graphical Linux session (WSLg for the verified Windows/WSL2 setup).
 
-Verification status below is a reported snapshot for this tour, not current-checkout certification. See the [evidence guide](EVIDENCE.md): raw evaluation notes are absent from this repository. **Verified** means that specific live flow was
-observed; **Available, unverified** means code exists without a supplied live
-result on that architecture. Do not treat a parser test as live verification.
+Verification status below is maintainer-reported, not current-checkout
+certification. See the [evidence guide](EVIDENCE.md): raw evaluation notes and
+receipts are absent from this repository. **Verified** means the maintainer
+reported that specific live flow; **Available, unverified** means code exists
+without a supplied live result on that architecture. Parser tests validate the
+commands without establishing a live result.
 
-**x64 browser automation: verified on local pages through the kit with the rules planner: goal, typing, exact read back, and a login wall stop.**
+**x64 browser automation: verified on local pages**, as reported by the maintainer:
+kit with the rules planner, goal, typing, exact read back and a login wall stop
+[CITED: README.md, maintainer report; raw receipt absent].
 
 **x64 release-package snapshot [CITED: maintainer evaluation; raw receipt absent]: browser rules goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent]; login wall `HUMAN_HANDOFF`; stop clean. Muse on x64 and real mouse drag under a window manager remain unverified.**
 
@@ -127,7 +132,8 @@ This is the measured x64 launch route. Human Program is a separate route;
 
 **Success:** a calculator frame appears with the chosen role. Human input is
 a separate check; the measured x64 result here is Agent launch. **If refused:** inspect the missing binary, image or resource message.
-Use a GUI binary installed on the host and the required program image. Do not
+The binary must be discoverable on the host and usable by the required program
+image [CITED: daemon-adapter/internal/capsule/opening_mode.go]. Do not
 substitute Host program without reviewing its different isolation boundary.
 
 **Architecture:** x64 — isolated Program `gnome-calculator` as Agent verified
@@ -391,6 +397,9 @@ available, separate cleanup verification not documented here.
 ## Architecture support at this snapshot
 
 Answers: x64 vs arm64, what is verified on which architecture, VM, MicroVM, rewind
+
+Use the reported results below to choose a demonstration; none certifies a fresh
+installation or substitutes for observing its output on your machine.
 
 | Flow / limitation | Linux x64 | Linux arm64 |
 | --- | --- | --- |

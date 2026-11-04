@@ -7,8 +7,7 @@ receipts and recordings are not published here** [CITED: maintainer session acco
 The examples are new, portable adaptations, not the original session scripts.
 They have offline checks; they still need acceptance on a live display.
 
-Answers: how can an AI operate MetaViewer; how do I reproduce the computer use session;
-what does this playbook prove.
+Answers: how can an AI reproduce the documented computer-use workflow.
 
 ## The idea
 
@@ -17,7 +16,7 @@ the wall makes several tasks visible together. A player works inside a capsule;
 a director watches the wall and prepares the next task. The director can comment
 on a move without choosing the player's move for it.
 
-Answers: why use capsules for computer use; what does an agent gain over a raw desktop.
+Answers: why use capsules for computer use.
 
 On a raw desktop, a click depends on whichever window has focus. In the checked
 lane, the core checks the selected capsule, ownership and frame before input,
@@ -29,16 +28,14 @@ security boundary. Desktop window attaches an existing real desktop window.
 
 The public boundaries are described in [WHY_CAPSULES.md](WHY_CAPSULES.md),
 [AGENT_ENTRY.md](AGENT_ENTRY.md) and [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
-The external components remain private; only the compiled evaluation permission
-in that notice applies. No private component source or image is supplied here.
+The external components' evaluation permission is defined by that notice.
 
 ## Choose the control level
 
 Use visible UI control to arrange MetaViewer; use the checked lane for supported
 actions inside an Agent capsule. Neither level substitutes for looking afterward.
 
-Answers: should I click the UI or use mw_run; what are the control levels;
-can a browser or Desktop window use the game loop.
+Answers: which control level should I use for a task.
 
 | Level | Use it for | What must be checked |
 |---|---|---|
@@ -49,8 +46,7 @@ can a browser or Desktop window use the game loop.
 `agents/metaviewer_agents/mw_run.py` accepts `--surface-kind program --goal
 focused-key --key` with Enter, Up, Down, Left or Right [CITED:
 agents/metaviewer_agents/mw_run.py]. The key run requires `--steps 1` [CITED:
-agents/metaviewer_agents/mw_run.py]. The older statement in AI_OPERATOR_GUIDE that
-program keys are unsupported does not describe this parser. Browser computer use
+agents/metaviewer_agents/mw_run.py]. Browser computer use
 was **not shown working by this session**; a browser rendered as a Host program
 is still using the program lane. Desktop-window automation is unsupported by
 this lane [CITED: docs/AGENT_ENTRY.md].
@@ -60,8 +56,7 @@ this lane [CITED: docs/AGENT_ENTRY.md].
 Start an installed, verified package on an authorized X11 display, then identify
 its actual window. Never guess the display, package path, identity or attachment.
 
-Answers: how do I start MetaViewer for computer use; what must be installed;
-how do I connect the examples to the running app.
+Answers: how do I prepare the app and examples for computer use.
 
 Follow [INSTALL.md](INSTALL.md#2-installing-from-the-release-package-tarball) or
 [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md) for the package and its permitted
@@ -85,7 +80,10 @@ The launcher uses `MemoryHigh=6G`, `MemoryMax=8G`, `MemorySwapMax=0` [TARGET,
 resource limits]. Keep that terminal running. In another terminal, list windows
 with `wmctrl -lx`; select the intended MetaViewer XID and set `WINDOW` to that
 literal value. Multiple matches require inspection, not choosing the first.
-Ask the window manager to unmaximize it if necessary, then fit and capture:
+Ask the window manager to unmaximize it if necessary and move the client
+window fully into the display, then fit and capture. `fit` resizes only; it does
+not move the window. A negative client origin is refused before capture
+[CITED: examples/computer-use/ui.py].
 
 ```sh
 python3 "$EX/ui.py" --display "$DISPLAY" --window "$WINDOW" \
@@ -95,7 +93,7 @@ python3 "$EX/ui.py" --display "$DISPLAY" --window "$WINDOW" \
 The coordinate reference is a client window of **1920×1080 pixels** [CITED:
 maintainer session account]. The driver verifies that geometry with `xwininfo`.
 It does not scale the capture. If fitting or capture fails, stop and correct the
-window/display. Open `start.png` with the agent's image-viewing tool before input.
+window/display, including the client origin. Open `start.png` with the agent's image-viewing tool before input.
 
 For checked input, open **Copy ID for AI** for the intended capsule, keep the
 actual identity, and follow [AGENT_ENTRY.md#attachment-and-identity](AGENT_ENTRY.md#attachment-and-identity).
@@ -121,8 +119,7 @@ Perform a single visible action, capture it, and inspect its effect before the
 next action. A successful click command proves delivery to X11, not a correct UI
 target. Never act blind.
 
-Answers: what is the computer use operating loop; how do I verify a click;
-what should I do after INPUT_UNCERTAIN.
+Answers: what is the observe-act-verify loop.
 
 1. Look at a fresh full-window frame. Identify the current capsule, layout,
    selected role, dialog and focus. Read the labels you intend to use.
@@ -158,8 +155,7 @@ not coordinates in a scaled contact sheet. Each row requires its confirming
 capture before proceeding. The complete set below covers this playbook's UI
 operations; it is not a claim to enumerate every product control.
 
-Answers: where do I click to add a capsule; where are layout and terminal controls;
-what captures confirm each UI action.
+Answers: how do I locate and confirm the documented UI actions.
 
 | Action and required state | Coordinate [CITED: maintainer session account] or locator | Capture must show |
 |---|---|---|
@@ -200,8 +196,7 @@ not from a successful click. Menu and terminal positions change with tabs.
 Use the kind that matches the task and its admitted host capabilities. Select
 Agent when a checked player will act; select Human for direct manual use.
 
-Answers: how do I create each capsule kind; how do I stop or hide a capsule;
-why should games start in Agent mode.
+Answers: how do I open and stop each capsule kind.
 
 | Kind [CITED: ui/src/catalog/catalogModel.js] | Open through Add capsule | Close and limits |
 |---|---|---|
@@ -225,7 +220,7 @@ Create the supplied Connect Four board as a Host program, verify its identity,
 then start a player in the paired terminal. This game is deliberately small and
 turn-based, so a slow decision does not lose a real-time action window.
 
-Answers: how do I run one game; how do I launch a player in the paired terminal.
+Answers: how do I run a checked player on the example game.
 
 1. Initialize a new match and make its launcher. These paths derive from your
    chosen work directory, not the session machine:
@@ -273,7 +268,7 @@ No completed Tuxemon playthrough is claimed.
 Use independent named wrappers and verified identities for each visible seat;
 share the evidence root so the local player loops share their lane lock.
 
-Answers: how do I run two games side by side; how do I watch four players in a grid.
+Answers: how do I arrange multiple players on the wall.
 
 1. Stop the solo capsule. For **two seats** [TARGET], create a fresh paired
    match and its independent views:
@@ -293,7 +288,9 @@ Answers: how do I run two games side by side; how do I watch four players in a g
 3. Open each paired terminal, verify its identity and run its own bounded
    player with the goal "Play only your displayed seat; STOP when it is not
    your turn." A model that stops because it is waiting needs a new run after the
-   other seat changes the board. Never run two loops for the same seat.
+   other seat changes the board. For a shared match, run only the current
+   turn's player; let it stop before starting the other seat. Do not overlap
+   model decisions on the same match, or run two loops for the same seat.
 4. For **four seats in a 2×2 wall** [TARGET], create a separate match file with
    `connect_four.py init`, then another red/yellow wrapper pair with distinct
    filenames. Add that pair and select `2×2` [CITED: ui/src/App.vue]. Verify which
@@ -301,7 +298,9 @@ Answers: how do I run two games side by side; how do I watch four players in a g
    four-player rules variant.
 5. Hide paired terminals when they obscure boards; use a fresh wall capture to
    inspect all seats. The lock serializes capture/input, not model inference.
-   It coordinates only these example loops. Other tools must not act concurrently.
+   It coordinates only these example loops and does not protect a decision
+   while its model is thinking. Parallel players should use independent matches;
+   other tools must not act on a player's capsule concurrently.
 6. Stop on a journal warning, uncertainty or lost capsule. Do not promise a run
    duration or multiply a single-player throughput measurement.
 
@@ -311,7 +310,7 @@ Have each model return a constrained drawing, then display the results in Host
 program capsules. The supplied viewer interprets shapes as data and executes no
 model-generated code.
 
-Answers: how do I compare model drawings live; how can I display generated art safely.
+Answers: how do I compare model drawings in capsules.
 
 1. Give each installed model CLI the same neutral brief, for example “Draw a
    house and a tree using colored shapes.” Ask for only the object format in
@@ -342,8 +341,7 @@ Any CLI can be a player if an adapter gives it the frame and prompt and returns
 the decision object. The model chooses; the loop validates and the checked lane
 attempts the input.
 
-Answers: how do I plug in a model CLI; how does Muse Spark 1.3 choose game keys;
-what does the generic player return.
+Answers: what contract must a model CLI implement.
 
 Generic adapters accept the illustrated `--image`, `--prompt`, `--schema` paths
 and emit exactly this shape on stdout (diagnostics belong on stderr):
@@ -382,9 +380,9 @@ The inference step cap and run budget above are targets [TARGET]; the flag
 spellings come from the supplied session script [CITED: maintainer session
 account]. The workspace trust selection applies to the new evidence directory.
 The example parses `run.output.delta`, requires `run.terminal.completed`, and
-rejects terminal failure events. The completion event name was also checked with
-the installed CLI's offline echo provider [MEASURED]; this is not an inference
-or account test. A changed event format must fail, not select a guessed key.
+rejects terminal failure events
+[CITED: examples/computer-use/model_keys.py, examples/computer-use/test_examples.py].
+That offline parser check is not an inference or account test. A changed event format must fail, not select a guessed key.
 No account, quota, latency or provider availability is promised. The selected
 CLI is trusted host code: it inherits the user's environment, including the
 attachment, and can access whatever its effective permissions allow. The JSON
@@ -397,8 +395,7 @@ Keep the director's short observation loop separate from slow watchers and model
 calls. Ask a watcher a bounded question about saved images; do not block the
 next necessary capture waiting for its prose.
 
-Answers: how do I commentate live; how should parallel watchers work;
-how do I avoid confusing player decisions with commentary.
+Answers: how do I commentate while players work.
 
 Only one controller may act on a capsule at a time. The local lock does not
 exclude humans or unrelated tools. The checked lane rebinds its own input to a
@@ -423,8 +420,7 @@ Start with a full frame, use a contact sheet to find changes, then inspect the
 original resolution crop to read text. A sheet is navigation evidence, not
 proof that tiny terminal text says what you expect.
 
-Answers: how do I read frames; how do I make a contact sheet or exact crop;
-how do I inspect a recorded take.
+Answers: how do I inspect frames and recordings.
 
 ```sh
 python3 "$EX/frames.py" sheet "$WORK/sheet.png" \
@@ -458,8 +454,7 @@ content out unless explicitly intended.
 A full journal ends the session; guest Rewind restores admitted guest state;
 `mv-replay` checks the journal offline. These are separate operations.
 
-Answers: how do I recover from JOURNAL_FULL; how do I demonstrate Rewind;
-how do I run mv-replay after a take.
+Answers: how do I stop and recover a session without confusing Rewind and replay.
 
 For journal exhaustion, stop all player loops, keep the evidence paths, quit the
 application cleanly, then start a new session. Re-source the new attachment and
@@ -469,24 +464,27 @@ Lost alone does not prove journal exhaustion: read the actual terminal/log code.
 For a Rewind demonstration:
 
 1. Use an already provisioned, available **ARM64 MicroVM** and its live binding.
-   This is unavailable on x64 [CITED: docs/ARM64_MICROVM_REWIND.md]. The program
+   Availability depends on admitted host support and configured guest assets
+   [CITED: ui/src/catalog/catalogModel.js]. The program
    game loop is not a guest-command API.
 2. Follow [AGENT_ENTRY.md#microvm-direct-task](AGENT_ENTRY.md#microvm-direct-task)
    in the paired terminal, retaining the single connection and checked binding.
+   The AI may mark the guest; the person performs Pause, Resume, Back and Stop.
    Create a disposable guest file and read it back. A sample guest command is
    `printf 'before\n' > /tmp/mv-rewind-demo.txt`; verify with
    `test "$(cat /tmp/mv-rewind-demo.txt)" = before`.
 3. Mark the state before deletion using that recipe's `mark_before` step or
-   the enabled **Mark** control. Capture the acknowledged point. Use **Pause**
+   the enabled **Mark** control. Capture the acknowledged point. The person uses **Pause**
    / **Resume** only with their acknowledged states; do not assume a disabled
    control succeeded. The connection's generation advances after a mark.
-4. Delete only the disposable file, verify its absence, then use **Back** to
+4. Delete only the disposable file, verify its absence, then have the person use **Back** to
    choose the saved point. Capture the new acknowledged state and reacquire
    the fresh guest binding before reading the file again. Never reuse a stale
    command generation. Stop on uncertainty rather than forcing a restore.
-5. Show that the file content returned. This is guest recovery; it does not
+5. The AI verifies the file through a newly checked guest binding after the
+   person restores it. Show that the file content returned. This is guest recovery; it does not
    rewind a Host program, the host filesystem or the external journal.
-6. Stop the guest cleanly. Preserve the original session and run its installed
+6. The person stops the guest cleanly. Preserve the original session and run its installed
    verifier with actual absolute paths:
 
    ```sh
@@ -507,8 +505,7 @@ See [DEBUG.md#replay-a-journal-with-mv-replay](DEBUG.md#replay-a-journal-with-mv
 Use the observed error and current code to choose a fix. The session's explanations
 are maintainer reports, not independently reproduced bug diagnoses.
 
-Answers: why did a click miss; why did a player stop; why is the board black;
-what failures did the live session expose.
+Answers: how do I investigate a failed computer-use step.
 
 | Symptom | Cause or evidence boundary | Next action |
 |---|---|---|
@@ -544,8 +541,7 @@ and retained evidence. Do not edit receipts.
 This is a usable procedure with explicit gaps, not proof of general-purpose
 computer use or a ranking of models.
 
-Answers: what has not been proven; what are the limits of the demonstration;
-where did the games come from.
+Answers: what does the demonstration evidence establish.
 
 The coordinate set came from a fixed window size and layout; every step still
 needs a capture. Misses happened. Keys in the demonstrated program lane are
