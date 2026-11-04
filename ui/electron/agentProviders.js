@@ -3,6 +3,7 @@ import {resolveHostBinary,HOST_BINARY_STANDARD_DIRS} from './roleHost.js';
 import {userInfo} from 'node:os';
 import {posix} from 'node:path';
 import {validateProviderEnv,MAX_ENV_VALUE_BYTES,TERMINAL_MAX_PATH_SEGMENTS} from './ptyBroker.js';
+import {claimMuseWorkspace} from './museWorkspace.js';
 export const AGENT_CLI_PROFILES=Object.freeze([
   {id:'agent-codex',binary:'codex',label:'Codex'},
   {id:'agent-gemini',binary:'gemini',label:'Gemini'},
@@ -41,13 +42,15 @@ export function installedAgentProfiles(env,resolve=resolveHostBinary,hostUser=us
       const {path}=resolve(entry.binary,discoveryEnv);
       if(typeof path!=='string' || !path.startsWith('/')) continue;
       let launchEnv=hostEnv;
+      let agentWorkspace;
       let argv=hostEnv && entry.id==='agent-codex'
         ? [path,'-c',`shell_environment_policy.set.XDG_RUNTIME_DIR=${JSON.stringify(hostEnv.XDG_RUNTIME_DIR)}`]
         : [path];
       if(entry.id==='agent-muse') {
         if(!cleanAbsolute(path) || !cleanAbsolute(discoveryEnv.HOME) || !cleanAbsolute(discoveryEnv.XDG_RUNTIME_DIR)
           || !cleanAbsolute(env.MV_OPERATOR_REPO)) throw Error('AGENT_HOST_ENV_UNAVAILABLE');
-        const workspace=/** @type {string} */ (env.MV_OPERATOR_REPO);
+        const workspace=env.MV_MUSE_WORKSPACE===undefined ? /** @type {string} */ (env.MV_OPERATOR_REPO) : claimMuseWorkspace(env);
+        agentWorkspace=workspace;
         const helper=resolve('unshare',discoveryEnv).path;
         if(!cleanAbsolute(helper)) throw Error('AGENT_NAMESPACE_UNAVAILABLE');
         argv=[helper,'--user','--map-current-user','--pid','--fork','--mount-proc','--',path,
@@ -58,7 +61,7 @@ export function installedAgentProfiles(env,resolve=resolveHostBinary,hostUser=us
           XDG_RUNTIME_DIR:discoveryEnv.XDG_RUNTIME_DIR,MUSE_LOGIN:'0',MUSE_NO_AUTO_UPDATE:'1'},
           ['HOME','PATH','TERM','XDG_RUNTIME_DIR','MUSE_LOGIN','MUSE_NO_AUTO_UPDATE']);
       }
-      profiles.set(entry.id,{argv,...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:entry.id==='agent-muse'?env.MV_OPERATOR_REPO:discoveryEnv.HOME}:{}),...(launchEnv?{env:launchEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
+      profiles.set(entry.id,{argv,...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:agentWorkspace??discoveryEnv.HOME}:{}),...(launchEnv?{env:launchEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
     } catch { /* Missing CLI is omitted, never replaced with a shell. */ }
   }
   return profiles;

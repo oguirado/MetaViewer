@@ -409,4 +409,17 @@ retain the app's ownership and symlink checks. This places only this app session
 there; it grants no access to `/dev/shm` and does not disable the sandbox.
 Authentication and trust questions remain the person's responsibility.
 
+For an ephemeral Muse session, run `python3 tools/muse_session.py --app
+/absolute/package/metaviewer` with the existing external
+`SRF_IDENTITY_STORE_ROOT` and normal user runtime environment. The launcher
+creates a fresh owner-only workspace, starts exactly one app, and removes the
+workspace after that app exits. It never copies account or identity files.
+The app keeps its socket, SDK sequence state and temporary MemoryWeb home in
+that workspace. General application temporary files and repository guides
+remain outside it. The Muse profile claims the workspace exclusively and
+refuses broad, aliased, permissive or already-claimed roots. No shell sandbox
+bypass or saved workspace trust is enabled by this launcher. A forced kill can
+interrupt cleanup; retain the root until the owned process closure is verified.
+
+
 Known input markers are deliberately narrow. An unfamiliar CLI release may remain unready and require manual paste. No successful agent task or authenticated account is implied by first output.
