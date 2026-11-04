@@ -1,0 +1,1 @@
+- Keep lost Program capsules available to Stop so their identity can be reopened after verified cleanup without restarting MetaViewer.
