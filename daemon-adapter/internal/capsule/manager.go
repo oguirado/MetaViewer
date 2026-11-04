@@ -1265,7 +1265,7 @@ func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
 		if err == nil && b.NativeKind == "browser" && m.egressState() != "" {
 			err = removeEgressStarted(m.egressState(), b.Surface.ProfileID)
 		}
-		if err == nil && b.NativeKind != "holdings" {
+		if err == nil && b.NativeKind == "program" {
 			err = m.removeOwnedRAMRunDir(b)
 		}
 	}()
