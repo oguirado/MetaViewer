@@ -395,4 +395,12 @@ Create automation, Run automation and Direct task offer installed agent CLIs for
 
 The terminal waits at most 15 seconds [TARGET] for a recognized input prompt, then sends the instructions as one bracketed paste ending in `Task: `. It never sends Enter. Missing CLI, process exit, a changed pair, cancellation, no recognized prompt, or a visible authentication/workspace-trust question stop insertion. Authentication and trust remain the operator's actions. Selecting a workflow again launches a fresh process; this is not an authentication detector. Unpaired controls and plain-shell preparation retain copy-only behavior.
 
+The host-owned **Muse** profile selects `muse-spark-1.3`, Contributor mode and
+maximum reasoning effort for this run. It preserves the app's private
+`XDG_RUNTIME_DIR` in Muse's environment, keeps the normal sandbox and workspace
+trust checks, and does not initiate sign-in or update the installed CLI. A
+compatible Bubblewrap installation is a prerequisite for Muse's Linux shell
+tools; a visible sandbox warning is not proof that an agent task can run.
+Authentication and trust questions remain the person's responsibility.
+
 Known input markers are deliberately narrow. An unfamiliar CLI release may remain unready and require manual paste. No successful agent task or authenticated account is implied by first output.

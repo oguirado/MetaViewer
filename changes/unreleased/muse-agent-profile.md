@@ -1,0 +1,1 @@
+- Add a host-owned Muse Spark Contributor agent profile with maximum effort, isolated process ownership, and gated prompt preparation.

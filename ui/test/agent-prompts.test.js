@@ -19,7 +19,7 @@ function fixture({early='',exit=false}={}) {
 }
 test('installed agents are fixed host argv, missing binaries never become shell profiles',()=>{
   const calls=[],profiles=installedAgentProfiles({HOME:'/isolated-home'},name=>{calls.push(name);if(name!=='codex')throw Error('missing');return {path:'/tools/codex'};});
-  assert.deepEqual(calls,['codex','gemini','opencode']);
+  assert.deepEqual(calls,['codex','gemini','opencode','muse']);
   assert.deepEqual([...profiles.keys()],['agent-codex']);assert.deepEqual(profiles.get('agent-codex').argv,['/tools/codex']);
   assert.equal(profiles.get('agent-codex').cwd,'/isolated-home');assert.equal(profiles.get('agent-codex').env,undefined);
   assert.equal(installedAgentProfiles({},()=>({path:'relative'})).size,0);

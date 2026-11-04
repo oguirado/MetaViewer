@@ -7,6 +7,7 @@ export const AGENT_CLI_PROFILES=Object.freeze([
   {id:'agent-codex',binary:'codex',label:'Codex'},
   {id:'agent-gemini',binary:'gemini',label:'Gemini'},
   {id:'agent-opencode',binary:'opencode',label:'OpenCode'},
+  {id:'agent-muse',binary:'muse',label:'Muse'},
 ]);
 /** @param {unknown} value */
 function cleanAbsolute(value) {
@@ -39,10 +40,23 @@ export function installedAgentProfiles(env,resolve=resolveHostBinary,hostUser=us
     try {
       const {path}=resolve(entry.binary,discoveryEnv);
       if(typeof path!=='string' || !path.startsWith('/')) continue;
-      const argv=hostEnv && entry.id==='agent-codex'
+      let launchEnv=hostEnv;
+      let argv=hostEnv && entry.id==='agent-codex'
         ? [path,'-c',`shell_environment_policy.set.XDG_RUNTIME_DIR=${JSON.stringify(hostEnv.XDG_RUNTIME_DIR)}`]
         : [path];
-      profiles.set(entry.id,{argv,...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:discoveryEnv.HOME}:{}),...(hostEnv?{env:hostEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
+      if(entry.id==='agent-muse') {
+        if(!cleanAbsolute(path) || !cleanAbsolute(discoveryEnv.HOME) || !cleanAbsolute(discoveryEnv.XDG_RUNTIME_DIR)) throw Error('AGENT_HOST_ENV_UNAVAILABLE');
+        const helper=resolve('unshare',discoveryEnv).path;
+        if(!cleanAbsolute(helper)) throw Error('AGENT_NAMESPACE_UNAVAILABLE');
+        argv=[helper,'--user','--map-current-user','--pid','--fork','--mount-proc','--',path,
+          '--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max'];
+        // The TUI keeps its normal sandbox and trust checks. The launcher must
+        // neither initiate a login nor replace the installed CLI during a run.
+        launchEnv=validateProviderEnv({HOME:discoveryEnv.HOME,PATH:discoveryEnv.PATH,TERM:'xterm-256color',
+          XDG_RUNTIME_DIR:discoveryEnv.XDG_RUNTIME_DIR,MUSE_LOGIN:'0',MUSE_NO_AUTO_UPDATE:'1'},
+          ['HOME','PATH','TERM','XDG_RUNTIME_DIR','MUSE_LOGIN','MUSE_NO_AUTO_UPDATE']);
+      }
+      profiles.set(entry.id,{argv,...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:discoveryEnv.HOME}:{}),...(launchEnv?{env:launchEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
     } catch { /* Missing CLI is omitted, never replaced with a shell. */ }
   }
   return profiles;

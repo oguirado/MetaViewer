@@ -12,7 +12,7 @@ test('ARM private-home app resolves and launches the host-user installed CLI wit
  assert.equal(profile.env.PATH.split(':')[0],'/host-person/.local/bin');
  assert.deepEqual(Object.keys(profile.env).sort(),['HOME','PATH','TERM','XDG_RUNTIME_DIR']);
  assert.deepEqual(validateProviderEnv(profile.env,Object.keys(profile.env)),profile.env);
- assert.deepEqual(env,before);assert.equal(calls.length,3);
+ assert.deepEqual(env,before);assert.equal(calls.length,4);
  assert.ok(calls.every(call=>call.context.HOME==='/host-person' && !Object.hasOwn(call.context,'API_TOKEN')));
 });
 test('ARM never discovers a CLI in spoofed HOME and missing binaries stay absent',()=>{
