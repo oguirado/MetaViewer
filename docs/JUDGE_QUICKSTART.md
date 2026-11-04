@@ -203,7 +203,7 @@ no destinations. A running browser capsule is not evidence of working public bro
 Arbitrary public browsing requires a compatible Open image and firewall; this kit does
 not invent wildcard approvals or silently change proxy policy.
 
-The release-package x64 WSL2 evaluation at c26/c27 [CITED: maintainer evaluation]
+The reported release-package x64 WSL2 evaluation [CITED: maintainer evaluation; raw receipt absent]
 verified Open network **with its firewall step**: a public site returned
 HTTP 200 [CITED: maintainer evaluation; raw receipt absent]; local network and Docker bridge access were blocked. This
 result does not certify a legacy kit or an install that declined the firewall.
