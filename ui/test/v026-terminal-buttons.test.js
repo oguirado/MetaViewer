@@ -184,3 +184,49 @@ test('programs() lists a saved-less identity by its name and a missing binary on
   const src = readFileSync(new URL('../electron/roleHost.js', import.meta.url), 'utf8');
   assert.match(src, /try \{ binary = resolveHostBinary\(row\.id/);
 });
+
+async function workflowCopyOracle(createController=createTerminalDeckController) {
+  const writes=[];let copied='',sequence=0,focused=0;
+  const controller=createController({toastDurationMs:0,clipboard:{writeText:async t=>{copied=t;}},
+    broker:{setEnabled:async()=>true,open:async()=>({session:`session-workflow-${++sequence}`}),close:async()=>true},
+    sessionFacade:{attach:async({session})=>({session}),write:req=>writes.push(req),resize(){},ack(){},close(){}}});
+  try {
+    const target=await controller.launchProfile('shell');await controller.launchProfile('shell');
+    controller.registerTerminal(target.id,{focus(){focused++;}});
+    const identity='Capsule: work-profile (surface surface-workflow)';
+    for(const kind of WORKFLOW_PROMPT_KINDS) {
+      const result=await controller.useWorkflowPrompt(kind,identity,target.id);
+      assert.equal(result.ok,true);assert.equal(result.pasted,false);
+      const expected=workflowPrompt(kind).replace('<operator-pasted capsule identity line>',identity);
+      assert.equal(copied,expected);assert(expected.endsWith('\nTask: '));assert(!copied.includes('<operator-pasted'));
+      assert.equal(writes.length,0,'a paired shell is not an attested agent CLI; no bytes or Enter may reach it');
+      assert.match(controller.state.toastMessage,/paste into your agent CLI, not a shell/);
+    }
+    assert.equal(focused,0,'copy must not focus an unattested shell');
+    const absent=await controller.useWorkflowPrompt('automate','',target.id);
+    assert.equal(absent.ok,false);assert.equal(writes.length,0);
+    const stale=await controller.useWorkflowPrompt('automate',identity,'absent');
+    assert.equal(stale.ok,false);assert.equal(writes.length,0);
+    const fallback=await controller.useWorkflowPrompt('automate');
+    assert.equal(fallback.ok,true);assert.equal(fallback.pasted,false);assert.equal(copied,workflowPrompt('automate'));
+    assert.equal(writes.length,0,'unpaired control copies even when other terminals exist');
+    await assert.rejects(()=>controller.useWorkflowPrompt('automate','token=private-value',target.id),/UNSAFE/);
+  } finally {controller.dispose();}
+}
+test('workflow actions copy exact bound instructions without writing to an unattested terminal',()=>workflowCopyOracle());
+test('workflow copy guard rejects a shell-write mutant',async()=>{
+  const url=new URL('../src/terminal/terminalDeckModel.js',import.meta.url),source=readFileSync(url,'utf8');
+  const mutant=source.replace('    const result = await bootstrap(text);', "    if (targetSlotId) writeSessionBytes(findSlot(targetSlotId).slot.sessionId, Array.from(encoder.encode(text + '\\r')));\n    const result = await bootstrap(text);");
+  assert.notEqual(mutant,source);
+  const resolved=mutant.replace(/from\s+(['"])(\.[^'"]+)\1/g,(_all,q,spec)=>`from ${q}${new URL(spec,url).href}${q}`);
+  const altered=await import(`data:text/javascript;base64,${Buffer.from(resolved).toString('base64')}`);
+  await assert.rejects(()=>workflowCopyOracle(altered.createTerminalDeckController),{code:'ERR_ASSERTION'});
+});
+test('workflow copy and Identities use the requested plain labels',()=>{
+  const deck=readFileSync(new URL('../src/terminal/TerminalDeckView.vue',import.meta.url),'utf8');
+  for(const label of ['Create automation','Run automation','Direct task'])assert(deck.includes(`label:'${label}'`));
+  assert.match(deck,/@click="chooseWorkflow\(action\.kind\)"/);
+  assert.match(deck,/if\(!pairMatchesTarget\.value \|\| !focusedPair\.value\) return controller\.useWorkflowPrompt\(kind,workflowIdentity\.value,null\)/);
+  assert.match(deck,/controller\.prepareAgentPrompt\(choice\.kind,pair\.identityLine,pair\.slotId,profileId,current\)/);
+  assert.match(readFileSync(new URL('../src/identities/IdentitiesDialog.vue',import.meta.url),'utf8'),/description="Accounts and saved data for each capsule"/);
+});

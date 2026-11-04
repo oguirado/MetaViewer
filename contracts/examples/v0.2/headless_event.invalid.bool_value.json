@@ -1,0 +1,26 @@
+{
+  "schema": "headless_event/v0.2",
+  "event_id": "event-1",
+  "request_id": "request-1",
+  "event": "completed",
+  "data": {
+    "session": {
+      "schema": "headless_session/v0.2",
+      "workload_id": "workload-example",
+      "generation": 1,
+      "owner_id": "actor-example",
+      "profile_id": "headless-sumsq-v1",
+      "backend": "firecracker",
+      "isa": "aarch64",
+      "phase": "completed",
+      "ownership": "held",
+      "job": {
+        "job_id": "job-example",
+        "operation": "sumsq",
+        "n": 10,
+        "status": "completed",
+        "value": true
+      }
+    }
+  }
+}

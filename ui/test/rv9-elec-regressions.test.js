@@ -21,7 +21,10 @@ import {
   loadMainBindings,
 } from '../electron/main.js';
 import {
+  REWIND_CHANNELS,
   WIRE_CHANNELS,
+  HEADLESS_CHANNELS,
+  GUEST_COMMAND_CHANNELS,
   deliverAuthorityFrame,
   installAuthorityWire,
   recordingDestination,
@@ -788,7 +791,13 @@ test('authority dispose revokes all streams despite one close failure', async (t
   }
   assert.deepEqual(revoked, ['s1:SHUTDOWN', 's2:SHUTDOWN']);
   assert.equal(terminalDisposed, 1);
-  assert.equal(removedChannels.length, Object.keys(WIRE_CHANNELS).length);
+  const guestChannels = ['metaviewer:guest-command.capabilities', 'metaviewer:guest-command.status', 'metaviewer:guest-command.request'];
+  assert.deepEqual(Object.values(GUEST_COMMAND_CHANNELS).sort(), [...guestChannels].sort());
+  const rewindChannels = ['metaviewer:rewind.request', 'metaviewer:rewind.status'];
+  assert.deepEqual(Object.values(REWIND_CHANNELS).sort(), [...rewindChannels].sort());
+  assert.throws(() => assert.deepEqual([...Object.values(REWIND_CHANNELS), 'metaviewer:rewind.foreign'].sort(), [...rewindChannels].sort()), assert.AssertionError);
+  assert.deepEqual([...removedChannels].sort(), [...Object.values(WIRE_CHANNELS), ...Object.values(HEADLESS_CHANNELS), ...guestChannels, ...rewindChannels].sort());
+  assert.equal(removedChannels.length, Object.keys(WIRE_CHANNELS).length + Object.keys(HEADLESS_CHANNELS).length + Object.keys(GUEST_COMMAND_CHANNELS).length + Object.keys(REWIND_CHANNELS).length);
   assert.equal(handlers.size, 0);
 });
 

@@ -125,8 +125,8 @@ test('mounted settings persists then applies and emits the accepted scheme', asy
   const Panel = await component('settings/MvSettingsPanel.vue', value => applied.push(value));
   const mounted = mount(Panel, { settingsHost: { loadSettings: async () => null, saveSettings: async json => { saved.push(json); return true; } }, onSchemeChange: value => emitted.push(value) });
   try {
-    await flush(); nodes(mounted.root).find(node => node.props?.value === 'mv-dark').props.onChange(); await flush();
-    assert.deepEqual(saved, [settings('mv-dark')]); assert.deepEqual(applied, ['mv-light', 'mv-dark']); assert.deepEqual(emitted, applied);
+    await flush(); nodes(mounted.root).find(node => node.props?.value === 'mv-light').props.onChange(); await flush();
+    assert.deepEqual(saved, [settings('mv-light')]); assert.deepEqual(applied, ['mv-dark', 'mv-light']); assert.deepEqual(emitted, applied);
   } finally { mounted.close(); }
 });
 
@@ -146,12 +146,12 @@ test('mounted settings replaces hosts and ignores old load/save completions and 
 
 test('mounted settings emits fallback only if theme application succeeds', async () => {
   const applied = [], emitted = [];
-  const Panel = await component('settings/MvSettingsPanel.vue', value => { applied.push(value); if (value === 'mv-dark') throw new Error('private theme failure'); });
-  const mounted = mount(Panel, { settingsHost: { loadSettings: async () => settings('mv-dark'), saveSettings: async () => true }, onSchemeChange: value => emitted.push(value) });
+  const Panel = await component('settings/MvSettingsPanel.vue', value => { applied.push(value); if (value === 'mv-light') throw new Error('private theme failure'); });
+  const mounted = mount(Panel, { settingsHost: { loadSettings: async () => settings('mv-light'), saveSettings: async () => true }, onSchemeChange: value => emitted.push(value) });
   try {
     await flush(); assert.deepEqual(emitted, []); assert.doesNotMatch(text(mounted.root), /ERR_|private theme failure/);
     mounted.props.settingsHost = { loadSettings: async () => { throw new Error('private load failure'); }, saveSettings: async () => true };
-    await flush(); assert.deepEqual(emitted, ['mv-light']); assert.deepEqual(applied, ['mv-dark', 'mv-light']);
+    await flush(); assert.deepEqual(emitted, ['mv-dark']); assert.deepEqual(applied, ['mv-light', 'mv-dark']);
   } finally { mounted.close(); }
 });
 

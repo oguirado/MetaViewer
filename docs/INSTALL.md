@@ -588,9 +588,9 @@ Packaged demo operations additionally require `MV_OPERATOR_REPO` pointing to an
 operator-owned MetaViewer checkout with the host tools and Git admission.
 [CITED: `tools/mw_home_check.py`, `tools/mv_demo.py`, `ui/tools/package.js`]
 
-**Use MetaViewer** copies only the fenced prompt in [AGENT_ENTRY.md](AGENT_ENTRY.md),
-verbatim including its final newline, then displays **Copied**. It launches no
-workflow. The operator gives that prompt to an agent with an already running,
+Copy the fenced prompt in [AGENT_ENTRY.md](AGENT_ENTRY.md), including its final
+newline. The sidebar entry button is not available in this release. Copying
+launches no workflow. Give that prompt to an agent with an already running,
 logged-in identity and the configured core connection. The entry stops on
 refusal or `HUMAN_HANDOFF`; credentials must never be passed as text slots.
 [CITED: `ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]

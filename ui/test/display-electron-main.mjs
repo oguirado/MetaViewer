@@ -15,9 +15,14 @@ const shellRoot = process.env.MV_DISPLAY_E2E_SHELL_ROOT;
 const moduleUrl = name => shellRoot?.endsWith('.asar')
   ? pathToFileURL(join(shellRoot, 'electron', name)).href
   : new URL('../electron/' + name, import.meta.url).href;
+const bootStage = stage => process.stderr.write(`DISPLAY_E2E_BOOT stage=${stage}\n`);
+bootStage('ENTRY');
 const { findForbiddenEnv } = await import(moduleUrl('coreLauncher.js'));
+bootStage('CORE_LAUNCHER');
 const { createMainBindings } = await import(moduleUrl('hostBindings.js'));
+bootStage('HOST_BINDINGS');
 const { bootProductionMain, registerPrivilegedScheme, createLayoutBridge, DEFAULT_GEOMETRY, ELECTRON_PIN } = await import(moduleUrl('main.js'));
+bootStage('MAIN_IMPORTED');
 
 electron.app.disableHardwareAcceleration();
 for (const flag of ['disable-gpu', 'disable-gpu-compositing', 'disable-dev-shm-usage']) electron.app.commandLine.appendSwitch(flag);
@@ -107,7 +112,9 @@ async function run() {
       };
       publish(); writer = setInterval(publish, 1000 / 30);
     };
+    bootStage('BINDINGS_START');
     host = await createMainBindings({ env });
+    bootStage('BINDINGS_READY');
     assert.ok(shellRoot);
     electron.app.setPath('userData', join(root, 'profile'));
     const app = new Proxy(electron.app, { get(target, key) {

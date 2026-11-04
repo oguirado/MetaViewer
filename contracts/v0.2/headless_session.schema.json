@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/headless_session.schema.json",
+  "title": "headless_session",
+  "description": "Additive bounded headless fixed-job message; never a graphical action or arbitrary shell.",
+  "$defs": {
+    "workload_id": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 73,
+      "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 9,
+      "maxLength": 72,
+      "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 5,
+      "maxLength": 68,
+      "pattern": "^job-[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 70,
+      "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "owner_id": {
+      "type": "string",
+      "minLength": 7,
+      "maxLength": 70,
+      "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "n": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 10000
+    },
+    "value": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 333383335000
+    },
+    "job": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "job_id": {
+              "$ref": "headless_session.schema.json#/$defs/job_id"
+            },
+            "operation": {
+              "const": "sumsq"
+            },
+            "n": {
+              "$ref": "headless_session.schema.json#/$defs/n"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "unknown"
+              ],
+              "maxLength": 16
+            },
+            "value": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "job_id",
+            "operation",
+            "n",
+            "status",
+            "value"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        },
+        {
+          "type": "object",
+          "properties": {
+            "job_id": {
+              "$ref": "headless_session.schema.json#/$defs/job_id"
+            },
+            "operation": {
+              "const": "sumsq"
+            },
+            "n": {
+              "$ref": "headless_session.schema.json#/$defs/n"
+            },
+            "status": {
+              "const": "completed"
+            },
+            "value": {
+              "$ref": "headless_session.schema.json#/$defs/value"
+            }
+          },
+          "required": [
+            "job_id",
+            "operation",
+            "n",
+            "status",
+            "value"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_session/v0.2"
+        },
+        "workload_id": {
+          "$ref": "headless_session.schema.json#/$defs/workload_id"
+        },
+        "generation": {
+          "$ref": "headless_session.schema.json#/$defs/generation"
+        },
+        "owner_id": {
+          "$ref": "headless_session.schema.json#/$defs/owner_id"
+        },
+        "profile_id": {
+          "const": "headless-sumsq-v1"
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "firecracker",
+            "qemu"
+          ],
+          "maxLength": 16
+        },
+        "isa": {
+          "type": "string",
+          "enum": [
+            "aarch64",
+            "x86_64"
+          ],
+          "maxLength": 16
+        },
+        "job": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "headless_session.schema.json#/$defs/job"
+            }
+          ]
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "starting",
+            "ready",
+            "running",
+            "completed",
+            "stopping",
+            "uncertain"
+          ],
+          "maxLength": 16
+        },
+        "ownership": {
+          "const": "held"
+        }
+      },
+      "required": [
+        "schema",
+        "workload_id",
+        "generation",
+        "owner_id",
+        "profile_id",
+        "backend",
+        "isa",
+        "job",
+        "phase",
+        "ownership"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_session/v0.2"
+        },
+        "workload_id": {
+          "$ref": "headless_session.schema.json#/$defs/workload_id"
+        },
+        "generation": {
+          "$ref": "headless_session.schema.json#/$defs/generation"
+        },
+        "owner_id": {
+          "$ref": "headless_session.schema.json#/$defs/owner_id"
+        },
+        "profile_id": {
+          "const": "headless-sumsq-v1"
+        },
+        "backend": {
+          "type": "string",
+          "enum": [
+            "firecracker",
+            "qemu"
+          ],
+          "maxLength": 16
+        },
+        "isa": {
+          "type": "string",
+          "enum": [
+            "aarch64",
+            "x86_64"
+          ],
+          "maxLength": 16
+        },
+        "job": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "headless_session.schema.json#/$defs/job"
+            }
+          ]
+        },
+        "phase": {
+          "const": "stopped"
+        },
+        "ownership": {
+          "const": "released"
+        }
+      },
+      "required": [
+        "schema",
+        "workload_id",
+        "generation",
+        "owner_id",
+        "profile_id",
+        "backend",
+        "isa",
+        "job",
+        "phase",
+        "ownership"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    }
+  ]
+}

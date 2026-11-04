@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/capsule_capabilities.schema.json",
+  "title": "capsule_capabilities",
+  "description": "Sanitized host-only capability getter result; not an envelope body. Unsupported hosts cannot advertise ARM capsules.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "capsule_capabilities/v0.2"
+        },
+        "supported_host": {
+          "const": true
+        },
+        "vm": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "available": {
+                  "const": true
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]*$"
+                }
+              },
+              "required": [
+                "available",
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "available": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^(?=[\\s\\S]*[^ \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[^\\x00-\\x1f\\x7f/\\\\]*$"
+                }
+              },
+              "required": [
+                "available",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "microvm": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "available": {
+                  "const": true
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]*$"
+                }
+              },
+              "required": [
+                "available",
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "available": {
+                  "const": false
+                },
+                "reason": {
+                  "type": "string",
+                  "maxLength": 256,
+                  "pattern": "^(?=[\\s\\S]*[^ \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[^\\x00-\\x1f\\x7f/\\\\]*$"
+                }
+              },
+              "required": [
+                "available",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "supported_host",
+        "vm",
+        "microvm"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "capsule_capabilities/v0.2"
+        },
+        "supported_host": {
+          "const": false
+        },
+        "vm": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "const": false
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^(?=[\\s\\S]*[^ \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[^\\x00-\\x1f\\x7f/\\\\]*$"
+            }
+          },
+          "required": [
+            "available",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        "microvm": {
+          "type": "object",
+          "properties": {
+            "available": {
+              "const": false
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 256,
+              "pattern": "^(?=[\\s\\S]*[^ \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff])[^\\x00-\\x1f\\x7f/\\\\]*$"
+            }
+          },
+          "required": [
+            "available",
+            "reason"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schema",
+        "supported_host",
+        "vm",
+        "microvm"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

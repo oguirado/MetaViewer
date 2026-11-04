@@ -9,9 +9,12 @@ only to the provided MetaViewer sources and the pinned UI kit surface.
 
 ## Header and tile actions
 
-The header exposes Use MetaViewer and the current Identities dialog directly.
-More contains Automate from a demo, Storyboard, Settings, Open in multislot and
-Terminal. Activating a secondary action closes More.
+The Use MetaViewer sidebar entry is removed for this release. The host entry
+prompt API remains available.
+The left working tree groups Humans and Agents by desktop and capsule, with
+real state, counts and pending handoffs. Selecting a capsule restores and focuses
+its tile. Identities and Settings remain available in the sidebar and rail.
+Storyboard is unavailable in release 0.2.6; its code and fixtures are retained.
 
 Each role tile has a menu beside its mode badge in the panel header. The human
 menu offers Switch to agent mode, I logged in and Stop capsule. The agent menu

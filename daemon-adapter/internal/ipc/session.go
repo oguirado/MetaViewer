@@ -103,7 +103,7 @@ func Serve(ctx context.Context, listener *net.UnixListener, cfg Config, policy P
 					return
 				}
 				// No version fallback: the successor union supplies hello only in v0.2.
-				if envelope.Schema != "envelope/v0.2" || envelope.Seq == 0 || envelope.Nonce == "" || envelope.From.Component != "core" || envelope.To.Component != "daemon" {
+				if envelope.Schema != EnvelopeSchema(envelope.Body) || envelope.Seq == 0 || envelope.Nonce == "" || envelope.From.Component != "core" || envelope.To.Component != "daemon" {
 					refuse()
 					return
 				}
