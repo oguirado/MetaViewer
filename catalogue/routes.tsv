@@ -321,6 +321,7 @@ v028-ref.md	changes/unreleased/v028-ref.md
 v028-slots-core.md	changes/unreleased/v028-slots-core.md
 v028-slots-store.md	changes/unreleased/v028-slots-store.md
 v028-slots-ui.md	changes/unreleased/v028-slots-ui.md
+v028-slots.md	changes/unreleased/v028-slots.md
 v028-tiles.md	changes/unreleased/v028-tiles.md
 vm-capsule-create.md	changes/unreleased/vm-capsule-create.md
 vm-microvm-roadmap.md	changes/unreleased/vm-microvm-roadmap.md
@@ -1849,6 +1850,7 @@ ringmode_test.go	daemon-adapter/internal/capsule/ringmode_test.go
 role_test.go	daemon-adapter/internal/capsule/role_test.go
 shared_roots_test.go	daemon-adapter/internal/capsule/shared_roots_test.go
 copy_guard_test.go	daemon-adapter/internal/capsule/slots/copy_guard_test.go
+retention_test.go	daemon-adapter/internal/capsule/slots/retention_test.go
 store.go	daemon-adapter/internal/capsule/slots/store.go
 store_test.go	daemon-adapter/internal/capsule/slots/store_test.go
 slots_bridge.go	daemon-adapter/internal/capsule/slots_bridge.go
