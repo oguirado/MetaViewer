@@ -3,9 +3,9 @@ export const DESKTOP_SCHEMA = 'metaviewer.desktops/v1';
 /** Maximum persistent walls per view [TARGET]. */
 export const MAX_DESKTOPS_PER_VIEW = 16;
 export const VIEWS = Object.freeze(['human', 'agent']);
-export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'focus-strip', 'floating']);
+export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'grid-3x2', 'focus-strip', 'floating']);
 
-/** @typedef {{id:number,preset:string|null,layout:any}} Desktop */
+/** @typedef {{id:number,preset:string|null,layout:any,snapGrid?:{cols:number,rows:number},identityCells?:Record<string,{col:number,row:number}>}} Desktop */
 /** @typedef {{schema:string,activeView:string,views:Record<string,{active:number,next:number,desktops:Desktop[]}>,assignments:Record<string,{view:string,desktop:number}>}} DesktopState */
 /** @returns {DesktopState} */
 export function createDesktopState() {
@@ -28,7 +28,13 @@ export function validateDesktopState(state, validateLayout = (_layout) => false)
         !Array.isArray(group.desktops) || !group.desktops.length || group.desktops.length > MAX_DESKTOPS_PER_VIEW) return false;
     const ids = new Set();
     for (const desktop of group.desktops) {
-      if (!keys(desktop,['id','preset','layout']) || !number(desktop.id) || ids.has(desktop.id) ||
+      // [TARGET, unit decision] Optional per-desktop snap grid; legacy profiles remain valid.
+      const grid = plain(desktop) ? desktop.snapGrid : undefined;
+      if (grid !== undefined && (!keys(grid,['cols','rows']) ||
+          ![grid.cols,grid.rows].every(n => Number.isInteger(n) && n >= 1 && n <= 5))) return false;
+      const cells = desktop?.identityCells;
+      if (cells !== undefined && (!plain(cells) || Object.keys(cells).length > 256 || Object.entries(cells).some(([id,cell]) => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id) || ['__proto__','constructor','prototype'].includes(id) || !keys(cell,['col','row']) || ![cell.col,cell.row].every(n=>Number.isInteger(n) && n >= 0 && n < 5)))) return false;
+      if (!keys(desktop,['id','preset','layout',...(grid === undefined ? [] : ['snapGrid']),...(cells === undefined ? [] : ['identityCells'])]) || !number(desktop.id) || ids.has(desktop.id) ||
           desktop.id >= group.next || (desktop.preset !== null && !PRESETS.includes(desktop.preset)) ||
           (desktop.layout !== null && (!plain(desktop.layout) || !validateLayout(desktop.layout)))) return false;
       ids.add(desktop.id);

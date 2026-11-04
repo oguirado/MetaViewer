@@ -44,6 +44,9 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 		if header.Schema == "hello/v0.2" {
 			return nil, nil
 		}
+		if header.Schema == "capsule_state_request/v0.2" {
+			return dispatchState(ctx, manager, envelope)
+		}
 		var request capsule.Request
 		if err := json.Unmarshal(envelope.Body, &request); err != nil {
 			return nil, err
@@ -147,4 +150,25 @@ func listSnapshots(events []json.RawMessage) ([]json.RawMessage, error) {
 		out = append(out, encoded)
 	}
 	return out, nil
+}
+
+func dispatchState(ctx context.Context, manager *capsule.Manager, envelope ipc.Envelope) ([]json.RawMessage, error) {
+	if envelope.From.Component != "core" {
+		return nil, errors.New("core state authority required")
+	}
+	var request capsule.StateRequest
+	if err := json.Unmarshal(envelope.Body, &request); err != nil {
+		return nil, err
+	}
+	if stream, ok := ctx.Value(streamKey{}).(streamSession); ok {
+		// State I/O never occupies the shared data lane or manager capture mutex.
+		go func() {
+			work, cancel := context.WithTimeout(stream.ctx, 3*time.Minute)
+			defer cancel()
+			_ = stream.emit(work, manager.HandleState(work, request))
+		}()
+		return nil, nil
+	}
+	return []json.RawMessage{manager.HandleState(ctx, request)}, nil
+
 }

@@ -578,17 +578,17 @@ class DecoderConformanceTests(unittest.TestCase):
 
         names_all = [name for name, _, _ in self.fixture_cases]
         names_488 = [n for n in names_all if n != "surface_input.invalid.chord_overflow.json"]
-        self.assertEqual(len(names_488), 488)
-        self.assertIn(len(names_all), (488, 489))
+        self.assertEqual(len(names_488), 542)
+        self.assertIn(len(names_all), (542, 543))
         self.assertIn("surface_request.invalid.origin_unknown.json", names_488)
         self.assertEqual(
             hashlib.sha256("\n".join(names_488).encode("utf-8")).hexdigest(),
-            "0152797c88a120d4870524f0b8cbed6eeae16a2e0a0089a895968987a89d3e8a",
+            "65d137826119d750852c08194f55097822dc6a7113efeba2be35d715d8cf1773",
         )
-        if len(names_all) == 489:
+        if len(names_all) == 543:
             self.assertEqual(
                 hashlib.sha256("\n".join(names_all).encode("utf-8")).hexdigest(),
-                "ca0ef707054090c6576c47ca7838b5a43da82767ec7e4da195787d7c9589d9c0",
+                "fb0b7d559fe823b623dc0556c1d04ddd848705b68603db27b0c91185c5dd6038",
             )
         for idx, (name, _, expected) in enumerate(self.fixture_cases):
             self.assertTrue(

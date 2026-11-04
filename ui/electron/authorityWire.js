@@ -1,3 +1,4 @@
+import { stateRequest, stateEvent } from './preload.js';
 // @ts-check
 /** [TARGET, unit decision] Host binding for the authority lane. Core requests use
  * {op:'propose'|'intent',json}; the core remains the admission authority. A trusted
@@ -32,7 +33,7 @@ import { createTerminalFacade, validateProviderArgv } from './ptyBroker.js';
 let profilePickerModulePromise = null;
 
 export const WIRE_CHANNELS = Object.freeze({
-  loadSettings:'metaviewer:settings.load', saveSettings:'metaviewer:settings.save',
+  slotRequest:'metaviewer:capsule-state.request', loadSettings:'metaviewer:settings.load', saveSettings:'metaviewer:settings.save',
   recordingDestination:'metaviewer:recording.destination', nestedDepth:'metaviewer:nested.depth',
   selfCapsuleId:'metaviewer:nested.self', propose:'metaviewer:authority.propose',
   intent:'metaviewer:authority.intent',
@@ -866,6 +867,11 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     return {ok:false,code:wireCode};
   };
   const handlers = {
+    slotRequest: async (/** @type {any} */ request) => {
+      if (identity.depth !== null || disposed) throw new Error('DISPLAY_ONLY');
+      const body=stateRequest(request);
+      return stateEvent(await core.request({op:'capsule-state',request:body}));
+    },
     loadSettings: async () => {
       const loaded = await store.load();
       const parsed = typeof loaded === 'string' ? validateHostSettings(loaded) : DEFAULT_SETTINGS;
@@ -1230,7 +1236,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         continue;
       }
       const channel=ALL_WIRE_CHANNELS[/** @type {keyof typeof ALL_WIRE_CHANNELS} */(name)];
-      const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
+      const arity=['slotRequest','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
       ipcMain.handle(channel,/** @param {unknown} event @param {...any} args */ async (event,...args) => {
         if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
         const vmCreate = name === 'createSurface' && args.length === 1 && exactDataKeys(args[0],'kind') && args[0].kind === 'vm';

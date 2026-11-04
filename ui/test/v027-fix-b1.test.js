@@ -183,7 +183,14 @@ test('F09/F51 Bootstrap paste destination and selected identity are visible besi
   const source=read('../src/terminal/TerminalDeckView.vue');
   const template=parse(source).descriptor.template.content;
   assert.match(template,/Paste Copy ID for AI here/);
-  assert.match(template,/Selected capsule identity:[\s\S]*?\{\{\s*pastedBootstrapText\s*\}\}/);
+  assert.match(template,/class="mv-terminal-deck__identity-pill"/);
+  assert.match(template,/Capsule ID:/);
+  assert.match(template,/:value="focusedPair\?\.surfaceId \?\? pastedBootstrapText"/);
+  assert.match(template,/placeholder="Paste AI ID…"/);
+  assert.match(template,/id="terminal-deck-bootstrap-paste-target"/);
+  assert.match(template,/:readonly="!!focusedPair"/);
+  assert.match(template,/@input="onBootstrapInput"/);
+  assert.match(source,/focusedPair\.value\?\.identityLine \?\? pastedBootstrapText\.value/);
 });
 
 test('F52 repeated close during grace leaves no stale confirmation, without any exit event',async()=>{
