@@ -27,12 +27,13 @@ test('V027 K2 typed capture refusal supplies visible recovery while success stay
 
 import {parse,compileScript} from '@vue/compiler-sfc';
 import * as vue from 'vue';
+import * as recordingElapsed from '../src/recording/useRecordingElapsed.js';
 import vm from 'node:vm';
 function chromeView(state) {
   const source=readFileSync(new URL('../src/wall/TileCaptureChrome.vue',import.meta.url),'utf8');
   const {descriptor}=parse(source);
   let code=compileScript(descriptor,{id:'k2-chrome',inlineTemplate:true}).content;
-  const deps={vue,'./tileCapture.js':capture,
+  const deps={vue,'./tileCapture.js':capture,'../recording/useRecordingElapsed.js':recordingElapsed,
     '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue':{default:{render:()=>null}},
     '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue':{default:{render:()=>null}}};
   globalThis.__k2deps=deps;

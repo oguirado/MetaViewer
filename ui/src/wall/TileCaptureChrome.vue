@@ -8,6 +8,7 @@
 import { computed, inject, onBeforeUnmount, shallowRef } from 'vue';
 import SaasRecordButton from '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue';
 import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
+import { useRecordingElapsed } from '../recording/useRecordingElapsed.js';
 import {
   TILE_CAPTURE_UNAVAILABLE_REASON,
   isCaptureUnavailable,
@@ -61,6 +62,7 @@ const props = defineProps({
   surfaceId: { type: String, default: '' },
   profileId: { type: String, default: '' },
   tileState: { type: String, default: '' },
+  clock: { type: Object, default: null },
   clipboard: { type: /** @type {import('vue').PropType<import('./capsuleId.js').CapsuleClipboardLike | null>} */ (Object), default: null },
 });
 
@@ -105,9 +107,10 @@ const shotReason = computed(() => {
   return '';
 });
 
+const elapsed = useRecordingElapsed(() => ({phase:phase.value,elapsedMs:entry.value?.elapsedMs}),() => props.clock);
 const badgeText = computed(() => tileBadgeText({
   phase: phase.value,
-  elapsedMs: entry.value?.elapsedMs,
+  elapsedMs: elapsed.value,
 }));
 const badgeVariant = computed(() => demoActive.value ? 'recording' : tileBadgeVariant({ phase: phase.value }));
 const badgeTitle = computed(() => `Phase ${phase.value}`);
