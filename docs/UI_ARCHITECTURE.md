@@ -2,6 +2,34 @@
 
 Status: design sealed within the boundaries below [TARGET]; runtime integration and release qualification BLOCKED. This document specifies behavior, not installed APIs or measured product performance. All proposed names, paths, schemas, events, limits and writer units are [TARGET] unless an evidence citation says otherwise. Versions, schema names, section numbers and identifiers are identities, not measurements.
 
+<a id="implemented-ui-map"></a>
+## Where the implemented UI lives
+
+Answers: where is the UI code; which files render tiles, the launcher and the
+terminal; is this document the current UI.
+
+This document is the design that preceded the code. Its §13 paths
+(`src/renderer/...`, `books/...`) are proposals that were never created, and the
+research file `ANSWERS_par3_r1.md` it cites is not in this repository:
+`ABSENT — do not invent`. The implemented UI is:
+
+| Concern | Implemented in |
+| --- | --- |
+| Electron main, security flags, core spawn | `ui/electron/main.js`, `ui/electron/coreLauncher.js` |
+| Renderer facade over fixed IPC channels | `ui/electron/preload.js` |
+| Frame verification before tiles | `ui/electron/frameReader.js` |
+| Wall grid and tile layout | `ui/src/wall/WallWorkspace.vue` |
+| One capsule tile, role badge, not-isolated warnings | `ui/src/surfaces/RoleSurface.vue:532-533` |
+| Add capsule launcher and kind list | `ui/src/catalog/CatalogLauncher.vue`, `ui/src/catalog/catalogModel.js:98-135` |
+| Multislot attachment | `ui/src/multislot/` |
+| Paired and side terminals | `ui/src/terminal/`, `ui/electron/terminalHost.js`, `ui/electron/ptyBroker.js` |
+| UI intents and local projection | `ui/src/core/intents.js`, `ui/src/core/projection.js` |
+| Settings store | `ui/src/settings/settingsModel.js` |
+| Pinned capsule-ui-kit | `ui/kit.lock.json` |
+
+Why the UI holds no authority, and what each capsule kind isolates:
+[WHY_CAPSULES.md#separation](WHY_CAPSULES.md#separation).
+
 <a id="reading-map"></a>
 Reading map: authority and requirements §1; decisions and dependencies §2; components §3; state/persistence §4; IPC §5; multislot §6; drawer §7; tokens §8; operability §9; rendering §10; products §11; gates §12; writer units §13; risks §14. Evidence Q01–Q23 refers to the corresponding section of `ANSWERS_par3_r1.md` in this directory. Those answers are research claims, not package verification.
 
