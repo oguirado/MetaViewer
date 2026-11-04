@@ -1164,10 +1164,10 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
     assert.deepEqual(Object.keys(api.operator).sort(), operatorKeys);
     assert.throws(() => assert.deepEqual(Object.keys({ ...api.operator, unexpected: {} }).sort(), operatorKeys),
       { code: 'ERR_ASSERTION' });
-    assert.deepEqual(Object.keys(api.operator.demo).sort(), ['check', 'prompt', 'start', 'stop']);
+    assert.deepEqual(Object.keys(api.operator.demo).sort(), ['check', 'prompt', 'start', 'state', 'stop', 'subscribe']);
     assert.deepEqual(Object.keys(api.operator.entry).sort(), ['copy']);
     assert.throws(() => assert.deepEqual(Object.keys({ ...api.operator.demo, unexpected() {} }).sort(),
-      ['check', 'prompt', 'start', 'stop']), { code: 'ERR_ASSERTION' });
+      ['check', 'prompt', 'start', 'state', 'stop', 'subscribe']), { code: 'ERR_ASSERTION' });
     assert.deepEqual(Object.keys(api.operator.identity).sort(), ['create', 'delete', 'list', 'login', 'show']);
     assert.deepEqual(Object.keys(api.operator.egress).sort(), ['get', 'set']);
     assert.deepEqual(Object.keys(api.operator.handoff).sort(), ['ack', 'list', 'subscribe']);
