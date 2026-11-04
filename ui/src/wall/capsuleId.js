@@ -157,14 +157,17 @@ export function capsuleCopyAvailable(clipboard) {
 }
 
 /**
- * Copies the ready line. Never throws; every outcome is a projected state.
+ * Copies only the full capsule identifier. The legacy export name remains
+ * stable; prompt preparation uses buildCapsuleReadyLine separately.
+ * Never throws; every outcome is a projected state.
  * @param {{ surfaceId?: unknown, profileId?: unknown }} ids Host-issued ids.
  * @param {CapsuleClipboardLike|null|undefined} clipboard Injected clipboard; falls back to the ambient one.
  * @returns {Promise<{ state: 'copied'|'unavailable', reason: string, text: string }>}
  */
 export async function copyCapsuleReadyLine(ids, clipboard) {
-  const text = buildCapsuleReadyLine(ids);
-  if (text === null) return { state: 'unavailable', reason: 'ERR_CAPSULE_ID_INVALID', text: '' };
+  const surfaceId = ids?.surfaceId;
+  if (!isCapsuleSurfaceId(surfaceId)) return { state: 'unavailable', reason: 'ERR_CAPSULE_ID_INVALID', text: '' };
+  const text = /** @type {string} */ (surfaceId);
   if (utf8ByteLength(text) > CAPSULE_READY_LINE_MAX_BYTES) {
     return { state: 'unavailable', reason: 'ERR_CAPSULE_LINE_TOO_LARGE', text: '' };
   }
