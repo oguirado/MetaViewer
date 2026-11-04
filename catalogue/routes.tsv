@@ -76,6 +76,7 @@ test_frames_parity.py	agents/tests/test_frames_parity.py
 test_fuzz_envelope.py	agents/tests/test_fuzz_envelope.py
 test_fx2_agents_a.py	agents/tests/test_fx2_agents_a.py
 test_fx2_agents_b.py	agents/tests/test_fx2_agents_b.py
+testgue-210c670e83df	agents/tests/test_guest_bootstrap_barrier.py
 test_guest_command.py	agents/tests/test_guest_command.py
 testgue-ff100edafb47	agents/tests/test_guest_command_contracts.py
 test_headless.py	agents/tests/test_headless.py
@@ -217,6 +218,7 @@ launcher-role-step.md	changes/unreleased/launcher-role-step.md
 launcher-two-kinds.md	changes/unreleased/launcher-two-kinds.md
 main-rss-headroom.md	changes/unreleased/main-rss-headroom.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
+microvm-host-agent.md	changes/unreleased/microvm-host-agent.md
 microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
 microvm-2ad050142531	changes/unreleased/microvm-rewind-theme.md
 microvm-f937fea84c3b	changes/unreleased/microvm-workspace-presentation.md
@@ -1731,6 +1733,7 @@ rewind_flow.rs	core/src/rewind_flow.rs
 b1stale-69333dbae5b5	core/src/serve/b1_stale_frame_tests.rs
 canonical.rs	core/src/serve/canonical.rs
 serve-capture.rs	core/src/serve/capture.rs
+guest_agent_replay.rs	core/src/serve/guest_agent_replay.rs
 guestco-bd3eb2342cae	core/src/serve/guest_command.rs
 serve-headless.rs	core/src/serve/headless.rs
 journal_end.rs	core/src/serve/journal_end.rs
@@ -2912,6 +2915,11 @@ launche-aca9e07890ae	ui/test/launcher-recent-launch.test.js
 layout-load.test.js	ui/test/layout-load.test.js
 live-host-xpra.mjs	ui/test/live-host-xpra.mjs
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
+microvm-9d05fa323787	ui/test/microvm-agent-host-profile.test.js
+microvm-6c4892fc1489	ui/test/microvm-agent-prompt-delivery.test.js
+microvm-f8ba8f8cfb46	ui/test/microvm-agent-prompt-recipe.test.js
+microvm-07f31d8d2e40	ui/test/microvm-agent-prompt.test.js
+microvm-b270d5ac69d2	ui/test/microvm-tile-controls.test.js
 multica-199756b14b9b	ui/test/multicap-profile-picker.test.js
 multisl-cc0b2c69edc0	ui/test/multislot-u5a-ui.test.js
 multisl-575193d23c36	ui/test/multislotfix-sweep.test.js
