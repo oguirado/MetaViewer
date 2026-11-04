@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Launch one owned normal ARM capsule session from the protected local registry."""
 import argparse
+from contextlib import contextmanager
+import select
+import socket
 import fcntl
 import importlib.util
 import json
@@ -560,6 +563,60 @@ def child_environment(value, root, agent, profile, transport, normal=None, hoste
     return env
 
 
+def ui_bus_policy():
+    # Keep desktop integration, but never expose the user manager to Chromium.
+    # Portal registration otherwise moves Electron out of its guardian scope.
+    return ['--filter', '--talk=org.freedesktop.portal.Desktop',
+            '--talk=org.freedesktop.portal.Documents', '--talk=org.freedesktop.Notifications',
+            '--talk=org.a11y.Bus', '--talk=ca.desrt.dconf', '--talk=org.gtk.vfs.*']
+
+
+def ui_bus_address(root):
+    return 'unix:path=' + str(root / 'host-runtime' / 'ui-bus')
+
+
+def ui_bus_executable():
+    binary = Path('/usr/bin/xdg-dbus-proxy').resolve(strict=True)
+    info = binary.stat()
+    setup.need(stat.S_ISREG(info.st_mode) and info.st_uid == 0
+               and not info.st_mode & 0o022 and info.st_mode & 0o111,
+               'protected desktop bus proxy required')
+    return str(binary)
+
+
+@contextmanager
+def guarded_ui_bus(root, transport, group):
+    # The original UI bus remains bound by PLAN and its socket identity. Only
+    # Electron receives this filtered endpoint; manager operations use their
+    # separate explicit bus. The proxy inherits the original guardian cgroup.
+    endpoint = root / 'host-runtime' / 'ui-bus'
+    setup.need(not endpoint.exists() and not endpoint.is_symlink(), 'UI bus endpoint already exists')
+    parent, child = socket.socketpair()
+    proxy = None
+    try:
+        proxy = subprocess.Popen([ui_bus_executable(), '--fd=' + str(child.fileno()),
+                                  transport['dbus_session_bus_address'], str(endpoint), *ui_bus_policy()],
+                                 env=manager_environment(), pass_fds=(child.fileno(),))
+        child.close()
+        ready, _, _ = select.select([parent], [], [], 5)
+        setup.need(bool(ready) and len(parent.recv(1)) == 1 and proxy.poll() is None,
+                   'UI bus proxy readiness unknown')
+        identity = process_identity(proxy.pid)
+        setup.need(identity is not None and identity['cgroup'] == group,
+                   'UI bus proxy outside guardian')
+        info = endpoint.lstat()
+        setup.need(stat.S_ISSOCK(info.st_mode) and info.st_uid == os.getuid(), 'UI bus proxy socket custody')
+        setup.write_new(root / 'ui-bus-proxy.json', {'process': identity,
+                        'upstream': transport['dbus_session_bus_address'], 'endpoint': str(endpoint),
+                        'policy': ui_bus_policy()})
+        yield ui_bus_address(root)
+    finally:
+        child.close()
+        parent.close()  # --fd shutdown; never signal an unbound PID.
+        if proxy is not None:
+            setup.need(proxy.wait(timeout=5) == 0, 'UI bus proxy closure unknown')
+
+
 def internal(root):
     root = setup.private_dir(root)
     plan = setup.decode(setup.read(root / 'PLAN.json', private=True))
@@ -613,13 +670,15 @@ def internal(root):
     inventory_append(root, inventory, 'app_pending', id='app')
     record(root, 'app_spawn_pending', agent_instance=agent, actor=protected['owner_id'])
     guard()
-    app = subprocess.Popen([plan['app']], env=env, cwd=str(root / 'home'))
-    identity = process_identity(app.pid)
-    setup.need(identity is not None and identity['cgroup'] == group, 'app start binding unknown')
-    inventory_append(root, inventory, 'app_bound', id='app', pid=app.pid,
-                     start_ticks=identity['start_ticks'], cgroup=identity['cgroup'])
-    record(root, 'app_spawned', pid=app.pid)
-    rc = wait_app(app, identity, root, plan, guardian, inventory)
+    with guarded_ui_bus(root, transport, group) as ui_bus:
+        env['DBUS_SESSION_BUS_ADDRESS'] = ui_bus
+        app = subprocess.Popen([plan['app']], env=env, cwd=str(root / 'home'))
+        identity = process_identity(app.pid)
+        setup.need(identity is not None and identity['cgroup'] == group, 'app start binding unknown')
+        inventory_append(root, inventory, 'app_bound', id='app', pid=app.pid,
+                         start_ticks=identity['start_ticks'], cgroup=identity['cgroup'])
+        record(root, 'app_spawned', pid=app.pid)
+        rc = wait_app(app, identity, root, plan, guardian, inventory)
     record(root, 'app_exited_closure_unproven', returncode=rc)
     inventory.seal_inventory(root / 'inventory-config.json', 'setup', Path(__file__).resolve())
     return rc
@@ -635,6 +694,7 @@ def launch(app, source_root, transport_path, expected_commit, launcher_pid, laun
     setup.need(type(expected_commit) is str and re.fullmatch('[0-9a-f]{40}', expected_commit)
                and expected_commit == value['source_commit'], 'sealed package/source mismatch')
     setup.interpreter_check(value)
+    ui_bus_executable()  # Refuse an unavailable/unsafe proxy before holding a session.
     if rewind:
         rewind_sources(value)  # Refuse missing or changed closure before custody/effects.
     # Both helper files must be installed protected before even a held marker.

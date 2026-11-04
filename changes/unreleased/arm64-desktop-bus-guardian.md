@@ -1,0 +1,1 @@
+- Keep normal ARM64 sessions inside their guardian when Chromium registers desktop portals, preserving a filtered desktop bus and refusing an unavailable protected proxy.
