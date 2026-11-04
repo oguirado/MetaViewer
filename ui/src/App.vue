@@ -1454,9 +1454,9 @@ const mergedRows = () => {
   const base = baseFeed.getProjection()?.rows || [];
   const ids = new Set(base.map(row => row.id));
   return [...base.map(row => {
-    const native = nativeRows.value.find(item => item.id === row.id && item.hostWindow)
+    const native = nativeRows.value.find(item => item.id === row.id && (item.hostWindow || item.hostXpra))
       || (row.backendLifecycle === 'lost' && typeof nativeWindowMetadata !== 'undefined' ? nativeWindowMetadata.get(row.id) : undefined);
-    return native ? {...row,title:native.title,hostWindow:native.hostWindow} : row;
+    return native ? {...row,title:native.title,hostWindow:native.hostWindow,hostXpra:native.hostXpra,notIsolated:native.notIsolated} : row;
   }),...nativeRows.value.filter(row => !ids.has(row.id))];
 };
 const nativeSnapshot = () => {
@@ -1487,15 +1487,15 @@ async function pollNativeSurfaces() {
     const availabilityChanged = !nativeLoaded || nativePollFailed;
     nativeLoaded = true; nativePollFailed = false;
     const admitted = listed.filter(item => item?.schema === 'metaviewer.role_surface/v0.3'
-      && (item.role === 'human' || item.role === 'agent' && item.hostWindow)
+      && (item.role === 'human' || item.role === 'agent' && (item.hostWindow || item.hostXpra))
       && item.surface?.schema === 'surface/v0.2' && item.surface.state === 'active'
-      && (item.surface.control === 'human' || item.hostWindow && item.surface.control === 'agent'));
-    const next = admitted.map(({surface:s,hostWindow,role}) => ({id:s.surface_id,surfaceId:s.surface_id,title:hostWindow?.title || s.profile_id,profile_id:s.profile_id,hostWindow,role,
+      && (item.surface.control === 'human' || (item.hostWindow || item.hostXpra) && item.surface.control === 'agent'));
+    const next = admitted.map(({surface:s,hostWindow,hostXpra,role}) => ({id:s.surface_id,surfaceId:s.surface_id,title:hostWindow?.title || s.profile_id,profile_id:s.profile_id,hostWindow,hostXpra,role,
       backendLifecycle:s.state,generation:null,visibility:s.visibility,control:s.control,display:s.display,geometry:s.geometry,
       attachmentState:'live',refusal:null}));
     if (typeof nativeWindowMetadata !== 'undefined') {
-      for (const row of next) if (row.hostWindow) nativeWindowMetadata.set(row.id,{title:row.title});
-      const retained = new Set([...next.filter(row => row.hostWindow), ...(baseFeed.getProjection()?.rows || []).filter(row => row.backendLifecycle === 'lost')].map(row => row.id));
+      for (const row of next) if (row.hostWindow || row.hostXpra) nativeWindowMetadata.set(row.id,{title:row.title,notIsolated:true});
+      const retained = new Set([...next.filter(row => row.hostWindow || row.hostXpra), ...(baseFeed.getProjection()?.rows || []).filter(row => row.backendLifecycle === 'lost')].map(row => row.id));
       for (const id of nativeWindowMetadata.keys()) if (!retained.has(id)) nativeWindowMetadata.delete(id);
     }
     if (!availabilityChanged && JSON.stringify(next) === JSON.stringify(nativeRows.value)) return;
@@ -1525,6 +1525,46 @@ const rows = computed(() => {
     && (row.backendLifecycle !== 'lost' || admitLostRows.value)) ?? [];
   return admitted.filter(row => !nestedMode.displayOnly || applyNestedWall([row], nestedMode).rows.length > 0);
 });
+/** Pure presentation of admitted projection rows; ownership is never activity.
+ * @param {any[]} sourceRows
+ * @param {import('../electron/desktopLayout.js').DesktopState} state
+ * @param {string[]} pendingIds
+ * @param {string[]} minimizedIds */
+function buildWorkingTree(sourceRows, state, pendingIds, minimizedIds) {
+  const pending = new Set(pendingIds), minimized = new Set(minimizedIds);
+  return ['human','agent'].map(view => {
+    const desktops = state.views[view].desktops.map(desktop => ({id:desktop.id,capsules:sourceRows.filter(row => state.assignments[row.id]?.view === view && state.assignments[row.id]?.desktop === desktop.id).map(row => {
+      const needsYou = pending.has(row.id);
+      const lost = row.backendLifecycle === 'lost';
+      const error = Boolean(row.refusal || row.readinessError);
+      const connecting = row.attachmentState !== 'live';
+      const acting = row.aiSessionActivity === 'busy' || ['admitting','accepted','executing'].includes(row.dispatchOutcome);
+      const status = needsYou ? 'Needs you' : lost ? 'Lost' : error ? 'Error' : connecting ? 'Connecting' : minimized.has(row.id) || row.visibility === 'folded' ? 'Minimized' : acting && view === 'agent' ? 'Acting' : view === 'human' ? 'Human' : 'Agent';
+      const tone = needsYou || error ? 'attention' : lost ? 'lost' : connecting ? 'pending' : acting && view === 'agent' ? 'active' : 'quiet';
+      return {id:row.id,title:surfaceLabel(row),status,tone,needsYou,notIsolated:Boolean(row.hostWindow || row.hostXpra || row.notIsolated),symbol:needsYou || error ? '▲' : row.hostWindow || row.hostXpra ? '⚠' : lost ? '○' : connecting ? '◐' : acting && view === 'agent' ? 'ϟ' : '●'};
+    })}));
+    return {id:view,label:view === 'human' ? 'Humans' : 'Agents',desktops,count:desktops.reduce((n,d)=>n+d.capsules.length,0),needsYou:desktops.some(d=>d.capsules.some(c=>c.needsYou))};
+  });
+}
+const treeHandoffs = ref(/** @type {string[]} */ ([]));
+const treeCollapsed = ref(/** @type {Record<string,boolean>} */ ({}));
+const navigationTree = computed(() => buildWorkingTree(rows.value,desktopState.value,treeHandoffs.value,closedPanels.value));
+/** @param {string} view @param {number} desktop */
+function treeDesktopExpanded(view,desktop) { return !treeCollapsed.value[`${view}/${desktop}`]; }
+/** @param {string} view @param {number} desktop */
+function toggleTreeDesktop(view,desktop) { const key=`${view}/${desktop}`; treeCollapsed.value={...treeCollapsed.value,[key]:!treeCollapsed.value[key]}; }
+/** @param {string} view @param {number} desktop */
+function selectTreeDesktop(view,desktop) { selectGlobalView(view); wall.value?.selectDesktop(desktop); treeCollapsed.value={...treeCollapsed.value,[`${view}/${desktop}`]:false}; }
+/** @param {string} id */
+async function selectTreeCapsule(id) {
+  if (!rows.value.some(row=>row.id === id)) return;
+  const home=desktopState.value.assignments[id];
+  if (!home) return;
+  selectTreeDesktop(home.view,home.desktop);
+  await nextTick();
+  const result=wall.value?.revealSurface(id,'tab');
+  if (result?.ok) { markPanelOpen(id); selectedCapsuleId.value=id; }
+}
 // Reconcile only changed authoritative visibility, retaining pending local
 // presentation across unrelated feed updates and removing departed surfaces.
 watch(() => rows.value.map(row => /** @type {[string, string]} */ ([row.id, row.visibility])), (next, previous = []) => {
@@ -1642,22 +1682,38 @@ onMounted(() => {
     <aside v-if="!nestedMode.displayOnly" class="mv-navigation" :class="{ 'mv-navigation--collapsed': !railOpen }" aria-label="Workspace navigation">
       <div class="mv-navigation-brand"><UiButton label="Navigation" id="shell/navigation/toggle" data-semantic-anchor="shell/navigation/toggle" type="button" :aria-expanded="railOpen" :aria-label="railOpen ? 'Collapse navigation' : 'Expand navigation'" @click="railOpen = !railOpen">☰</UiButton><strong v-if="railOpen">MetaViewer</strong></div>
       <div class="mv-navigation-scroll">
-        <div class="mv-views" role="group" aria-label="Capsule views">
-          <div v-for="view in ['human','agent']" :key="view" class="mv-view-column">
-            <UiButton :id="`view-${view}`" :data-semantic-anchor="`wall/view/${view}`" class="mv-view-button" :label="view === 'human' ? 'Humans' : 'Agents'" :aria-pressed="desktopState.activeView === view" @click="selectGlobalView(view)" />
-            <div v-if="desktopState.activeView === view" class="mv-desktop-numbers" :aria-label="`${view === 'human' ? 'Humans' : 'Agents'} desktops`">
-              <UiButton v-for="desktop in desktopState.views[view].desktops" :key="desktop.id" :id="`desktop-${view}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view}/${desktop.id}`" :label="String(desktop.id)" :aria-label="`Desktop ${desktop.id}`" :aria-pressed="desktopState.views[view].active === desktop.id" @click="selectGlobalView(view); wall?.selectDesktop(desktop.id)" />
-              <UiButton id="desktop-add" data-semantic-anchor="wall/desktop/add" label="+" aria-label="Add desktop" :disabled="!desktopStateLoaded || desktopState.views[desktopState.activeView].desktops.length >= MAX_DESKTOPS_PER_VIEW" @click="selectGlobalView(desktopState.activeView); wall?.addDesktop()" />
-              <UiButton v-if="desktopState.views[view].active !== 1" id="desktop-remove" data-semantic-anchor="wall/desktop/remove" label="−" aria-label="Remove empty desktop" :disabled="Object.values(desktopState.assignments).some(home => home.view === view && home.desktop === desktopState.views[view].active)" @click="wall?.removeDesktop(desktopState.views[view].active)" />
+        <div class="mv-tree-shortcuts"><UiButton id="sidebar-add-capsule" data-semantic-anchor="sidebar/add-capsule" :label="railOpen ? '+ Add capsule' : '+'" aria-label="Add capsule" title="Add capsule" @click="launcherOpen = true" /></div>
+        <div class="mv-views mv-working-tree" role="group" aria-label="Capsule views">
+          <section v-for="view in navigationTree" :key="view.id" class="mv-tree-view">
+            <div class="mv-tree-heading">
+              <UiButton :label="view.label" :id="`view-${view.id}`" :data-semantic-anchor="`wall/view/${view.id}`" class="mv-view-button" :aria-pressed="desktopState.activeView === view.id" :title="`${view.label}: ${view.count} capsules`" @click="selectGlobalView(view.id)">
+                <span class="mv-tree-view-name">{{ view.label }}</span><span class="mv-tree-view-short" aria-hidden="true">{{ view.id === 'human' ? 'H' : 'A' }}</span><span class="mv-tree-count">{{ view.count }}</span><span v-if="view.needsYou" class="mv-tree-needs-dot" role="img" aria-label="Needs you" title="Needs you">●</span>
+              </UiButton>
+              <UiButton label="+" :id="desktopState.activeView === view.id ? 'desktop-add' : `desktop-add-${view.id}`" data-semantic-anchor="wall/desktop/add" class="mv-tree-add" :aria-label="`Add ${view.label.toLowerCase()} desktop`" :title="`Add ${view.label.toLowerCase()} desktop`" :disabled="!desktopStateLoaded || view.desktops.length >= MAX_DESKTOPS_PER_VIEW" @click="selectGlobalView(view.id); wall?.addDesktop()">+</UiButton>
             </div>
-          </div>
+            <div class="mv-tree-desktops" :aria-label="`${view.label} desktops`">
+              <section v-for="desktop in view.desktops" :key="desktop.id" class="mv-tree-desktop" :class="{ 'mv-tree-desktop--active': desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id }">
+                <div class="mv-tree-desktop-heading">
+                  <UiButton :id="`tree-fold-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/tree/${view.id}/${desktop.id}/fold`" :label="treeDesktopExpanded(view.id,desktop.id) ? 'Collapse desktop' : 'Expand desktop'" class="mv-tree-fold" :aria-label="`${treeDesktopExpanded(view.id,desktop.id) ? 'Collapse' : 'Expand'} ${view.label} desktop ${desktop.id}`" :aria-expanded="treeDesktopExpanded(view.id,desktop.id)" @click="toggleTreeDesktop(view.id,desktop.id)">{{ treeDesktopExpanded(view.id,desktop.id) ? '▾' : '▸' }}</UiButton>
+                  <UiButton :label="`Desktop ${desktop.id}`" :id="`desktop-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view.id}/${desktop.id}`" class="mv-tree-desktop-button" :aria-pressed="desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id" @click="selectTreeDesktop(view.id,desktop.id)"><span>Desktop {{ desktop.id }}</span><span class="mv-tree-count">{{ desktop.capsules.length }}</span></UiButton>
+                </div>
+                <ul v-if="treeDesktopExpanded(view.id,desktop.id)" class="mv-tree-capsules" :aria-label="`${view.label} desktop ${desktop.id} capsules`">
+                  <li v-for="capsule in desktop.capsules" :key="capsule.id">
+                    <UiButton :label="capsule.title" :id="`tree-capsule-${capsule.id}`" :data-semantic-anchor="`wall/tree/${capsule.id}`" class="mv-tree-capsule" :class="{ 'mv-tree-capsule--selected': selectedCapsuleId === capsule.id }" :title="`${capsule.title} · ${capsule.status}${capsule.notIsolated ? ' · Not isolated' : ''}`" :aria-label="`${capsule.title}, ${capsule.status}${capsule.notIsolated ? ', Not isolated' : ''}`" @click="selectTreeCapsule(capsule.id)">
+                      <span class="mv-tree-signal" :data-tone="capsule.tone" aria-hidden="true">{{ capsule.symbol }}</span><span class="mv-tree-capsule-name">{{ capsule.title }}</span><span class="mv-tree-capsule-status" :data-tone="capsule.tone">{{ capsule.notIsolated ? 'Not isolated' : capsule.status }}</span>
+                    </UiButton>
+                  </li>
+                  <li v-if="!desktop.capsules.length" class="mv-tree-empty">No capsules</li>
+                </ul>
+              </section>
+              <UiButton v-if="desktopState.activeView === view.id && desktopState.views[view.id].active !== 1" id="desktop-remove" data-semantic-anchor="wall/desktop/remove" label="Remove empty desktop" :disabled="Object.values(desktopState.assignments).some(home => home.view === view.id && home.desktop === desktopState.views[view.id].active)" @click="wall?.removeDesktop(desktopState.views[view.id].active)" />
+            </div>
+          </section>
         </div>
-
         <nav aria-label="Workspace tools" class="mv-navigation-tools">
-          <UiButton id="sidebar-add-capsule" data-semantic-anchor="sidebar/add-capsule" :label="railOpen ? 'Add capsule' : '+'" aria-label="Add capsule" title="Add capsule" @click="launcherOpen = true" />
           <UiButton id="shell-identities" data-semantic-anchor="identities/open" :label="railOpen ? 'Identities' : 'ID'" aria-label="Identities" title="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
           <UiButton id="shell-settings" data-semantic-anchor="settings/open" :label="railOpen ? 'Settings' : '⚙'" aria-label="Settings" title="Settings" :aria-expanded="settingsOpen" @click="toggleSettings()" />
-          <UiButton id="shell-creative" data-semantic-anchor="creative/open" :label="railOpen ? 'Storyboard' : '▦'" aria-label="Storyboard" title="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative()" />
+          <UiButton v-if="props.fixture" id="shell-creative" data-semantic-anchor="creative/open" :label="railOpen ? 'Storyboard' : '▦'" aria-label="Storyboard" title="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative()" />
         </nav>
     <div v-if="!nestedMode.displayOnly" id="mv-layout-notice" class="mv-layout-notice">
       <!-- Reserve the longest outcome before the wall becomes interactive, including while panels open. -->
@@ -1675,7 +1731,7 @@ onMounted(() => {
         <span class="mv-entry-copy"><UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
         <span class="mv-entry-feedback" role="status" aria-live="polite" aria-atomic="true">{{ entryMessage }}</span></span>
 
-        <HandoffNotice @activity="recordActivity" @take-control="takeHandoffControl" />
+        <HandoffNotice @activity="recordActivity" @take-control="takeHandoffControl" @pending="treeHandoffs = $event" />
         <ActivityStrip :entries="activityFeed" />
         <div class="mv-sidebar-status"><StatusBar :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]"><template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template><template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.filter(row => row.backendLifecycle !== 'lost').length} capsules${rows.some(row => row.backendLifecycle === 'lost') ? ` · ${rows.filter(row => row.backendLifecycle === 'lost').length} lost` : ''}` : 'Ready when you are' }}</span></template></StatusBar></div>
       </div>
@@ -1943,4 +1999,37 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-shell .wall-workspace { position:relative; }
 .mv-shell .wall-grid-controls { display:none; position:absolute; top:0; left:0; right:0; z-index:var(--cuk-semantic-z-index-overlay); background:var(--cuk-semantic-surface-panel); border-bottom:1px solid var(--cuk-semantic-border-default); }
 .mv-shell:has(#shell-grid-tools[open]) .wall-grid-controls { display:flex; }
+</style>
+
+<style>
+.mv-tree-shortcuts { margin-bottom:14px; }
+.mv-tree-shortcuts button { width:100%; min-height:30px; }
+.mv-navigation .mv-working-tree { gap:18px; }
+.mv-tree-heading,.mv-tree-desktop-heading { display:flex; align-items:center; min-width:0; gap:4px; }
+.mv-tree-heading .mv-view-button { display:flex; align-items:center; gap:6px; flex:1; width:auto; min-width:0; padding:4px; text-transform:uppercase; letter-spacing:.07em; font-size:10px; border:0; background:transparent; }
+.mv-tree-view-name { flex:1; text-align:left; }
+.mv-tree-view-short { display:none; }
+.mv-tree-count { color:var(--cuk-semantic-text-muted); font-variant-numeric:tabular-nums; font-size:10px; }
+.mv-tree-add,.mv-tree-fold,.mv-tree-desktop-button,.mv-tree-capsule { font:inherit; color:var(--cuk-semantic-text-primary); background:transparent; border:0; cursor:pointer; }
+.mv-tree-add { width:24px; height:24px; border-radius:4px; }
+.mv-tree-add:disabled { opacity:.45; cursor:default; }
+.mv-tree-desktop { margin-top:4px; padding:3px; border:1px solid transparent; border-radius:6px; }
+.mv-tree-desktop--active { border-color:var(--cuk-semantic-border-default); background:var(--cuk-semantic-surface-canvas); }
+.mv-tree-fold { width:18px; flex:none; padding:2px; color:var(--cuk-semantic-text-muted); }
+.mv-tree-desktop-button { display:flex; align-items:center; justify-content:space-between; flex:1; min-width:0; padding:5px 2px; text-align:left; font-size:12px; }
+.mv-tree-desktop-button[aria-pressed="true"] { font-weight:650; }
+.mv-tree-capsules { list-style:none; padding:2px 0 2px 9px; margin:0; }
+.mv-tree-capsule { display:flex; align-items:center; gap:5px; width:100%; min-width:0; padding:6px 2px; text-align:left; border-radius:4px; font-size:11px; }
+.mv-tree-capsule-name { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mv-tree-capsule-status { flex:none; font-size:9px; color:var(--cuk-semantic-text-muted); }
+.mv-tree-signal { flex:none; width:10px; font-size:9px; color:var(--cuk-semantic-text-muted); }
+.mv-tree-capsule--selected { background:var(--cuk-semantic-surface-panel); box-shadow:inset 2px 0 var(--cuk-semantic-accent-primary); }
+.mv-tree-needs-dot,[data-tone="attention"] { color:var(--cuk-semantic-text-primary); font-weight:700; }
+.mv-tree-empty { padding:5px 2px; font-size:10px; color:var(--cuk-semantic-text-muted); }
+.mv-working-tree button:focus-visible { outline:2px solid var(--cuk-semantic-accent-primary); outline-offset:1px; }
+.mv-navigation--collapsed .mv-tree-desktops,.mv-navigation--collapsed .mv-tree-add,.mv-navigation--collapsed .mv-tree-view-name { display:none; }
+.mv-navigation--collapsed .mv-tree-view-short { display:inline; font-size:12px; }
+.mv-navigation--collapsed .mv-tree-heading .mv-view-button { flex-wrap:wrap; justify-content:center; gap:2px; padding:5px 0; font-size:10px; }
+.mv-navigation--collapsed .mv-working-tree #view-human::after,.mv-navigation--collapsed .mv-working-tree #view-agent::after { content:none; }
+.mv-navigation--collapsed .mv-tree-needs-dot { flex-basis:100%; font-size:8px; }
 </style>

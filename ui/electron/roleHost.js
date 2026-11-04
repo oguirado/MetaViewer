@@ -1049,10 +1049,11 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         // [TARGET, unit decision] Project window presentation metadata outside
         // the frozen surface contract, including windows in the agent wall.
         return [...capsuleStates.values()].filter(s => s.surface_id && s.state === 'active'
-          && (roleFor(s) === 'human' || windowProfiles.has(s.profile_id)))
+          && (roleFor(s) === 'human' || windowProfiles.has(s.profile_id) || programProfiles.get(s.profile_id)?.hostXpra === true))
           .map(s => {
             try { return {schema:'metaviewer.role_surface/v0.3',role:roleFor(s),surface:rendererSurface(authoritative(s.surface_id)),
-              ...(windowProfiles.has(s.profile_id) ? {hostWindow:status(s.surface_id).hostWindow} : {})}; }
+              ...(windowProfiles.has(s.profile_id) ? {hostWindow:status(s.surface_id).hostWindow} : {}),
+              ...(programProfiles.get(s.profile_id)?.hostXpra === true ? {hostXpra:true} : {})}; }
             catch {
               // A stale mirror is presentation-only and must never grant input.
               return {schema:'metaviewer.role_surface/v0.3',role:roleFor(s),

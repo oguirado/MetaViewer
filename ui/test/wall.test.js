@@ -130,10 +130,10 @@ describe('WallWorkspace.vue static contract (pinned compiler)', async () => {
     assert.ok(source.includes('revealSurface'), 'revealSurface is exposed');
   });
 
-  test('SFC imports only vue, the kit DockWorkspace and the sibling SurfacePanel', () => {
+  test('SFC imports only vue, the kit, SurfacePanel and the pure workload router', () => {
     const source = readSfc();
     const specifiers = [...source.matchAll(/from\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
-    assert.deepEqual([...new Set(specifiers)].sort(), ['./SurfacePanel.vue', 'capsule-ui-kit/DockWorkspace', 'vue']);
+    assert.deepEqual([...new Set(specifiers)].sort(), ['./SurfacePanel.vue', './workloadPanelParams.js', 'capsule-ui-kit/DockWorkspace', 'vue']);
   });
 
   test('forbidden effects are absent: no popout, storage, controller or backend calls', () => {
@@ -660,6 +660,7 @@ export default defineComponent({
     let code = compiled.content;
     code = code.replace(/(['"])capsule-ui-kit\/DockWorkspace\1/g, "'./stubDockWorkspace.mjs'");
     code = code.replace(/(['"])\.\/SurfacePanel\.vue\1/g, "'./stubSurfacePanel.mjs'");
+    code = code.replace(/(['"])\.\/workloadPanelParams\.js\1/g, JSON.stringify(pathToFileURL(path.join(uiDir,'src/wall/workloadPanelParams.js')).href));
     assert.ok(!code.includes('capsule-ui-kit/DockWorkspace'), 'kit import is stubbed');
     assert.ok(!code.includes('./SurfacePanel.vue'), 'sibling import is stubbed');
     writeFileSync(path.join(tmpDir, 'stubDockWorkspace.mjs'), STUB_DOCKWORKSPACE);
