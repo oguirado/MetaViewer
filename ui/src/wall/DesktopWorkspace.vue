@@ -17,6 +17,7 @@ const emit = defineEmits(['ready','wall-settled','desktops-change','layout-error
 const state = ref(createDesktopState()), loaded = ref(false);
 const walls = new Map(), ready = new Set(), adapters = new Map(), listeners = new Set();
 const revealed = new Map();
+const dismissed = new Map();
 let alive = true, readOnly = false, dirty = false, saving = /** @type {Promise<void>|null} */ (null), pruneTimer = /** @type {ReturnType<typeof setTimeout>|undefined} */ (undefined);
 // [TARGET, unit decision] Fresh sessions may follow the first reported agent role.
 // Saved layouts and explicit navigation close this startup-only choice.
@@ -77,7 +78,7 @@ function reconcile() {
     state.value.activeView = 'agent';
     initialViewPending = false;
   }
-  for (const [key,seen] of revealed) for (const id of seen) {
+  for (const collection of [revealed,dismissed]) for (const [key,seen] of collection) for (const id of seen) {
     const home = homeOf(id);
     if (!home || keyOf(home.view,home.desktop) !== key) seen.delete(id);
   }
@@ -129,16 +130,39 @@ function adapter(view,id) {
   adapters.set(key,value); return value;
 }
 /** @param {string} key */
-function revealAll(key) {
+function revealAll(key,force = false) {
   if (!ready.has(key)) return;
   const entry = desktops.value.find(d => d.key === key);
   if (!entry) return;
   if (!revealed.has(key)) revealed.set(key,new Set());
   const seen = revealed.get(key);
+  const wall = walls.get(key);
   for (const row of desktopRows(state.value,props.rows,entry.view,entry.desktop.id)) {
-    if (seen.has(row.id)) continue;
-    if (walls.get(key)?.revealSurface(row.id,'split')?.ok) seen.add(row.id);
+    if (!force && dismissed.get(key)?.has(row.id)) continue;
+    if (!force && seen.has(row.id) && wall?.hasSurfacePanel?.(row.id) !== false) continue;
+    if (wall?.revealSurface(row.id,'split')?.ok) seen.add(row.id);
   }
+}
+/** @param {string} key @param {{capsuleId:string}} event */
+function panelClosed(key,event) {
+  if (!dismissed.has(key)) dismissed.set(key,new Set());
+  dismissed.get(key).add(event.capsuleId);
+  emit('panel-closed',event);
+}
+/** Rebuild presentation from the live rows; no capsule command is issued. */
+async function refreshCurrentDesktop() {
+  const key = activeKey();
+  if (!loaded.value || !ready.has(key)) return {ok:false,code:'ERR_NOT_READY'};
+  await nextTick();
+  if (key !== activeKey()) return {ok:false,code:'DESKTOP_CHANGED'};
+  dismissed.delete(key);
+  revealAll(key,true);
+  const entry = desktops.value.find(d=>d.key===key);
+  for (const row of props.workloadTiles) {
+    const home = homeOf(row.id);
+    if (home && keyOf(home.view,home.desktop)===key) walls.get(key)?.revealWorkload?.(row.id);
+  }
+  return walls.get(key)?.setPreset(entry?.desktop.preset ?? null) ?? {ok:false,code:'ERR_NOT_READY'};
 }
 /** @param {string} key */
 function wallReady(key) {
@@ -165,7 +189,7 @@ function addDesktop() { if (loaded.value) {try {return appendDesktop(state.value
 function removeDesktop(id) {
   const key = keyOf(state.value.activeView,id);
   if (!deleteDesktop(state.value,state.value.activeView,id)) return false;
-  ready.delete(key); adapters.delete(key); revealed.delete(key);
+  ready.delete(key); adapters.delete(key); revealed.delete(key); dismissed.delete(key);
   return true;
 }
 /** @param {string} id @param {string} [mode] */
@@ -180,7 +204,10 @@ async function followSurface(id, mode) {
 /** @param {string} id @param {unknown} placement */
 function revealSurface(id,placement) {
   const home = homeOf(id); if (!home) return {ok:false};
-  return walls.get(keyOf(home.view,home.desktop))?.revealSurface(id,placement) ?? {ok:false};
+  const key=keyOf(home.view,home.desktop);
+  const result=walls.get(key)?.revealSurface(id,placement) ?? {ok:false};
+  if(result.ok)dismissed.get(key)?.delete(id);
+  return result;
 }
 /** @param {any} intent */
 function applyPresentationIntent(intent) {
@@ -260,6 +287,13 @@ function onKey(event) {
 const onNativeShortcut = event => shortcut(/** @type {CustomEvent} */(event).detail);
 watch(() => [props.rows,props.modes,props.workloadTiles], () => {reconcile(); announce(); for (const key of ready) revealAll(key);}, {deep:true});
 watch(state, () => {announce(); void persist().catch(() => {});}, {deep:true});
+watch(activeKey,async key=>{
+  await nextTick();
+  if(key!==activeKey() || !ready.has(key))return;
+  revealAll(key);
+  const entry=desktops.value.find(d=>d.key===key);
+  walls.get(key)?.setPreset(entry?.desktop.preset ?? null);
+},{flush:'post'});
 onMounted(async () => {
   try {
     const raw = await props.storage.readRaw();
@@ -359,7 +393,7 @@ async function renameCapsule(id,value) {
   pendingNames.add(pendingKey);
   try {await persist();announce();return true;} catch {if(previous===undefined)delete state.value.labels?.[key];else if(state.value.labels)state.value.labels[key]=previous;announce();return false;} finally {pendingNames.delete(pendingKey);}
 }
-defineExpose({forgetIdentity,renameDesktop,renameCapsule,revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
+defineExpose({refreshCurrentDesktop,forgetIdentity,renameDesktop,renameCapsule,revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
 </script>
 <template>
   <div class="mv-desktop-workspace" :hidden="$attrs.hidden === true">
@@ -371,7 +405,7 @@ defineExpose({forgetIdentity,renameDesktop,renameCapsule,revealWorkload,moveTile
         :identity-cells="desktop.identityCells" :snap-grid="desktop.snapGrid" @custom-layout="desktop.preset = $event ?? null" @snap-grid-change="desktop.snapGrid = $event"
         :workload-tiles="props.workloadTiles.filter(row=>homeOf(row.id)?.view===view&&homeOf(row.id)?.desktop===desktop.id)" :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
-        @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">
+        @layout-error="emit('layout-error',$event)" @panel-closed="panelClosed(key,$event)" @submit-intent="emit('submit-intent',$event)">
         <template #surface="slotProps"><slot name="surface" v-bind="slotProps" :desktop-active="isActive(view,desktop.id)" /></template>
         <template #workload="slotProps"><slot name="workload" v-bind="slotProps" /></template>
       </WallWorkspace>
