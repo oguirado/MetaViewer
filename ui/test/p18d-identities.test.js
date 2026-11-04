@@ -375,3 +375,10 @@ test('successful release followed by failed list refresh retains the refresh dia
   assert.match(text(view.root),new RegExp(identityErrorText('IDENTITY_UNAVAILABLE')));
   assert.doesNotMatch(text(view.root),/Release could not be verified/);
 });
+
+for(const refused of [false,true])test(`identity deletion waits for durable workspace alias cleanup (refused=${refused})`,async t=>{
+ const order=[];const identity={list:async()=>({ok:true,rows:[{id:'p18d-a',label:'Work',domains:[]}]}),delete:async()=>{order.push('delete');return {ok:true};}};
+ const view=mount(await dialog(),{open:true,host:{identity},beforeDelete:async id=>{assert.equal(id,'p18d-a');order.push('cleanup');if(refused)throw Error('LAYOUT_SAVE_REFUSED');}});t.after(view.close);await tick();
+ button(view.root,'Delete').props.onClick();await tick();button(view.root,'Delete identity').props.onClick();await tick();
+ assert.deepEqual(order,refused?['cleanup']:['cleanup','delete']);
+});

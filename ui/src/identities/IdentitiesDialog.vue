@@ -6,7 +6,7 @@ import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.
 import { operatorHost } from '../operatorHost.js';
 import { identityErrorText, identityFormRequest, validLabel, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
 import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityProtection.js';
-const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null},initialProfile:{type:String,default:''}});
+const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null},initialProfile:{type:String,default:''},beforeDelete:{type:Function,default:null}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
 const selectedSlots=ref(''), copyStatus=ref('');
@@ -52,6 +52,7 @@ async function invoke(method,request) {
   if (roleApi) modesKnown.value=false;
   try {
     const api=props.host?.identity;if(!api)throw new Error('IDENTITY_HOST_ABSENT');
+    if(method==='delete' && props.beforeDelete)await props.beforeDelete(request.id);
     const result=await (request===undefined?api[method]():api[method](request));
     if(!result.ok)throw new Error(result.code);
     if(method==='delete'){pendingDelete.value='';failedDelete='';}

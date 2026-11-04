@@ -52,22 +52,27 @@ From a fresh clone, fetch the assets in one command (Python is required):
 Obtain the judge kit from the public repository at the tag of the same release
 as the assets: set `RELEASE_TAG` to that published tag, run
 `git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/oguirado/MetaViewer.git`,
-then `cd MetaViewer` and fetch below.
+then `cd MetaViewer` and run `scripts/judge/fetch_assets.py` as shown below.
+
+Set these variables from the maintainer's matching release notes before fetching.
+The public [v0.2.5 pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
+has compiled x64 assets [CITED: release asset list]. Set `RELEASE_TAG=v0.2.5`
+when using that set. The matching asset base URL is:
 
 ```bash
-# Complete directory supplied by the release maintainer; add --capsules for T2.
-python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules
-# Or an explicit HTTPS release asset base URL with an independently obtained digest:
+export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.5
+# Copy SHA256SUMS_DIGEST from that release's notes before running this command.
 python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
 ```
 
-Set these variables from the release: published releases carry their assets, the source URL is
-`https://github.com/oguirado/MetaViewer/releases/download/v<VERSION>` and each release's
-notes from the maintainer give the manifest digest. Do not assume that a GitHub Actions artifact
-is a published release. The command refuses incomplete or corrupt sets. Checksums protect integrity, not
-publisher authenticity.
-The explicit fetch command authorizes the transfer; install still asks before downloading
-missing assets. No install begins until the fetch command has verified the selected set.
+That release has no ARM64 compiled assets. The generic
+architecture names below describe the packaging contract, not an available arm64
+download. Source builds and later release sets require their own matching assets.
+For a local release directory, use `--source "$RELEASE_ASSET_DIRECTORY"` instead.
+Do not assume that a GitHub Actions artifact is a published release. Fetch refuses
+incomplete or corrupt sets. Checksums protect integrity, not publisher authenticity.
+The explicit fetch command authorizes the transfer; install still asks before
+downloading missing assets. No install begins until the selected set is verified.
 
 Fetch maps the architecture printed by `uname -m` (`aarch64` to `arm64`,
 `x86_64` to `x64`) and writes verified files into `assets/`. A kit for the wrong architecture is
@@ -85,6 +90,23 @@ sha256sum -c ../MetaViewer-linux-<arch>.sha256
 Start in the directory containing the extracted tree; replace `<arch>` with `x64`
 or `arm64`. The checksum command runs inside the bundle, as described in
 [INSTALL.md](INSTALL.md#extract-and-verify-the-sha-256-manifest).
+
+## Before you start
+
+- Run as a normal user. Electron refuses root without disabling its sandbox;
+  do not add `--no-sandbox` to bypass it [CITED: `scripts/judge/preflight.sh` sandbox policy].
+- Use a desktop/logind session with an existing, user-owned `XDG_RUNTIME_DIR`.
+  On WSL2, enable systemd and use WSLg. A display alone does not supply the runtime
+  directory [CITED: `scripts/judge/preflight.sh`].
+- `install --yes` accepts administrator steps, including `apt-get update` and
+  package installation. Omit `--yes` to review each request [CITED: `scripts/judge/metaviewer-judge.sh`].
+- To keep downloads outside the checkout, set `MV_JUDGE_ASSET_DIR` to an absolute
+  writable directory and pass `--dest "$MV_JUDGE_ASSET_DIR"` to fetch. Fetch does
+  not read that variable itself. `MV_JUDGE_HOME` selects a separate absolute
+  installation/state directory; its default is `$XDG_DATA_HOME/metaviewer-judge`
+  (home fallback). Keep these variables set for doctor, install, run and stop
+  [CITED: `scripts/judge/fetch_assets.py`, `scripts/judge/metaviewer-judge.sh`].
+- Without Docker or private-runtime access, use [the app-only route](JUDGE_NO_DOCKER.md).
 
 ## 2. Check your machine (no changes made)
 
@@ -178,7 +200,7 @@ not invent wildcard approvals or silently change proxy policy.
 
 The release-package x64 WSL2 evaluation at c26/c27 [CITED: maintainer evaluation]
 verified Open network **with its firewall step**: a public site returned
-HTTP 200 [MEASURED]; local network and Docker bridge access were blocked. This
+HTTP 200 [CITED: maintainer evaluation; raw receipt absent]; local network and Docker bridge access were blocked. This
 result does not certify a legacy kit or an install that declined the firewall.
 
 ### Headless installation
@@ -218,7 +240,7 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 `:101`, `mv-live-3` on `:102`, `mv-live-4` on `:103`):
 
 - Use the left **`Humans`** / **`Agents`** tree to select desktops and capsules, create virtual
-  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1` — one tile, `2` — two side by side,
+  desktops with `+` and switch between existing desktops with `Ctrl+1..9`, and test tile layouts (`1` — one tile, `2` — two side by side,
   `2×2`, `3×2`, `Focus` — focus + strip, `Float` — floating layout). The compact
   controls retain descriptive accessible names and tooltips.
 - Click **`＋ Add capsule`** to launch an **`Identity browser`**, a Linux **`Program`**
@@ -277,13 +299,13 @@ Full table and sources: [INSTALL.md](INSTALL.md#hardware). Designed for a standa
 8-core, 16 GiB RAM x64 or arm64 Linux laptop:
 
 - **App only (T1)**: 2+ cores, `floor + 512 MiB` available RAM (`floor = min(MemTotal/4, 20 GiB)`), `512 MiB` `/dev/shm` `tmpfs`, `2 GB` free disk [TARGET].
-- **Live capsules (T2)**: 8 logical CPUs recommended (no CPU pinning required; `MV_JUDGE_REQUIRE_CPUSET` defaults to `none`), 16 GiB RAM (`MemAvailable >= floor + 512 MiB` hard minimum, i.e. `4.5 GiB` on a 16 GiB machine [MEASURED]; warns below `floor + 4 GiB`, i.e. `8 GiB` [TARGET]), `>= 1 GiB` `/dev/shm` `tmpfs` (`>= 2.5 GiB` recommended [TARGET]), `>= 15 GB` free disk (`>= 30 GB` recommended [TARGET]), rootful Docker Engine.
+- **Live capsules (T2)**: 8 logical CPUs recommended (no CPU pinning required; `MV_JUDGE_REQUIRE_CPUSET` defaults to `none`), 16 GiB RAM (`MemAvailable >= floor + 512 MiB` install/doctor minimum, i.e. `4.5 GiB` on a 16 GiB machine [TARGET]; each **Add capsule** also needs at least `6` GiB MemAvailable or refuses with `RAM_ADMISSION_REFUSED` [CITED: `ui/electron/profilePicker.js`]; warns below `floor + 4 GiB`, i.e. `8 GiB` [TARGET]), `>= 1 GiB` `/dev/shm` `tmpfs` (`>= 2.5 GiB` recommended [TARGET]), `>= 15 GB` free disk (`>= 30 GB` recommended [TARGET]), rootful Docker Engine.
 - VM capsules are not part of judging.
 
 ## Troubleshooting
 
 The app includes public Python agents, tools, dependency locks and contracts in
-`resources/operator` [TARGET, unit decision]. Python remains a host prerequisite.
+`resources/operator` [CITED: `ui/tools/package.js`]. Python remains a host prerequisite.
 `MV_OPERATOR_REPO` optionally selects a developer checkout; an installed runtime
 uses sealed public files and keeps MemoryWeb data outside the app directory.
 
@@ -334,8 +356,8 @@ Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_adm
 
 The sudo-free fallback calls the kit's `srf-identity-surface net up` with
 `--proxy-bin` pointing to the kit's `srf-egress-proxy`. The launcher selects the
-proxy entrypoint, internal network and bridge attachment and verifies
-`EGRESS_PROXY_READY`; it refuses an existing incompatible proxy without replacing it.
+proxy entrypoint, internal network and bridge attachment. It refuses if
+`srf-identity-surface net up` fails; it does not replace an existing incompatible proxy.
 Private metadata lives under `$MV_JUDGE_HOME/network`: separate `policy/`,
 `registry/` and `audit/` directories (mode `0700`), with policy and registry files
 at `0600`. The x64 source runs the proxy with the CLI caller's UID/GID, so these

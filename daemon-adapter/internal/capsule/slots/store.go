@@ -1,10 +1,13 @@
 // Package slots stores stopped capsule data, not open tabs or process state.
 // [TARGET, unit decision] Adapter-only API; callers must hold core authority.
+// New load staging names encode slot ownership for guarded deletion. Legacy
+// anonymous backups without an intent have no provable slot owner; never guess.
 // CheckStopped supplies native absence/login evidence under the native identity
 // guard. HumanConfirmed means an explicit click acknowledging signed-in sessions
 // travel. No default custody witness is supplied. Slot quotas include retained
-// generations and orphans. Load backups remain under profiles for guarded GC;
-// each load checks free space. GC and explicit recovery are separate actions.
+// generations and orphans. Guarded GC keeps both verified references, prunes
+// unreferenced generations, and discards load backups only after durable exchange.
+// Cleanup retains its intent until durable; explicit recovery remains separate.
 // btrfs and WSL2 remain unqualified for power loss. No power-loss claim is made.
 package slots
 
@@ -36,8 +39,8 @@ const Version = 1
 
 var idPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{1,39}$`)
 var digestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
-var SaveSteps = []string{"intent", "staging", "payload", "manifest", "generation", "generation-sync", "ref-file", "ref-rename", "ref-sync", "complete"}
-var LoadSteps = []string{"load-intent", "load-extract", "load-prepared", "load-exchange", "load-sync", "load-complete"}
+var SaveSteps = []string{"intent", "staging", "payload", "manifest", "generation", "generation-sync", "ref-file", "ref-rename", "ref-sync", "save-prune", "save-prune-sync", "complete"}
+var LoadSteps = []string{"load-intent", "load-extract", "load-prepared", "load-exchange", "load-sync", "load-discard", "load-discard-sync", "load-complete"}
 
 type Config struct {
 	Root, Image, LiveProfile string
@@ -421,6 +424,9 @@ func (s *Store) InspectReference(ctx context.Context, id, name string) (Manifest
 		return Manifest{}, e
 	}
 	defer u()
+	if e = s.noIntent(id); e != nil {
+		return Manifest{}, e
+	}
 	return s.inspectLocked(ctx, id, []string{name})
 }
 
@@ -598,6 +604,9 @@ func (s *Store) Save(ctx context.Context, r Request) (Manifest, error) {
 	if e = s.step("ref-sync"); e != nil {
 		return m, e
 	}
+	if e = s.pruneGenerations(ctx, r.SlotID); e != nil {
+		return m, e
+	}
 	if e = s.clear(r.SlotID); e != nil {
 		return m, e
 	}
@@ -657,7 +666,7 @@ func (s *Store) Load(ctx context.Context, r Request) (Manifest, error) {
 	if _, e = s.helper(ctx, "exchange-probe", profile, "", s.cfg.MaxBytes); e != nil {
 		return m, errors.New("RENAME_EXCHANGE_UNSUPPORTED")
 	}
-	stage, e := os.MkdirTemp(filepath.Dir(profile), ".slot-load-")
+	stage, e := os.MkdirTemp(filepath.Dir(profile), ".slot-load-"+r.SlotID+".")
 	if e != nil {
 		return m, e
 	}
@@ -709,6 +718,9 @@ func (s *Store) Load(ctx context.Context, r Request) (Manifest, error) {
 	if e = s.step("load-sync"); e != nil {
 		return m, e
 	}
+	if e = s.discardLoad(ctx, stage); e != nil {
+		return m, e
+	}
 	if e = s.clear(r.SlotID); e != nil {
 		return m, e
 	}
@@ -716,7 +728,7 @@ func (s *Store) Load(ctx context.Context, r Request) (Manifest, error) {
 }
 
 // Reconcile proves the exchange outcome from durable inode witnesses. It never
-// retries an exchange. The old destination remains as a private sibling backup.
+// retries an exchange. Cleanup runs only after proving a usable destination.
 func (s *Store) Reconcile(ctx context.Context, id string) error {
 	u, e := s.slotLock(id)
 	if e != nil {
@@ -744,36 +756,10 @@ func (s *Store) Reconcile(ctx context.Context, id string) error {
 	}
 	switch in.Operation {
 	case "save":
-		best, err := s.selectLocked(ctx, id)
-		if err != nil && !os.IsNotExist(err) {
+		if err := s.pruneGenerations(ctx, id); err != nil {
 			return err
 		}
-		// Discard only unpublished successors; older retained generations stay.
-		dir := filepath.Join(s.slot(id), "generations")
-		entries, err := os.ReadDir(dir)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			p := filepath.Join(dir, entry.Name())
-			if !digestPattern.MatchString(entry.Name()) || privateDir(p) != nil {
-				return errors.New("SLOT_QUARANTINED")
-			}
-			raw, err := read(filepath.Join(p, "manifest.json"))
-			var m Manifest
-			if err != nil || hash(raw) != entry.Name() || decode(raw, &m) != nil {
-				return errors.New("SLOT_QUARANTINED")
-			}
-			if m.Generation > best.Generation {
-				if err = os.RemoveAll(p); err != nil {
-					return err
-				}
-			}
-		}
-		if err = syncDir(dir); err != nil {
-			return err
-		}
-		entries, err = os.ReadDir(s.slot(id))
+		entries, err := os.ReadDir(s.slot(id))
 		if err != nil {
 			return err
 		}
@@ -793,7 +779,7 @@ func (s *Store) Reconcile(ctx context.Context, id string) error {
 			return e
 		}
 		b, e := inode(filepath.Join(s.cfg.Root, "profiles", in.Stage))
-		if os.IsNotExist(e) && a == in.Before && in.Before != 0 && in.Prepared != 0 && in.Before != in.Prepared {
+		if os.IsNotExist(e) && (a == in.Before || a == in.Prepared) && in.Before != 0 && in.Prepared != 0 && in.Before != in.Prepared {
 			// Cleanup may have completed before the intent was durably cleared.
 			if e = syncDir(filepath.Join(s.cfg.Root, "profiles")); e != nil {
 				return e
@@ -803,18 +789,18 @@ func (s *Store) Reconcile(ctx context.Context, id string) error {
 		if e != nil {
 			return e
 		}
-		if !((a == in.Before && b == in.Prepared) || (a == in.Prepared && b == in.Before)) {
+		if in.Before == 0 || in.Prepared == 0 || in.Before == in.Prepared || !((a == in.Before && b == in.Prepared) || (a == in.Prepared && b == in.Before)) {
 			return errors.New("SLOT_QUARANTINED")
 		}
-		if a == in.Before {
-			// No exchange occurred: discard even a partially extracted tree.
-			if _, e = s.helper(ctx, "discard", filepath.Join(s.cfg.Root, "profiles", in.Stage), "", s.cfg.MaxBytes); e != nil {
-				return e
-			}
-		}
+		// Make either observed exchange outcome durable before deleting its sibling.
 		if e = syncDir(filepath.Join(s.cfg.Root, "profiles")); e != nil {
 			return e
 		}
+		if e = s.discardLoad(ctx, filepath.Join(s.cfg.Root, "profiles", in.Stage)); e != nil {
+			return e
+		}
+	case "delete":
+		return s.finishDelete(ctx, id)
 	default:
 		return errors.New("SLOT_QUARANTINED")
 	}
@@ -1041,20 +1027,151 @@ func (s *Store) Delete(ctx context.Context, r Request) error {
 	if m.ProfileID != r.ProfileID {
 		return errors.New("FOREIGN_SLOT")
 	}
-	// Retain the guard inode so competing operations cannot lock an unlinked guard.
-	entries, e := os.ReadDir(s.slot(r.SlotID))
+	if e = s.marker(r.SlotID, intent{Operation: "delete", Profile: r.ProfileID}); e != nil {
+		return e
+	}
+	if e = s.step("delete-intent"); e != nil {
+		return e
+	}
+	return s.finishDelete(ctx, r.SlotID)
+}
+
+// finishDelete retains the guard inode and intent until all slot-owned data is
+// durably removed. Replaying any interrupted removal is idempotent.
+func (s *Store) finishDelete(ctx context.Context, id string) error {
+	entries, e := os.ReadDir(s.slot(id))
 	if e != nil {
 		return e
 	}
 	for _, entry := range entries {
-		if entry.Name() != "guard" {
-			if e = os.RemoveAll(filepath.Join(s.slot(r.SlotID), entry.Name())); e != nil {
+		if entry.Name() == "guard" || entry.Name() == "intent.json" || entry.Name() == "generations" {
+			continue
+		}
+		if e = os.RemoveAll(filepath.Join(s.slot(id), entry.Name())); e != nil {
+			return e
+		}
+		if e = s.step("delete-" + entry.Name()); e != nil {
+			return e
+		}
+	}
+	dir := filepath.Join(s.slot(id), "generations")
+	entries, e = os.ReadDir(dir)
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if e = os.RemoveAll(filepath.Join(dir, entry.Name())); e != nil {
+			return e
+		}
+		if e = s.step("delete-generation"); e != nil {
+			return e
+		}
+	}
+	if e = syncDir(dir); e != nil {
+		return e
+	}
+	if e = s.step("delete-generations-sync"); e != nil {
+		return e
+	}
+	// New load stages encode exact slot ownership (IDs cannot contain a dot).
+	// Never guess ownership of legacy anonymous stages or other slots' backups.
+	profiles := filepath.Join(s.cfg.Root, "profiles")
+	entries, e = os.ReadDir(profiles)
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".slot-load-"+id+".") {
+			if _, e = s.helper(ctx, "discard", filepath.Join(profiles, entry.Name()), "", s.cfg.MaxBytes); e != nil {
 				return e
 			}
 		}
 	}
-	return syncDir(s.slot(r.SlotID))
+	if e = syncDir(profiles); e != nil {
+		return e
+	}
+	if e = s.step("delete-backups"); e != nil {
+		return e
+	}
+	if e = syncDir(s.slot(id)); e != nil {
+		return e
+	}
+	if e = s.step("delete-sync"); e != nil {
+		return e
+	}
+	if e = s.clear(id); e != nil {
+		return e
+	}
+	return s.step("delete-complete")
 }
+
+// pruneGenerations holds both guards, verifies both recovery references before
+// removing anything, and keeps its caller's intent through partial GC failures.
+func (s *Store) pruneGenerations(ctx context.Context, id string) error {
+	keep := map[string]bool{}
+	var first Manifest
+	for _, name := range []string{"A.json", "B.json"} {
+		m, e := s.inspectLocked(ctx, id, []string{name})
+		if os.IsNotExist(e) {
+			continue
+		}
+		if e != nil {
+			return e
+		}
+		if first.Generation == m.Generation && first.Digest != m.Digest {
+			return errors.New("SLOT_QUARANTINED: conflicting generation")
+		}
+		first = m
+		keep[m.Digest] = true
+	}
+	// Recovery may observe a reference rename interrupted before its fsync.
+	// Persist those references before pruning the generations they supersede.
+	if e := syncDir(s.slot(id)); e != nil {
+		return e
+	}
+	dir := filepath.Join(s.slot(id), "generations")
+	entries, e := os.ReadDir(dir)
+	if e != nil {
+		return e
+	}
+	for _, entry := range entries {
+		if keep[entry.Name()] {
+			continue
+		}
+		p := filepath.Join(dir, entry.Name())
+		if !digestPattern.MatchString(entry.Name()) || privateDir(p) != nil {
+			return errors.New("SLOT_QUARANTINED")
+		}
+		// Unreferenced trees may already be partially removed after a crash.
+		if e = os.RemoveAll(p); e != nil {
+			return e
+		}
+		if e = s.step("save-prune-generation"); e != nil {
+			return e
+		}
+	}
+	if e = s.step("save-prune"); e != nil {
+		return e
+	}
+	if e = syncDir(dir); e != nil {
+		return e
+	}
+	return s.step("save-prune-sync")
+}
+
+func (s *Store) discardLoad(ctx context.Context, stage string) error {
+	if _, e := s.helper(ctx, "discard", stage, "", s.cfg.MaxBytes); e != nil {
+		return e
+	}
+	if e := s.step("load-discard"); e != nil {
+		return e
+	}
+	if e := syncDir(filepath.Dir(stage)); e != nil {
+		return e
+	}
+	return s.step("load-discard-sync")
+}
+
 func (s *Store) ReconcileAll(ctx context.Context) error {
 	entries, e := os.ReadDir(filepath.Join(s.cfg.Root, "slots"))
 	if e != nil {

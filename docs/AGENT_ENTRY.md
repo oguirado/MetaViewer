@@ -39,7 +39,7 @@ the configuration contains several agent registrations. It never launches a
 core, surface, or browser. The host supplies `MV_SRF_BIN_DIR`, `MV_SRF_STATE_DIR`,
 and `SRF_IDENTITY_STORE_ROOT`; dependency roots must satisfy `deps.lock`.
 
-[TARGET, unit decision] Without `MV_CORE_CONFIG` the backend attaches to the one
+[TARGET] Without `MV_CORE_CONFIG` the backend attaches to the one
 running packaged app: the same-user `resources/bin/mv-daemon-adapter` whose parent
 is that app's `metaviewer` binary. It keeps only `MV_CORE_CONFIG`,
 `XDG_RUNTIME_DIR`, `MV_SRF_BIN_DIR`, `MV_SRF_STATE_DIR`,
@@ -52,7 +52,7 @@ of the app environment and must be exported by the caller.
 The discovered store and registry context is forwarded to native read-only
 subprocesses without exporting it into the caller's environment.
 
-[TARGET, unit decision] After a verified run only, the backend reads the visible
+[TARGET] After a verified run only, the backend reads the visible
 text of the container holding the workflow oracle's present anchor once, with
 the read-only `srf-identity-surface ax --text-container`, into the owner-only
 `answer.txt` beside the receipt. The report's `answer` records `captured`,
@@ -67,7 +67,7 @@ because the pinned MemoryWeb gate opens that file and otherwise refuses the run
 with `MW_GATE_IO`. It reports one line per fault in `faults` and never edits the
 home. The same lines are added to a `MW_GATE_*` refusal message.
 
-[TARGET, unit decision] Site network admission requires the private adapter start
+[TARGET] Site network admission requires the private adapter start
 witness `MV_SRF_STATE_DIR/egress/<identity>.started.json` with schema
 `metaviewer.capsule_egress_started/v1`. It freezes the capsule, effective native
 mode, record digest (or `absent`), and monotonic and wall start times. The backend

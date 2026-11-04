@@ -757,7 +757,7 @@ function publicRuntimeFiles(root) {
       return entry.isFile() && /\.(py|json)$/.test(entry.name) && !entry.name.startsWith('test_') ? [path] : [];
     });
   };
-  return [...walk('agents/metaviewer_agents'),...walk('tools'),...walk('contracts/v0.2'),...walk('daemon-adapter/guest_command_runtime'),...walk('daemon-adapter/rewind_runtime'),'daemon-adapter/tools/guest_command_runner.py','daemon-adapter/tools/rewind_runner.py'].sort();
+  return [...walk('agents/metaviewer_agents'),...walk('tools'),...walk('contracts/v0.2'),...walk('daemon-adapter/guest_command_runtime'),...walk('daemon-adapter/rewind_runtime'),'daemon-adapter/tools/guest_command_runner.py','daemon-adapter/tools/rewind_runner.py','daemon-adapter/tools/rewind_recover.py'].sort();
 }
 
 /** Packaged relative directory for the out-of-ASAR node-pty runtime (P18H-R2-PTY). */

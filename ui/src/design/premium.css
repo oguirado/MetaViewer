@@ -86,6 +86,7 @@
 .s8n-card-code,.s8n-detail-meta { color:var(--cuk-semantic-text-muted); }
 .s8n-detail { background:var(--cuk-semantic-surface-sunken); border-color:var(--cuk-semantic-border-subtle); border-radius:8px; }
 .s1-topbar-palette { padding:20px; background:var(--cuk-semantic-surface-panel); color:var(--cuk-semantic-text-primary); border:1px solid var(--cuk-semantic-border-subtle); border-radius:12px; box-shadow:var(--cuk-semantic-elevation-s1-floating); }
+.s1-topbar-palette .p-dialog-header { display:flex; align-items:center; justify-content:space-between; gap:var(--cuk-semantic-spacing-md); }
 .s1-topbar-palette input { min-height:40px; margin:12px 0; font:14px var(--cuk-semantic-typography-font-family-sans); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:1px solid var(--cuk-semantic-border-default); border-radius:6px; padding:10px; }
 .s1-topbar-palette-list { gap:6px; }
 .s1-topbar-palette-list button { min-height:38px; text-align:left; justify-content:flex-start; padding:8px 12px; border-radius:6px; }
@@ -158,3 +159,15 @@
 .mv-tree-rename { min-width:0; width:100%; box-sizing:border-box; padding:5px 7px; border:1px solid var(--cuk-semantic-accent-primary); border-radius:4px; color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-panel); font:inherit; }
 .mv-tree-rename-error { color:var(--cuk-semantic-status-error-text); font-size:12px; }
 .mv-tree-desktop-content > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* Dark controls and existing modal masks; geometry and overlay ownership stay unchanged. */
+.mv-shell .mv-terminal-dock > .p-button.p-button-secondary:not(:disabled):is(:hover,:active,:focus-visible),
+.mv-shell .mv-navigation .mv-activity__bar .p-button.p-button-secondary:not(:disabled):is(:hover,:active,:focus-visible) {
+  background:var(--cuk-semantic-surface-interactive); color:var(--cuk-semantic-text-primary); border-color:var(--cuk-semantic-border-default);
+}
+.s8n-dialog,.s1-topbar-palette { box-shadow:0 0 0 100vmax var(--cuk-component-dialog-host-backdrop),var(--cuk-semantic-elevation-s1-floating); }
+.mv-role-dialog { box-shadow:0 0 0 100vmax var(--cuk-component-dialog-host-backdrop),var(--cuk-semantic-elevation-s1-floating); }
+:root[data-theme-scheme="dark"],:root[data-theme-scheme="mv-dark"] { scrollbar-color:var(--cuk-semantic-border-default) var(--cuk-semantic-surface-sunken); }
+
+.mv-terminal-deck__identity-pill { gap:var(--cuk-primitive-space-4); }
+.mv-terminal-deck__screen-tab { white-space:nowrap; }

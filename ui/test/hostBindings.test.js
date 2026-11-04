@@ -14,6 +14,28 @@ import { loadMainBindings, bootProductionMain, ELECTRON_PIN, CHANNELS } from '..
 import { deliverAuthorityFrame, WIRE_CHANNELS, INTENT_OPS as WIRE_INTENT_OPS, validateIntentBody } from '../electron/authorityWire.js';
 import { installPreload } from '../electron/preload.js';
 
+
+function isKnownStartupObservation(args, observations) {
+  if (args[0] === 'metaviewer:guest-command.observation') {
+    assert.deepEqual(args, ['metaviewer:guest-command.observation',
+      {staged:null,active:null,history:[],uncertain:false,generation:null}]);
+    assert.equal(observations.length, 0, 'only one initial observation is expected');
+    observations.push(args);
+    return true;
+  }
+  assert.equal(args[0], 'metaviewer:authority.frames', 'unknown notification must not be filtered');
+  return false;
+}
+
+test('startup observation classification refuses unknown channels and authority fields', () => {
+  const snapshot={staged:null,active:null,history:[],uncertain:false,generation:null};
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:unknown',snapshot],[]),assert.AssertionError);
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:guest-command.observation',{...snapshot,canRun:true}],[]),assert.AssertionError);
+  const seen=[];
+  assert.equal(isKnownStartupObservation(['metaviewer:guest-command.observation',snapshot],seen),true);
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:guest-command.observation',snapshot],seen),assert.AssertionError);
+});
+
 const surface = {schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'agent',profile_id:'test'};
 const registration = component => ({endpoint:{component,instance:component+'-test'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component,component_version:'0.1.1',component_commit:'a'.repeat(40),dependencies:[]}});
 async function waitForCondition(predicate, description = 'condition', timeoutMs = 5000) {
@@ -148,8 +170,9 @@ test('production boot installs the default socket wire and delivers a subscribed
   await writeFile(join(shell,'dist/preload/preload.cjs'),'');
   const session={setPermissionRequestHandler(){},setPermissionCheckHandler(){}};
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
+  const observations=[];
   let resolveNotice;const notice=new Promise(resolve=>{resolveNotice=resolve;});
-  const contents={id:17,mainFrame:frame,session,isDestroyed:()=>false,setWindowOpenHandler(){},on(){},loadURL:async()=>{},postMessage:(...args)=>resolveNotice(args)};
+  const contents={id:17,mainFrame:frame,session,isDestroyed:()=>false,setWindowOpenHandler(){},on(){},loadURL:async()=>{},postMessage:(...args)=>{if(!isKnownStartupObservation(args,observations))resolveNotice(args);}};
   let windows=0;
   class Window {
     constructor(){windows++;this.webContents=contents;}
@@ -161,6 +184,7 @@ test('production boot installs the default socket wire and delivers a subscribed
     electronVersion:ELECTRON_PIN,shellRoot:shell,argv:['metaviewer'],env:f.env,
     runtime:{xdgRuntimeDir:f.root,uid:process.getuid()},geometry:{width:1280,height:720},bridge:[CHANNELS.load,CHANNELS.save].map(channel=>({channel,decode:value=>value,invoke:async()=>null}))});
   t.after(()=>booted.dispose());assert.equal(windows,1);
+  assert.equal(observations.length,1);
   await handlers.get(WIRE_CHANNELS.subscribeFrames)({sender:contents,senderFrame:frame});
   f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
   f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:f.frame}});
@@ -285,7 +309,7 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
   await writeFile(join(shell, 'dist/preload/preload.cjs'), '');
   const session = { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} };
   const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
-  const notices = [];
+  const notices = [], observations = [];
   let onNotice = () => {};
   const contents = {
     id: 23,
@@ -295,7 +319,7 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
     setWindowOpenHandler() {},
     on() {},
     loadURL: async () => {},
-    postMessage: (...args) => { notices.push(args); onNotice(args); },
+    postMessage: (...args) => { if(!isKnownStartupObservation(args,observations)){notices.push(args); onNotice(args);} },
   };
   class Window {
     constructor() { this.webContents = contents; }
@@ -317,6 +341,7 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
     bridge: [CHANNELS.load, CHANNELS.save].map(channel => ({ channel, decode: value => value, invoke: async () => null })),
   });
   t.after(() => booted.dispose());
+  assert.equal(observations.length,1);
 
   // 1. L1 pre-subscribe race: frame_ready (generation 1) arrives BEFORE renderer calls subscribeFrames.
   f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });

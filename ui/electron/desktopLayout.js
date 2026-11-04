@@ -157,7 +157,7 @@ export function pruneDesktopLayout(layout, keep, preserveEmpty = false) {
 
 /** Bounded presentation labels; never backend or identity identifiers. @param {unknown} value */
 export function validDisplayLabel(value) {
-  return typeof value==='string' && value===value.trim() && value.length>0 && [...value].length<=80 && !/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(value);
+  return typeof value==='string' && value===value.trim() && value.length>0 && [...value].length<=80 && !/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/.test(value);
 }
 /** @param {unknown} value */
 function displayLabelKey(value) {return typeof value==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,319}$/.test(value) && !['__proto__','constructor','prototype'].includes(value);}

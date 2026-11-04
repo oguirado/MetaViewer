@@ -552,6 +552,9 @@ it. The x64 observation is not permission to bypass the binding check
 | `MW_PROGRAM_TEXT_REFUSED` | Program text input was refused. | Inspect the report and editor state before considering another input. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `MW_PROGRAM_TEXT_STEPS` | Program text input requires a single bounded step. | Use --steps 1 with --text. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `MW_PROGRAM_UNKNOWN_OBSERVATION` | The program observation cannot be classified safely. | Inspect the capsule and acquire a supported observation. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_REQUEST` | The navigation request is unsupported. | Use focused-key with one arrow or Enter, one step, rules and no text. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_HOST_ONLY` | Navigation requires an Agent Host program custody binding. | Select a live Agent Host program before running again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_REFUSED` | The navigation input was refused. | Inspect the report and acquire a fresh observation before planning again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` | Text was typed, but OCR did not read it back; a successful exit does not certify the text. | Take control and inspect the editor; do not blindly type again. No command to force readable OCR is supplied. | [code](../tools/mw_run_program.py) |
 | `PROGRAM_BOUNDED_ACTIONS_VERIFIED` | The bounded moves were verified, never the whole goal. | Inspect the fresh capsule output and receipts; for a calculator, inspect the displayed result separately. | [code](../tools/mw_run_program.py) |
 

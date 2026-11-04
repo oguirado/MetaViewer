@@ -248,6 +248,7 @@ const terminalDeckOpen = computed(() => terminalOpen.value && !nestedMode.displa
 // another key and must open. Additive only, so every committed harness
 // mounting with a key and no screen sees exactly the previous children.
 const multislotOpen = ref(['multislot', 'recording'].includes(props.fixture?.key ?? '') || props.fixture?.screen === 'multislot');
+const capturePanelOnly = ref(false);
 const selectedCapsuleId = ref(props.fixture?.capsules[0]?.id ?? '');
 // MVUI25 lane A: the wall shares this app-level input mode with the
 // multislot (v-model below); the input-write fixture starts in WRITE.
@@ -1337,6 +1338,7 @@ function toggleCreative() {
   terminalOpen.value = false;
 }
 function openMultislot() {
+  capturePanelOnly.value = false;
   cancelTerminalOpening();
   creativeOpen.value = false;
   if (!selectedSurface.value) return;
@@ -1344,6 +1346,18 @@ function openMultislot() {
   terminalOpen.value = false;
   multislotOpen.value = true;
 }
+/** @param {string} capsuleId */
+function openCapturePanel(capsuleId) {
+  selectCapsule({capsuleId});
+  openMultislot();
+  capturePanelOnly.value = true;
+}
+/** @param {string} id */
+async function forgetIdentityLayout(id) {
+  if(!wall.value?.forgetIdentity)throw Error('LAYOUT_SAVE_REFUSED');
+  await wall.value.forgetIdentity(id);
+}
+
 function toggleSettings() {
   cancelTerminalOpening();
   creativeOpen.value = false;
@@ -1882,7 +1896,7 @@ onMounted(() => {
           <template #workload="{workload}"><component :is="guestCommandPanel" v-if="guestCommandPanel" :snapshot="workload.snapshot" :rewind="rewindSnapshot" :rewind-panel="rewindPanel" @action="guestCommandAction" @rewind-action="requestRewind" /></template>
           <template #surface="{ surface, capsuleId, desktopActive }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @stored-data="openStoredData" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
+            <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" :recording-available="captureAvailable" @recordings="openCapturePanel(capsuleId)" @take-control="takeWallControl(surface)" @stored-data="openStoredData" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
               <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? 'Taking control…' }}</span>
@@ -1907,7 +1921,8 @@ onMounted(() => {
         <section v-if="multislotOpen && !nestedMode.displayOnly" class="mv-multislot-screen" aria-label="Capsule multislot">
           <UiButton id="multislot-back" data-semantic-anchor="multislot/back" label="Back to wall" @click="multislotOpen = false" />
           <p v-if="!selectedSurface" id="multislot-empty" data-semantic-anchor="multislot/empty" role="status">No capsule is available. Go back to the wall or create one.</p>
-          <MultislotHost v-if="selectedSurface" :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
+          <div v-if="capturePanelOnly && selectedSurface" class="mv-capture-screen"><h2>Recordings and screenshots</h2><MvRecordingPanel :capsule-id="selectedSurface.id" :export-destination="props.exportDestination" :capture-state="captureState" :capture-available="captureAvailable" @submit-intent="dispatch" /></div>
+          <MultislotHost v-else-if="selectedSurface" :capsule-id="selectedSurface.id" :capsule-label="selectedSurface.title" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :folded="selectedFolded" :hidden="selectedPlacement.hidden" :floating="selectedPlacement.floating"
             :float-x="selectedPlacement.x" :float-y="selectedPlacement.y" :float-width="selectedPlacement.width" :float-height="selectedPlacement.height"
             :group-id="selectedPlacement.groupId" :placement-index="selectedPlacement.index"
             :last-dock-group-id="selectedPlacement.lastDockGroupId" :last-dock-index="selectedPlacement.lastDockIndex"
@@ -1944,7 +1959,7 @@ onMounted(() => {
         </div>
       </div>
     </div>
-    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :initial-profile="storedDataProfile" :open-program="createProgramCapsule" @close="identitiesOpen=false; storedDataProfile=''" @open-identity="openIdentityChoice" />
+    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :initial-profile="storedDataProfile" :before-delete="forgetIdentityLayout" :open-program="createProgramCapsule" @close="identitiesOpen=false; storedDataProfile=''" @open-identity="openIdentityChoice" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" :arm64-capabilities="arm64Capabilities" :vm-available="vmAvailable" :guest-command-available="guestCommandSnapshot.available" :headless-available="(guestCommandSnapshot.available && !guestCommandSnapshot.session && !guestCommandSnapshot.uncertain) || (headlessSnapshot.available && !headlessSnapshot.session && !headlessSnapshot.uncertain)" @create="onCreateCapsule" />
 
     <component :is="headlessPanel" v-if="headlessOpen && headlessPanel && !nestedMode.displayOnly" :snapshot="headlessSnapshot" @run="runHeadlessJob" @stop="headlessAction('stop')" />
@@ -2015,6 +2030,7 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 </style>
 
 <style>
+.mv-capture-screen { padding:20px; }
 .mv-more-menu { position:relative; }
 .mv-menu-popover { position:absolute; right:0; top:100%; z-index:10000; display:flex; flex-direction:column; min-width:220px; padding:6px; gap:4px; border:1px solid var(--cuk-semantic-border-subtle); border-radius:var(--cuk-semantic-radius-md); background:var(--cuk-semantic-surface-chrome); color:var(--cuk-semantic-text-primary); box-shadow:var(--cuk-semantic-shadow-md); }
 .mv-menu-popover button { text-align:left; }

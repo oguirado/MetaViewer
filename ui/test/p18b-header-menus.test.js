@@ -64,9 +64,9 @@ async function withRoles(run, source = read('../src/surfaces/RoleSurface.vue')) 
     visibility:async(id,shown)=>{calls.push(['visibility',id,shown]);return {ok:true};},
     close:async id=>{calls.push(['close',id]);return {ok:true};},confirmLogin:async()=>({ok:true})};
   const Component=await compile(source),overlays=createOverlayCoordinator(doc),pool=createHiddenSessionPool();
-  const add=async (id,role)=>{
+  const add=async (id,role,extra={})=>{
     roles.set(id,role);
-    const f=mount(Component,{surfaceId:id,control:role},{overlayCoordinator:overlays,hiddenSessionPool:pool},{default:()=>vue.h('canvas')});
+    const f=mount(Component,{surfaceId:id,control:role,...extra},{overlayCoordinator:overlays,hiddenSessionPool:pool},{default:()=>vue.h('canvas')});
     fixtures.push(f);await tick();return f;
   };
   try {await run({add,calls,attrs,overlays,pool});}
@@ -429,4 +429,13 @@ test('removing viewport observation fails the immediate resize oracle',async()=>
   const source=read('../src/surfaces/RoleSurface.vue');
   const mutant=source.replace('viewportResizeObserver.observe(root.value);','/* observation removed */');
   assert.notEqual(mutant,source);await assert.rejects(()=>viewportResizeOracle(mutant),{code:'ERR_ASSERTION'});
+});
+
+test('recording-capable tile menu opens its capture panel and releases native overlay ownership',async()=>{
+ await withRoles(async({add,overlays})=>{
+  const opened=[];const f=await add('capture-menu','agent',{recordingAvailable:true,onRecordings:()=>opened.push('capture-menu')});
+  await openMenu(f);assert.equal(overlays.count,1);
+  const action=all(f.root).find(n=>n.props.id==='tile-recordings-capture-menu');assert.ok(action);assert.equal(text(action),'Recordings and screenshots');
+  action.props.onClick();await tick();assert.deepEqual(opened,['capture-menu']);assert.equal(overlays.count,0);
+ });
 });

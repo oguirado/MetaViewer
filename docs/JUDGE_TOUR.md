@@ -7,13 +7,13 @@ Commands run from the MetaViewer checkout or the installed public operator tree
 supplied in [AGENT_ENTRY.md](AGENT_ENTRY.md); judge launcher commands run from the kit root.
 Use a graphical Linux session (WSLg for the verified Windows/WSL2 setup).
 
-Verification status below is a snapshot for this tour. **Verified** means that specific live flow was
+Verification status below is a reported snapshot for this tour, not current-checkout certification. See the [evidence guide](EVIDENCE.md): raw evaluation notes are absent from this repository. **Verified** means that specific live flow was
 observed; **Available, unverified** means code exists without a supplied live
 result on that architecture. Do not treat a parser test as live verification.
 
 **x64 browser automation: verified on local pages through the kit with the rules planner: goal, typing, exact read back, and a login wall stop.**
 
-**x64 release-package snapshot, commits c26 and c27 [CITED: maintainer evaluation]: browser rules goals 10 of 10 [MEASURED]; login wall `HUMAN_HANDOFF`; stop clean. Muse on x64 and real mouse drag under a window manager remain unverified.**
+**x64 release-package snapshot, commits c26 and c27 [CITED: maintainer evaluation]: browser rules goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent]; login wall `HUMAN_HANDOFF`; stop clean. Muse on x64 and real mouse drag under a window manager remain unverified.**
 
 ## Open the wall
 
@@ -47,7 +47,7 @@ changes the role. Marking login alone does not change the role.
 **Success:** both tiles show browser frames and their role badges; clicking a
 Human page works. Watching an Agent does not give human input authority.
 **If refused:** select a free identity and inspect the dialog/activity reason.
-On x64, Open network with its firewall step reached a public site with HTTP 200 [MEASURED] while local network and Docker bridge access were blocked. Public internet is unavailable without compatible Open network mode;
+On x64, Open network with its firewall step reached a public site with HTTP 200 [CITED: maintainer evaluation; raw receipt absent] while local network and Docker bridge access were blocked. Public internet is unavailable without compatible Open network mode;
 legacy networking grants no public destinations. A live tile alone does not
 prove internet access. Use an already permitted page or ask the installer for
 an Open-ready kit; do not bypass policy.
@@ -162,11 +162,15 @@ profile, or **Custom CLI → Launch**. Use the task buttons in the paired termin
 | Run automation | Select and run a stored workflow | Run report and verified outcome |
 | Direct task | Operate an observed goal without storing a workflow | Fresh observation and bounded action receipts |
 
-These buttons copy prompts ending in `Task: ` with the actual paired capsule identity.
-Paste into an agent CLI, add your task and submit it. Automatic insertion is withheld
-until the host can attest the foreground agent input target. Copying does not execute a goal. Use the capsule
-**ID** / **Copy ID for AI** and the app's **Copy env path** to identify the actual
-running capsule. Never put credentials in prompts.
+With a matching paired terminal, these buttons offer an installed agent profile,
+launch it, and paste the prompt ending in `Task: ` once its input prompt is
+recognized. They never send Enter: add your task and submit it yourself. The
+readiness wait is bounded at `15` seconds [CITED: `ui/src/terminal/agentPromptGate.js`];
+authentication prompts and unready agents receive no task. Without a matching
+pair, the prompt is copied only. See [agent entry](AGENT_ENTRY.md).
+Use the capsule **ID** / **Copy ID for AI** to identify the capsule, and the
+`METAVIEWER_ATTACH <path>` line printed in the terminal running
+`metaviewer-judge.sh run` to locate the attachment. Never put credentials in prompts.
 
 **If refused:** inspect clipboard/terminal feedback; `TERMINAL_UNAVAILABLE` means
 the paired terminal dock and drawer cannot open a session in this build. Use an external terminal with the
@@ -176,7 +180,7 @@ same attachment. A copied prompt is not proof that an AI CLI is installed.
 
 ## Prepare commands for your AI
 
-Replace the attachment placeholder with **Copy env path** from the running app.
+Replace the attachment placeholder with the path from the `METAVIEWER_ATTACH` line printed in the terminal running `metaviewer-judge.sh run`.
 Run this setup in a dedicated shell; it changes that shell's runtime environment.
 The directory created below is private temporary RAM evidence, not durable storage.
 
@@ -217,7 +221,7 @@ planner; dependency validation still applies. Stored workflows retain their
 separate compiled-runtime restriction. Never automatically retry
 `INPUT_UNCERTAIN`; delivery may already have happened.
 
-**Architecture:** x64 — browser rules goals 10 of 10 [MEASURED] from the release package;
+**Architecture:** x64 — browser rules goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent] from the release package;
 Muse on x64 remains unverified. arm64 — browser goal with
 Muse verified.
 
@@ -369,7 +373,7 @@ available, separate cleanup verification not documented here.
 | Wall stop | Verified on a local page | Verified on local pages |
 | Terminal, prompt buttons, capture | Available; live verification absent | Available; live verification absent |
 | Stop | Verified | Available; separate cleanup verification absent |
-| Open network with firewall step | Public site HTTP 200 [MEASURED]; local network and Docker bridge blocked | Separate Open result absent |
+| Open network with firewall step | Public site HTTP 200 [CITED: maintainer evaluation; raw receipt absent]; local network and Docker bridge blocked | Separate Open result absent |
 | Public internet without Open mode | Not available | Legacy policy grants no public destinations |
 | VM, MicroVM and rewind | VM and MicroVM not in this release | Developer setup only; verified local assets required; not a judge install |
 
