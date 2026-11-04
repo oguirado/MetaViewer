@@ -12,6 +12,10 @@ browser/program capsules or an agent completing a goal.
 Use the matching [v0.2.5 source tag and release assets](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
 [CITED: release]. Copy the `SHA256SUMS` digest from that release's notes before
 running fetch. That release has no ARM64 compiled assets.
+Its package uses the older light shell without the left Humans/Agents tree
+[CITED: maintainer evaluation; raw receipt absent]. The current checkout's Dark
+shell and tree describe source behavior, not that published binary. Use the
+matching release checkout; no newer asset tag or checksum digest is supplied here.
 Run from the matching checkout root:
 
 ```bash

@@ -43,7 +43,7 @@ The judge kit uses the release assets in `assets/` (verified against
 | `metaviewer-linux-<x64\|arm64>.tar.gz` | T1 & T2 | Packaged `MetaViewer-linux-<arch>/` bundle and `MetaViewer-linux-<arch>.sha256` [CITED: `docs/INSTALL.md`] |
 | `node-linux-<x64\|arm64>.tar.xz` | T1 & T2 | Node.js `>= 24` runtime (`*/bin/node` plus npm when included), extracted only when host `node` is missing or `< 24` |
 | `opensuperficies-linux-<x64\|arm64>.tar.gz` | T2 | `opensuperficies/bin/srf*` binaries and `opensuperficies/firewall/` |
-| `images-linux-<x64\|arm64>.tar` | T2 | `docker save` archive containing `opensuperficies-identity-browser-<arch>:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, and `opensuperficies-desktop-<arch>:1.1.0` |
+| `images-linux-<x64\|arm64>.tar` | T2 | `docker save` archive containing `opensuperficies-identity-browser-<arch>:0.2.0` and `:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, `opensuperficies-program-gtk-<arch>:0.1.0`, and `opensuperficies-desktop-<arch>:1.1.0` [CITED: maintainer evaluation; raw receipt absent] |
 | `vision-engine.tar.gz` | T2 | `vision-engine/` at the commit pinned in `deps.lock` |
 | `wender-agent.tar.gz` | T2 | `wender-agent/` at the commit pinned in `deps.lock` |
 
@@ -79,6 +79,9 @@ Fetch maps the architecture printed by `uname -m` (`aarch64` to `arm64`,
 refused (`JUDGE_BUNDLE_ARCH` / `PKG_ARCH_MISMATCH`). Maintainers building the release
 assets from local artifacts run `python3 tools/build_release_assets.py --out-dir ./assets ...`
 (see [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md#3-release-assets-and-building-them-locally)).
+For a release build, supply `--node-tarball` with the official Node runtime archive
+meeting the required major version [CITED: `../ui/package.json`]; the local-binary
+builder does not verify its version before naming the archive.
 
 You can also verify the unpacked application bundle manifest by hand:
 
@@ -94,7 +97,9 @@ or `arm64`. The checksum command runs inside the bundle, as described in
 ## Before you start
 
 - Run as a normal user. Electron refuses root without disabling its sandbox;
-  do not add `--no-sandbox` to bypass it [CITED: `scripts/judge/preflight.sh` sandbox policy].
+  do not run the launcher with `sudo` or add `--no-sandbox` to bypass it.
+  Preflight refuses `JUDGE_ROOT` before installation; install requests its own
+  administrator steps [CITED: `scripts/judge/preflight.sh`, `scripts/judge/metaviewer-judge.sh`].
 - Use a desktop/logind session with an existing, user-owned `XDG_RUNTIME_DIR`.
   On WSL2, enable systemd and use WSLg. A display alone does not supply the runtime
   directory [CITED: `scripts/judge/preflight.sh`].
@@ -129,7 +134,7 @@ print `JUDGE_DOCTOR_OK tier=<T1|T2>`. T0 uses the separate fixture below.
 
 | Tier | What you get |
 | --- | --- |
-| T0 | Offline conversation fixture only; no display, no Docker ([JUDGES.md](JUDGES.md)) |
+| T0 | Offline conversation fixture only; no display or Docker, but requires the local private `wender-agent` checkout in `MV_MW_WENDER_ROOT`; not part of the public judge kit ([JUDGES.md](JUDGES.md)) |
 | T1 | The packaged app: wall, core and adapter. Creating a capsule fails with a clear, correlated error: expected |
 | T2 | T1 plus up to 4 concurrent live browser and Linux program capsules (Docker, images, network, sudo-free profiles) |
 
@@ -230,7 +235,14 @@ command itself does not install npm packages.
 bash scripts/judge/metaviewer-judge.sh run
 ```
 
-The shell defaults to Dark unless a saved theme overrides it. Its three columns
+The UI described below is the current source checkout. The published
+`v0.2.5` package has an older light shell without the left Humans/Agents tree
+[CITED: maintainer evaluation; raw receipt absent]. Use that release's matching
+source tag and instructions when evaluating its binary. Matching assets and a
+checksum digest for this checkout are not supplied here; do not combine the old
+binary with these UI expectations.
+
+The current source shell defaults to Dark unless a saved theme overrides it. Its three columns
 [CITED: `../ui/src/App.vue`, `../ui/src/settings/settingsModel.js`] hold the left tree,
 center wall and paired terminal dock. Storyboard is not available in live navigation.
 The launcher shows installed host apps. Custom grid (⋯) sets snapping rows and columns; newly
