@@ -1,0 +1,26 @@
+{"id": "L01", "split": "dev", "mode": "locate", "query": "input epoch advanced when a person takes or releases control of a surface", "gold": ["daemon-adapter/internal/capsule/handoff.go"], "evidence": "nextInputEpoch"}
+{"id": "L02", "split": "held", "mode": "locate", "query": "which actions does the engine admit or refuse before they run", "gold": ["core/src/admission/mod.rs"], "evidence": "pub fn admit("}
+{"id": "L03", "split": "dev", "mode": "locate", "query": "commit subject must start with an allowed imperative verb", "gold": ["tools/check_laws.py"], "evidence": "VERBS = {"}
+{"id": "L04", "split": "held", "mode": "locate", "query": "changelog fragment lines must be bullet entries", "gold": ["tools/check_laws.py"], "evidence": "bullet entry"}
+{"id": "L05", "split": "dev", "mode": "locate", "query": "typing into a shell pane is rejected by the desktop app main process", "gold": ["ui/electron/authorityWire.js", "ui/electron/terminalHost.js", "ui/electron/preload.js"], "evidence": "TERMINAL_IO_REFUSED"}
+{"id": "L06", "split": "held", "mode": "locate", "query": "holdings witness ground truth validation in the session service", "gold": ["daemon-adapter/internal/capsule/capsule.go"], "evidence": "invalid holdings ground truth"}
+{"id": "L07", "split": "dev", "mode": "locate", "query": "agent python bridge sees a refusal after an acceptance for a headless run", "gold": ["agents/metaviewer_agents/client.py"], "evidence": "headless refusal after acceptance"}
+{"id": "L08", "split": "held", "mode": "locate", "query": "go back in time request checks labels hex digests and ids", "gold": ["core/src/rewind.rs"], "evidence": "fn hex(s: &str)"}
+{"id": "L09", "split": "dev", "mode": "locate", "query": "catalogue coverage check fails when published hashes disagree", "gold": ["tools/router_index.py"], "evidence": "SHA256SUMS mismatch"}
+{"id": "L10", "split": "held", "mode": "locate", "query": "listing symbols added since the map needs universal ctags", "gold": ["route/route_query.py"], "evidence": "E_NO_CTAGS"}
+{"id": "L11", "split": "dev", "mode": "locate", "query": "window to create open or delete a saved browser profile slot", "gold": ["ui/src/identities/IdentitiesDialog.vue"], "evidence": "function deleteIdentity"}
+{"id": "L12", "split": "held", "mode": "locate", "query": "screenshot button and frames per second field for captures", "gold": ["ui/src/recording/MvRecordingPanel.vue"], "evidence": "function onScreenshotClick"}
+{"id": "F01", "split": "dev", "mode": "find", "query": "confirmRole", "gold": ["ui/src/catalog/CatalogLauncher.vue"], "evidence": "function confirmRole"}
+{"id": "F02", "split": "held", "mode": "find", "query": "applyLayoutEcho", "gold": ["ui/src/wall/WallWorkspace.vue", "ui/src/wall/DesktopWorkspace.vue"], "evidence": "function applyLayoutEcho"}
+{"id": "F03", "split": "dev", "mode": "find", "query": "changeHiddenSessionLimit", "gold": ["ui/src/settings/MvSettingsPanel.vue"], "evidence": "function changeHiddenSessionLimit"}
+{"id": "F04", "split": "held", "mode": "find", "query": "bindTerminal", "gold": ["ui/src/terminal/TerminalView.vue"], "evidence": "function bindTerminal"}
+{"id": "F05", "split": "dev", "mode": "find", "query": "nextInputEpoch", "gold": ["daemon-adapter/internal/capsule/handoff.go"], "evidence": "func (m *Manager) nextInputEpoch"}
+{"id": "F06", "split": "held", "mode": "find", "query": "buildWorkingTree", "gold": ["ui/src/App.vue"], "evidence": "function buildWorkingTree"}
+{"id": "F07", "split": "dev", "mode": "find", "query": "applyExportResult", "gold": ["ui/src/recording/MvRecordingPanel.vue"], "evidence": "function applyExportResult"}
+{"id": "F08", "split": "held", "mode": "find", "query": "check_mount_freshness", "gold": ["tools/router_index.py"], "evidence": "def check_mount_freshness"}
+{"id": "E01", "split": "dev", "mode": "error", "query": "invalid holdings ground truth state", "gold": ["daemon-adapter/internal/capsule/capsule.go"], "evidence": "invalid holdings ground truth state"}
+{"id": "E02", "split": "held", "mode": "error", "query": "headless refusal after acceptance", "gold": ["agents/metaviewer_agents/client.py"], "evidence": "headless refusal after acceptance"}
+{"id": "E03", "split": "dev", "mode": "error", "query": "missing mount or SHA256SUMS", "gold": ["tools/router_index.py"], "evidence": "missing mount or SHA256SUMS"}
+{"id": "E04", "split": "held", "mode": "error", "query": "integer token out of range", "gold": ["daemon-adapter/internal/capsule/capsule.go"], "evidence": "integer token out of range"}
+{"id": "E05", "split": "dev", "mode": "error", "query": "TERMINAL_IO_REFUSED", "gold": ["ui/electron/authorityWire.js", "ui/electron/terminalHost.js", "ui/electron/preload.js", "ui/src/terminal/terminalClient.js", "ui/src/terminal/terminalDeckModel.js"], "evidence": "TERMINAL_IO_REFUSED"}
+{"id": "E06", "split": "held", "mode": "error", "query": "E_NO_CTAGS", "gold": ["route/route_query.py"], "evidence": "E_NO_CTAGS"}

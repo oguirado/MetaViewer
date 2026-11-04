@@ -216,8 +216,13 @@ microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
 microvm-2ad050142531	changes/unreleased/microvm-rewind-theme.md
 mutatio-9bd8e2d9afd9	changes/unreleased/mutation-regression-tests.md
 mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
+mwparti-1980adad520e	changes/unreleased/mw-partial-text-refusal.md
+mwpriva-76f7c208b48f	changes/unreleased/mw-private-run-parents.md
 mw-readback-textof.md	changes/unreleased/mw-readback-textof.md
+mw-report-deadline.md	changes/unreleased/mw-report-deadline.md
+mw-report-outcome.md	changes/unreleased/mw-report-outcome.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
+mwtermi-843dba820964	changes/unreleased/mw-terminal-deadline.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
@@ -242,6 +247,7 @@ release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
 rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.md
 rewindr-f6d46b8b6090	changes/unreleased/rewind-recovery-package.md
 routed-map.md	changes/unreleased/routed-map.md
+router-benchmark.md	changes/unreleased/router-benchmark.md
 schema-parse-once.md	changes/unreleased/schema-parse-once.md
 sidebar-74e83dfe487d	changes/unreleased/sidebar-entry-cleanup.md
 termina-d99d31338446	changes/unreleased/terminal-input-controls.md
@@ -352,6 +358,7 @@ witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
 workspace-columns.md	changes/unreleased/workspace-columns.md
 xpra-role-tiles.md	changes/unreleased/xpra-role-tiles.md
+ROUTER_PLAN.md	cloud-audit/ROUTER_PLAN.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
 actionr-3778f6831d07	contracts/examples/action_receipt.invalid.schema.json
@@ -2387,6 +2394,7 @@ volumeb-fd6fcd819519	tests/e2e/volume_bootstrap.test.js
 wall-fixture.mjs	tests/e2e/wall-fixture.mjs
 frames_parity.json	tests/fixtures/frames_parity.json
 golden_scenario.json	tests/fixtures/golden_scenario.json
+router_bench.jsonl	tests/fixtures/router_bench.jsonl
 secrets-README.md	tests/fixtures/secrets/README.md
 gate.py	tests/fixtures/secrets/gate.py
 test_gate.py	tests/fixtures/secrets/test_gate.py
@@ -2430,6 +2438,7 @@ proc_fields.mjs	tests/perf/proc_fields.mjs
 proc_fields.test.mjs	tests/perf/proc_fields.test.mjs
 rss_probe.mjs	tests/perf/rss_probe.mjs
 truncated.json	tests/perf/truncated.json
+router_bench.py	tests/router_bench.py
 setting-340cec3004f0	tests/settings_store.test.mjs
 supervisor-Cargo.lock	tests/supervisor/Cargo.lock
 supervisor-Cargo.toml	tests/supervisor/Cargo.toml
@@ -2516,6 +2525,7 @@ testpyt-2879eeaf233d	tests/test_python_contract_mirror.py
 testref-a49f742cb78b	tests/test_reference_docs.py
 testrel-8763567d3ddc	tests/test_release_notices.py
 test_route_map.py	tests/test_route_map.py
+test_router_bench.py	tests/test_router_bench.py
 test_router_docs.py	tests/test_router_docs.py
 test_router_index.py	tests/test_router_index.py
 testrou-b1523da28137	tests/test_router_queries.py

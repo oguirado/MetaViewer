@@ -1,0 +1,1 @@
+- Add a router benchmark (`tests/fixtures/router_bench.jsonl`, `python3 tests/router_bench.py`) that measures the catalogue router and the code map on 26 evidence-checked queries split into dev and held-out halves, and replace the router plan in `cloud-audit/ROUTER_PLAN.md` with a reviewed version.
