@@ -17,6 +17,14 @@ set -a; . "$ENV"; set +a
 
 The attachment changes `XDG_RUNTIME_DIR`. Use the original environment to locate
 it first; stop if the file is missing or its recorded app PID is no longer live.
+Resolve and source it once per task invocation. Keep that session's environment
+in the same subshell; do not recompute the pointer after sourcing it, because the
+new runtime directory is the core's private directory, not the publication root.
+The shared pointer can be replaced when another app starts. A live PID alone does
+not prove that it is the app containing the supplied capsule. The observation
+recipe below must match both capsule and identity before any input. If the
+pointer selects another app, stop and ask the operator to leave only the intended
+instance running; do not guess another path or act on its similarly named tab.
 If the app was started with a custom runtime directory which this terminal does
 not inherit, ask the operator for its actual attachment path. Never guess a
 private directory. `MV_OPERATOR_REPO` must then identify the installed operator
