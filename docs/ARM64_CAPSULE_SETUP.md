@@ -148,6 +148,25 @@ does not replace backend admission or prove an already running guest.
 The helper does not trigger graphical creation. The UI should wait for an actual
 Add capsule action. Registry-absent normal launch behavior is unchanged.
 
+### Rewind in the normal wall
+
+Pass `--rewind` to `arm64_capsule_session.py` to select Rewind for MicroVMs in
+the same normal wall. Both VM and MicroVM remain selectable in Add capsule;
+no browser or VM is created automatically. The launcher still needs the complete
+protected ARM64 registry, exact package commit and explicit UI transport above.
+This is not the exclusive developer `MV_REWIND_ONLY` mode.
+
+The helper derives the Rewind runner and module hashes from the verified package
+manifest, uses the existing admitted artifact pins and records its explicit mode
+in the private session plan. The resource inventory and held-session fence remain
+active. The shorter, exclusively created runtime path avoids Unix socket path
+limits without relaxing the native limit. A colliding directory is refused.
+
+MicroVM creation remains blocked while any surface capsule, including a browser
+or an unresolved creation, is held. An absent VM window does not establish that
+all surface resources have closed. Missing setup must be repaired through the
+protected launcher; setting availability flags by hand is not a setup procedure.
+
 ## Lifecycle and allocation custody
 
 The durable `held-session.json` prevents another session while closure remains

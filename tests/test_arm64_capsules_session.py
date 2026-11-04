@@ -57,6 +57,76 @@ class SessionTests(Fixture):
             'vm': {'available': True, 'reason': ''}, 'microvm': {'available': True, 'reason': ''}})
         self.assertEqual(json.loads(env['MV_SRF_PROFILES'])['fresh-vm']['Kind'], 'vm')
 
+    def rewind_fixture(self):
+        names = ['guest_command_runtime/' + n + '.py' for n in
+                 ('__init__', '_schemas', 'wire', 'schema', 'config', 'image', 'native_checks', 'protocol')]
+        names += ['rewind_runtime/' + n + '.py' for n in ('__init__', 'config', 'native', 'controller')]
+        names += ['tools/rewind_runner.py']
+        rows = []
+        for name in names:
+            item = self.file('source/daemon-adapter/' + name, b'# sealed rewind fixture\n')
+            Path(item['path']).chmod(0o644)
+            rows.append(item['sha256'] + '  source/daemon-adapter/' + name + '\n')
+        self.value['package_manifest'] = self.file('package.sha256', ''.join(rows).encode())
+        return names
+
+    def test_rewind_profile_uses_manifest_sealed_closure_and_normal_inventory(self):
+        self.directories()
+        names = self.rewind_fixture()
+        p = s.build_profile(self.value, self.root, 'agent-test', 'owned.scope', '/user.slice/owned.scope', rewind=True)
+        self.assertEqual(p['schema'], 'mv-rewind-host/v1')
+        self.assertEqual(p['controller_relative'], 'rewind_runtime/controller.py')
+        self.assertEqual({x['relative'] for x in p['files']}, set(names) - {'tools/rewind_runner.py'})
+        self.assertEqual(p['config_template']['schema'], 'rewind-host-config/v1')
+        self.assertEqual(p['config_template']['startup_seconds'], 10)
+        self.assertNotIn('generation', p['config_template'])
+        self.assertEqual(p['runtime_root'], str(self.root / 'r'))
+        self.assertEqual(p['runner']['path'], str(self.source / 'daemon-adapter/tools/rewind_runner.py'))
+
+    def test_rewind_manifest_tamper_missing_duplicate_and_foreign_source_refuse(self):
+        self.rewind_fixture()
+        manifest = Path(self.value['package_manifest']['path'])
+        good = manifest.read_bytes()
+        target = self.source / 'daemon-adapter/rewind_runtime/controller.py'
+        target.write_bytes(b'# altered\n')
+        with self.assertRaises(s.setup.Refused):
+            s.rewind_sources(self.value)
+        target.write_bytes(b'# sealed rewind fixture\n')
+        for raw in (b''.join(good.splitlines(keepends=True)[:-1]), good + good.splitlines(keepends=True)[0]):
+            manifest.write_bytes(raw)
+            self.value['package_manifest']['sha256'] = s.setup.digest(raw)
+            with self.assertRaises(s.setup.Refused):
+                s.rewind_sources(self.value)
+        manifest.write_bytes(good)
+        self.value['package_manifest']['sha256'] = s.setup.digest(good)
+        self.value['source_root'] = '/foreign'
+        with self.assertRaises((s.setup.Refused, OSError)):
+            s.rewind_sources(self.value)
+
+    def test_rewind_environment_keeps_normal_mode_and_binds_explicit_guardian(self):
+        env = s.child_environment(self.value, self.root, 'agent-test', 'fresh-vm', {
+            'display': ':9', 'xauthority': None, 'dbus_session_bus_address': 'unix:path=/explicit/bus'},
+            rewind=True, guardian='owned.scope')
+        self.assertEqual(env['MV_ARM64_CAPSULES'], '1')
+        self.assertEqual(env['MV_REWIND_ENABLED'], '1')
+        self.assertEqual(env['MV_REWIND_GUARDIAN_UNIT'], 'owned.scope')
+        self.assertEqual(env['MV_REWIND_AGENT_INSTANCE'], 'agent-test')
+        self.assertEqual(env['MV_REWIND_PROFILE'], str(self.root / 'guest-profile.json'))
+        for key in ('MV_REWIND_ONLY', 'MV_HEADLESS_ONLY', 'MV_GUEST_COMMAND_ONLY'):
+            self.assertNotIn(key, env)
+
+    def test_rewind_root_preserves_legacy_prefix_and_unix_socket_budget(self):
+        run = 'a' * 24
+        self.assertEqual(s.session_root_prefix(run, False), 'metaviewer-arm64-' + run + '-')
+        root = '/dev/shm/' + s.session_root_prefix(run, True)
+        self.assertLessEqual(len((root + '/r/headless-4294967295/rewind-12345678/vsock.sock_52').encode()), 107)
+        allocated = s.allocate_session_root(run, True, self.root)
+        self.assertEqual(allocated, self.root / s.session_root_prefix(run, True))
+        self.assertEqual(allocated.stat().st_mode & 0o777, 0o700)
+        with self.assertRaises(FileExistsError):
+            s.allocate_session_root(run, True, self.root)
+        self.assertEqual(list(allocated.iterdir()), [])
+
     def test_fixed_scope_caps_no_shell(self):
         argv = s.scope_args('owned.scope', '/runtime/python', '/runtime/session.py', Path('/ram/root'))
         for field in ('MemoryHigh=6G', 'MemoryMax=8G', 'MemorySwapMax=0', 'CPUQuota=200%', 'TasksMax=256'):

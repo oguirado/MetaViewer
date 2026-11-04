@@ -433,7 +433,71 @@ def provision(value, root, run_id, command=setup.run, kind='vm', guard=None, inv
         os.close(fd)
 
 
-def build_profile(value, root, agent, unit, group):
+def session_root_prefix(run_id, rewind=False):
+    setup.need(type(rewind) is bool, 'explicit rewind mode required')
+    setup.need(type(run_id) is str and re.fullmatch('[0-9a-f]{24}', run_id), 'session run identity')
+    return 'metaviewer-arm64-' + run_id + '-'
+
+
+def allocate_session_root(run_id, rewind=False, base='/dev/shm'):
+    prefix = session_root_prefix(run_id, rewind)
+    if not rewind:
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=base))
+    # The run already has 96 bits of fresh randomness. Exclusive creation never
+    # reuses a stale directory, and omitting another suffix preserves sun_path.
+    root = Path(base) / prefix
+    root.mkdir(mode=0o700)
+    return root
+
+
+def runtime_directory(root, rewind=False):
+    return root / ('r' if rewind else 'runtime')
+
+
+def rewind_sources(value):
+    """Use only the exact rewind closure sealed by this package's manifest."""
+    source = setup.canonical(value['source_root'])
+    package = setup.canonical(str(Path(value['package']['app']['path']).parent))
+    try:
+        source.relative_to(package)
+    except ValueError as error:
+        raise setup.Refused('rewind source must belong to the admitted package') from error
+    manifest = setup.pin(value['package_manifest'], 16 << 20).decode('utf-8', errors='strict')
+    entries = {}
+    for line in manifest.splitlines():
+        match = re.fullmatch(r'([0-9a-f]{64})(?: ([0-7]{4})  | ([ *]))(.+)', line)
+        setup.need(match is not None, 'rewind package manifest syntax')
+        sha, mode, mark, relative = match.groups()
+        setup.need(not relative.startswith('/') and '\\' not in relative
+                   and all(part not in ('', '.', '..') for part in relative.split('/'))
+                   and relative not in entries, 'rewind package manifest identity')
+        entries[relative] = (sha, int(mode, 8) if mode else (0o755 if mark == '*' else 0o644))
+    normal = ['guest_command_runtime/' + n + '.py' for n in
+              ('__init__', '_schemas', 'wire', 'schema', 'config', 'image', 'native_checks', 'protocol')]
+    names = normal + ['rewind_runtime/' + n + '.py' for n in ('__init__', 'config', 'native', 'controller')]
+    files = []
+    for name in names + ['tools/rewind_runner.py']:
+        path = setup.canonical(str(source / 'daemon-adapter' / name))
+        relative = str(path.relative_to(package))
+        setup.need(relative in entries, 'rewind source missing from package manifest')
+        sha, mode = entries[relative]
+        setup.need(stat.S_IMODE(path.lstat().st_mode) == mode, 'rewind source mode differs from manifest')
+        pin = {'path': str(path), 'sha256': sha}
+        setup.pin(pin, 2 << 20)
+        if name == 'tools/rewind_runner.py':
+            runner = pin
+        else:
+            files.append({'relative': name, **pin})
+    return runner, files
+
+
+def build_profile(value, root, agent, unit, group, rewind=False):
+    setup.need(type(rewind) is bool, 'explicit rewind mode required')
+    if rewind:
+        # Go's service root and Python's native root both add bounded suffixes.
+        worst = str(runtime_directory(root, True) / 'headless-4294967295/rewind-12345678/vsock.sock_52')
+        setup.need(len(os.fsencode(worst)) <= 107, 'rewind Unix socket path budget')
+    runner, files = rewind_sources(value) if rewind else (value['runner'], value['files'])
     owner = 'actor-' + setup.digest(('agent:' + agent).encode())
     assets = {}
     for name, asset in value['artifacts'].items():
@@ -446,16 +510,19 @@ def build_profile(value, root, agent, unit, group):
             os.fsync(f.fileno())
         assets[name] = {'path': str(target), 'sha256': asset['sha256']}
     config = {'schema': 'guest-command-host-config/v1', 'owner_id': owner, 'generation': 1,
-              'runtime_admitted': True, 'artifacts': assets, 'runtime_root': str(root / 'runtime'),
+              'runtime_admitted': True, 'artifacts': assets, 'runtime_root': str(runtime_directory(root, rewind)),
               'external_cgroup': '/sys/fs/cgroup' + group, 'startup_seconds': 20, 'stop_seconds': 5}
-    return {'schema': 'mv-guest-command-host/v1', 'owner_id': owner, 'guardian_unit': unit,
+    if rewind:
+        config.update(schema='rewind-host-config/v1', startup_seconds=10)
+        del config['generation']
+    return {'schema': 'mv-rewind-host/v1' if rewind else 'mv-guest-command-host/v1', 'owner_id': owner, 'guardian_unit': unit,
             'python': value['python'], 'python_prefix': value['python_prefix'],
-            'runner': value['runner'], 'controller_relative': 'guest_command_runtime/controller.py',
-            'files': value['files'], 'config_template': config,
-            'state_root': str(root / 'state'), 'runtime_root': str(root / 'runtime')}
+            'runner': runner, 'controller_relative': 'rewind_runtime/controller.py' if rewind else 'guest_command_runtime/controller.py',
+            'files': files, 'config_template': config,
+            'state_root': str(root / 'state'), 'runtime_root': str(runtime_directory(root, rewind))}
 
 
-def child_environment(value, root, agent, profile, transport, normal=None, hosted=False):
+def child_environment(value, root, agent, profile, transport, normal=None, hosted=False, *, rewind=False, guardian=None):
     # The only display/auth authority is the explicit protected UI descriptor.
     env = native_environment(root)
     env.update(DISPLAY=transport['display'],
@@ -484,6 +551,10 @@ def child_environment(value, root, agent, profile, transport, normal=None, hoste
         'vm': {'available': True, 'reason': ''},
         'microvm': {'available': True, 'reason': ''}}, separators=(',', ':'))
     env['MV_ARM64_INVENTORY_CONFIG'] = str(root / 'inventory-config.json')
+    if rewind:
+        setup.need(type(rewind) is bool and type(guardian) is str and guardian, 'rewind guardian required')
+        env.update(MV_REWIND_ENABLED='1', MV_REWIND_PROFILE=str(root / 'guest-profile.json'),
+                   MV_REWIND_AGENT_INSTANCE=agent, MV_REWIND_GUARDIAN_UNIT=guardian)
     # Normal browser/program profiles supplied by a future registry version must
     # be admitted explicitly, never merged from untrusted stale environment.
     return env
@@ -492,9 +563,11 @@ def child_environment(value, root, agent, profile, transport, normal=None, hoste
 def internal(root):
     root = setup.private_dir(root)
     plan = setup.decode(setup.read(root / 'PLAN.json', private=True))
-    setup.closed(plan, ('schema', 'run_id', 'unit', 'app', 'source_root', 'expected_commit', 'registry_sha256', 'script_sha256', 'setup_helper_sha256', 'ui_transport', 'ui_xauthority_identity', 'ui_bus_identity', 'hosted', 'launcher', 'outer'))
+    setup.closed(plan, ('schema', 'run_id', 'unit', 'app', 'source_root', 'expected_commit', 'registry_sha256', 'script_sha256', 'setup_helper_sha256', 'ui_transport', 'ui_xauthority_identity', 'ui_bus_identity', 'hosted', 'launcher', 'outer') + (('rewind',) if 'rewind' in plan else ()))
+    rewind = plan.get('rewind', False)
+    setup.need(type(rewind) is bool, 'explicit rewind mode required')
     setup.need(plan['schema'] == 'metaviewer-arm64-session/v1'
-               and root.name.startswith('metaviewer-arm64-' + plan['run_id'] + '-')
+               and root.name.startswith(session_root_prefix(plan['run_id'], rewind))
                and plan['unit'] == 'metaviewer-arm64-' + plan['run_id'] + '.scope', 'session identity')
     setup.need(setup.digest(setup.read(__file__, 1 << 20)) == plan['script_sha256'], 'session helper changed')
     setup.need(setup.digest(setup.read(setup.__file__, 1 << 20)) == plan['setup_helper_sha256'], 'setup helper changed')
@@ -502,6 +575,8 @@ def internal(root):
     registry = setup.read(setup.registry_path(), private=True)
     setup.need(setup.digest(registry) == plan['registry_sha256'], 'registry changed')
     value = setup.validate(setup.decode(registry))
+    if rewind:
+        rewind_sources(value)
     setup.need(value['source_commit'] == plan['expected_commit'], 'sealed package/source mismatch')
     setup.interpreter_check(value)
     transport = ui_transport(plan['ui_transport'])
@@ -528,9 +603,9 @@ def internal(root):
     normal = {kind: provision(value, root, plan['run_id'], kind=kind, guard=guard, inventory=inventory)
               for kind in ('browser', 'program') if kind in value.get('normal_profiles', {})}
     agent = 'agent-arm64-' + plan['run_id']
-    protected = build_profile(value, root, agent, plan['unit'], group)
+    protected = build_profile(value, root, agent, plan['unit'], group, rewind=rewind)
     setup.write_new(root / 'guest-profile.json', protected)
-    env = child_environment(value, root, agent, profile, transport, normal, plan['hosted'])
+    env = child_environment(value, root, agent, profile, transport, normal, plan['hosted'], rewind=rewind, guardian=plan['unit'])
     # Rehash immediately before the sole application side effect.
     setup.pin(value['package']['app'])
     setup.pin(value['package']['asar'])
@@ -550,7 +625,8 @@ def internal(root):
     return rc
 
 
-def launch(app, source_root, transport_path, expected_commit, launcher_pid, launcher_start):
+def launch(app, source_root, transport_path, expected_commit, launcher_pid, launcher_start, rewind=False):
+    setup.need(type(rewind) is bool, 'explicit rewind mode required')
     setup.need(os.environ.get('MV_ARM64_CAPSULES') != '1', 'already internal session')
     launcher = bind_launcher(launcher_pid, launcher_start)
     outer = process_identity(os.getpid())
@@ -559,6 +635,8 @@ def launch(app, source_root, transport_path, expected_commit, launcher_pid, laun
     setup.need(type(expected_commit) is str and re.fullmatch('[0-9a-f]{40}', expected_commit)
                and expected_commit == value['source_commit'], 'sealed package/source mismatch')
     setup.interpreter_check(value)
+    if rewind:
+        rewind_sources(value)  # Refuse missing or changed closure before custody/effects.
     # Both helper files must be installed protected before even a held marker.
     script = str(Path(__file__).resolve())
     helper_hash = setup.digest(setup.read(script, 1 << 20))
@@ -576,8 +654,8 @@ def launch(app, source_root, transport_path, expected_commit, launcher_pid, laun
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         setup.need(not (directory / 'held-session.json').exists(), 'previous session requires reconciliation')
         run_id = secrets.token_hex(12)
-        root = Path(tempfile.mkdtemp(prefix='metaviewer-arm64-' + run_id + '-', dir='/dev/shm'))
-        for name in ('home', 'native-state', 'store', 'frames', 'assets', 'state', 'runtime',
+        root = allocate_session_root(run_id, rewind)
+        for name in ('home', 'native-state', 'store', 'frames', 'assets', 'state', 'r' if rewind else 'runtime',
                      'host-runtime', 'config', 'data', 'app-state', 'cache', 'tmp'):
             (root / name).mkdir(mode=0o700)
         unit = 'metaviewer-arm64-' + run_id + '.scope'
@@ -588,7 +666,7 @@ def launch(app, source_root, transport_path, expected_commit, launcher_pid, laun
                 'ui_transport': transport,
                 'ui_xauthority_identity': xauthority_identity(transport),
                 'ui_bus_identity': ui_bus_identity(transport),
-                'hosted': os.environ.get('MV_HOSTED') == '1', 'launcher': launcher, 'outer': outer}
+                'hosted': os.environ.get('MV_HOSTED') == '1', 'launcher': launcher, 'outer': outer, 'rewind': rewind}
         setup.write_bytes_new(root / 'setup.json', setup.read(setup.registry_path(), private=True))
         setup.write_new(root / 'PLAN.json', plan)
         effect_guard(root, plan)
@@ -620,15 +698,16 @@ def main():
     p.add_argument('--expected-commit')
     p.add_argument('--launcher-pid', type=int)
     p.add_argument('--launcher-start', type=int)
+    p.add_argument('--rewind', action='store_true', help='Enable the sealed ARM64 rewind backend in the normal capsule session')
     args = p.parse_args()
     try:
         if args.internal_root:
             setup.need(not args.app and not args.source_root and not args.ui_transport and not args.expected_commit
-                       and args.launcher_pid is None and args.launcher_start is None, 'internal arity')
+                       and args.launcher_pid is None and args.launcher_start is None and not args.rewind, 'internal arity')
             return internal(args.internal_root)
         setup.need(bool(args.app and args.source_root and args.ui_transport and args.expected_commit), 'explicit app/source/UI binding required')
         return launch(args.app, args.source_root, args.ui_transport, args.expected_commit,
-                      args.launcher_pid, args.launcher_start)
+                      args.launcher_pid, args.launcher_start, rewind=args.rewind)
     except (ValueError, OSError, subprocess.SubprocessError):
         if args.internal_root:
             # Failure after an uncertain Popen still has a captured own scope.
