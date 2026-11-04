@@ -160,6 +160,7 @@ export function installFloatingDrag(root, api, grid, custom, complete) {
 }
 
 // Presentation only: no capsule geometry, ownership, or lifecycle operations.
+const WORKLOAD_PANEL_PREFIX='workload-panel:';
 export const TILE_PRESETS = Object.freeze(['single','side-by-side','grid','grid-3x2','focus-strip','floating']);
 
 /** Exact cell geometry; equal rectangles denote tabs in the same cell.
@@ -360,7 +361,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {string} id
  * @property {string} component
  * @property {string} [title]
- * @property {{ capsuleId: string }} params
+ * @property {{ capsuleId: string } | { sessionId: string }} params
  * @property {'always'} renderer
  * @property {number} minimumWidth
  * @property {number} minimumHeight
@@ -393,6 +394,8 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {()=>Record<string,{col:number,row:number}>} [savedCells]
  * @property {boolean} [allowLostSurface] - Diagnostic fixture presentation only.
  * @property {(error:WallAdmissionError)=>void} [onLayoutError]
+ * @property {() => Array<any>} [workloadTiles]
+ * @property {(value:any)=>boolean} [validateWorkloadTile]
  * @property {WallProjectionView | null} [projectionView]
  */
 
@@ -417,6 +420,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {(preset:string|null) => WallAdmissionResult<unknown>} setPreset
  * @property {() => void} refreshPreset
  * @property {(capsuleId:string,body:any) => WallAdmissionResult<unknown>} applyLayoutEcho
+ * @property {(id:string) => WallAdmissionResult<Readonly<{panelId:string}>>} revealWorkload
  * @property {(capsuleId: unknown, placement: unknown) => WallAdmissionResult<Readonly<{ panelId: string }>>} revealSurface
  * @property {(intent: unknown) => WallAdmissionResult<Readonly<{ panelId: string, type: string }>>} applyPresentationIntent
  * @property {(emit: WallEmitFn) => WallPanelCallbacks} createPanelCallbacks
@@ -734,6 +738,23 @@ export function createWallWorkspaceController(options = {}) {
       }
     }
     rememberSlot(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel, direction, orderIndex});
+  }
+  const workloadRows = () => {
+    const rows=options.workloadTiles?.() ?? [];
+    return Array.isArray(rows)&&typeof options.validateWorkloadTile==='function'?rows.filter(options.validateWorkloadTile):[];
+  };
+  /** Presentation only; the consumer owns row validation and slot contents. @param {string} id */
+  function revealWorkload(id) {
+    const row=workloadRows().find(row=>row.id===id);
+    if(!row)return fail('ERR_UNKNOWN_WORKLOAD','The workload panel is unavailable.');
+    if(!api||!windows)return fail('ERR_NOT_READY','The wall is not ready.');
+    const panelId=WORKLOAD_PANEL_PREFIX+id;
+    try {
+      const existing=api.getPanel(panelId);
+      if(existing){if(windows.state(panelId).hidden)windows.show(panelId);else existing.api.setActive();}
+      else api.addPanel({id:panelId,component:'CapsulePanel',title:row.title,params:{sessionId:id},renderer:'always',minimumWidth:320,minimumHeight:240});
+      return succeed(Object.freeze({panelId}));
+    }catch{return fail('ERR_PRESENTATION_FAILED','The workload panel could not be shown.');}
   }
   const presentationRows = () => {
     if (!api || !windows) return [];
@@ -1258,7 +1279,7 @@ export function createWallWorkspaceController(options = {}) {
     });
   }
 
-  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, beginFloatingDrag, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
+  return Object.freeze({ handleReady, dispose, revealWorkload, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, beginFloatingDrag, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
 }
 
 /**
@@ -1289,11 +1310,14 @@ export const WallMissingPanel = defineComponent({
 });
 </script>
 <script setup>
-import { inject, provide, markRaw, onBeforeUnmount, ref, useSlots } from 'vue';
+import { inject, provide, markRaw, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
 import SurfacePanel from './SurfacePanel.vue';
+import {createCapsulePanelRouter} from './workloadPanelParams.js';
 
 const props = defineProps({
+  workloadTiles:{type:/** @type {import('vue').PropType<Array<any>>} */ (Array),default:()=>[]},
+  validateWorkloadTile:{type:Function,default:null},
   identityCells: {type:Object,default:()=>({})},
   snapGrid: {type: /** @type {import('vue').PropType<{cols:number,rows:number}>} */ (Object), default:()=>({cols:2,rows:2})},
   workspaceComponent: { type: Object, default: () => DockWorkspace },
@@ -1353,7 +1377,7 @@ const emit = defineEmits([
   'layout-error',
 ]);
 
-const controller = createWallWorkspaceController({ floatingGrid:()=>props.snapGrid, savedCells:()=>props.identityCells, projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
+const controller = createWallWorkspaceController({workloadTiles:()=>props.workloadTiles,validateWorkloadTile:value=>typeof props.validateWorkloadTile==='function'&&props.validateWorkloadTile(value), floatingGrid:()=>props.snapGrid, savedCells:()=>props.identityCells, projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
 const callbacks = controller.createPanelCallbacks(emit);
 
 const wallRoot = ref(null);
@@ -1364,6 +1388,11 @@ function changeGrid(/** @type {'cols'|'rows'} */ axis, /** @type {Event} */ even
 }
 const slots = useSlots();
 const surfaceSlot = slots.surface ?? null;
+const workloadSlot=slots.workload??null;
+const validWorkload=(/** @type {any} */ row)=>typeof props.validateWorkloadTile==='function'&&props.validateWorkloadTile(row);
+const revealedWorkloads=new Set();
+function revealWorkloads(){for(const row of props.workloadTiles){if(validWorkload(row)&&!revealedWorkloads.has(row.id)){const result=controller.revealWorkload(row.id);if(result.ok)revealedWorkloads.add(row.id);}}}
+watch(()=>props.workloadTiles.map(row=>row?.id).join('|'),revealWorkloads);
 // Dockview mounts router components in isolated roots. Carry the scoped
 // capability into that root instead of relying on App's ancestor provides.
 const capsuleTerminal = inject('capsuleTerminal', null);
@@ -1379,6 +1408,7 @@ function onReady(payload) {
   releaseDrag();
   if (accepted.ok && /** @type {any} */ (wallRoot.value)?.ownerDocument && /** @type {any} */ (payload)?.api) releaseDrag = installFloatingDrag(wallRoot.value,/** @type {any} */ (payload).api,
     ()=>props.snapGrid,()=>{emit('custom-layout',controller.beginFloatingDrag());},()=>{void /** @type {any} */ (payload).host?.completeUserGesture?.();});
+  revealWorkloads();
   emit('ready', payload);
 }
 
@@ -1468,8 +1498,10 @@ const SurfaceTab = defineComponent({
 });
 const tabComponents = markRaw({ SurfaceTab });
 
+const CapsuleContentRouter=createCapsulePanelRouter({defineComponent,h,markRaw,graphical:WallSurfaceRouter,
+ rows:()=>props.workloadTiles,validate:validWorkload,slot:workloadSlot});
 const panelComponents = markRaw({
-  CapsulePanel: WallSurfaceRouter,
+  CapsulePanel: CapsuleContentRouter,
 
 });
 
@@ -1490,7 +1522,7 @@ function resizeFocused(/** @type {string} */ action) { return controller.resizeF
 function applyPresentationIntent(intent) { return controller.applyPresentationIntent(intent); }
 const presetTimer = setInterval(() => { controller.refreshPreset(); },150);
 presetTimer.unref?.();
-defineExpose({ revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
+defineExpose({ revealWorkload:(/** @type {string} */ id)=>controller.revealWorkload(id), revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
 
 onBeforeUnmount(() => {
   releaseDrag();
