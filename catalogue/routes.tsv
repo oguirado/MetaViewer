@@ -237,6 +237,9 @@ opfixde-af5b2743aa57	changes/unreleased/opfix-desktop-recovery.md
 opfixla-694d6cb6954e	changes/unreleased/opfix-launcher-focus-probe.md
 opfixme-5263d410786d	changes/unreleased/opfix-meta-site-examples.md
 opfixre-fb43387edf6d	changes/unreleased/opfix-recording-clock.md
+opfixre-13e60bac5f37	changes/unreleased/opfix-refresh-verdict.md
+opfixst-eaa19a96195d	changes/unreleased/opfix-stored-data-menu.md
+opfixsu-17ff59d49661	changes/unreleased/opfix-suite-regressions.md
 opfix2c-e8850a6263c8	changes/unreleased/opfix2-context-focus.md
 opfix2c-d46a8141f71e	changes/unreleased/opfix2-copy-capsule-id.md
 opfix2r-06d31b5099f6	changes/unreleased/opfix2-retain-capsule-drawers.md
@@ -3145,6 +3148,9 @@ opfixme-9fed732a954c	ui/test/opfix-meta-examples.test.js
 opfix-recording.cjs	ui/test/opfix-recording.cjs
 opfix-recording.html	ui/test/opfix-recording.html
 opfix-recording.js	ui/test/opfix-recording.js
+opfix-stored-menu.cjs	ui/test/opfix-stored-menu.cjs
+opfixst-a1cd99638ddf	ui/test/opfix-stored-menu.html
+opfix-stored-menu.js	ui/test/opfix-stored-menu.js
 opfix2g-d55bf7b8e845	ui/test/opfix2-geometry-nonce.test.js
 opfix2s-4a2285d09741	ui/test/opfix2-separation.test.js
 originc-568d530772a3	ui/test/origin-contract.test.js
