@@ -161,6 +161,7 @@ browser-goal.md	changes/unreleased/browser-goal.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 cipacka-468d8ecfdb15	changes/unreleased/ci-packaged-display-arm64.md
 cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
+ciporta-ba0238b657a7	changes/unreleased/ci-portable-arm-fixtures.md
 compact-9378a8397e9e	changes/unreleased/compact-capsule-chrome.md
 compile-238480708e01	changes/unreleased/compiled-browser-entries.md
 desktop-hidden.md	changes/unreleased/desktop-hidden.md

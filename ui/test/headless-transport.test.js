@@ -1,3 +1,4 @@
+import {headlessProfileOwnerSync} from '../electron/coreLauncher.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:net';
@@ -5,8 +6,14 @@ import {once,EventEmitter} from 'node:events';
 import {mkdtemp,mkdir,writeFile,chmod,lstat,rm} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {envelopeTagForBody,createMainBindings} from '../electron/hostBindings.js';
+function useArm64Fixture(t){
+ const prior=Object.getOwnPropertyDescriptor(process,'arch');
+ Object.defineProperty(process,'arch',{value:'arm64'});
+ t.after(()=>Object.defineProperty(process,'arch',prior));
+}
 const reg=c=>({endpoint:{component:c,instance:c+'-headless'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component:c,component_version:'0.2.5',component_commit:'a'.repeat(40),dependencies:[]}});
 test('authenticated binding routes real headless envelope events, never a surface/frame request',async t=>{
+ useArm64Fixture(t);
  const root=await mkdtemp('/dev/shm/mv-hl-');await mkdir(root+'/metaviewer',{mode:0o700});
  const config={session_id:'headless-test',core:reg('core'),peers:[reg('ui'),reg('agent')]};
  const owner='actor-'+createHash('sha256').update('agent:'+config.peers[1].endpoint.instance).digest('hex');
@@ -28,4 +35,13 @@ test('authenticated binding routes real headless envelope events, never a surfac
  const h=binding.core.headless;assert.equal(h.status().available,true);const notices=[];const unsubscribe=h.subscribe(s=>notices.push(s));
  assert.equal((await h.request({op:'create'})).session.phase,'ready');assert.equal((await h.request({op:'run',workload_id:'workload-real',generation:1,n:10})).session.job.value,385);assert.equal((await h.request({op:'stop',workload_id:'workload-real',generation:1})).session.ownership,'released');
  assert.deepEqual(requests.map(r=>r.schema),Array(3).fill('headless_request/v0.2'));assert.ok(notices.some(s=>s.session?.phase==='starting'));unsubscribe();
+});
+
+test('headless-transport keeps unsupported architecture unavailable',async t=>{
+ const root=await mkdtemp('/dev/shm/arch-control-');t.after(()=>rm(root,{recursive:true,force:true}));
+ const owner='actor-'+createHash('sha256').update('agent:arch-control').digest('hex');
+ await writeFile(root+'/profile',JSON.stringify({schema:'mv-headless-host/v1',owner_id:owner,guardian_unit:'synthetic.service',python:{},python_prefix:'/usr',runner:{},controller_relative:'mc06-controller/controller.py',files:[],config_template:{schema:'mc06-host-config/v1',runtime_admitted:true,owner_id:owner},state_root:root,runtime_root:root}),{mode:0o600});
+ const env={MV_HEADLESS_ONLY:'1',MV_HEADLESS_PROFILE:root+'/profile'};
+ assert.equal(headlessProfileOwnerSync(env,'arm64'),owner);
+ assert.equal(headlessProfileOwnerSync(env,'x64'),null);
 });
