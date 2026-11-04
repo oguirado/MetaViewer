@@ -120,6 +120,9 @@ type Window struct {
 	URL   string `json:"url"`
 }
 type Binding struct {
+	// [TARGET, unit decision] Local capture freshness survives a failed release
+	// capture. It is never part of a native CLI or versioned wire payload.
+	FrameRefreshEpoch                                         uint64 `json:"-"`
 	InventoryID                                               string
 	HostXpra                                                  *hostXpraProcess
 	Role                                                      string
@@ -1338,7 +1341,7 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	if !ok || current.Surface.State != "active" || current.recoveryProbe != nil || m.destroying[id] || current.Container != b.Container || current.RunID != b.RunID {
 		return Binding{}, NativeFrame{}, fault("surface", "capture requires an active surface")
 	}
-	if m.hasPending(id) || m.inputEpochs[id] != epoch {
+	if m.hasPending(id) || m.inputEpochs[id] != epoch || current.FrameRefreshEpoch != b.FrameRefreshEpoch {
 		return Binding{}, NativeFrame{}, fault("POLICY", "input must be drained before capture")
 	}
 	b = current

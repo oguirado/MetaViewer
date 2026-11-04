@@ -19,6 +19,7 @@ const hint=computed(()=>{
   return '';
 });
 const PUBLIC={
+  ACTING_STEP_LOCATE_WAIT_REQUIRED:'Set locate_wait_ms to 5000 on every interactive step, then check the site again.',
   DEMO_BUSY:'Another demo operation is still running.',
   DEMO_NOT_RECORDING:'No recording is running.',
   BUTTON_UNAVAILABLE:'The demo tool is unavailable: check that MV_OPERATOR_REPO points to the operator checkout.',

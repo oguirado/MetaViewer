@@ -127,6 +127,7 @@ export function viewerUrl(value) {
 }
 /** @param {string} method @param {any} v */
 export function assertButtonReply(method,v) {
+  if(method==='demo.check' && buttonExact(v,['ok','code']) && v.ok===false && v.code==='ACTING_STEP_LOCATE_WAIT_REQUIRED')return v;
   if(buttonExact(v,['ok','code']) && v.ok===false && ['BUTTON_UNAVAILABLE','DEMO_REFUSED','DEMO_BUSY','DEMO_NOT_RECORDING'].includes(v.code))return v;
   if(method==='demo.state'){if(buttonExact(v,['schema','ok','phase','identity','demo']) && v.schema==='metaviewer.demo_state/v1' && v.ok===true && ['idle','starting','recording','sealing'].includes(v.phase) && (v.phase==='idle'?v.identity==='' && v.demo==='':buttonId(v.identity,40) && v.identity.length>=2 && buttonId(v.demo,40)))return v;throw new Error('BUTTON_REPLY');}
   if(v?.ok===true && (method==='demo.start'?buttonExact(v,['ok','url']) && viewerUrl(v.url):buttonExact(v,['ok'])))return v;

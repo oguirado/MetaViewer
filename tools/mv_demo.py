@@ -19,6 +19,8 @@ OpenSuperficies recorder source (read only, surface/record.go):
 - the RAM copy is removed once the private export is sealed and digested.
 - a site written by an AI is untrusted data: check copies it without following
   links, refuses special files and bounds the tree.
+- interactive workflow steps need a positive locate wait before site admission;
+  the authoring prompt uses 5000 ms, matching the builtin sites.
 """
 import argparse
 import hashlib
@@ -382,6 +384,18 @@ def check(site):
             copy_site(source_fd, dest, {'files': 0, 'bytes': 0})
         finally:
             os.close(source_fd)
+        # Inspect only the bounded, link-free copy, never mutate authored data.
+        for path in sorted((dest / 'workflows').rglob('*.json')):
+            workflow = strict_json(path.read_bytes())
+            if not isinstance(workflow, dict) or workflow.get('schema') != 'mw.workflow.v1':
+                continue
+            steps = workflow.get('steps')
+            need(isinstance(steps, list), 'INVALID_WORKFLOW')
+            for step in steps:
+                need(isinstance(step, dict) and isinstance(step.get('action'), dict), 'INVALID_WORKFLOW')
+                if step['action'].get('kind') in ('click', 'right_click', 'double_click', 'paste', 'key', 'scroll', 'drag'):
+                    wait = step.get('locate_wait_ms')
+                    need(type(wait) is int and wait > 0, 'ACTING_STEP_LOCATE_WAIT_REQUIRED')
         for flags in ([], ['--check']):
             result = subprocess.run([sys.executable, '-I', str(copy / 'tools/build_index.py'), '--root', str(copy), *flags],
                                     cwd=copy, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -446,6 +460,10 @@ def remote_demo(args):
                          and row.get('schema') == 'metaviewer.demo_control/v1'
                          and row.get('session_id') == session, 'DEMO_REFUSED')
                     reply = row.get('reply')
+                    if (args.verb == 'check' and row.get('event') == 'done'
+                            and isinstance(reply, dict) and reply.get('ok') is False
+                            and reply.get('code') == 'ACTING_STEP_LOCATE_WAIT_REQUIRED'):
+                        raise Refused('ACTING_STEP_LOCATE_WAIT_REQUIRED')
                     need(isinstance(reply, dict) and reply.get('ok') is True, 'DEMO_REFUSED')
                     if row.get('event') == 'ready':
                         need(args.verb == 'record' and not announced, 'DEMO_REFUSED')
@@ -495,6 +513,11 @@ def main(argv=None):
         print(json.dumps({'schema': 'metaviewer.demo/v1', 'ok': True, 'result': result}))
         return 0
     except Refused as error:
+        if str(error) == 'ACTING_STEP_LOCATE_WAIT_REQUIRED':
+            print(json.dumps({'schema': 'metaviewer.demo/v1', 'ok': False,
+                              'error': 'ACTING_STEP_LOCATE_WAIT_REQUIRED',
+                              'hint': 'Set locate_wait_ms to 5000 on every interactive step, then run check again.'}))
+            return 6
         code = str(error) if str(error) == 'DEMO_HOST_UNAVAILABLE' else 'DEMO_REFUSED'
         print(json.dumps({'schema': 'metaviewer.demo/v1', 'ok': False, 'error': code}))
         return 6

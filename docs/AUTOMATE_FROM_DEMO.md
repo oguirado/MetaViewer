@@ -45,11 +45,12 @@ Use a neutral public page for a rehearsal and verify that it actually loads befo
    An anchored Markdown workflow alone is not an executable workflow. Restore
    the demonstrated starting page before replay, observe its anchors again,
    and require the run's receipt and result rather than the model's verdict.
-   A schema-valid zero `locate_wait_ms` is not a usable live acquisition window
-   in the pinned runner: it reaches `DEADLINE` before target lookup. The person
-   must review the authored locate policy before execution. Do not raise an
-   established budget or retry an uncertain action to hide this refusal.
-   [CITED: pinned wender-agent `wender/learn/mw_workflow.py`, `_execute`, `_time`]
+   Each interactive step must set `locate_wait_ms: 5000`, matching the builtin
+   sites. The site check refuses nonpositive or missing acting-step locate waits
+   before admission with `ACTING_STEP_LOCATE_WAIT_REQUIRED` and a fix hint.
+   Correct the authored data and check again before replay. This selects the
+   builtin acquisition window; runtime/test budgets and schema limits stay fixed.
+   [CITED: `memoryweb-builtin/sites/meta-ai/workflows/new-chat.json`, `tools/mv_demo.py`]
 
 [TARGET] The following is the single prompt template used by the
 host and the later button. The host substitutes the marked values after checking
@@ -78,9 +79,11 @@ valid pixel boxes, and source_sha256 for each node's relative file#anchor span.
 Use explicit standalone Markdown anchors. Pin steps.json and EXPLANATION.md
 SHA-256 digests in the demo manifest. Also write workflows/<workflow>.json in
 mw.workflow.v1 format for Run automation; Markdown alone cannot be replayed.
-Read the installed workflow template and live acquisition policy before choosing
-locate and verification windows; schema-valid zero locate wait expires before
-live lookup in the pinned runner. Never expand established runtime/test budgets.
+Set locate_wait_ms: 5000 on every interactive step (click, right_click,
+double_click, paste, key, scroll, drag), matching the builtin sites. This is an
+authored workflow value, not a change to runtime/test budgets or schema limits.
+Do not use zero for acting steps. Read the installed workflow template and live
+acquisition policy for the remaining fields. Never expand runtime/test budgets.
 Declare text slots exactly matching the
 steps' (seq,text_len); never fill them with characters from events or frames.
 Unknown values remain operator-supplied variable slots. Do not invent observations.

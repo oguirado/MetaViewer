@@ -427,6 +427,14 @@ func TestOwnershipChangeInvalidatesInFlightCaptures(t *testing.T) {
 	}
 	cases := []stepCase{
 		{
+			name: "straddle_state_refresh",
+			mid: func(t *testing.T, m *Manager, id string) {
+				if _, err := m.RequireFrameRefresh(id); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
 			name: "straddle_take_control",
 			mid: func(t *testing.T, m *Manager, id string) {
 				if _, e := m.Handle(context.Background(), req("take_control", `{"surface_id":"`+id+`","owner":"human"}`)); e != nil {
@@ -546,4 +554,3 @@ func TestOwnershipChangeInvalidatesInFlightCaptures(t *testing.T) {
 		}
 	}
 }
-

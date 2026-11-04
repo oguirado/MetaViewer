@@ -83,6 +83,21 @@ func (m *Manager) control(r Request, version string) ([]json.RawMessage, error) 
 	m.bindings[q.SurfaceID] = b
 	return []json.RawMessage{surfaceEvent(version, "state_changed", b.Surface)}, nil
 }
+
+// RequireFrameRefresh keeps state-reply freshness pending until a capture is
+// actually published. List reconciliation raises the same core fence as release.
+func (m *Manager) RequireFrameRefresh(id string) (Binding, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	b, ok := m.bindings[id]
+	if !ok || b.Surface.State != "active" || b.Role == "human" || b.Surface.Control != "agent" {
+		return Binding{}, fault("POLICY", "state refresh requires active agent control")
+	}
+	b.FrameRefreshEpoch++
+	m.refresh[id] = true
+	m.bindings[id] = b
+	return b, nil
+}
 func (m *Manager) ControlReady(id string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
