@@ -1,0 +1,193 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/graphical_session_request.schema.json",
+  "title": "Graphical QEMU session request",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_request/v0.2",
+          "maxLength": 30
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "op": {
+          "type": "string",
+          "const": "attach"
+        },
+        "params": {
+          "type": "object",
+          "properties": {},
+          "required": [],
+          "additionalProperties": false,
+          "maxProperties": 0
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "op",
+        "params",
+        "owner_id"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 6
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_request/v0.2",
+          "maxLength": 30
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "op": {
+          "type": "string",
+          "const": "mark"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 80,
+              "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]*$"
+            }
+          },
+          "required": [
+            "label"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 1
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "op",
+        "params",
+        "generation",
+        "authority_epoch",
+        "owner_id"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 8
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_request/v0.2",
+          "maxLength": 30
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "op": {
+          "type": "string",
+          "const": "restore"
+        },
+        "params": {
+          "type": "object",
+          "properties": {
+            "point_id": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 70,
+              "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+            }
+          },
+          "required": [
+            "point_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 1
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "op",
+        "params",
+        "generation",
+        "authority_epoch",
+        "owner_id"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 8
+    }
+  ]
+}

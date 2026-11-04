@@ -1,0 +1,1127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/graphical_session_event.schema.json",
+  "title": "Graphical QEMU session event",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "attach"
+        },
+        "event": {
+          "type": "string",
+          "const": "accepted"
+        },
+        "reason_code": {
+          "type": "null"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "oneOf": [
+            {
+              "$ref": "graphical_session.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "attach"
+        },
+        "event": {
+          "type": "string",
+          "const": "completed"
+        },
+        "reason_code": {
+          "type": "null"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "$ref": "graphical_session.schema.json"
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "attach"
+        },
+        "event": {
+          "type": "string",
+          "const": "refused"
+        },
+        "reason_code": {
+          "type": "string",
+          "maxLength": 17,
+          "pattern": "^(UNAVAILABLE|STALE|BUSY|CAPACITY|POINT_UNAVAILABLE|POLICY|NATIVE_FAILED)$"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "oneOf": [
+            {
+              "$ref": "graphical_session.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "attach"
+        },
+        "event": {
+          "type": "string",
+          "const": "outcome_unknown"
+        },
+        "reason_code": {
+          "type": "string",
+          "const": "OUTCOME_UNKNOWN"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "oneOf": [
+            {
+              "$ref": "graphical_session.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "mark"
+        },
+        "event": {
+          "type": "string",
+          "const": "accepted"
+        },
+        "reason_code": {
+          "type": "null"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "$ref": "graphical_session.schema.json"
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "mark"
+        },
+        "event": {
+          "type": "string",
+          "const": "completed"
+        },
+        "reason_code": {
+          "type": "null"
+        },
+        "point_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "session": {
+          "$ref": "graphical_session.schema.json"
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "mark"
+        },
+        "event": {
+          "type": "string",
+          "const": "refused"
+        },
+        "reason_code": {
+          "type": "string",
+          "maxLength": 17,
+          "pattern": "^(UNAVAILABLE|STALE|BUSY|CAPACITY|POINT_UNAVAILABLE|POLICY|NATIVE_FAILED)$"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "oneOf": [
+            {
+              "$ref": "graphical_session.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "mark"
+        },
+        "event": {
+          "type": "string",
+          "const": "outcome_unknown"
+        },
+        "reason_code": {
+          "type": "string",
+          "const": "OUTCOME_UNKNOWN"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "$ref": "graphical_session.schema.json"
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "restore"
+        },
+        "event": {
+          "type": "string",
+          "const": "accepted"
+        },
+        "reason_code": {
+          "type": "null"
+        },
+        "point_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "session": {
+          "$ref": "graphical_session.schema.json"
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "restore"
+        },
+        "event": {
+          "type": "string",
+          "const": "completed"
+        },
+        "reason_code": {
+          "type": "null"
+        },
+        "point_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "session": {
+          "$ref": "graphical_session.schema.json"
+        },
+        "elapsed_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 30000
+        },
+        "frame_sha256": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "frame_generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "restore"
+        },
+        "event": {
+          "type": "string",
+          "const": "refused"
+        },
+        "reason_code": {
+          "type": "string",
+          "maxLength": 17,
+          "pattern": "^(UNAVAILABLE|STALE|BUSY|CAPACITY|POINT_UNAVAILABLE|POLICY|NATIVE_FAILED)$"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "oneOf": [
+            {
+              "$ref": "graphical_session.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session_event/v0.2",
+          "maxLength": 28
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "op": {
+          "type": "string",
+          "const": "restore"
+        },
+        "event": {
+          "type": "string",
+          "const": "outcome_unknown"
+        },
+        "reason_code": {
+          "type": "string",
+          "const": "OUTCOME_UNKNOWN"
+        },
+        "point_id": {
+          "type": "null"
+        },
+        "session": {
+          "$ref": "graphical_session.schema.json"
+        },
+        "elapsed_ms": {
+          "type": "null"
+        },
+        "frame_sha256": {
+          "type": "null"
+        },
+        "frame_generation": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "surface_id",
+        "generation",
+        "authority_epoch",
+        "op",
+        "event",
+        "reason_code",
+        "point_id",
+        "session",
+        "elapsed_ms",
+        "frame_sha256",
+        "frame_generation"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 15
+    }
+  ]
+}

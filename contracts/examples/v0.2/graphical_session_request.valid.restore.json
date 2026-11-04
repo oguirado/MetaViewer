@@ -1,0 +1,12 @@
+{
+  "schema": "graphical_session_request/v0.2",
+  "request_id": "request-restore-001",
+  "surface_id": "surface-demo",
+  "op": "restore",
+  "params": {
+    "point_id": "point-a1"
+  },
+  "generation": 1,
+  "authority_epoch": 1,
+  "owner_id": "actor-demo"
+}

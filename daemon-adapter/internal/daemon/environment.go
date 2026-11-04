@@ -602,6 +602,9 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		if err := json.Unmarshal(e.Body, &q); err != nil {
 			return nil, err
 		}
+		if q.Schema == "graphical_session_request/v0.2" {
+			return dispatchGraphicalSession(ctx, m, profiles, pubs, e)
+		}
 		if q.Schema == "capsule_state_request/v0.2" {
 			return dispatchState(ctx, m, e)
 		}

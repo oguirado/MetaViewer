@@ -157,6 +157,21 @@ pub enum Input {
         executor_epoch: u64,
     },
     RewindUncertain,
+    GraphicalSessionRequest {
+        request: crate::wire::graphical_session::GraphicalSessionRequest,
+        caller: Endpoint,
+        agent: Endpoint,
+        daemon: Endpoint,
+        enabled: bool,
+        capture_busy: bool,
+        received_ns: u64,
+    },
+    GraphicalSessionEvent {
+        notice: crate::wire::graphical_session::GraphicalSessionEvent,
+        sender: Endpoint,
+        executor_epoch: u64,
+    },
+    GraphicalSessionUncertain,
 
     GuestCommandRequest {
         request: crate::wire::guest_command::GuestCommandRequest,
@@ -269,6 +284,8 @@ pub struct CoreState {
     pub guest_command: crate::guest_command::State,
     #[serde(default, skip_serializing_if = "crate::rewind_flow::State::is_empty")]
     pub rewind: crate::rewind_flow::State,
+    #[serde(default, skip_serializing_if = "crate::graphical_session::State::is_empty")]
+    pub graphical_session: crate::graphical_session::State,
     pub surfaces: BTreeMap<String, Surface>,
     /// Surface keys; display conflicts are checked against every leased surface.
     pub leases: BTreeMap<String, String>,
@@ -316,6 +333,7 @@ impl CoreState {
             headless: crate::headless::State::default(),
             guest_command: crate::guest_command::State::default(),
             rewind: crate::rewind_flow::State::default(),
+            graphical_session: crate::graphical_session::State::default(),
             surfaces: BTreeMap::new(),
             leases: BTreeMap::new(),
             pending: BTreeMap::new(),
@@ -599,6 +617,72 @@ impl CoreState {
                 }
             }
             Input::RewindUncertain => self.rewind.mark_unknown(),
+            Input::GraphicalSessionRequest {
+                request,
+                caller,
+                agent,
+                daemon,
+                enabled,
+                capture_busy,
+                received_ns,
+            } => {
+                let surface_id = request.0["surface_id"].as_str().unwrap_or("");
+                let busy = *capture_busy || self.pending.values().any(|p| {
+                    p.request
+                        .proposal()
+                        .is_ok_and(|proposal| proposal.surface_id == surface_id)
+                }) || self.draining.values().any(|id| id == surface_id)
+                    || self.leases.contains_key(surface_id);
+                match self.graphical_session.request(
+                    request,
+                    caller,
+                    agent,
+                    daemon,
+                    &self.surfaces,
+                    &self.destroyed,
+                    busy,
+                    *enabled,
+                    self.remaining_budget,
+                    *received_ns,
+                    self.epoch,
+                    next,
+                ) {
+                    Ok(true) => {
+                        self.remaining_budget -= 1;
+                        out.dispatch = true;
+                    }
+                    Ok(false) => {}
+                    Err(code) => {
+                        out.reason = Some(match code {
+                            "CAPACITY" => Refusal::BudgetExceeded,
+                            "STALE" => Refusal::StaleFrame,
+                            "BUSY" => Refusal::LockedByOther,
+                            _ => Refusal::Policy,
+                        });
+                    }
+                }
+            }
+            Input::GraphicalSessionEvent {
+                notice,
+                sender,
+                executor_epoch,
+            } => {
+                if let Err(code) = self.graphical_session.observe(
+                    notice,
+                    sender,
+                    *executor_epoch,
+                    &self.surfaces,
+                ) {
+                    out.reason = Some(match code {
+                        "STALE" => Refusal::StaleFrame,
+                        "CAPACITY" => Refusal::BudgetExceeded,
+                        _ => Refusal::Policy,
+                    });
+                }
+            }
+            Input::GraphicalSessionUncertain => {
+                let _ = self.graphical_session.uncertain(next);
+            }
             Input::GuestCommandRequest {
                 request,
                 caller,
@@ -745,7 +829,16 @@ impl CoreState {
             Input::SurfaceRequest { request } => {
                 let value =
                     serde_json::to_value(request).map_err(|_| AdmissionError::InvalidInput)?;
+                let graph_cleanup = value["op"] == "destroy"
+                    && value["params"]["surface_id"].as_str().is_some_and(|id| {
+                        self.graphical_session.blocks_mutation(id)
+                    });
                 if (value["op"] == "create" && (self.headless.held || self.guest_command.held))
+                    || (self.graphical_session.pending.is_some() && value["op"] == "create")
+                    || value["params"]["surface_id"].as_str().is_some_and(|id| {
+                        self.graphical_session.blocks_mutation(id)
+                            && !matches!(value["op"].as_str(), Some("destroy" | "frame_subscribe" | "frame_unsubscribe"))
+                    })
                     || !matches!(
                         value["op"].as_str(),
                         Some(
@@ -767,9 +860,9 @@ impl CoreState {
                     || !valid_surface_create_policy(request)
                 {
                     out.reason = Some(Refusal::Policy);
-                } else if self.remaining_budget == 0 {
+                } else if self.remaining_budget == 0 && !graph_cleanup {
                     out.reason = Some(Refusal::BudgetExceeded);
-                } else {
+                } else if !graph_cleanup {
                     self.remaining_budget -= 1;
                 }
             }
@@ -782,7 +875,8 @@ impl CoreState {
                         return Ok(out);
                     }
                 }
-                if self.human_roles.contains(&p.surface_id)
+                if self.graphical_session.blocks_mutation(&p.surface_id)
+                    || self.human_roles.contains(&p.surface_id)
                     || self.is_destroyed(&p.surface_id)
                     || self.epoch == 0
                     || self.seen.contains(&p.proposal_id)
@@ -885,6 +979,7 @@ impl CoreState {
                     LifecycleUpdate::Created(surface) => {
                         if self.headless.held
                             || self.guest_command.held
+                            || self.graphical_session.pending.is_some()
                             || surface_id.is_empty()
                             || surface.display.is_empty()
                             || surface.frame.is_some()
@@ -905,7 +1000,7 @@ impl CoreState {
                                     if surface.display.is_empty() || surface.frame.is_some() {
                                         return Err(AdmissionError::InvalidInput);
                                     }
-                                    if !old.live {
+                                    if !old.live || self.graphical_session.blocks_mutation(surface_id) {
                                         out.reason = Some(Refusal::Policy);
                                     } else {
                                         old.display = surface.display.clone();
@@ -919,11 +1014,15 @@ impl CoreState {
                                         out.reason = Some(Refusal::Policy);
                                     } else {
                                         old.live = false;
+                                        if self.graphical_session.held_surface() == Some(surface_id) {
+                                            let _ = self.graphical_session.uncertain(next);
+                                        }
                                     }
                                 }
                                 LifecycleUpdate::Destroyed => {
                                     old.live = false;
                                     self.destroyed.insert(surface_id.clone());
+                                    self.graphical_session.destroyed(surface_id);
                                 }
                                 LifecycleUpdate::Created(_) => unreachable!(),
                             }
@@ -954,6 +1053,7 @@ impl CoreState {
                 self.headless.uncertain();
                 self.guest_command.uncertain();
                 self.rewind.mark_unknown();
+                let _ = self.graphical_session.uncertain(next);
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {
                     // Only a durable Dispatch can have reached the executor.
@@ -965,7 +1065,8 @@ impl CoreState {
                 }
             }
             Input::Surface { id, surface } => {
-                if id.is_empty() || surface.display.is_empty() || self.surfaces.contains_key(id) {
+                if id.is_empty() || surface.display.is_empty() || self.surfaces.contains_key(id)
+                    || self.graphical_session.pending.is_some() {
                     return Err(AdmissionError::InvalidInput);
                 }
                 if let Some(f) = &surface.frame {
@@ -1018,7 +1119,9 @@ impl CoreState {
                         .sequences
                         .get(&who)
                         .is_some_and(|s| r.envelope.seq <= *s);
-                out.reason = if duplicate {
+                out.reason = if self.graphical_session.blocks_mutation(&p.surface_id) {
+                    Some(Refusal::LockedByOther)
+                } else if duplicate {
                     Some(Refusal::Policy)
                 } else {
                     self.check(r, r.received_ns, false)?
@@ -1104,7 +1207,8 @@ impl CoreState {
                 }
             }
             Input::TakeControl { surface_id } => {
-                if self.human_roles.contains(surface_id) {
+                if self.graphical_session.blocks_mutation(surface_id)
+                    || self.human_roles.contains(surface_id) {
                     out.reason = Some(Refusal::Policy);
                     self.core_seq = next;
                     return Ok(out);
@@ -1125,7 +1229,8 @@ impl CoreState {
                 }
             }
             Input::ReleaseControl { surface_id } => {
-                if self.human_roles.contains(surface_id)
+                if self.graphical_session.blocks_mutation(surface_id)
+                    || self.human_roles.contains(surface_id)
                     || self.draining.values().any(|sid| sid == surface_id)
                 {
                     out.reason = Some(Refusal::Policy);

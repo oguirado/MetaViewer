@@ -76,6 +76,7 @@ const CAPSULE_BODIES: &[&str] = &[
     "guest_command_event",
 ];
 const REWIND_BODIES: &[&str] = &["rewind_request", "rewind_event"];
+const GRAPHICAL_BODIES: &[&str] = &["graphical_session_request", "graphical_session_event"];
 const COMMAND_OBSERVATION_BODIES: &[&str] = &["guest_command_observation"];
 fn family(prefix: &str) -> Option<&'static str> {
     if prefix == "envelope" || LEGACY_BODIES.contains(&prefix) {
@@ -84,6 +85,8 @@ fn family(prefix: &str) -> Option<&'static str> {
         Some("capsule_envelope")
     } else if prefix == "rewind_envelope" || REWIND_BODIES.contains(&prefix) {
         Some("rewind_envelope")
+    } else if prefix == "graphical_session_envelope" || GRAPHICAL_BODIES.contains(&prefix) {
+        Some("graphical_session_envelope")
     } else if prefix == "guest_command_observation_envelope"
         || COMMAND_OBSERVATION_BODIES.contains(&prefix)
     {
@@ -192,6 +195,12 @@ fn check_frozen_example(
         return Ok(ExampleDisposition::EmbeddedChecked { valid });
     }
     let metadata = match prefix {
+        "graphical_session" => Some(
+            serde_json::from_slice::<metaviewer_core::wire::graphical_session::GraphicalSession>(
+                raw,
+            )
+            .map(|_| ()),
+        ),
         "rewind_session" => Some(
             serde_json::from_slice::<metaviewer_core::wire::rewind::RewindSession>(raw).map(|_| ()),
         ),
@@ -231,6 +240,11 @@ fn check_frozen_example(
     let mut env = if family == "guest_command_observation_envelope" {
         serde_json::from_str(include_str!(
             "../../contracts/examples/v0.2/guest_command_observation_envelope.valid.json"
+        ))
+        .unwrap()
+    } else if family == "graphical_session_envelope" {
+        serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/graphical_session_envelope.valid.flow-1.json"
         ))
         .unwrap()
     } else {
@@ -273,6 +287,10 @@ fn all_frozen_body_examples_and_negative_controls() {
             include_str!("../../contracts/v0.2/rewind_envelope.schema.json"),
             REWIND_BODIES,
         ),
+        (
+            include_str!("../../contracts/v0.2/graphical_session_envelope.schema.json"),
+            GRAPHICAL_BODIES,
+        ),
     ] {
         let schema: serde_json::Value = serde_json::from_str(schema).unwrap();
         let actual: std::collections::BTreeSet<String> = schema
@@ -308,6 +326,7 @@ fn all_frozen_body_examples_and_negative_controls() {
     assert_eq!(LEGACY_BODIES.len(), 21);
     assert_eq!(CAPSULE_BODIES.len(), 4);
     assert_eq!(REWIND_BODIES.len(), 2);
+    assert_eq!(GRAPHICAL_BODIES.len(), 2);
     let directory =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/examples/v0.2");
     let mut valid_body_prefixes = std::collections::BTreeSet::new();
@@ -712,18 +731,31 @@ fn closed_families_and_metadata_cannot_cross_wire() {
         ("envelope", LEGACY_BODIES),
         ("capsule_envelope", CAPSULE_BODIES),
         ("rewind_envelope", REWIND_BODIES),
+        ("graphical_session_envelope", GRAPHICAL_BODIES),
     ] {
         for body in bodies {
             let raw = std::fs::read(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join(format!("../contracts/examples/v0.2/{body}.valid.json")),
+                    .join(match *body {
+                        "graphical_session_request" => "../contracts/examples/v0.2/graphical_session_request.valid.attach.json".to_string(),
+                        "graphical_session_event" => "../contracts/examples/v0.2/graphical_session_event.valid.attach-completed.json".to_string(),
+                        _ => format!("../contracts/examples/v0.2/{body}.valid.json"),
+                    }),
             )
             .unwrap();
             let value: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-            for tag in ["envelope", "capsule_envelope", "rewind_envelope"] {
+            for tag in [
+                "envelope",
+                "capsule_envelope",
+                "rewind_envelope",
+                "graphical_session_envelope",
+            ] {
                 let mut env = base.clone();
                 env["schema"] = format!("{tag}/v0.2").into();
                 env["body"] = value.clone();
+                if name == "graphical_session_envelope" {
+                    env["from"]["component"] = "ui".into();
+                }
                 assert_eq!(
                     decode_envelope(&env.to_string()).is_ok(),
                     tag == name,
@@ -741,16 +773,25 @@ fn closed_families_and_metadata_cannot_cross_wire() {
         "rewind_guest_reset",
         "capsule_capabilities",
         "capsule_resource_inventory",
+        "graphical_session",
     ] {
         let value: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join(format!("../contracts/examples/v0.2/{helper}.valid.json")),
-            )
+            &std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                if helper == "graphical_session" {
+                    "../contracts/examples/v0.2/graphical_session.valid.ready.json".to_string()
+                } else {
+                    format!("../contracts/examples/v0.2/{helper}.valid.json")
+                },
+            ))
             .unwrap(),
         )
         .unwrap();
-        for tag in ["envelope", "capsule_envelope", "rewind_envelope"] {
+        for tag in [
+            "envelope",
+            "capsule_envelope",
+            "rewind_envelope",
+            "graphical_session_envelope",
+        ] {
             let mut env = base.clone();
             env["schema"] = format!("{tag}/v0.2").into();
             env["body"] = value.clone();

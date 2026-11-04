@@ -8,6 +8,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 pub mod command_observation;
 pub mod guest_command;
+pub mod graphical_session;
 pub mod headless;
 pub mod payload;
 pub mod rewind;
@@ -255,6 +256,9 @@ fn preflight(raw: &str, limits: &WireLimits) -> Result<(), DecodeError> {
 pub fn envelope_schema(body: &Command) -> &'static str {
     match body {
         Command::GuestCommandObservation(_) => "guest_command_observation_envelope/v0.2",
+        Command::GraphicalSessionRequest(_) | Command::GraphicalSessionEvent(_) => {
+            "graphical_session_envelope/v0.2"
+        }
         Command::RewindRequest(_) | Command::RewindEvent(_) => "rewind_envelope/v0.2",
         Command::HeadlessRequest(_)
         | Command::HeadlessEvent(_)
@@ -289,6 +293,7 @@ pub fn decode_envelope_with_limits(
                 | "capsule_envelope/v0.2"
                 | "rewind_envelope/v0.2"
                 | "guest_command_observation_envelope/v0.2"
+                | "graphical_session_envelope/v0.2"
         )
     }) || is_unknown_body_version(value["body"]["schema"].as_str())
         || value["body"]["schema"] == "hello/v0.2"
@@ -309,6 +314,7 @@ pub fn decode_envelope_with_limits(
         "envelope/v0.2" => "envelope.schema.json",
         "capsule_envelope/v0.2" => "capsule_envelope.schema.json",
         "rewind_envelope/v0.2" => "rewind_envelope.schema.json",
+        "graphical_session_envelope/v0.2" => "graphical_session_envelope.schema.json",
         _ => return Err(DecodeError::UnknownVersion),
     };
     let value = serde_json::to_value(&envelope).map_err(|_| DecodeError::InvalidField)?;
@@ -398,6 +404,14 @@ fn ramws_path_ok(s: &str) -> bool {
 }
 
 fn pattern_ok(s: &str, pattern: &str) -> bool {
+    if pattern == "^runtime-[0-9a-f]{64}$" {
+        return s.strip_prefix("runtime-").is_some_and(|tail| {
+            tail.len() == 64 && tail.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        });
+    }
+    if pattern == "^(UNAVAILABLE|STALE|BUSY|CAPACITY|POINT_UNAVAILABLE|POLICY|NATIVE_FAILED)$" {
+        return matches!(s, "UNAVAILABLE" | "STALE" | "BUSY" | "CAPACITY" | "POINT_UNAVAILABLE" | "POLICY" | "NATIVE_FAILED");
+    }
     if pattern == r"^[^\x00-\x1f\x7f/\\]*$" {
         return !s
             .chars()
