@@ -343,6 +343,8 @@ v028-flow2-direct.md	changes/unreleased/v028-flow2-direct.md
 v028flo-c3083af1faea	changes/unreleased/v028-flow2-indicator.md
 v028flo-67575cdf4eb1	changes/unreleased/v028-flow2-recovery.md
 v028-flow2-setup.md	changes/unreleased/v028-flow2-setup.md
+v028-flow3-locate.md	changes/unreleased/v028-flow3-locate.md
+v028flo-98bcee25013a	changes/unreleased/v028-flow4-static-handoff.md
 v028-grid6.md	changes/unreleased/v028-grid6.md
 v028-journal-full.md	changes/unreleased/v028-journal-full.md
 v028jud-b1bae7918c82	changes/unreleased/v028-judge-home-whitespace.md
@@ -1982,6 +1984,7 @@ wire_binary_test.go	daemon-adapter/internal/daemon/wire_binary_test.go
 wire_live_test.go	daemon-adapter/internal/daemon/wire_live_test.go
 ac02_cadence_test.go	daemon-adapter/internal/frames/ac02_cadence_test.go
 cancelrace_test.go	daemon-adapter/internal/frames/cancelrace_test.go
+control-918637c46141	daemon-adapter/internal/frames/control_refresh_test.go
 diag_limiter.go	daemon-adapter/internal/frames/diag_limiter.go
 digests-ab60251c633d	daemon-adapter/internal/frames/digest_skip_mut_test.go
 digest_skip_test.go	daemon-adapter/internal/frames/digest_skip_test.go
