@@ -2100,3 +2100,21 @@ export function createTerminalDeckController(options = {}) {
     dispose,
   };
 }
+
+/** Keep the launcher within the intersection of its panel and the viewport.
+ * Insets and preferred width are presentation targets, not a minimum panel size.
+ * @param {{left:number,right:number,top:number,bottom:number}} panel
+ * @param {{right:number,bottom:number,width:number}} anchor
+ * @param {number} naturalHeight
+ * @param {{width:number,height:number}} viewport
+ * @returns {{left:number,top:number,width:number,maxHeight:number}|null}
+ */
+export function placeTerminalLauncher(panel, anchor, naturalHeight, viewport) {
+  if (![panel?.left,panel?.right,panel?.top,panel?.bottom,anchor?.right,anchor?.bottom,anchor?.width,naturalHeight,viewport?.width,viewport?.height].every(Number.isFinite)) return null;
+  const left=Math.max(0,panel.left)+8, right=Math.min(viewport.width,panel.right)-8;
+  const top=Math.max(0,panel.top)+8, bottom=Math.min(viewport.height,panel.bottom)-8;
+  if (right<=left || bottom<=top || naturalHeight<0 || anchor.width<0) return null;
+  const width=Math.min(Math.max(288,anchor.width),right-left),maxHeight=bottom-top;
+  return {left:Math.max(left,Math.min(anchor.right-width,right-width)),
+    top:Math.max(top,Math.min(anchor.bottom+4,bottom-Math.min(naturalHeight,maxHeight))),width,maxHeight};
+}
