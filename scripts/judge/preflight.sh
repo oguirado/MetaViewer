@@ -9,18 +9,17 @@
 # and the run exits 2. Warnings (JUDGE_OS) never change the exit code. Nothing
 # is installed, written or escalated here; sudo is never called.
 #
-# [TARGET, unit decision] This unit implements the table of
-# STRATEGY_JUDGE_PORTABILITY section 2.2. Missing handoffs are filled here:
-#   - Tiers: T0 fixture, T1 packaged app, T2 app plus one browser capsule.
+# Preflight phases and supported host overrides:
+#   - Tiers: T0 private fixture, T1 packaged app, T2 live capsules.
 #   - Phase `static` runs the checks the installer cannot fix (host facts);
 #     phase `all` also checks what install provides (bundle, tools, images).
 #   - Test seams (all optional, default to the real host): MV_JUDGE_PROC,
 #     MV_JUDGE_OS_RELEASE, MV_JUDGE_SHM_DIR, MV_JUDGE_CPUSET_FILE,
 #     MV_JUDGE_RUN_USER_ROOT, MV_JUDGE_APPARMOR_DIR, MV_JUDGE_FW_WITNESS.
-#   - JUDGE_REQUIRE_CPUSET defaults to 10-14 until the cpuset fix lands in
-#     OpenSuperficies (H01); MV_JUDGE_REQUIRE_CPUSET=none removes the check.
+#   - MV_JUDGE_REQUIRE_CPUSET defaults to none; set it explicitly to check
+#     the logical CPUs required by a custom capsule runtime.
 #   - Thresholds marked [TARGET] come from the strategy table, not from a
-#     measurement on a small machine.
+#     host measurement.
 # Lines marked `# MUT:<code>` are the deciding predicates that the offline
 # mutation tests negate.
 set -u
@@ -95,7 +94,7 @@ else
 fi
 
 
-# [TARGET, unit decision] Docker metadata may wait up to 120 seconds; image
+# Docker metadata may wait up to 120 seconds; image
 # load/save/pull/build may take 1800 seconds. Kill a stuck client after grace.
 # Environment overrides allow slower machines and offline deadline controls.
 bounded_docker() {
