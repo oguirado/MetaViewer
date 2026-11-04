@@ -18,6 +18,7 @@ import {
   createTerminalDeckController,
   matchDeckShortcut,
   placeTerminalLauncher,
+  placeTerminalContextMenu,
 } from './terminalDeckModel.js';
 import './terminal.css';
 import {createPairedTerminals} from './pairedTerminals.js';
@@ -78,6 +79,14 @@ const contextMenu = ref(
   }),
 );
 const deckRoot = ref(/** @type {HTMLElement|null} */ (null));
+const contextDimensions = ref({width:0,height:0});
+const contextMenuStyle = computed(() => {
+  const root=deckRoot.value?.getBoundingClientRect?.();
+  const local=root && placeTerminalContextMenu(root,contextMenu.value,contextDimensions.value,{width:globalThis.window?.innerWidth ?? 0,height:globalThis.window?.innerHeight ?? 0});
+  return /** @type {import('vue').CSSProperties} */ (local
+    ? {position:'absolute',left:`${local.left}px`,top:`${local.top}px`,maxWidth:'100%',maxHeight:'100%'}
+    : {left:`${contextMenu.value.x}px`,top:`${contextMenu.value.y}px`});
+});
 const contextMenuWrap = ref(/** @type {any} */ (null));
 const bootstrapWrap = ref(/** @type {any} */ (null));
 
@@ -437,12 +446,16 @@ function syncTerminals() {
         try {
           current.fit?.fit();
           if (current.term && current.term.cols > 0 && current.term.rows > 0) {
-            controller.resizeSession(slot.sessionId, current.term.cols, current.term.rows);
+            const size=`${current.term.cols}x${current.term.rows}`;
+            if (fittedSizes.get(slot.id)!==size) {
+              fittedSizes.set(slot.id,size);
+              controller.resizeSession(slot.sessionId, current.term.cols, current.term.rows);
+            }
           }
         } catch {
           // Fit is best-effort in headless DOMs.
         }
-        if (focusedSlotId.value === slot.id && !lastBootstrapFocused.value && !controlsFocused.value && !pendingCloseSlotId.value) {
+        if (focusedSlotId.value === slot.id && !lastBootstrapFocused.value && !controlsFocused.value && !pendingCloseSlotId.value && !current.term?.hasSelection?.()) {
           try {
             current.term?.focus();
           } catch {
@@ -481,6 +494,7 @@ function syncTerminals() {
         try {
           fit.fit();
           if (term.cols > 0 && term.rows > 0) {
+            fittedSizes.set(slot.id,`${term.cols}x${term.rows}`);
             controller.resizeSession(sessionId, term.cols, term.rows);
           }
         } catch {
@@ -730,6 +744,7 @@ function onTileContextMenu(slotId, event) {
     if (!contextMenu.value.open) return;
     const bounds = contextMenuWrap.value?.getBoundingClientRect?.();
     if (!bounds) return;
+    contextDimensions.value={width:bounds.width,height:bounds.height};
     contextMenu.value.x = Math.max(0, Math.min(x, (globalThis.window?.innerWidth ?? x) - bounds.width));
     contextMenu.value.y = Math.max(0, Math.min(y, (globalThis.window?.innerHeight ?? y) - bounds.height));
   });
@@ -893,13 +908,34 @@ function focusSlot(slotId) {
   if (pendingCloseSlotId.value) return;
   controlsFocused.value = false;
   lastBootstrapFocused.value = false;
-  controller.focusSlot(slotId);
+  if (controller.state.focusedSlotId !== slotId) controller.focusSlot(slotId);
   const entry = mountedTerminals.get(slotId);
   try {
-    entry?.term?.focus();
+    if (!entry?.term?.hasSelection?.()) entry?.term?.focus();
   } catch {
     // Best-effort focus.
   }
+}
+
+/** Capture the owner before xterm stops Shift+mousedown during mouse reporting.
+ * Right-click belongs to the local menu and never reaches an application.
+ * @param {string} slotId @param {MouseEvent|PointerEvent} event */
+function onTilePointerDown(slotId, event) {
+  if (pendingCloseSlotId.value) return;
+  controlsFocused.value=false;lastBootstrapFocused.value=false;
+  if (controller.state.focusedSlotId!==slotId) controller.focusSlot(slotId);
+  if (event.button===2) onTileContextMenu(slotId,event);
+  else {
+    // Shift selection can stop xterm before its own mousedown focus handler.
+    try { mountedTerminals.get(slotId)?.term?.focus(); } catch { /* best effort */ }
+  }
+}
+
+/** Suppress mouse-reporting hover while Shift requests local selection.
+ * Drag moves still reach xterm's document selection listener.
+ * @param {MouseEvent} event */
+function onTerminalMouseMove(event) {
+  if (event.shiftKey && event.buttons===0) event.stopPropagation();
 }
 
 /**
@@ -1031,6 +1067,7 @@ defineExpose({
     data-semantic-anchor="terminal/deck/root"
     aria-label="Terminal workspace"
     @keydown="onWindowKeyDown"
+    @contextmenu.prevent
   >
     <header class="mv-terminal-deck__bar" aria-label="Terminal operator bar">
       <button v-if="compact" :id="domId('terminal-deck-hide')" data-semantic-anchor="terminal/hide" type="button" class="mv-terminal-deck__action-btn" @click="emit('update:open', false)">Hide terminal</button>
@@ -1266,7 +1303,8 @@ defineExpose({
         tabindex="0"
         :aria-label="item.slot.title"
         aria-description="Press Ctrl+Shift+F6 to leave terminal input and focus the deck controls."
-        @mousedown="focusSlot(item.slot.id)"
+        @pointerdown.capture="onTilePointerDown(item.slot.id, $event)"
+        @mousedown.capture="onTilePointerDown(item.slot.id, $event)"
         @focus="focusSlot(item.slot.id)"
         @contextmenu.prevent="onTileContextMenu(item.slot.id, $event)"
         @keydown="onTileKeyDown(item.slot.id, $event)"
@@ -1306,6 +1344,8 @@ defineExpose({
             :ref="(el) => setViewportRef(item.slot.id, el)"
             :data-semantic-anchor="`terminal/tile/${item.slot.id}/viewport`"
             class="mv-terminal-deck__viewport"
+            @mousemove.capture="onTerminalMouseMove"
+            title="Drag to select; hold Shift when an app captures the mouse. Ctrl+Shift+C copies."
             @contextmenu.prevent="onTileContextMenu(item.slot.id, $event)"
           ></div>
           <div
@@ -1327,7 +1367,7 @@ defineExpose({
       class="mv-terminal-deck__context-menu"
       role="menu"
       aria-label="Terminal context menu"
-      :style="{ left: `${contextMenu.x}px`, top: `${contextMenu.y}px` }"
+      :style="contextMenuStyle"
       @keydown.esc.stop.prevent="closeContextMenu"
     >
       <button

@@ -17,3 +17,8 @@ test('terminal launcher clamps width, vertical overflow and offscreen panel edge
  }
  assert.equal(model.placeTerminalLauncher?.({left:NaN,right:2,top:0,bottom:4},{},10,{width:100,height:100}),null);
 });
+
+test('context menu uses drawer-local coordinates and stays within transformed drawer edges',()=>{
+ const result=model.placeTerminalContextMenu?.({left:224,right:832,top:404,bottom:701},{x:820,y:690},{width:117,height:46},{width:1280,height:701});
+ assert.deepEqual(result,{left:491,top:251});
+});

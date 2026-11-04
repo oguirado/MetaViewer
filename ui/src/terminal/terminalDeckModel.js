@@ -2118,3 +2118,16 @@ export function placeTerminalLauncher(panel, anchor, naturalHeight, viewport) {
   return {left:Math.max(left,Math.min(anchor.right-width,right-width)),
     top:Math.max(top,Math.min(anchor.bottom+4,bottom-Math.min(naturalHeight,maxHeight))),width,maxHeight};
 }
+
+/** Place a local context menu without inheriting transformed-ancestor offsets.
+ * @param {{left:number,right:number,top:number,bottom:number}} panel
+ * @param {{x:number,y:number}} point @param {{width:number,height:number}} size
+ * @param {{width:number,height:number}} viewport
+ * @returns {{left:number,top:number}|null} */
+export function placeTerminalContextMenu(panel,point,size,viewport) {
+  if(![panel?.left,panel?.right,panel?.top,panel?.bottom,point?.x,point?.y,size?.width,size?.height,viewport?.width,viewport?.height].every(Number.isFinite)) return null;
+  const left=Math.max(0,panel.left),right=Math.min(viewport.width,panel.right);
+  const top=Math.max(0,panel.top),bottom=Math.min(viewport.height,panel.bottom);
+  return {left:Math.max(left,Math.min(point.x,right-size.width))-panel.left,
+    top:Math.max(top,Math.min(point.y,bottom-size.height))-panel.top};
+}
