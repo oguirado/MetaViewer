@@ -4,13 +4,14 @@ import {readFileSync} from 'node:fs';
 import {installedAgentProfiles} from '../electron/agentProviders.js';
 import {AGENT_PROFILE_IDS,agentPromptState} from '../src/terminal/agentPromptGate.js';
 const captured=JSON.parse(readFileSync(new URL('./fixtures/muse-ready.json',import.meta.url),'utf8')).output;
-const env={HOME:'/host-person',PATH:'/usr/bin:/bin',XDG_RUNTIME_DIR:'/run/user/1000/app-fixture',API_TOKEN:'private-token',MUSE_AUTH_PATH:'/do-not-forward'};
+const env={HOME:'/host-person',PATH:'/usr/bin:/bin',XDG_RUNTIME_DIR:'/run/user/1000/app-fixture',MV_OPERATOR_REPO:'/operator/repo',API_TOKEN:'private-token',MUSE_AUTH_PATH:'/do-not-forward'};
 function resolve(name){if(['muse','unshare'].includes(name))return {path:'/usr/bin/'+name};throw Error('missing');}
 test('Muse is a host-owned Contributor max profile with a scoped runtime and no secret environment',()=>{
  for(const arm of [false,true]) {
   const profile=installedAgentProfiles({...env,...(arm?{MV_ARM64_CAPSULES:'1'}:{})},resolve,()=>({homedir:'/host-person'})).get('agent-muse');
   assert.ok(profile);assert.ok(AGENT_PROFILE_IDS.includes('agent-muse'));
-  assert.deepEqual(profile.argv,['/usr/bin/unshare','--user','--map-current-user','--pid','--fork','--mount-proc','--','/usr/bin/muse','--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max']);
+  assert.deepEqual(profile.argv,['/usr/bin/unshare','--user','--map-current-user','--pid','--fork','--mount-proc','--','/usr/bin/muse','--workspace','/operator/repo','--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max']);
+  assert.equal(profile.cwd,'/operator/repo');
   assert.equal(profile.env.XDG_RUNTIME_DIR,env.XDG_RUNTIME_DIR);assert.equal(profile.env.HOME,'/host-person');
   assert.equal(profile.env.API_TOKEN,undefined);assert.equal(profile.env.MUSE_AUTH_PATH,undefined);
   assert.equal(profile.argv.includes('--trust-workspace'),false);assert.equal(profile.argv.includes('--disable-sandbox'),false);
@@ -19,6 +20,7 @@ test('Muse is a host-owned Contributor max profile with a scoped runtime and no 
 test('Muse requires its executable, namespace helper and actual attachment runtime',()=>{
  assert.equal(installedAgentProfiles(env,name=>{if(name==='unshare')throw Error('missing');return resolve(name);}).has('agent-muse'),false);
  assert.equal(installedAgentProfiles({...env,XDG_RUNTIME_DIR:undefined},resolve).has('agent-muse'),false);
+ for(const repo of [undefined,'relative','/operator/../repo','/operator/repo\nspoof']) assert.equal(installedAgentProfiles({...env,MV_OPERATOR_REPO:repo},resolve).has('agent-muse'),false);
 });
 test('Muse readiness recognizes captured input bytes but refuses banners, other CLIs and auth/trust',()=>{
  assert.equal(agentPromptState('agent-muse',captured),'ready');
