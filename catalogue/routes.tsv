@@ -251,6 +251,7 @@ opfix2t-07c2e902ca62	changes/unreleased/opfix2-terminal-geometry.md
 opfix2t-c6e5a419b2e9	changes/unreleased/opfix2-terminal-verification.md
 opfix2r-1e567714e07c	changes/unreleased/opfix2r2-terminal-launcher.md
 opfix2r-65e5534583a3	changes/unreleased/opfix2r2-terminal-selection.md
+opfix3r-e1e3cbacc34a	changes/unreleased/opfix3-remove-bootstrap.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
 p18-opening-modes.md	changes/unreleased/p18-opening-modes.md
@@ -273,6 +274,7 @@ program-1cea63c18df4	changes/unreleased/program-workflow-guidance.md
 release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
 rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.md
 rewindr-f6d46b8b6090	changes/unreleased/rewind-recovery-package.md
+round2r-a78804b13678	changes/unreleased/round2-recording-start.md
 routed-map.md	changes/unreleased/routed-map.md
 schema-parse-once.md	changes/unreleased/schema-parse-once.md
 sidebar-74e83dfe487d	changes/unreleased/sidebar-entry-cleanup.md
@@ -3240,6 +3242,8 @@ rewindp-f5b4490f0ad8	ui/test/rewind-profile.test.js
 rewindr-aa871ef20945	ui/test/rewind-recovery-package.test.js
 roleanc-974ddb27a9ff	ui/test/role-ancestor-bound.test.js
 rolemen-aebcbe39861b	ui/test/role-menu-input-harness.mjs
+round2r-db4125c407fe	ui/test/round2-recording-clock.test.js
+round2r-5d797cd5afd0	ui/test/round2-recording-reactive.test.js
 rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
 security.test.js	ui/test/security.test.js
 setting-c22b53627f2f	ui/test/settingsHarden.test.mjs
