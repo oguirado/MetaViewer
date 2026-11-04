@@ -162,7 +162,7 @@ python3 route/route_query.py locate "Stop lost capsule" --k 5
 | `stats` | Which commit the findings are pinned to |
 
 Findings are pinned to an older commit (`stats` prints `study_pin`) and many read STALE
-[MEASURED]: a row is a lead, not proof. Open the cited line and read it before you state
+[MEASURED] A row is a lead, not proof. Open the cited line and read it before you state
 anything. For codes, [ERRORS.md](ERRORS.md) is generated from the current tree and is the
 faster lookup.
 
