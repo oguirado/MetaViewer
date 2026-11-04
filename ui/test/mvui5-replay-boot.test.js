@@ -188,7 +188,7 @@ test('live boot ignores ?step= entirely, including garbage', async () => {
     assert.equal(mount.textContent, '', `live ${search} mounts`);
     assert.ok(mounted, `live ${search} mounts`);
     assert.equal(mounted.props.fixture, null, `live ${search} has no fixture`);
-    assert.deepEqual(kitSchemes, ['mv-light'], `live ${search} keeps the default seed`);
+    assert.deepEqual(kitSchemes, ['mv-dark'], `live ${search} keeps the default seed`);
   }
 });
 

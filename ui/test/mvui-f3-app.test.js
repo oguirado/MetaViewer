@@ -58,7 +58,7 @@ test('mounted App injects settings and keeps overlays and expanded controls sync
     const settingsHost = vue.markRaw({ loadSettings: async () => null, saveSettings: async () => true });
     const row = { id: 'cap-01', title: 'Capsule', generation: 1, backendLifecycle: 'active' };
     const runtime = { projectionView: { getSnapshot: () => ({ envelope: null }), getProjection: () => ({ rows: [row] }), subscribe: () => () => {} } };
-    app = renderer().createApp(App, { settingsHost, runtime, layout: {}, scope: {}, storage: { readRaw: async () => null, writeAtomic: async () => {} } });
+    app = renderer().createApp(App, { fixture:{key:'one',ui:{},capsules:[]}, settingsHost, runtime, layout: {}, scope: {}, storage: { readRaw: async () => null, writeAtomic: async () => {} } });
     const vm = app.mount(root);
     const byId = id => find(root, node => node.props?.id === id);
     const settingsScreen = () => find(root, node => node.props?.class === 'mv-settings-screen');

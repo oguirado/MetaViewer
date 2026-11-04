@@ -155,8 +155,8 @@ test('each optional method is independently feature detected, including non-call
       try {
         assert.ok(mounted.props, `${name}: ${mounted.mount.textContent}`);
         const p = mounted.props;
-        if (name === 'loadSettings') assert.equal(JSON.parse(await p.settingsHost.loadSettings()).scheme, 'mv-light');
-        if (name === 'saveSettings') { await p.settingsHost.saveSettings(encodeMvSettings({ scheme: 'mv-dark', density: 'compact' })); assert.equal(mounted.local.size, 1); }
+        if (name === 'loadSettings') assert.equal(JSON.parse(await p.settingsHost.loadSettings()).scheme, 'mv-dark');
+        if (name === 'saveSettings') { await p.settingsHost.saveSettings(encodeMvSettings({ scheme: 'mv-light', density: 'compact' })); assert.equal(mounted.local.size, 1); }
         if (name === 'recordingDestination') assert.equal(p.exportDestination, '');
         if (name === 'nestedDepth') assert.equal(p.nestedHost.getNestedDepth(), null);
         if (name === 'selfCapsuleId') assert.equal(p.nestedHost.getSelfCapsuleId(), null);

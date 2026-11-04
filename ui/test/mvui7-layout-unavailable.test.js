@@ -268,9 +268,9 @@ for (const displayOnly of [false, true]) test(`notice grid mode renders correctl
     assert.equal(nodes(body).some(n => n.props?.class === 'mv-nested-wall'), displayOnly);
     const styles = parse(appSource).descriptor.styles.map(s => s.content).join('\n');
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested > .mv-shell-body' : '.mv-shell-body'),
-      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:3(?:;|$)/);
+      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:2(?:;|$)/);
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested' : '.mv-shell'),
-      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) auto minmax\(0,1fr\)/);
+      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) minmax\(0,1fr\)/);
   } finally { app.close(); }
 });
 

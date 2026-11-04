@@ -109,6 +109,7 @@ import { readFileSync } from 'node:fs';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as vue from 'vue';
 import * as deckModel from '../src/terminal/terminalDeckModel.js';
+import {createPairedTerminals} from '../src/terminal/pairedTerminals.js';
 import vm from 'node:vm';
 
 let viewSerial = 0;
@@ -119,7 +120,7 @@ function loadView(mutate = source => source, model = deckModel) {
   let code = compileScript(descriptor, { id: `u5-${++viewSerial}`, inlineTemplate: true }).content;
   class MissingTerminal { constructor() { throw Error('headless terminal unavailable'); } }
   const key = `__u5deps${viewSerial}`;
-  globalThis[key] = { vue, '@xterm/xterm': { Terminal: MissingTerminal }, '@xterm/addon-fit': { FitAddon: class {} }, './terminalDeckModel.js': model,
+  globalThis[key] = { vue, '@xterm/xterm': { Terminal: MissingTerminal }, '@xterm/addon-fit': { FitAddon: class {} }, './terminalDeckModel.js': model, './pairedTerminals.js': {createPairedTerminals},
     '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) } };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '')
     .replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_all, binding, _q, spec) => `const ${binding.replace(/\bas\b/g, ':')} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`)

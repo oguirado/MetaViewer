@@ -30,9 +30,9 @@ const HANDLER_NOT_INSTALLED = 'No handler registered';
 const READ_ATTEMPTS = 100;
 const READ_RETRY_MS = 20;
 
-/** Light-first paint seed; mirrors the static dataset attributes in index.html. */
+/** Dark-first paint seed; mirrors the static dataset attributes in index.html. */
 const THEME_DATASET = Object.freeze({
-  themeScheme: 'mv-light',
+  themeScheme: 'mv-dark',
   themeContrast: 'normal',
   themeDensity: 'compact',
   themeTextScale: '1',
@@ -134,9 +134,9 @@ async function readBootSettings(settingsHost) {
  * @returns {string} mv-light or mv-dark.
  */
 function bootSchemeFromText(text) {
-  if (typeof text !== 'string') return 'mv-light';
+  if (typeof text !== 'string') return 'mv-dark';
   const decoded = createSettingsHost.decodeStoredSettings(text);
-  if (decoded.ok === false) return 'mv-light';
+  if (decoded.ok === false) return 'mv-dark';
   return decoded.settings.scheme;
 }
 

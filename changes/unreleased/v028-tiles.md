@@ -1,0 +1,1 @@
+- Floating title and capsule-header drags capture Control changes across Dockview overlays, preview and commit desktop grid cells, and remain free when Control is released; default floats retain full wall height and usable frame space. Per-desktop grids and slots persist.

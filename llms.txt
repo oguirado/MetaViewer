@@ -2,3 +2,5 @@
 Rust authority; Electron/Vue renders admitted snapshots and submits intents.
 Read first: AGENTS.md, then catalogue/protocol.json.
 Status: router unavailable.
+
+Task preparation: Create automation, Run automation, and Direct task end with "Task: ". Prompts copy to clipboard with the actual capsule identity when paired. Paste only into an agent CLI, never a shell. Automatic insertion is withheld without host attestation of the foreground agent input target. These controls prepare text; they do not execute workflows. See docs/AGENT_ENTRY.md.

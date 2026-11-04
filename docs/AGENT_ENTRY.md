@@ -98,3 +98,7 @@ summary, or to the handoff record for `HUMAN_HANDOFF`; `report` points to the
 private invocation result. Failures before evidence admission use null paths.
 Only a verified summary permits process success. A handoff exits with rc 4
 [TARGET]; it has no resume or automatic retry operation.
+
+## Paired-terminal task prompts
+
+**Create automation**, **Run automation**, and **Direct task** prepare the corresponding workflow instructions. They finish with `Task: ` for the operator to complete. The prompt is copied to the clipboard with the actual capsule identity when paired. Paste it into your agent CLI, never at a shell prompt. Pairing alone does not attest the foreground process, so automatic terminal insertion is withheld. Retain every safety instruction and wait for the operator's task before acting.
