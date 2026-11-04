@@ -105,7 +105,8 @@ test('first admitted null-unknown keeps the advancing cleanup target without fab
  assert.equal(f.host.status().session,null);assert.equal(f.host.status().uncertain,true);assert.equal(f.host.commandAllowed(),false);
  assert.deepEqual(f.host.status().stop_target,{workload_id:'workload-one',generation:2});
 });
-test('a recovery witness is consumed once and cannot replace a newly accepted Restore',async()=>{
+test('a recovery witness is consumed once and cannot replace a newly accepted Restore',async t=>{
+ t.mock.method(process.hrtime,'bigint',()=>1_000_000_000n);
  const f=fixture(),s=await marked(f),point=s.points[0].point_id;
  const pause=f.host.request({op:'pause',workload_id:s.workload_id,generation:2,authority_epoch:2});const pauseId=f.sent.at(-1).request_id;
  f.event('accepted',{...s,phase:'pausing',pending_request_id:pauseId},{op:'pause'});f.event('completed',{...s,phase:'paused'},{op:'pause',point_id:null});await pause;

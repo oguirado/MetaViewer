@@ -149,6 +149,6 @@
 .mv-settings-screen a { color:var(--cuk-semantic-text-accent); }
 .s8n-dialog .s8n-card-foot .p-tag { color:var(--cuk-semantic-status-info-text); background:var(--cuk-semantic-status-info-surface); border:1px solid var(--cuk-semantic-status-info-border); }
 .s8n-dialog .s8n-create:not(:disabled),.s1-confirm-panel .s1-confirm-btn-primary:not(:disabled) { background:var(--cuk-semantic-accent-primary); color:var(--cuk-semantic-text-inverse); border-color:var(--cuk-semantic-accent-primary); }
-.s8n-dialog .s8n-create:not(:disabled):hover,.mv-shell .s1-topbar .s1-topbar-new:hover { background:var(--cuk-semantic-accent-primary-hover); color:var(--cuk-semantic-text-inverse); }
+.s8n-dialog .s8n-create:not(:disabled):hover,.mv-shell .s1-topbar .s1-topbar-new:hover { background:var(--cuk-semantic-accent-primary); color:var(--cuk-semantic-text-inverse); }
 .s1-confirm-panel button:disabled { color:var(--cuk-semantic-text-disabled); }
 @media(max-width:1000px) { .mv-settings-screen > .p-button { margin-left:12px; } .mv-settings-screen > p { margin-left:12px; } }

@@ -1,3 +1,4 @@
+export { applySavedCapturePreferences } from './capturePreferences.js';
 // @ts-check
 'use strict';
 
