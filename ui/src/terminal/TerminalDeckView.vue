@@ -21,7 +21,7 @@ import {
   placeTerminalContextMenu,
 } from './terminalDeckModel.js';
 import './terminal.css';
-import {createPairedTerminals} from './pairedTerminals.js';
+import {createPairedTerminals,pairedTargetId} from './pairedTerminals.js';
 import {AGENT_PROFILE_IDS} from './agentPromptGate.js';
 
 const props = defineProps({
@@ -253,9 +253,9 @@ const activeScreenIndex = computed(() => deckState.value.activeScreenIndex);
 const activeScreen = computed(() => deckState.value.activeScreen);
 const focusedSlotId = computed(() => deckState.value.focusedSlotId);
 const focusedPair=computed(()=>{revision.value;return pairedTerminals.forSlot(focusedSlotId.value);});
-const pairMatchesTarget=computed(()=>!props.compact || focusedPair.value?.surfaceId === props.pairedTarget?.surfaceId);
+const pairMatchesTarget=computed(()=>!props.compact || pairedTargetId(focusedPair.value) === pairedTargetId(props.pairedTarget));
 const workflowIdentity=computed(()=>pairMatchesTarget.value ? focusedPair.value?.identityLine ?? pastedBootstrapText.value : '');
-watch(focusedPair,pair=>emit('pair-focus',pair?.surfaceId ?? null),{immediate:true});
+watch(focusedPair,pair=>emit('pair-focus',pairedTargetId(pair) ?? null),{immediate:true});
 const pendingCloseSlotId = computed(() => deckState.value.pendingCloseSlotId);
 const launcherOpen = computed(() => deckState.value.launcherOpen);
 const toastMessage = computed(() => deckState.value.toastMessage);
@@ -265,22 +265,29 @@ const gridColumns = computed(() => props.compact ? '1' : String(deckState.value.
 const profiles = computed(() => deckState.value.profiles);
 async function copyPairedId() {
   if (!pairMatchesTarget.value || !focusedPair.value) return;
-  await controller.copySelection(focusedPair.value.surfaceId, focusedPair.value.slotId);
+  await controller.copySelection(pairedTargetId(focusedPair.value), focusedPair.value.slotId);
 }
 /** @param {string} slotId */
 function pairedTerminalLabel(slotId) {
   const slot=controller.findSlot(slotId)?.slot;
   return slot?.profileId==='shell'?'Host shell':slot?.title ?? 'Terminal';
 }
+const workflowActions=computed(()=>[...(focusedPair.value?.kind==='microvm' || props.pairedTarget?.kind==='microvm'?[]:[{kind:'automate',label:'Create automation',hint:'Teach an automation by showing the steps.'},{kind:'use-automation',label:'Run automation',hint:'Prepare a task using a saved automation.'}]),{kind:'no-automation',label:'Direct task',hint:'Prepare a task without a saved automation.'}]);
+// A generation or owner change invalidates any pending prompt, even in the same slot.
+const samePair=(/** @type {any} */ pair)=>pairedTargetId(focusedPair.value)===pairedTargetId(pair) && JSON.stringify(focusedPair.value?.microvmContext)===JSON.stringify(pair.microvmContext);
 const agentProfiles=computed(()=>profiles.value.filter(profile=>AGENT_PROFILE_IDS.includes(profile.id)));
 /** @param {string} kind */
 async function chooseWorkflow(kind) {
+  if(focusedPair.value?.kind==='microvm' || props.pairedTarget?.kind==='microvm') {
+    if(kind!=='no-automation') return;
+    if(!pairMatchesTarget.value || !focusedPair.value?.microvmContext) {pairError.value='MicroVM binding unavailable; nothing prepared.';return;}
+  }
   if(!pairMatchesTarget.value || !focusedPair.value) return controller.useWorkflowPrompt(kind,workflowIdentity.value,null);
   const pair={...focusedPair.value},slot=controller.findSlot(pair.slotId)?.slot;
   if(slot?.status==='running' && AGENT_PROFILE_IDS.includes(slot.profileId)) {
     const generation=++agentGeneration;agentChoice.value=null;agentPreparing.value=true;pairError.value='';
-    const current=()=>generation===agentGeneration && props.open && focusedPair.value?.surfaceId===pair.surfaceId;
-    try {return await controller.prepareAgentPrompt(kind,pair.identityLine,slot.id,slot.profileId,current);}
+    const current=()=>generation===agentGeneration && props.open && samePair(pair);
+    try {return pair.microvmContext ? await controller.prepareAgentPrompt(kind,pair.identityLine,slot.id,slot.profileId,current,pair.microvmContext) : await controller.prepareAgentPrompt(kind,pair.identityLine,slot.id,slot.profileId,current);}
     finally {if(generation===agentGeneration)agentPreparing.value=false;}
   }
   agentGeneration++;agentPreparing.value=false;agentChoice.value={kind,pair};
@@ -292,17 +299,18 @@ async function launchWorkflowAgent(profileId) {
   const choice=agentChoice.value;
   if(!choice || agentPreparing.value) return;
   const generation=++agentGeneration;
-  const current=()=>generation===agentGeneration && props.open && focusedPair.value?.surfaceId===choice.pair.surfaceId;
+  const current=()=>generation===agentGeneration && props.open && samePair(choice.pair);
   agentPreparing.value=true;pairError.value='';
   try {
     const pair=await pairedTerminals.open(choice.pair,profileId);
     if(!current()) return;
     controller.focusSlot(pair.slotId);revision.value++;
-    await controller.prepareAgentPrompt(choice.kind,pair.identityLine,pair.slotId,profileId,current);
+    if(pair.microvmContext) await controller.prepareAgentPrompt(choice.kind,pair.identityLine,pair.slotId,profileId,current,pair.microvmContext);
+    else await controller.prepareAgentPrompt(choice.kind,pair.identityLine,pair.slotId,profileId,current);
   } catch(error) {if(current())pairError.value=error instanceof Error?error.message:'Agent launch unavailable';}
   finally {if(generation===agentGeneration){agentPreparing.value=false;agentChoice.value=null;}}
 }
-watch(focusedSlotId,()=>{if(agentChoice.value && focusedPair.value?.surfaceId!==agentChoice.value.pair.surfaceId)cancelAgentChoice();});
+watch(focusedSlotId,()=>{if(agentChoice.value && !samePair(agentChoice.value.pair))cancelAgentChoice();});
 const allScreenSlots = computed(() => {
   const list = [];
   const scrs = screens.value ?? [];
@@ -1120,19 +1128,19 @@ defineExpose({
         >
           <button v-if="focusedPair" type="button" :id="domId('terminal-deck-copy-capsule-id')"
             class="mv-terminal-deck__identity-pill mv-terminal-deck__identity-copy"
-            :title="`Copy capsule ID: ${focusedPair.surfaceId}`" aria-label="Copy capsule ID" @click="copyPairedId">
-            <span>Capsule ID:</span><span class="mv-terminal-deck__identity-value">{{ focusedPair.surfaceId }}</span>
+            :title="`Copy capsule ID: ${pairedTargetId(focusedPair)}`" aria-label="Copy capsule ID" @click="copyPairedId">
+            <span>Capsule ID:</span><span class="mv-terminal-deck__identity-value">{{ pairedTargetId(focusedPair) }}</span>
           </button>
           <label v-else class="mv-terminal-deck__identity-pill"
             :title="focusedPair ? `Paired with ${focusedPair.title} · ${pairedTerminalLabel(focusedPair.slotId)}. ${workflowIdentity}` : 'Paste Copy ID for AI here to select the capsule for workflow actions.'">
             <span>Capsule ID: <span v-if="!workflowIdentity">None</span></span>
             <input :id="domId('terminal-deck-bootstrap-paste-target')" data-semantic-anchor="terminal/bootstrap/identity"
-              :value="focusedPair?.surfaceId ?? pastedBootstrapText" :readonly="!!focusedPair" placeholder="Paste AI ID…"
+              :value="pairedTargetId(focusedPair) ?? pastedBootstrapText" :readonly="!!focusedPair" placeholder="Paste AI ID…"
               :aria-label="focusedPair ? 'Paired capsule identity · ' + (pairedTerminalLabel(focusedPair.slotId)) : 'Capsule identity for workflow actions'"
               @input="onBootstrapInput" />
           </label>
           <button
-            v-for="action in [{kind:'automate',label:'Create automation',hint:'Teach an automation by showing the steps.'}, {kind:'use-automation',label:'Run automation',hint:'Prepare a task using a saved automation.'}, {kind:'no-automation',label:'Direct task',hint:'Prepare a task without a saved automation.'}]"
+            v-for="action in workflowActions"
             :key="action.kind"
             type="button"
             :id="domId(`terminal-deck-${action.kind}`)"

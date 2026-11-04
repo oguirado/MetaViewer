@@ -40,6 +40,24 @@ impl Server {
     ) -> Result<()> {
         self.poll_rewind_at(now)?;
         let agent = self.agent()?;
+        // A human-created capsule reserves Back for its human creator. Agent
+        // marks are still allowed; agent-created workloads retain their API.
+        if r.0["op"] == "restore"
+            && env.from == agent
+            && self
+                .authority
+                .state()
+                .guest_command
+                .creator
+                .as_ref()
+                .is_some_and(|creator| creator.component == Component::Ui)
+        {
+            self.authority.apply_with_witnesses(
+                Input::Refuse { reason: Refusal::Policy },
+                vec![boundary],
+            )?;
+            return self.rewind_refused(now, env, r, "OWNER");
+        }
         let daemon = self
             .config
             .peers
@@ -141,6 +159,7 @@ impl Server {
             return self.refuse_at(now, &env.from, &env.msg_id, reason, out.core_seq);
         }
         let normalized = normalized.ok_or_else(|| invalid("rewind preview disagreed"))?;
+        self.record_guest_observation(Command::RewindEvent(Box::new(normalized.clone())));
         for receiver in self.rewind_receivers()? {
             if self.connections.contains_key(&receiver) {
                 let _ = self.send_at(
@@ -182,6 +201,7 @@ impl Server {
             let event: RewindEvent = serde_json::from_value(
                 json!({"schema":"rewind_event/v0.2","event_id":format!("event-core-{}",out.core_seq),"request_id":p.request["request_id"],"owner_id":owner,"event":"outcome_unknown","session":session,"data":{"op":p.request["op"],"code":"TRANSPORT"}}),
             )?;
+            self.record_guest_observation(Command::RewindEvent(Box::new(event.clone())));
             for receiver in self.rewind_receivers()? {
                 if self.connections.contains_key(&receiver) {
                     let _ = self.send_at(

@@ -1,5 +1,5 @@
 import {AGENT_PROFILE_IDS,AGENT_START_TIMEOUT_MS,agentPromptState,plainAgentOutput} from './agentPromptGate.js';
-import { assertSafeWorkflowPrompt, assertSafeWorkflowIdentity, workflowPrompt } from './workflowPrompts.js';
+import { assertSafeWorkflowPrompt, assertSafeWorkflowIdentity, microvmIdentity, workflowPrompt } from './workflowPrompts.js';
 /**
  * OpenFresnel-style Terminal Deck model and controller for MetaViewer (P18h).
  *
@@ -1708,6 +1708,7 @@ export function createTerminalDeckController(options = {}) {
    * target, copy only: a shell must never receive these executable examples.
    * @param {string} kind @param {string} identityLine @param {string|null} targetSlotId */
   async function useWorkflowPrompt(kind, identityLine = '', targetSlotId = null) {
+    if(identityLine.startsWith('MICROVM=')) throw Error('WORKFLOW_MICROVM_CONTEXT');
     const text = assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
       '<operator-pasted capsule identity line>', () => assertSafeWorkflowIdentity(identityLine) || '<operator-pasted capsule identity line>'));
     if (targetSlotId !== null) {
@@ -1725,10 +1726,17 @@ export function createTerminalDeckController(options = {}) {
 
   /** Launch is host-owned and precedes this gate. No raw shell receives workflow text.
    * @param {string} kind @param {string} identityLine @param {string} slotId
-   * @param {string} profileId @param {()=>boolean} [stillCurrent] */
-  async function prepareAgentPrompt(kind,identityLine,slotId,profileId,stillCurrent=()=>true) {
-    const text=assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
-      '<operator-pasted capsule identity line>',()=>assertSafeWorkflowIdentity(identityLine)));
+   * @param {string} profileId @param {()=>boolean} [stillCurrent] @param {any} [microvmContext] */
+  async function prepareAgentPrompt(kind,identityLine,slotId,profileId,stillCurrent=()=>true,microvmContext=undefined) {
+    if(identityLine.startsWith('MICROVM=') && microvmContext===undefined) throw Error('WORKFLOW_MICROVM_CONTEXT');
+    if(microvmContext!==undefined && identityLine!==microvmIdentity(microvmContext)) throw Error('WORKFLOW_MICROVM_IDENTITY');
+    const buildText=()=>{
+      if(microvmContext!==undefined) return workflowPrompt(kind,microvmContext);
+      const text=assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
+        '<operator-pasted capsule identity line>',()=>assertSafeWorkflowIdentity(identityLine)));
+      return text;
+    };
+    const text=buildText();
     const sessionId=findSlot(slotId)?.slot.sessionId;
     const fail=(/** @type {string} */ message)=>{toastMessage=message;notify();return {ok:false,pasted:false};};
     if(!identityLine || !AGENT_PROFILE_IDS.includes(profileId) || !sessionId) return fail('Agent terminal unavailable; nothing pasted.');
@@ -2087,9 +2095,12 @@ export function createTerminalDeckController(options = {}) {
     bootstrap,
     useWorkflowPrompt,
     prepareAgentPrompt,
-    copyWorkflowPrompt: (/** @type {string} */ kind, /** @type {string} */ identityLine = '') => bootstrap(assertSafeWorkflowPrompt(
-      workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => assertSafeWorkflowIdentity(identityLine) || '<operator-pasted capsule identity line>'),
-    )),
+    copyWorkflowPrompt: (/** @type {string} */ kind, /** @type {string} */ identityLine = '') => {
+      if(identityLine.startsWith('MICROVM=')) throw Error('WORKFLOW_MICROVM_CONTEXT');
+      return bootstrap(assertSafeWorkflowPrompt(
+        workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => assertSafeWorkflowIdentity(identityLine) || '<operator-pasted capsule identity line>'),
+      ));
+    },
     dismissError,
     handleKeyDown,
     writeSessionBytes,

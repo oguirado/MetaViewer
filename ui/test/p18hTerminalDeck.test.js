@@ -7,7 +7,7 @@ import vm from 'node:vm';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as vue from 'vue';
 import * as deckModel from '../src/terminal/terminalDeckModel.js';
-import {createPairedTerminals} from '../src/terminal/pairedTerminals.js';
+import {createPairedTerminals,pairedTargetId} from '../src/terminal/pairedTerminals.js';
 import { assertSpawnProfile } from '../electron/ptyBroker.js';
 
 function extractEntryPrompt(markdown) {
@@ -729,7 +729,7 @@ async function compileSfc(relPath, deps = {}, mutateSource = null) {
   const { descriptor } = parse(source);
   let code = compileScript(descriptor, { id: `p18h-${++serial}`, inlineTemplate: true }).content;
   const key = `__p18hDeps_${serial}`;
-  globalThis[key] = { './pairedTerminals.js':{createPairedTerminals}, './agentPromptGate.js':agentPromptGate, ...deps, vue };
+  globalThis[key] = { './pairedTerminals.js':{createPairedTerminals,pairedTargetId}, './agentPromptGate.js':agentPromptGate, ...deps, vue };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '');
   code = code.replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_line, binding, _q, spec) => {
     const normalized = binding

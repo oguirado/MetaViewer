@@ -50,6 +50,7 @@
 //! [TARGET, unit decision] Server shutdown/Drop and serve() teardown flush the
 //! authority journal and join its background sync worker before returning.
 mod capture;
+mod guest_agent_replay;
 mod guest_command;
 mod headless;
 mod journal_end;
@@ -201,6 +202,7 @@ pub struct Server {
     authority: Authority,
     root: PathBuf,
     replay: ReplayTable,
+    guest_agent_replay: guest_agent_replay::Transcript,
     connections: BTreeMap<Endpoint, Connection>,
     origin: Instant,
     clock_offset: Duration,
@@ -267,11 +269,25 @@ impl Server {
         let mut seen = BTreeSet::new();
         let mut human_inputs = BTreeMap::new();
         let mut headless_graphical_seen = false;
+        let mut guest_history = false;
         let mut tool_state = tools::ToolState::default();
         for seq in 1..=authority.state().core_seq {
             let event: serde_json::Value = serde_json::from_slice(&fs::read(
                 root.join("events").join(format!("{seq}.json")),
             )?)?;
+            if matches!(
+                event["input"]["event"].as_str(),
+                Some(
+                    "GuestCommandRequest"
+                        | "GuestCommandEvent"
+                        | "GuestCommandUncertain"
+                        | "RewindRequest"
+                        | "RewindEvent"
+                        | "RewindUncertain"
+                )
+            ) {
+                guest_history = true;
+            }
             if event["input"]["event"] == "SurfaceRequest"
                 && event["input"]["request"]["op"] == "create"
                 && event["outcome"]["reason"].is_null()
@@ -454,6 +470,7 @@ impl Server {
             authority,
             root,
             replay,
+            guest_agent_replay: guest_agent_replay::Transcript::recovered(guest_history),
             connections: BTreeMap::new(),
             origin: Instant::now(),
             clock_offset: Duration::ZERO,
@@ -519,6 +536,7 @@ impl Server {
             if peer.component == Component::Daemon {
                 if let Ok(now_ns) = self.now() {
                     let _ = self.mark_headless_unknown(now_ns);
+                    let _ = self.mark_rewind_unknown(now_ns);
                     let _ = self.mark_guest_command_unknown(now_ns);
                 }
                 let mut pending: Vec<_> = self
@@ -2660,7 +2678,16 @@ async fn connection_with_liveness(
         if s.connections.contains_key(ready.endpoint()) {
             return Err(invalid("endpoint already connected"));
         }
+        // Validate the complete bounded history before inserting the connection
+        // or queuing Hello: failure must never expose a plausible partial prefix.
+        let observations = s.guest_observations_for(&ready)?;
         let now_ns = s.now()?;
+        if s.serial
+            .checked_add(observations.len() as u64 + 3)
+            .is_none_or(|last| last > MAX_WIRE_INTEGER)
+        {
+            return Err(invalid("guest observation replay envelope sequence exhausted"));
+        }
         s.replay
             .record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
         if env.from.component == Component::Daemon && s.journal_end.is_none() {
@@ -2691,9 +2718,19 @@ async fn connection_with_liveness(
                 terminal: terminal.clone(),
             },
         );
-        let hello = s.config.core.hello.clone();
-        s.send_at(now_ns, ready.endpoint(), Command::Hello(Box::new(hello)))?;
-        s.resume_journal_end(now_ns, ready.endpoint())?;
+        let initialized = (|| -> Result<()> {
+            let hello = s.config.core.hello.clone();
+            s.send_at(now_ns, ready.endpoint(), Command::Hello(Box::new(hello)))?;
+            s.resume_journal_end(now_ns, ready.endpoint())?;
+            for body in observations {
+                s.send_at(now_ns, ready.endpoint(), body)?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = initialized {
+            s.connections.remove(ready.endpoint());
+            return Err(error);
+        }
         Ok((id, epoch))
     })();
     let (id, epoch) = match admitted {
