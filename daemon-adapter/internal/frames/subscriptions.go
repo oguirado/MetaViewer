@@ -810,6 +810,14 @@ func captureFailure(id string, skippedPolls uint64) (json.RawMessage, error) {
 	return json.Marshal(event)
 }
 
+// IsSubscribed reports retained capture ownership under the subscription lock.
+func (s *Subscriptions) IsSubscribed(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.tasks[id]
+	return ok
+}
+
 func (s *Subscriptions) Unsubscribe(ctx context.Context, id string) error {
 	s.mu.Lock()
 	t, ok := s.tasks[id]

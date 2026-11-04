@@ -2235,6 +2235,8 @@ pub struct CapsuleStateEvent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Command {
+    RoleSwitchRequest(Box<super::role_switch::RoleSwitchRequest>),
+    RoleSwitchResult(Box<super::role_switch::RoleSwitchResult>),
     GuestCommandObservation(Box<super::command_observation::GuestCommandObservation>),
     CapsuleStateRequest(Box<CapsuleStateRequest>),
     CapsuleStateEvent(Box<CapsuleStateEvent>),

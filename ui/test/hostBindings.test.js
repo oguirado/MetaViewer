@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { createMainBindings, readPeerCredentials, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
+import { createMainBindings, readPeerCredentials, envelopeTagForBody, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
 import { loadMainBindings, bootProductionMain, ELECTRON_PIN, CHANNELS } from '../electron/main.js';
 import { deliverAuthorityFrame, WIRE_CHANNELS, INTENT_OPS as WIRE_INTENT_OPS, validateIntentBody } from '../electron/authorityWire.js';
 import { installPreload } from '../electron/preload.js';
@@ -49,7 +49,7 @@ async function waitForCondition(predicate, description = 'condition', timeoutMs 
     await new Promise(resolve => setTimeout(resolve, 5));
   }
 }
-async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=null}={}) {
+async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=null,roleSwitchState=true}={}) {
   const root=await mkdtemp(join(tmpdir(),'mv-host-'));
   const ram=await mkdtemp('/dev/shm/mv-host-');
   const config={session_id:'host-test',core:registration('core'),peers:[registration('ui')]};
@@ -58,10 +58,14 @@ async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=n
   const bytes=Buffer.from([1,2,3]);const path=join(ram,'frame.rgb');await writeFile(path,bytes,{mode:0o600});
   const frame={schema:'frame_ref/v0.2',surface_id:'s1',generation:1,tick:1,ts_ns:1,width:1,height:1,format:'rgb24',ramws_path:path,sha256:createHash('sha256').update(bytes).digest('hex'),capture_us:1};
   const requests=[],sockets=new Set();let peer,seq=0;
-  const send=body=>peer.write(JSON.stringify({schema:'envelope/v0.2',msg_id:'reply-'+(++seq),ts_ns:0,from:config.core.endpoint,to:config.peers[0].endpoint,session_id:config.session_id,seq,nonce:'nonce-'+seq,body})+'\n');
+  const send=body=>peer.write(JSON.stringify({schema:envelopeTagForBody(body),msg_id:'reply-'+(++seq),ts_ns:0,from:config.core.endpoint,to:config.peers[0].endpoint,session_id:config.session_id,seq,nonce:'nonce-'+seq,body})+'\n');
   const server=createServer(socket=>{peer=socket;sockets.add(socket);socket.on('close',()=>sockets.delete(socket));let buffer='';socket.on('data',data=>{
     buffer+=data;let offset;while((offset=buffer.indexOf('\n'))>=0){const env=JSON.parse(buffer.slice(0,offset));buffer=buffer.slice(offset+1);requests.push(env);
       if(env.body.schema==='hello/v0.2')send({...config.core.hello,...(badHello?{component_commit:'b'.repeat(40)}:{})});
+      else if(env.body.schema==='metaviewer.role_switch/v0.3') {
+        if(roleSwitchState) send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,control:env.body.role}}});
+        send({schema:'metaviewer.role_switch_result/v0.3',request_id:env.body.request_id,surface_id:env.body.surface_id,role:env.body.role,ok:true});
+      }
       else if(env.body.schema==='surface_request/v0.2') { /* subscription has no reply */ }
       else if(env.body.schema==='ui_intent/v0.2') {
         const extended=['move','tab','float','hide','show'].includes(env.body.op);
@@ -82,6 +86,22 @@ async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=n
   const env={MV_CORE_CONFIG:configPath,XDG_RUNTIME_DIR:root};
   return {env,root,frame,send,requests,messages,channels,createMessageChannel,disconnect:()=>peer.destroy()};
 }
+test('role switch uses its additive envelope and requires authoritative control before success',async t=>{
+  for(const roleSwitchState of [true,false]) {
+    const f=await fixture(t,{roleSwitchState});
+    const bindings=await createMainBindings({env:f.env,createMessageChannel:f.createMessageChannel});t.after(()=>bindings.core.dispose());
+    await bindings.core.start();
+    f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+    await waitForCondition(()=>bindings.core.getHumanSurface('s1'),'initial surface');
+    const pending=bindings.core.switchRole('s1','human');
+    if(roleSwitchState) {
+      const reply=await pending;assert.equal(reply.ok,true);assert.equal(bindings.core.getHumanSurface('s1').control,'human');
+    } else await assert.rejects(pending,/CAPSULE_MODE_UNPROVEN/);
+    const request=f.requests.find(item=>item.body.schema==='metaviewer.role_switch/v0.3');
+    assert.equal(request.schema,'role_switch_envelope/v0.3');
+    assert.deepEqual(Object.keys(request.body).sort(),['request_id','role','schema','surface_id']);
+  }
+});
 test('default bootstrap connects, pins hello, delivers real bytes and routes intents/proposals',async t=>{
   const f=await fixture(t);
   const bindings=await loadMainBindings(f.env,{createMessageChannel:f.createMessageChannel});t.after(()=>bindings.core.dispose());

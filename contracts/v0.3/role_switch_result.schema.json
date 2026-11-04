@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.3/role_switch_result.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "metaviewer.role_switch_result/v0.3"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "role": {
+          "enum": [
+            "human",
+            "agent"
+          ]
+        },
+        "ok": {
+          "const": true
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "role",
+        "ok"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 6
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "metaviewer.role_switch_result/v0.3"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "role": {
+          "enum": [
+            "human",
+            "agent"
+          ]
+        },
+        "ok": {
+          "const": false
+        },
+        "code": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[A-Z][A-Z0-9_]*$"
+        }
+      },
+      "required": [
+        "schema",
+        "request_id",
+        "surface_id",
+        "role",
+        "ok",
+        "code"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 6
+    }
+  ]
+}

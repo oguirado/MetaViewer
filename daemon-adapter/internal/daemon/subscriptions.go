@@ -28,6 +28,32 @@ func subscriptionHandler(m *capsule.Manager, profiles map[string]capsule.Profile
 		if err := json.Unmarshal(e.Body, &q); err != nil {
 			return nil, err
 		}
+		if q.Schema == roleSwitchSchema {
+			request, err := parseRoleSwitch(e)
+			if err != nil {
+				return nil, err
+			}
+			var active []*frames.Subscriptions
+			for _, sub := range subs {
+				if sub.IsSubscribed(request.SurfaceID) {
+					active = append(active, sub)
+				}
+			}
+			for _, sub := range active {
+				if err := sub.Unsubscribe(ctx, request.SurfaceID); err != nil {
+					return []json.RawMessage{roleSwitchReply(request, err)}, nil
+				}
+			}
+			events, switchErr := next(ctx, e)
+			// Restore only pre-existing capture ownership. UI frame subscriptions
+			// still decide whether an initially human capsule needs a live stream.
+			for _, sub := range active {
+				if err := sub.Subscribe(ctx, request.SurfaceID); err != nil {
+					return nil, err
+				}
+			}
+			return events, switchErr
+		}
 		if q.Op != "frame_subscribe" && q.Op != "frame_unsubscribe" {
 			return next(ctx, e)
 		}

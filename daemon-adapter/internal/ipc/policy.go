@@ -29,6 +29,7 @@ type SchemaPolicy struct {
 	capsule     *schemaNode
 	rewind      *schemaNode
 	observation *schemaNode
+	roleSwitch  *schemaNode
 }
 
 var _ Policy = (*SchemaPolicy)(nil)
@@ -282,7 +283,7 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return nil, statErr
 	}
-	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot, observation: observationRoot}, nil
+	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot, observation: observationRoot, roleSwitch: roleSwitchEnvelope(n)}, nil
 }
 func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 	var e Envelope
@@ -315,6 +316,11 @@ func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 		selected = p.rewind
 	case "guest_command_observation_envelope/v0.2":
 		selected = p.observation
+	case "role_switch_envelope/v0.3":
+		if !roleSwitchRoute(obj) {
+			return e, errors.New("role switch route refused")
+		}
+		selected = p.roleSwitch
 	default:
 		return e, errors.New("unknown envelope discriminator")
 	}

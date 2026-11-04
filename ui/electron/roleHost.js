@@ -860,7 +860,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       key = `pending:${profileId}`;
       capsuleStates.set(key, {profile_id:profileId, state:'creating'});
       try {
-        const provReply = choice.hostXpra ? {ok:true} : await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});
+        const provReply = choice.hostXpra || programIdentities.has(profileId) ? {ok:true} : await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});
         if (provReply && provReply.ok === false) {
           const pCode = typeof provReply.code === 'string' && provReply.code ? provReply.code : 'PROFILE_NOT_PROVISIONED';
           const pReason = typeof provReply.reason === 'string' && provReply.reason ? provReply.reason : pCode;
@@ -1004,17 +1004,35 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     if (surface.kind === 'vm') throw refuse('CAPSULE_ROLE_INVALID');
     const role = roleFor(surface) === 'human' ? 'agent' : 'human';
     const program = programProfiles.get(profileId);
+    // Host-Xpra programs have a separate external-process lifecycle. Preserve
+    // its existing acknowledged reopen path; native identity capsules transfer.
+    if (program?.hostXpra) {
+      creating = true;
+      transitions.set(profileId,'stopping');
+      try {
+        await stop(surfaceId);
+        transitions.set(profileId,'starting');
+        return await createProgram({binary:program.path,role,hostXpra:true},true,profileId);
+      } finally { creating=false;transitions.delete(profileId); }
+    }
+    if (typeof core.switchRole !== 'function') throw Object.assign(refuse('CAPSULE_MODE_UNAVAILABLE'), {
+      reason:'This runtime cannot preserve the running capsule while changing modes. The capsule is still open; use Take control / Release instead.'});
     creating = true;
-    transitions.set(profileId,'stopping');
+    transitions.set(profileId,'switching');
     try {
-      await stop(surfaceId);
-      transitions.set(profileId,'starting');
-      if (program) {
-        return await createProgram({binary:program.path,role,...(program.hostXpra ? {hostXpra:true} : {})},true,profileId);
+      // Revoke the local input view before changing authority. Native process,
+      // identity, tabs and session cookies remain untouched.
+      await close(surfaceId);
+      const reply = await core.switchRole(surfaceId,role);
+      const current = core.getHumanSurface?.(surfaceId);
+      if (reply?.ok !== true || reply.surface_id !== surfaceId || reply.role !== role ||
+          current?.state !== 'active' || current.profile_id !== profileId || current.control !== role) {
+        throw Object.assign(refuse('CAPSULE_MODE_UNPROVEN'), {reason:'The running capsule was retained, but the mode change was not confirmed. Reopen its tile to check the current mode.'});
       }
-      // A new surface identity has no VERIFIED frame. Existing core/P14 fences
-      // require its first fresh capture before any proposal can be admitted.
-      return await create({profileId,role},true);
+      openingRoles.set(surfaceId,role);
+      capsuleStates.set(surfaceId,current);
+      if (program) program.role = role;
+      return {ok:true,reused:true,surfaceId,profileId,role};
     } finally { creating = false; transitions.delete(profileId); }
   }
   /** @param {any} choice */

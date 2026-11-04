@@ -1537,7 +1537,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
   // Mutant 14 (V023-HOST-MV2): provisioning skipped in roleHost createProgram.
   {
     const mutatedSrc = roleHostSrc.replace(
-      'const provReply = choice.hostXpra ? {ok:true} : await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});',
+      'const provReply = choice.hostXpra || programIdentities.has(profileId) ? {ok:true} : await provisionIdentity({id:profileId, label:resolved.name, binary:resolved.name, path:resolved.path});',
       'const provReply = {ok:true};',
     );
     assert.notEqual(mutatedSrc, roleHostSrc);

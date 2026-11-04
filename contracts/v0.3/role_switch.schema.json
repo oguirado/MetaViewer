@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 8,
+  "$id": "https://metaviewer.local/contracts/v0.3/role_switch.schema.json",
+  "properties": {
+    "schema": {
+      "const": "metaviewer.role_switch/v0.3"
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "surface_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "role": {
+      "enum": [
+        "human",
+        "agent"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "request_id",
+    "surface_id",
+    "role"
+  ]
+}

@@ -24,12 +24,19 @@ async function fixture(t, legacy = undefined) {
   const root = await mkdtemp(join(tmpdir(),'p18-host-'));
   t.after(() => rm(root,{recursive:true,force:true}));
   const handlers = new Map(), states = new Map(), calls = [], stageModes = [];
-  let next = 0, failedStop = false, failedCreate = false, stage = 'agent';
+  let next = 0, failedStop = false, failedSwitch = false, stage = 'agent';
   const parent = new EventEmitter();
   parent.webContents = {session:{registerPreloadScript(){return 'preload';},unregisterPreloadScript(){}}};
   const env = {MV_SRF_PROFILES:JSON.stringify({demo:{Kind:'browser',role:legacy}}),MV_SRF_STATE_DIR:root,MV_SRF_BIN_DIR:'/synthetic/bin',MV_RECORDING_DESTINATION:root};
   const core = {
     getHumanSurface:id => states.get(id),
+    async switchRole(surfaceId, role) {
+      calls.push('switchRole');
+      if (failedSwitch) return {schema:'surface_event/v0.2',event:'error',data:{code:'ROLE_SWITCH_REFUSED'}};
+      const surface = {...states.get(surfaceId),control:role};
+      states.set(surfaceId,surface);
+      return {schema:'metaviewer.role_switch_result/v0.3',request_id:'fixture',surface_id:surfaceId,role,ok:true};
+    },
     stopSurface:surfaceId => core.request({schema:'surface_request/v0.2',op:'destroy',params:{surface_id:surfaceId}}),
     async request(request) {
       calls.push(request.op);
@@ -39,7 +46,6 @@ async function fixture(t, legacy = undefined) {
         states.set(surface.surface_id,surface);
         return {schema:'surface_event/v0.2',event:'state_changed',data:{surface}};
       }
-      if (failedCreate) return typeof failedCreate === 'object' ? failedCreate : {schema:'surface_event/v0.2',event:'error'};
       const mode = JSON.parse(await readFile(join(root,'opening-modes/demo.json'),'utf8'));
       assert.equal(mode.profile_id,'demo'); stage = mode.mode; stageModes.push(stage);
       const surface = {surface_id:'surface-'+(++next),profile_id:'demo',state:'active',control:stage,geometry:{w:1280,h:900}};
@@ -55,7 +61,7 @@ async function fixture(t, legacy = undefined) {
     tileFactory:async()=>({close:async()=>{calls.push('tile-close');},resize(){},setVisible(){}})});
   t.after(()=>host.dispose());
   const request = (op,body={}) => handlers.get('metaviewer:roles.v0.3')({}, {schema:'metaviewer.roles/v0.3',op,...body});
-  return {root,request,states,calls,stageModes,set failStop(value){failedStop=value;},set failCreate(value){failedCreate=value;}};
+  return {root,request,states,calls,stageModes,set failStop(value){failedStop=value;},set failSwitch(value){failedSwitch=value;}};
 }
 
 test('P18 opening mode overrides legacy default; duplicate modes refuse; same-mode open reveals',async t=>{
@@ -78,7 +84,7 @@ test('P18 absent legacy default is agent; every profile is offered in either mod
   assert.deepEqual(f.stageModes,['human']);
 });
 
-test('P18 switch closes view then destroys before fresh create and retains identity',async t=>{
+test('P18 switch changes control in place and retains the same running surface and identity',async t=>{
   const f = await fixture(t);
   const initial = await f.request('create',{choice:{profileId:'demo',role:'human'}});
   const lifecycle = await f.request('surfaces');
@@ -86,35 +92,44 @@ test('P18 switch closes view then destroys before fresh create and retains ident
   assert.equal(lifecycle[0].surface.surface_id,initial.surfaceId);assert.equal(lifecycle[0].frame_ref,undefined);
   assert.equal((await f.request('mount',{surfaceId:initial.surfaceId,bounds})).ok,true);
   const switched = await f.request('switch',{surfaceId:initial.surfaceId});
-  assert.equal(switched.ok,true); assert.notEqual(switched.surfaceId,initial.surfaceId); assert.equal(switched.role,'agent');
-  assert.deepEqual(f.calls,['create','tile-close','bridge-close','destroy','create']);
-  assert.deepEqual(f.stageModes,['human','agent']);
-  assert.equal(f.states.get(initial.surfaceId).state,'destroyed');
+  assert.equal(switched.ok,true); assert.equal(switched.surfaceId,initial.surfaceId); assert.equal(switched.role,'agent');
+  assert.ok(f.calls.includes('switchRole'));
+  assert.equal(f.calls.filter(op=>op==='create'||op==='destroy').length,1,'switch must not create or destroy a surface');
+  assert.deepEqual(f.stageModes,['human']);
+  assert.equal(f.states.get(initial.surfaceId).state,'active');
+  assert.equal(f.states.get(initial.surfaceId).control,'agent');
   assert.equal([...f.states.values()].filter(s=>s.state==='active').length,1);
   assert.equal((await f.request('choices'))[0].currentMode,'agent');
-  assert.deepEqual(await f.request('surfaces'),[]);
+  const after = await f.request('status',{surfaceId:initial.surfaceId});
+  assert.equal(after.role,'agent');assert.equal(after.profileId,'demo');assert.equal(after.control,'agent');
 });
 
-test('P18 failed stop never starts replacement; failed replacement leaves identity closed',async t=>{
+test('P18 failed stop keeps destroy fail-closed; refused role switch keeps the old active surface',async t=>{
   const f = await fixture(t);
   const initial = await f.request('create',{choice:{profileId:'demo',role:'human'}});
   f.failStop = true;
-  assert.equal((await f.request('switch',{surfaceId:initial.surfaceId})).code,'CAPSULE_STOP_UNPROVEN');
+  assert.equal((await f.request('stop',{surfaceId:initial.surfaceId})).code,'CAPSULE_STOP_UNPROVEN');
   assert.deepEqual(f.calls,['create','destroy']);
-  f.failStop = false; f.failCreate = true;
-  assert.equal((await f.request('switch',{surfaceId:initial.surfaceId})).code,'SURFACE_CREATE_REFUSED');
-  assert.equal((await f.request('choices'))[0].currentMode,'closed');
-  assert.equal([...f.states.values()].filter(s=>s.state==='active').length,0);
+  f.failStop = false; f.failSwitch = true;
+  const refused = await f.request('switch',{surfaceId:initial.surfaceId});
+  assert.equal(refused.ok,false);
+  assert.deepEqual(f.calls,['create','destroy','switchRole']);
+  assert.equal(f.states.get(initial.surfaceId).state,'active');
+  assert.equal(f.states.get(initial.surfaceId).control,'human');
+  assert.equal((await f.request('choices'))[0].currentMode,'human');
+  assert.equal([...f.states.values()].filter(s=>s.state==='active').length,1);
 });
 
-test('P18 R2 destroy acknowledgement then create preserves the adapter fault code',async t=>{
+test('P18 refused in-place role switch never destroys or recreates the surface',async t=>{
   const f = await fixture(t);
   const initial = await f.request('create',{choice:{profileId:'demo',role:'human'}});
-  f.failCreate = {schema:'surface_event/v0.2',event:'error',data:{surface_id:'replacement',code:'frame',detail:'native frame allocation mismatch'}};
-  assert.deepEqual(await f.request('switch',{surfaceId:initial.surfaceId}),{ok:false,code:'ADAPTER_FRAME'});
-  assert.deepEqual(f.calls,['create','destroy','create']);
-  assert.equal(f.states.get(initial.surfaceId).state,'destroyed');
-  assert.equal((await f.request('choices'))[0].currentMode,'closed');
+  f.failSwitch = true;
+  const refused = await f.request('switch',{surfaceId:initial.surfaceId});
+  assert.equal(refused.ok,false);
+  assert.deepEqual(f.calls,['create','switchRole']);
+  assert.equal(f.states.get(initial.surfaceId).state,'active');
+  assert.equal(f.states.get(initial.surfaceId).control,'human');
+  assert.equal((await f.request('choices'))[0].currentMode,'human');
 });
 
 test('P18 R2 create refusals map fixed adapter faults and withhold arbitrary diagnostics',()=>{
@@ -139,7 +154,9 @@ test('P18 last login is absent until explicit human operator confirmation',async
   let opened = await f.request('create',{choice:{profileId:'demo',role:'agent'}});
   assert.equal((await f.request('confirm-login',{surfaceId:opened.surfaceId})).code,'LOGIN_CONFIRMATION_REQUIRES_HUMAN');
   assert.equal((await f.request('choices'))[0].lastLogin,null);
-  opened = await f.request('switch',{surfaceId:opened.surfaceId});
+  const switched = await f.request('switch',{surfaceId:opened.surfaceId});
+  assert.equal(switched.surfaceId,opened.surfaceId);
+  opened = switched;
   assert.equal((await f.request('choices'))[0].lastLogin,null);
   const confirmed = await f.request('confirm-login',{surfaceId:opened.surfaceId});
   assert.equal(confirmed.ok,true); assert(confirmed.lastLogin > 0);

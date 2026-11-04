@@ -16,6 +16,15 @@ pub(super) fn schema(name: &str) -> Option<serde_json::Value> {
 
 fn schema_uncached(name: &str) -> Option<serde_json::Value> {
     let raw = match name {
+        "role_switch.schema.json" => {
+            include_str!("../../../contracts/v0.3/role_switch.schema.json")
+        }
+        "role_switch_result.schema.json" => {
+            include_str!("../../../contracts/v0.3/role_switch_result.schema.json")
+        }
+        "role_switch_envelope.schema.json" => {
+            include_str!("../../../contracts/v0.3/role_switch_envelope.schema.json")
+        }
         "guest_command_observation.schema.json" => {
             include_str!("../../../contracts/v0.2/guest_command_observation.schema.json")
         }

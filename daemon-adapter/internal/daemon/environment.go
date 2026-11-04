@@ -605,6 +605,48 @@ func wireHandlerWithoutAdmission(m *capsule.Manager, profiles map[string]capsule
 		if q.Schema == "capsule_state_request/v0.2" {
 			return dispatchState(ctx, m, e)
 		}
+		if q.Schema == roleSwitchSchema {
+			request, err := parseRoleSwitch(e)
+			if err != nil {
+				return nil, err
+			}
+			binding, err := m.SubscriptionBinding(request.SurfaceID)
+			if err != nil {
+				return []json.RawMessage{roleSwitchReply(request, err)}, nil
+			}
+			profile, ok := profiles[binding.Surface.ProfileID]
+			if !ok {
+				profile, ok = m.ProfileFor(binding.Surface.ProfileID)
+			}
+			pub := pubs[profile.RAMRoot]
+			if !ok || pub == nil {
+				return []json.RawMessage{roleSwitchReply(request, configuration("role publisher required"))}, nil
+			}
+			events, err := dispatchRoleSwitch(ctx, m, e)
+			if err != nil {
+				return nil, err
+			}
+			if len(events) != 2 {
+				return events, nil
+			}
+			frameMu.Lock()
+			owned[request.SurfaceID] = pub
+			delete(lastFrames, request.SurfaceID)
+			frameMu.Unlock()
+			syncSurface(request.SurfaceID)
+			if request.Role == "agent" {
+				ref, captureErr := captureStateFrame(ctx, m, profiles, pubs, request.SurfaceID)
+				if captureErr == nil {
+					frameJSON, _ := json.Marshal(ref)
+					frameMu.Lock()
+					lastFrames[request.SurfaceID] = frameJSON
+					frameMu.Unlock()
+					ready, _ := json.Marshal(map[string]any{"schema": "surface_event/v0.2", "event": "frame_ready", "data": map[string]any{"frame_ref": ref}})
+					events = append(events, ready)
+				}
+			}
+			return events, nil
+		}
 		if q.Schema == "record_request/v0.2" {
 			if recorder == nil {
 				var req struct {

@@ -237,7 +237,7 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 			fail(err)
 			return exitLoop(err)
 		}
-		if !isHello && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" {
+		if !isHello && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "metaviewer.role_switch/v0.3" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)
@@ -261,7 +261,7 @@ func Connect(ctx context.Context, cfg Config, policy Policy, registration Envelo
 		_ = json.Unmarshal(in.Body, &op)
 		target := dataIn
 		item := queuedEnvelope{in: in, wait: ctrlGate}
-		if op.Op == "take_control" || op.Op == "release_control" {
+		if op.Op == "take_control" || op.Op == "release_control" || body.Schema == "metaviewer.role_switch/v0.3" {
 			done := make(chan struct{})
 			ctrlGate = done
 			item = queuedEnvelope{in: in, done: done}

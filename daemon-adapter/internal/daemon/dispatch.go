@@ -47,6 +47,9 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 		if header.Schema == "capsule_state_request/v0.2" {
 			return dispatchState(ctx, manager, envelope)
 		}
+		if header.Schema == roleSwitchSchema {
+			return dispatchRoleSwitch(ctx, manager, envelope)
+		}
 		var request capsule.Request
 		if err := json.Unmarshal(envelope.Body, &request); err != nil {
 			return nil, err

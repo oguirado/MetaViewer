@@ -438,6 +438,13 @@ async function lifecycle(operation) {
     emit('lifecycle', {surfaceId:props.surfaceId,completion});
     const result = await completion;
     if (!result.ok) throw Error(result.code);
+    if (result.reused === true && result.surfaceId === props.surfaceId) {
+      role.value = result.role;
+      watching.value = false;
+      emit('mode', {surfaceId:props.surfaceId,mode:result.role});
+      if (result.surfaceId) emit('reveal',result.surfaceId);
+      return;
+    }
     ended = true;
     // Start reveal before retiring this component: closing its pane can unmount
     // it synchronously, after which Vue suppresses further emitted events.
