@@ -666,7 +666,10 @@ def descriptor_context(root, plan, config):
     required = {'schema','source_commit','source_root','package','python','python_prefix','artifacts','native','runner','files','vm_image','legal','producer_pins','package_manifest','reconciler'}
     need(type(descriptor) is dict and required <= set(descriptor) and set(descriptor) <= required | {'normal_profiles','identity_provisioner'} and descriptor['schema'] == 'metaviewer-arm64-setup/v1', 'descriptor schema incomplete')
     closed(descriptor['package'], ('app','asar'))
-    closed(descriptor['native'], ('srf-identity-admin','srf-identity-surface','srf-holdings-capsule'))
+    need(type(descriptor['native']) is dict and set(descriptor['native']) in (
+        {'srf-identity-admin', 'srf-identity-surface'},
+        {'srf-identity-admin', 'srf-identity-surface', 'srf-holdings-capsule'}),
+        'native binary closure incomplete')
     closed(descriptor['artifacts'], ('engine','kernel','broker','busybox'))
     closed(descriptor['producer_pins'], PRODUCERS)
     modules = {'guest_command_runtime/' + n + '.py' for n in ('__init__','_schemas','wire','schema','config','image','native_checks','native','protocol','storage','controller')}
