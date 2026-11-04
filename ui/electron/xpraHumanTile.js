@@ -4,6 +4,7 @@ import { createXpraRecovery } from './xpraRecovery.js';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { interceptDesktopShortcut } from './desktopShortcuts.js';
+import { captureNativePreview, nativeThemeScript } from './nativePreview.js';
 
 /** Per-event refusals of the trace recorder: the event is dropped, the view stays. */
 export const DROPPABLE_TRACE_CODES = Object.freeze(new Set(['TRACE_EVENT_REFUSED','TRACE_COORDINATE_REFUSED',
@@ -28,6 +29,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
   }
   const isolated = session.fromPartition(`xpra-human-${randomUUID()}`, { cache: false });
   let origin = bridge.origin;
+  let themeScript = '';
   let websocketOrigin = origin.replace(/^http:/, 'ws:');
   /** @param {string} url */
   const localURL = url => url.startsWith(origin + '/') || url.startsWith(websocketOrigin + '/');
@@ -99,7 +101,7 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     if (!live()) return;
     trace.setActive(state === 'ready');
     onState(state);
-    void wc.executeJavaScript(`{const overlay=document.getElementById('metaviewer-reconnecting');if(overlay){overlay.hidden=${state === 'ready'};overlay.textContent=${JSON.stringify(state === 'reconnecting' ? 'Reconnecting…' : 'Connecting…')};}}`)
+    void wc.executeJavaScript(themeScript+`{const overlay=document.getElementById('metaviewer-reconnecting');if(overlay){overlay.hidden=${state === 'ready'};overlay.textContent=${JSON.stringify(state === 'reconnecting' ? 'Reconnecting…' : 'Connecting…')};}}`)
       .catch(() => {});
   }
   /** @param {{x:number,y:number,width:number,height:number}} rect */
@@ -112,6 +114,9 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
     if (size.width !== 1280 || size.height !== 900) throw Error('XPRA_FIXED_SIZE_REQUIRED');
     wc.setZoomFactor(1);
     view.setBounds(rect);
+    // Native child views can retain a blank compositor surface after a hidden
+    // mount or resize. Request paint without changing keyboard ownership.
+    wc.invalidate?.();
   }
   /** @type {Set<string>} */
   const droppedCodes = new Set();
@@ -197,8 +202,15 @@ export async function attachXpraHumanTile({ electron, window, bridge, bounds, tr
         await waitForXpraClient(wc, {writable, rawKeyboard, isActive:live});
       }, onState:publish});
     return Object.freeze({ view, resize, close, bringToFront,
+      preview: () => captureNativePreview(wc, live),
+      /** @param {{background:string,foreground:string}} theme */
+      setTheme(theme) { if (!live()) throw Error('XPRA_HUMAN_LEASE_LOST'); themeScript=nativeThemeScript(theme); return wc.executeJavaScript(themeScript); },
       /** @param {boolean} visible */
-      setVisible(visible) { if (!detached) view.setVisible(visible); } });
+      setVisible(visible) {
+        if (detached) return;
+        view.setVisible(visible);
+        if (visible) wc.invalidate?.();
+      } });
   } catch (error) { await close(); throw failure || error; }
   finally { stopFocusWatch(); }
 }

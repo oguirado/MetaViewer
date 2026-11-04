@@ -119,7 +119,7 @@ describe('mounted tile chrome', () => {
     assert.ok((await render()).includes('Recording 01:01'), 'recording entry shows elapsed');
     store.bySurface['cap-7'] = { phase: 'error', lastShot: null };
     const errored = await render();
-    assert.ok(errored.includes('>Idle<'), 'error phase renders no error text');
+    assert.ok(errored.includes('>Error<'), 'error phase has a semantic label without a raw refusal code');
     assert.doesNotMatch(errored, /ERR_/, 'no refusal code leaks into the rail');
   });
 

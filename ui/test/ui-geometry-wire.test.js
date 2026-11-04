@@ -302,12 +302,14 @@ async function mountRenderedTile(Component, {
       [ch.port2],
     );
     sender.postDisplayFrame({
-      width: 2,
-      height: 2,
+      // Paint the geometry asserted below; presentation now owns the aspect.
+      // Mismatched projection/paint is covered by v028-fit.test.js.
+      width: canvasEl.width,
+      height: canvasEl.height,
       seq: 2,
       captureMonoNs: '1000',
       generation: 1,
-      bytes: new Uint8Array(12).fill(0x7f),
+      bytes: new Uint8Array(canvasEl.width * canvasEl.height * 3).fill(0x7f),
     });
     await new Promise((r) => setTimeout(r, 20));
     await Vue.nextTick();
@@ -443,13 +445,18 @@ async function assertTileAspectAndFooter({
     }
   }
 
-  // 4. CSS rules in SurfaceCanvas.vue and wall.css constrain the tile canvas/surface to 1280/900 and keep the strip visible.
+  // V028-FIT-2: the footer's measured flex row reserves its wrapped height.
+  // v028-fit-render.test.js exercises these rules in Electron with the real
+  // banner siblings; the mock below continues to cover input and frame facts.
   const styleBlock = sfcSource.slice(sfcSource.indexOf('<style'));
   const canvasRule = extractCssRule(styleBlock, '.mv-surface__canvas');
-  assert.match(canvasRule, /aspect-ratio:\s*1280\s*\/\s*900/, '.mv-surface__canvas must declare aspect-ratio: 1280 / 900');
-  const surfaceStripRule = extractCssRule(styleBlock, '.mv-surface:has(> .mv-surface__strip)');
-  assert.match(surfaceStripRule, /1280\s*\/\s*900/, '.mv-surface with strip must size to 1280 / 900');
-  assert.match(surfaceStripRule, /900\s*\/\s*1280/, '.mv-surface with strip must size height to 900 / 1280 + 23px');
+  assert.match(canvasRule, /object-fit:\s*contain/, 'complete frame uses uniform contain scaling');
+  assert.match(canvasRule, /height:\s*0/, 'canvas basis leaves room for the actual footer height');
+  assert.match(canvasRule, /flex:\s*1 1 0/, 'canvas fills remaining space');
+  assert.match(canvasRule, /background-color:\s*var\(--cuk-semantic-surface-canvas\)/, 'free space matches the tile background');
+  const surfaceRule = extractCssRule(styleBlock, '.mv-surface');
+  assert.match(surfaceRule, /flex:\s*1 1 0/, 'surface fills the space after the banner');
+  assert.doesNotMatch(surfaceRule, /100cq[wh]/, 'whole-container arithmetic cannot reserve sibling chrome');
   const stripRule = extractCssRule(styleBlock, '.mv-surface__strip');
   assert.match(stripRule, /flex:\s*0 0 auto/, '.mv-surface__strip must not shrink out of view');
   assert.match(wallCssSource, /container-type:\s*size/, 'wall.css must establish a size container on .mv-tile-capture-host');
@@ -632,16 +639,16 @@ describe('UI-GEOMETRY-WIRE: capsule browser fills its tile with no letterbox', (
       'restoring 16:9 (1280x720) in layout.js must fail the wall layout aspect guard',
     );
 
-    // Mutant 1c: restore 16:9 aspect-ratio in SurfaceCanvas.vue CSS
-    const mutantSfc16x9 = SFC_SOURCE.replace(
-      'aspect-ratio: 1280 / 900;',
-      'aspect-ratio: 16 / 9;',
+    // Mutant 1c: restore the black canvas background seen in the live failure
+    const mutantSfcBlack = SFC_SOURCE.replace(
+      'background-color: var(--cuk-semantic-surface-canvas);',
+      'background-color: #000;',
     );
-    assert.notEqual(mutantSfc16x9, SFC_SOURCE, 'SFC 16:9 mutant must alter source');
+    assert.notEqual(mutantSfcBlack, SFC_SOURCE, 'black canvas mutant must alter source');
     await assert.rejects(
-      () => assertTileAspectAndFooter({ sfcSource: mutantSfc16x9 }),
+      () => assertTileAspectAndFooter({ sfcSource: mutantSfcBlack }),
       assert.AssertionError,
-      'restoring 16:9 in SurfaceCanvas.vue must fail the CSS/renderer aspect guard',
+      'restoring black margins must fail the canvas background guard',
     );
   });
 

@@ -1,0 +1,13 @@
+{
+  "schema": "guest_command_event/v0.2",
+  "event_id": "event-fixture",
+  "request_id": "request-fixture",
+  "reservation_id": "reservation-fixture",
+  "owner_id": "actor-fixture",
+  "session": null,
+  "event": "outcome_unknown",
+  "data": {
+    "op": "create",
+    "code": "TRANSPORT"
+  }
+}

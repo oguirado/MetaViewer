@@ -1,0 +1,2 @@
+- Add an evidence-tagged reference paper with capsule boundaries, source coordinates, runnable verification gates and explicit qualification limits.
+- Validate reference metadata, stable anchors, evidence tags and repository source coordinates with rejecting negative controls.

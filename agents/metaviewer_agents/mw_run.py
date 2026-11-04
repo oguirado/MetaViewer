@@ -344,7 +344,7 @@ def build_parser():
     parser.add_argument('--surface-kind', choices=('browser', 'program'), default='browser')
     parser.add_argument('--goal')
     parser.add_argument('--text')
-    parser.add_argument('--key', choices=('Enter',))
+    parser.add_argument('--key', choices=('Enter', 'Up', 'Down', 'Left', 'Right'))
     parser.add_argument('--steps', type=int, default=1)
     parser.add_argument('--timeout-ms', type=int, default=10000)
     parser.add_argument('--planner', choices=('rules', 'muse'), default='rules')
@@ -359,15 +359,20 @@ def main(argv=None, *, runner=None):
     if args.surface_kind == 'program' or args.goal is not None:
         if args.site is not None or args.workflow is not None or args.slot:
             parser.error('goal mode does not accept --site, --workflow or --slot')
-        if args.surface_kind == 'program' and args.key is not None:
-            parser.error('--key requires a browser goal')
+        program_key = args.surface_kind == 'program' and args.goal == 'focused-key'
+        if args.surface_kind == 'program' and (args.key is not None or program_key):
+            if not (program_key and args.key is not None and args.text is None and
+                    args.steps == 1 and args.planner == 'rules'):
+                parser.error('program --key requires --goal focused-key, --steps 1, --planner rules and no --text')
+        if args.surface_kind != 'program' and args.key not in (None, 'Enter'):
+            parser.error('browser --key supports only Enter')
         if not args.goal or not args.goal.strip() or not 1 <= args.steps <= 16 or not 1 <= args.timeout_ms <= 30000:
             parser.error('program mode requires --goal, --steps within 1..16 and --timeout-ms within 1..30000')
         if not 1 <= args.model_timeout_ms <= 240000:
             parser.error('--model-timeout-ms must be within 1..240000')
         if args.text is not None and (not args.text or len(args.text.encode('utf-8')) > 65536):
             parser.error('--text must contain between 1 and 65536 UTF-8 bytes')
-        if args.key is not None and args.text is None:
+        if args.key is not None and args.text is None and not program_key:
             parser.error('--key requires explicit --text and verified readback')
         if args.surface_kind == 'program':
             if args.text is not None and args.steps != 1:

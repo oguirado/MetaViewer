@@ -1,3 +1,4 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 // CAPID-UI (FEEDBACK row 7, pillar P2): every wall tile shows its capsule id
 // (short, full id on hover) and a keyboard-reachable "Copy ID for AI" action
 // that copies one ready line: the id plus the documented mw_run attach usage.
@@ -338,6 +339,7 @@ async function panelOracle(Panel) {
     assert.equal(button.props.disabled, false);
     assert.notEqual(button.props.tabindex, -1);
     assert.equal(button.props['aria-label'], `Copy ID for AI: capsule ${SURFACE}`);
+    assert.equal(button.props.title, `Copy ID for AI: capsule ${SURFACE}`);
     assert.equal(textOf(button), 'Copy ID for AI');
     assert.equal(button.props['data-semantic-anchor'], `tile-${SURFACE}-copy-id`);
     close();
@@ -508,7 +510,7 @@ describe('wall tile id chip and Copy ID for AI', () => {
   });
   test('the chip adds no lane control to SurfacePanel and no template v-if', () => {
     const template = PANEL_SOURCE.slice(PANEL_SOURCE.indexOf('<template>'));
-    assert.doesNotMatch(template, /v-if|<button|tabindex/);
+    assert.doesNotMatch(withoutPairedTerminalControl(template), /v-if|<button|tabindex/);
     assert.match(template, /:surface-id=/);
     assert.match(template, /:profile-id=/);
     assert.match(template, /:tile-state="tile\.tile"/);
@@ -555,7 +557,7 @@ describe('mutants are rejected by the oracles', () => {
     ['confirmation always shown', (c) => c.replace('<span v-if="copyStatusText !== \'\'" role="status"', '<span role="status"')],
     ['chip shown in display-only tiles', (c) => c.replace('<div v-if="!props.displayOnly" class="mv-tile-chrome"', '<div class="mv-tile-chrome"')],
     ['wrong id source (profile instead of surface id)', (c) => c.replace('surfaceId: capSurfaceId.value,\n  profileId', 'surfaceId: props.profileId || capSurfaceId.value,\n  profileId')],
-    ['button not a button (div)', (c) => c.replace('      <button\n        :id="copyIdDomId"\n        type="button"', '      <div\n        :id="copyIdDomId"').replace('{{ CAPSULE_COPY_LABEL }}</button>', '{{ CAPSULE_COPY_LABEL }}</div>')],
+    ['button not a button (div)', (c) => c.replace('      <button\n        :id="copyIdDomId"\n        type="button"', '      <div\n        :id="copyIdDomId"').replace('{{ CAPSULE_COPY_LABEL }}</span></button>', '{{ CAPSULE_COPY_LABEL }}</span></div>')],
     ['chip falls back to the capsule id without a surface id', (c) => c.replace('const capSurfaceId = computed(() => props.surfaceId);', 'const capSurfaceId = computed(() => props.surfaceId || props.capsuleId);')],
     ['reset timer not cleared on unmount', (c) => c.replace("onBeforeUnmount(() => { copyFeedback.dispose(); });", '')],
   ];

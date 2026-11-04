@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/capsule_state_request.schema.json",
+  "title": "Capsule State Request",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "capsule_state_request/v0.2"
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "enum": [
+            "save",
+            "overwrite",
+            "load",
+            "list",
+            "delete"
+          ]
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "slot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "credential_copy_confirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "operation_id",
+        "op",
+        "profile_id",
+        "slot_id",
+        "credential_copy_confirmed"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "capsule_state_request/v0.2"
+        },
+        "operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "op": {
+          "const": "copy"
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "slot_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "credential_copy_confirmed": {
+          "type": "boolean"
+        },
+        "destination_profile_id": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 48,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        }
+      },
+      "required": [
+        "schema",
+        "operation_id",
+        "op",
+        "profile_id",
+        "slot_id",
+        "credential_copy_confirmed",
+        "destination_profile_id"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 256
+    }
+  ]
+}

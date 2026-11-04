@@ -1,3 +1,4 @@
+import * as guestWorkloadTileModel from '../src/wall/guestWorkloadTile.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -28,9 +29,9 @@ async function compile(source, deps = {}) {
   return (await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64')+'#'+serial)).default;
 }
 function mount(Component, props = {}, providers = {}, slots = {}) {
-  const geometry = {shown:true};
+  const geometry = {shown:true,height:500};
   const node = tag => ({tag,children:[],props:{},parent:null,style:{},
-    getBoundingClientRect:()=>({x:10,y:10,width:geometry.shown?700:0,height:500}),
+    getBoundingClientRect:()=>({x:10,y:10,width:geometry.shown?700:0,height:geometry.height}),
     getClientRects:()=>geometry.shown?[1]:[]});
   const renderer = vue.createRenderer({
     createElement:node,createText:value=>({...node('#text'),text:value}),createComment:()=>node('#comment'),
@@ -63,9 +64,9 @@ async function withRoles(run, source = read('../src/surfaces/RoleSurface.vue')) 
     visibility:async(id,shown)=>{calls.push(['visibility',id,shown]);return {ok:true};},
     close:async id=>{calls.push(['close',id]);return {ok:true};},confirmLogin:async()=>({ok:true})};
   const Component=await compile(source),overlays=createOverlayCoordinator(doc),pool=createHiddenSessionPool();
-  const add=async (id,role)=>{
+  const add=async (id,role,extra={})=>{
     roles.set(id,role);
-    const f=mount(Component,{surfaceId:id,control:role},{overlayCoordinator:overlays,hiddenSessionPool:pool},{default:()=>vue.h('canvas')});
+    const f=mount(Component,{surfaceId:id,control:role,...extra},{overlayCoordinator:overlays,hiddenSessionPool:pool},{default:()=>vue.h('canvas')});
     fixtures.push(f);await tick();return f;
   };
   try {await run({add,calls,attrs,overlays,pool});}
@@ -232,35 +233,34 @@ test('P18B mutant: hiding only the body leaves the agent shell visible',async()=
 
 async function headerOracle(source) {
   const calls=[];globalThis.__p18bHeaderCalls=calls;
-  const fragment=source.slice(source.indexOf('<template #actions>')+'<template #actions>'.length,source.indexOf('</template>',source.indexOf('<template #actions>')));
-  const Component=await compile(`<script setup>import {ref} from 'vue';const moreOpen=ref(false),moreMenu=ref(null),identitiesOpen=ref(false),demoOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),multislotOpen=ref(false),terminalOpen=ref(false),selectedSurface=ref({}),entryMessage=ref('');const copyEntry=()=>{},toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),openMultislot=()=>globalThis.__p18bHeaderCalls.push('Open in multislot'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
+  const navigation=source.match(/<nav aria-label="Workspace tools"[\s\S]*?<\/nav>/)?.[0];
+  const dock=source.match(/<UiButton label="Terminal" id="shell-terminal"[^\n]+/)?.[0];
+  assert.ok(navigation && dock, 'navigation and dock actions remain reachable');
+  const shortcut=source.match(/<div class="mv-tree-shortcuts">[\s\S]*?<\/div>/)?.[0];
+  assert.ok(shortcut);
+  const fragment=shortcut+navigation+dock;
+  const dockToggle=source.match(/function toggleTerminalDock\(\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(dockToggle, 'drawer transition keeps the real dock handler');
+  const Component=await compile(`<script setup>import {ref} from 'vue';const guestWorkloadTiles=ref([]);const showGuestConsole=()=>{};const props={fixture:true};const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),terminalDockOpen=ref(false),terminalInDrawer=ref(false),terminalPreferDock=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');${dockToggle}</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
   const Button=vue.defineComponent({props:['label'],setup:(p,ctx)=>()=>vue.h('button',ctx.attrs,p.label)});
-  // UiButton is globally resolved in this extracted, otherwise byte-exact header.
   const Host=vue.defineComponent({setup(){vue.getCurrentInstance().appContext.components.UiButton=Button;return()=>vue.h(Component);}});
   const live=mount(Host);
   try {
-    const visible=node=>{for(let p=node;p;p=p.parent)if(p.props?.hidden===true)return false;return true;};
-    const buttons=()=>all(live.root).filter(n=>n.tag==='button'&&visible(n));
-    assert.deepEqual(buttons().map(text),['Use MetaViewer','Identities','More']);
-    buttons().find(n=>text(n)==='More').props.onClick();await tick();
-    assert.deepEqual(buttons().slice(3).map(text),['Storyboard','Settings','Terminal']);
+    const buttons=()=>all(live.root).filter(n=>n.tag==='button');
+    assert.deepEqual(buttons().map(text),['+ Add capsule','Identities','Settings','Storyboard','Terminal']);
     for(const label of ['Storyboard','Settings','Terminal']) {
-      if(!all(live.root).some(n=>n.props?.role==='menu'&&visible(n))) {
-        buttons().find(n=>text(n)==='More').props.onClick();await tick();
-      }
       buttons().find(n=>text(n)===label).props.onClick();await tick();
       assert.equal(calls.at(-1),label,`${label} calls its existing feature handler`);
-      assert.equal(all(live.root).some(n=>n.props?.role==='menu'&&visible(n)),false);
     }
   } finally {live.app.unmount();delete globalThis.__p18bHeaderCalls;}
 }
-test('P18B header keeps core actions and moves all secondary actions into More',()=>headerOracle(read('../src/App.vue')));
-test('P18B mutant: omitting a moved action fails the header oracle',async()=>{
-  const source=read('../src/App.vue'),mutant=source.replace(/<UiButton role="menuitem" id="shell-terminal"[^\n]+/,'');
+test('P18B navigation and dock retain existing feature actions',()=>headerOracle(read('../src/App.vue')));
+test('P18B mutant: omitting a moved action fails the navigation oracle',async()=>{
+  const source=read('../src/App.vue'),mutant=source.replace(/<UiButton label="Terminal" id="shell-terminal"[^\n]+/,'');
   assert.notEqual(source,mutant);await assert.rejects(()=>headerOracle(mutant),{code:'ERR_ASSERTION'});
 });
-test('P18B mutant: referencing a moved handler without calling it fails the header oracle',async()=>{
-  const source=read('../src/App.vue'),mutant=source.replace('moreOpen = false; toggleSettings()','moreOpen = false; toggleSettings');
+test('P18B mutant: referencing a moved handler without calling it fails the navigation oracle',async()=>{
+  const source=read('../src/App.vue'),mutant=source.replace('@click="toggleTerminalDock()"','@click="void toggleTerminalDock"');
   assert.notEqual(source,mutant);await assert.rejects(()=>headerOracle(mutant),{code:'ERR_ASSERTION'});
 });
 
@@ -376,4 +376,66 @@ test('P18B a connecting native view waits for current modal admission before sho
 test('P18B mutant: ignoring deferred visibility prevents the native view from returning',async()=>{
   const source=read('../src/surfaces/RoleSurface.vue'),mutant=source.replace('if (reply.visible === false)','if (false)');
   assert.notEqual(source,mutant);await assert.rejects(()=>deferredVisibilityOracle(mutant),{code:'ERR_ASSERTION'});
+});
+
+async function latePreviewOracle(source, rejects = false) {
+  await withRoles(async({add,calls,overlays})=>{
+    let finishPreview,entered=false;
+    globalThis.metaviewerRoles.preview=()=>{entered=true;return new Promise((resolve,reject)=>{finishPreview=rejects ? ()=>reject(Error("capture unavailable")) : resolve;});};
+    await add('preview-human','human');
+    const owner={};
+    overlays.setSurface(owner,'preview-human',true);await tick();
+    assert.equal(entered,true,'native preview is pending');
+    overlays.setSurface(owner,'preview-human',false);
+    finishPreview({ok:true,image:'data:image/png;base64,YQ=='});await tick();await tick();
+    assert.equal(calls.some(c=>c[0]==='visibility' && c[2]===false),false,'a closed overlay must not hide the restored live view');
+  },source);
+}
+test('late native preview cannot hide a view after its overlay closes',()=>latePreviewOracle(read('../src/surfaces/RoleSurface.vue')));
+test('rejected native preview cannot hide a view after its overlay closes',()=>latePreviewOracle(read('../src/surfaces/RoleSurface.vue'),true));
+test('removing the current-occlusion fence reproduces the stale hide',async()=>{
+  const source=read('../src/surfaces/RoleSurface.vue');
+  const mutant=source.replace(' || overlays?.isSurfaceOccluded(props.surfaceId) !== true','');
+  assert.notEqual(mutant,source);
+  await assert.rejects(()=>latePreviewOracle(mutant),{code:'ERR_ASSERTION'});
+  await assert.rejects(()=>latePreviewOracle(mutant,true),{code:'ERR_ASSERTION'});
+});
+
+async function viewportResizeOracle(source) {
+  const previous={observer:globalThis.ResizeObserver,interval:globalThis.setInterval,clear:globalThis.clearInterval};
+  const observers=[];
+  globalThis.ResizeObserver=class {
+    constructor(callback){this.callback=callback;observers.push(this);}
+    observe(target){this.target=target;}
+    disconnect(){this.disconnected=true;}
+  };
+  // The resize must reach native bounds without the polling fallback.
+  globalThis.setInterval=()=>0;globalThis.clearInterval=()=>{};
+  try {
+    await withRoles(async({add,calls})=>{
+      globalThis.metaviewerRoles.resize=async(id,bounds)=>{calls.push(['resize',id,bounds]);return {ok:true};};
+      const f=await add('resized-human','human');
+      assert.equal(observers.length,1);
+      assert(observers[0].target,'observe the presentation viewport');
+      f.geometry.height=260;
+      observers[0].callback([]);await tick();
+      assert(calls.some(c=>c[0]==='resize' && c[1]==='resized-human' && c[2].height===260),'native bounds follow the viewport resize');
+    },source);
+    assert.equal(observers[0].disconnected,true,'release the observer on unmount');
+  } finally {globalThis.ResizeObserver=previous.observer;globalThis.setInterval=previous.interval;globalThis.clearInterval=previous.clear;}
+}
+test('native bounds follow viewport resize without waiting for polling',()=>viewportResizeOracle(read('../src/surfaces/RoleSurface.vue')));
+test('removing viewport observation fails the immediate resize oracle',async()=>{
+  const source=read('../src/surfaces/RoleSurface.vue');
+  const mutant=source.replace('viewportResizeObserver.observe(root.value);','/* observation removed */');
+  assert.notEqual(mutant,source);await assert.rejects(()=>viewportResizeOracle(mutant),{code:'ERR_ASSERTION'});
+});
+
+test('recording-capable tile menu opens its capture panel and releases native overlay ownership',async()=>{
+ await withRoles(async({add,overlays})=>{
+  const opened=[];const f=await add('capture-menu','agent',{recordingAvailable:true,onRecordings:()=>opened.push('capture-menu')});
+  await openMenu(f);assert.equal(overlays.count,1);
+  const action=all(f.root).find(n=>n.props.id==='tile-recordings-capture-menu');assert.ok(action);assert.equal(text(action),'Recordings and screenshots');
+  action.props.onClick();await tick();assert.deepEqual(opened,['capture-menu']);assert.equal(overlays.count,0);
+ });
 });

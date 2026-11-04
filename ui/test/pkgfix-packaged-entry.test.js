@@ -157,10 +157,11 @@ test('PKG-FIX ID-01/L-04 operator resources stage the identity and reclaim tools
   assert.match(source, /join\(operatorRoot,'ATTACH\.md'\),ATTACH_GUIDE/);
   assert.match(ATTACH_GUIDE, /metaviewer\/attach\/current\.env/);
   assert.match(ATTACH_GUIDE, /cd "\$MV_OPERATOR_REPO\/agents"/);
-  // The identity tool runs from resources/operator/tools: standard library only.
+  // Static imports remain standard-library only. Normal mode separately loads
+  // its protected, pinned public resource-inventory helper.
   const tool = await readFile(new URL('../../tools/mv_identity.py', import.meta.url), 'utf8');
   for (const line of tool.split('\n').filter(l => /^(import|from) /.test(l))) {
-    assert.match(line, /^(import (argparse|fcntl|json|os|re|shutil|signal|stat|subprocess|sys|uuid)|from (pathlib|urllib\.parse) import )/, line);
+    assert.match(line, /^(import (argparse|fcntl|hashlib|importlib\.util|json|os|re|shutil|signal|stat|subprocess|sys|uuid)|from (pathlib|urllib\.parse) import )/, line);
   }
 });
 

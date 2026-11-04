@@ -1,0 +1,24 @@
+{
+  "schema": "capsule_envelope/v0.2",
+  "msg_id": "guest-command-fixture",
+  "ts_ns": 0,
+  "from": {
+    "component": "wender",
+    "instance": "fixture-from"
+  },
+  "to": {
+    "component": "wender",
+    "instance": "fixture-to"
+  },
+  "session_id": "fixture-session",
+  "seq": 1,
+  "nonce": "fixture-nonce",
+  "body": {
+    "schema": "guest_command_request/v0.2",
+    "request_id": "request-fixture",
+    "op": "create",
+    "params": {
+      "profile_id": "guest-command-arm64-v1"
+    }
+  }
+}
