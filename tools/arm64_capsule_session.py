@@ -19,6 +19,47 @@ setup = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(setup)
 
 
+def _rename_noreplace(directory_fd, source, target):
+    """Linux atomic publication without replacing an existing custody marker."""
+    import ctypes
+    import errno
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(libc, 'renameat2', None)
+    if rename is None:
+        raise OSError(errno.ENOSYS, 'atomic no-replace publication unavailable')
+    rename.argtypes = (ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint)
+    rename.restype = ctypes.c_int
+    if rename(directory_fd, os.fsencode(source), directory_fd, os.fsencode(target), 1) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def publish_held_marker(directory, value):
+    """Publish complete durable bytes; a failed preparation creates no final marker."""
+    directory = setup.private_dir(directory)
+    parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    temporary = '.held-session-' + secrets.token_hex(12)
+    try:
+        before = os.fstat(parent)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                     0o600, dir_fd=parent)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write((json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False) + '\n').encode())
+            stream.flush()
+            os.fsync(stream.fileno())
+        current = directory.lstat()
+        setup.need((before.st_dev, before.st_ino) == (current.st_dev, current.st_ino),
+                   'registry directory changed before publication')
+        _rename_noreplace(parent, temporary, 'held-session.json')
+        os.fsync(parent)
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+        os.close(parent)
+
+
 def record(root, event, **fields):
     # Each transition is a new durable file; interrupted actions cannot be replayed.
     index = len(list(root.glob('event-*.json')))
@@ -551,7 +592,7 @@ def launch(app, source_root, transport_path, expected_commit, launcher_pid, laun
         setup.write_bytes_new(root / 'setup.json', setup.read(setup.registry_path(), private=True))
         setup.write_new(root / 'PLAN.json', plan)
         effect_guard(root, plan)
-        setup.write_new(directory / 'held-session.json', {'root': str(root), 'unit': unit, 'status': 'closure-unproven'})
+        publish_held_marker(directory, {'root': str(root), 'unit': unit, 'status': 'closure-unproven'})
         manager_env = manager_environment()
         manager_env['XDG_DATA_HOME'] = str(setup.registry_path().parents[3])
         result = monitor_scope(lambda: subprocess.Popen(

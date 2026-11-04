@@ -134,12 +134,41 @@ class Native:
         for name,data in [('fc',assets['engine']),('Image',assets['kernel']),('initrd.gz',build_initramfs(assets['broker'],assets['busybox']))]:
             fd=os.open(self.root/name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o500 if name=='fc' else 0o400)
             with os.fdopen(fd,'wb') as out:out.write(data);out.flush();os.fsync(out.fileno())
+        self.record('allocate','sealed',{'sha256':self._seal_allocation()})
         self.boot_token=secrets.token_hex(32);self._spawn()
         self.record('boot','intent');self._api('PUT','/machine-config',{'mem_size_mib':256,'vcpu_count':1})
         self._api('PUT','/boot-source',{'kernel_image_path':str(self.root/'Image'),'initrd_path':str(self.root/'initrd.gz'),
             'boot_args':'console=ttyS0 reboot=k panic=1 rdinit=/init mv_rewind=1 mv_nonce='+self.boot_token})
         self._api('PUT','/vsock',{'guest_cid':3,'uds_path':str(self.root/'vsock.sock')});self._api('PUT','/actions',{'action_type':'InstanceStart'})
         self.wait_fence(0);self.record('boot','complete',self.evidence())
+    def _seal_allocation(self):
+        # Kept inside this already sealed module: no expansion of runner imports.
+        def identity(st):return {'device':st.st_dev,'inode':st.st_ino}
+        assets={}
+        for name,mode in (('fc',0o500),('Image',0o400),('initrd.gz',0o400)):
+            fd=os.open(self.root/name,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK|os.O_CLOEXEC)
+            with os.fdopen(fd,'rb') as stream:
+                st=os.fstat(stream.fileno())
+                require(stat.S_ISREG(st.st_mode) and st.st_uid==os.getuid() and st.st_nlink==1 and stat.S_IMODE(st.st_mode)==mode and 0<st.st_size<=128<<20,'seal asset custody')
+                digest=hashlib.sha256()
+                for block in iter(lambda:stream.read(1<<20),b''):digest.update(block)
+                end=os.fstat(stream.fileno());named=(self.root/name).lstat()
+                require(all(getattr(st,k)==getattr(end,k)==getattr(named,k) for k in ('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns','st_mode','st_uid','st_nlink')),'seal asset changed')
+            assets[name]=dict(identity(st),bytes=st.st_size,sha256=digest.hexdigest())
+        cg=Path(self.config['external_cgroup'])
+        require(cg==cg.resolve(strict=True) and 'newton-ia.slice' in cg.parts,'seal cgroup custody')
+        owner_start=checks.pid_identity(os.getpid());require(type(owner_start)is int and owner_start>0,'seal owner identity')
+        seal={'schema':'rewind-recovery-seal/v1','config_sha256':hashlib.sha256(json.dumps(self.config,sort_keys=True,separators=(',',':')).encode()).hexdigest(),
+              'base':identity(self.root.parent.lstat()),'root':identity(self.root.lstat()),
+              'external_cgroup':str(cg),'cgroup':identity(cg.lstat()),'assets':assets,
+              'owner':{'pid':os.getpid(),'start_ticks':owner_start}}
+        raw=json.dumps(seal,sort_keys=True,separators=(',',':')).encode()
+        fd=os.open(self.root/'recovery.json',os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(raw);stream.flush();os.fsync(stream.fileno())
+        dfd=os.open(self.root,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+        try:os.fsync(dfd)
+        finally:os.close(dfd)
+        return hashlib.sha256(raw).hexdigest()
     def _spawn(self):
         with self.close_lock:return self._spawn_locked()
     def _spawn_locked(self):
@@ -281,7 +310,7 @@ class Native:
         if self.ledger is not None:self.record('stop','complete',self.evidence())
         if self.root:
             st=self.root.stat();require((st.st_dev,st.st_ino)==self.directory_identity,'runtime directory replaced')
-            expected={'fc','Image','initrd.gz','owner.lock','ledger.jsonl'}|{p+s for p in set(self.points)|self.staged|self.retired for s in ('.state','.mem')}
+            expected={'fc','Image','initrd.gz','owner.lock','ledger.jsonl','recovery.json'}|{p+s for p in set(self.points)|self.staged|self.retired for s in ('.state','.mem')}
             require({p.name for p in self.root.iterdir()}<=expected,'untracked runtime files retained')
             with self.record_lock:
                 if self.ledger is not None:os.close(self.ledger);self.ledger=None

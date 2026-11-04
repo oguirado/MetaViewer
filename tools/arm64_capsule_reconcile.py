@@ -692,40 +692,64 @@ def descriptor_context(root, plan, config):
     return raw
 
 
-def reconcile_held(path, config_path=None, release=False, observer=None):
-    """Only the new sealed contract can release; legacy events always retain custody."""
+def reconcile_held(path, config_path=None, release=False, observer=None, *, recover_crashed=False):
+    """Normal release requires seals; explicit crash recovery requires bound, absent resources."""
+    need(type(recover_crashed) is bool and not (release and recover_crashed), 'choose one release mode')
+    releasing = release or recover_crashed
     marker = canonical(path)
     directory = private_dir(marker.parent)
     need(marker.name == 'held-session.json', 'exact held marker required')
     lock = canonical(directory / 'session.lock')
     fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    inventory_fd = None
     try:
         lockid = os.fstat(fd)
         private_file(lockid)
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         marker_raw = read_private(marker)
+        marker_identity = identity(marker.lstat())
         held = decode(marker_raw)
         closed(held, ('root', 'unit', 'status'))
         need(held['status'] == 'closure-unproven', 'held status unknown')
         root = private_dir(held['root'])
+        root_identity = (root.stat().st_dev, root.stat().st_ino)
         plan_raw = read_private(root / 'PLAN.json')
         plan = decode(plan_raw)
         need(plan.get('schema') == 'metaviewer-arm64-session/v1' and plan.get('unit') == held['unit'], 'session plan mismatch')
         fixed = root / 'inventory-config.json'
         if config_path is None and not fixed.exists():
-            need(not release, 'legacy session cannot release')
+            need(not releasing, 'legacy session cannot release')
             return inspect_held(marker, acquire_lock=False)
         need(config_path is None or canonical(config_path) == fixed, 'foreign inventory config')
         config, config_raw = load_config(fixed)
+        if recover_crashed:
+            inventory_lock = canonical(root / 'allocations.lock')
+            inventory_fd = os.open(inventory_lock, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            inventory_identity = identity(os.fstat(inventory_fd))
+            private_file(os.fstat(inventory_fd))
+            fcntl.flock(inventory_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         need(held['unit'] == 'metaviewer-arm64-' + config['run_id'] + '.scope'
              and plan['run_id'] == config['run_id'], 'inventory session mismatch')
         descriptor_raw = descriptor_context(root, plan, config)
+        def recheck_recovery_custody():
+            if recover_crashed:
+                current = private_dir(held['root']).stat()
+                need((current.st_dev, current.st_ino) == root_identity
+                     and identity(marker.lstat()) == marker_identity
+                     and identity(os.fstat(inventory_fd)) == inventory_identity == identity(inventory_lock.lstat())
+                     and descriptor_context(root, plan, config) == descriptor_raw,
+                     'crash recovery custody changed')
         ledger_raw = read_journal(config['journal'])
         state = inventory_state(config, ledger_raw, complete=release)
-        if not release:
+        if not releasing:
             return {'schema': 'arm64-capsule-reconcile-audit/v1', 'status': 'held',
                     'release_supported': True, 'closure_proven': False,
                     'rows': len(state['rows']), 'sealed': state['coordinator']}
+        if recover_crashed:
+            need(state['guardian'] is not None and state['app'] is not None
+                 and 'bound' in state['app'], 'crash inventory lacks app/guardian binding')
+            need(all('pending' in item and 'bound' in item and 'unknown' not in item
+                     for item in state['resources'].values()), 'crash inventory pending/unknown allocation')
         observed = observer or Observations()
         proofs = []
         cids = set()
@@ -755,12 +779,16 @@ def reconcile_held(path, config_path=None, release=False, observer=None):
              and read_private(fixed) == config_raw and read_private(root / 'setup.json') == descriptor_raw
              and read_journal(config['journal']) == ledger_raw
              and identity(os.fstat(fd)) == identity(lockid) == identity(lock.lstat()), 'custody changed before release')
+        recheck_recovery_custody()
         # Persist evidence before the single atomic marker removal; never delete roots/resources.
         import secrets
         archive = directory / ('reconciled-' + config['run_id'] + '-' + secrets.token_hex(8) + '.json')
         proof = {'schema': 'arm64-capsule-reconciliation-proof/v1', 'run_id': config['run_id'],
                  'held_sha256': digest(marker_raw), 'inventory_sha256': digest(ledger_raw),
                  'head': state['rows'][-1]['sha256'], 'proofs': proofs, 'absent_container_ids': sorted(cids)}
+        if recover_crashed:
+            proof.update(recovery_mode='crashed-owner', coordinator_sealed=state['coordinator'],
+                         producer_seals=sorted(state['sealed']))
         out = os.open(archive, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
         with os.fdopen(out, 'wb') as stream:
             stream.write((json.dumps(proof, sort_keys=True, separators=(',', ':')) + '\n').encode())
@@ -770,6 +798,7 @@ def reconcile_held(path, config_path=None, release=False, observer=None):
         try:
             os.fsync(dirfd)
             need(read_private(marker) == marker_raw and read_journal(config['journal']) == ledger_raw, 'custody changed at release')
+            recheck_recovery_custody()
             os.unlink(marker)
             os.fsync(dirfd)
         finally:
@@ -777,6 +806,8 @@ def reconcile_held(path, config_path=None, release=False, observer=None):
         return {'schema': 'arm64-capsule-reconcile-audit/v1', 'status': 'released',
                 'release_supported': True, 'closure_proven': True, 'proof': str(archive)}
     finally:
+        if inventory_fd is not None:
+            os.close(inventory_fd)
         os.close(fd)
 
 
@@ -785,10 +816,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--held-session', required=True)
     parser.add_argument('--inventory-config')
-    parser.add_argument('--release', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--release', action='store_true')
+    mode.add_argument('--recover-crashed', action='store_true',
+                      help='release only a fully bound crash inventory after independent absence proofs')
     args = parser.parse_args()
     try:
-        result = reconcile_held(args.held_session, args.inventory_config, args.release)
+        result = reconcile_held(args.held_session, args.inventory_config, args.release,
+                                recover_crashed=args.recover_crashed)
     except (ValueError, OSError, TypeError, KeyError, RecursionError):
         print(json.dumps({'schema': 'arm64-capsule-reconcile-audit/v1', 'status': 'refused',
                           'release_supported': False, 'closure_proven': False}, sort_keys=True))
