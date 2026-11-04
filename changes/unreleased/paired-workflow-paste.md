@@ -1,1 +1,0 @@
-- Preserve agent input prompt detection across mixed-terminator OSC sequences and paste workflow prompts directly into already-running paired agent CLIs without sending Enter.

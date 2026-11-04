@@ -1,1 +1,0 @@
-- Admit explicit UI destroy requests for lost non-game capsules in agent or human mode, deliver post-loss destroyed state updates to renderer subscribers, and remove owned capsule RAM run directories on native stop and judge stop.

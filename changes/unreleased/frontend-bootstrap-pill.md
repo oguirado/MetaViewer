@@ -1,2 +1,0 @@
-- Replace terminal Bootstrap prose with a compact capsule identity input while preserving exact clipboard data and workflow actions.
-- Document compact layout labels and retain descriptive accessible names for layout controls.

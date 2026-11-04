@@ -1,2 +1,0 @@
-- Keep terminal and activity hover controls dark, reuse modal backdrop colors, and theme scrollbar colors without changing layout.
-- Separate the capsule identity label from its paste field and keep screen tab text on one line.

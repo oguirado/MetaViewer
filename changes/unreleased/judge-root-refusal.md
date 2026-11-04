@@ -1,1 +1,0 @@
-- Refuse root sessions before judge installation and doctor host checks, and direct smoke failures to a normal user without disabling the sandbox.

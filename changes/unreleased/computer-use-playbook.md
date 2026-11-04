@@ -1,2 +1,0 @@
-- Add a computer-use playbook with source-checked controls and explicit live-evidence limits.
-- Add portable UI capture, frame inspection, player-loop and local game examples with offline checks.

@@ -1,1 +1,0 @@
-- Keep ARM transport and fixed-interpreter test fixtures portable while preserving unsupported-host and unsafe-interpreter refusals.

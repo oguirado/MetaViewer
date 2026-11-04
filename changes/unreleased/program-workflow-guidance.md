@@ -1,1 +1,0 @@
-- Describe program text and Agent Host focused navigation keys in workflow prompts while preserving no-Enter paste and safety checks.

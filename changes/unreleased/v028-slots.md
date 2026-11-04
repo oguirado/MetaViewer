@@ -1,2 +1,0 @@
-- Stored data slot deletion now retains a durable intent through cleanup so an interrupted delete cannot restore an older credential-bearing generation; reconciliation finishes deletion before allowing reuse.
-- Stored data loads discard the previous profile after the exchange is durable, and saves prune generations outside the verified recovery references under the existing guards; crash tests cover cleanup interruption and credential retention.

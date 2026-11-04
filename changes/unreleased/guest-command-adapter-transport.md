@@ -1,2 +1,0 @@
-- Route registered guest commands through both adapter transport loops with existing authentication, sequence and dispatch checks. Refuse unknown families and foreign or unauthenticated routes.
-- Cover both transport variants with local socket tests for accepted requests, authentication refusal, foreign endpoints and unknown schemas.

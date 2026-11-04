@@ -1,1 +1,0 @@
-- Terminal: shells work in the packaged app; node-pty ships pinned outside the ASAR under build-native and loading errors show in the terminal wall.

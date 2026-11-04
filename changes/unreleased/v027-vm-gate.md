@@ -1,1 +1,0 @@
-- Offer the ARM64 VM capsule only on an ARM64 host with a configured VM template; x64 no longer lists it.

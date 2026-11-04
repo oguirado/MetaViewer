@@ -1,3 +1,0 @@
-- Add an English judge tour with product controls, refusal recovery, and explicit x64/arm64 verification limits.
-- Link the tour from the project README, documentation index, and Judge Quickstart.
-- Check tour commands against the public automation parser and judge launcher parser without live execution.

@@ -1,2 +1,0 @@
-- Keep the running browser or identity program when switching between Human and Agent modes, preserving tabs, page state and session cookies. Refuse explicitly when the runtime cannot preserve the capsule. External Host programs retain their existing restart behavior.
-- Reuse existing program identities during mode changes instead of trying to provision them again.

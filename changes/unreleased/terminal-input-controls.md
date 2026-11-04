@@ -1,1 +1,0 @@
-- Reject control characters in Custom CLI commands and unsafe multiline identity data before workflow prompt copying or pasting.

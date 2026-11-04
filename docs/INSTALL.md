@@ -32,7 +32,7 @@ Answers: Rust version, Go version, Node version, Electron version, toolchain pin
 
 | Component | Required Version / Pin | Source of Truth | Notes |
 | --- | --- | --- | --- |
-| Release version | `0.2.5` [CITED: `VERSION`] | `VERSION`, `Cargo.toml`, `agents/pyproject.toml`, `ui/package.json` | Enforced for parity by the `manifests` and `laws` gate legs (`tools/gate.sh`). |
+| Release version | `0.2.6` [CITED: `VERSION`] | `VERSION`, `Cargo.toml`, `agents/pyproject.toml`, `ui/package.json` | Enforced for parity by the `manifests` and `laws` gate legs (`tools/gate.sh`). |
 | Node.js | `>=24` [CITED: `ui/package.json`] | `ui/package.json` (`engines.node`) | Checked by `ui/tools/package.js` and `tools/gate.sh`; hosted CI runs Node `24` (`.github/workflows/ci.yml`). |
 | Electron | `44.9.2` [CITED: `ui/package.json`] | `ui/package.json`, `ui/electron/main.js` (`ELECTRON_PIN`) | Supplied from local disk via `ELECTRON_OVERRIDE_DIST_PATH` or `MV_ELECTRON_ZIP_DIR`; network downloads are disabled (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`). |
 | Rust compiler & Clippy | `1.97` (`1.97.0` in CI) [CITED: `Cargo.toml`] | `Cargo.toml` (`rust-version`) | Used to compile `metaviewer-core` and `mv-replay` (`core/Cargo.toml`) and run `cargo clippy --offline`. |

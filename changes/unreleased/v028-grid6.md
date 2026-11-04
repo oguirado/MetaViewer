@@ -1,3 +1,0 @@
-- Place new floating capsules in the first free desktop grid cell, retain existing floats when adding capsules, and restore bounded identity cell hints through the desktop layout owner.
-- Prevent floating window drags from extending text selections while retaining dialog and terminal selection, and keep the Floating preset after Control snapping.
-- Carry saved program launch markers after a confirmed stored-data copy, reconcile deleted identity markers on inventory refresh, and retain a visible copy acknowledgement when the panel selects the copied identity.

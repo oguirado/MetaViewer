@@ -1,1 +1,0 @@
-- Open identity stored data from the tile menu while preserving stopped-only save and load guards.

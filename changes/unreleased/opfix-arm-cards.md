@@ -1,1 +1,0 @@
-- Show unavailable ARM64 VM and MicroVM choices as disabled Windows cards with setup guidance, only on supported ARM64 hosts.

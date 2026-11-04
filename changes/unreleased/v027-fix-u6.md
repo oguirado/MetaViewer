@@ -1,8 +1,0 @@
-- V027-CP01: retain dead-owner RAM reservations for random browser names, host Xvfb/xpra processes, incomplete inventories, and legacy non-mv natives; require positive absence proof before reclaim [TARGET, unit decision].
-- V027-JF01: collect the app child's wait status even when it exits before the first liveness probe.
-- V027-JF02: run static Docker preflight before repairing the legacy capsule network.
-- V027-JF03: print quoted recovery commands with the installed reclaim tool and admission directory, including dry-run followed by guarded apply.
-- V027-JF04: terminate, escalate, and reap the startup child if pidfile publication fails, then report JUDGE_PIDFILE.
-- V027-JF05: validate every advertised default or configured browser profile directory and reject malformed configured pools.
-- V027-JF07: document image loading before optional firewall selection.
-- Tests: add offline regression sequences; update existing reservation expectations to require conservative proof and judge fixtures to provision the advertised profile pool.

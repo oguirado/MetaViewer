@@ -1,3 +1,0 @@
-- Document account-free rules planning, authenticated Muse Code, exact observed goals and one goal per run.
-- Explain app attachment, private RAM evidence, compiled browser refusal, human handoff, control release and uncertain-delivery recovery.
-- Update the existing Terminal button prompts and test documented goal commands against the public parser without live automation.

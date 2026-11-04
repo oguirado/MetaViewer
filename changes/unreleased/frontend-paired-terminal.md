@@ -1,4 +1,0 @@
-- Add a capability-gated capsule terminal button that reuses one host-shell session per capsule and binds workflow actions without copying an ID.
-- Preserve the latest capsule selection during serialized terminal launches and keep paired sessions when the dock is hidden.
-- Clip native floating views to their allocated tile and wall boundaries beside the terminal dock.
-- Request native repaint after show and resize without moving focus, and refit terminal viewports when dock geometry changes.

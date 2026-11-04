@@ -1,5 +1,0 @@
-- Keep the last real native frame visible while tile tools are open and suppress tool reveal during floating-window drags.
-- Remove the redundant floating title strip while retaining the capsule header as the drag handle.
-- Recompute floating cells and free-window proportions when the wall resizes, including stored identity cell hints.
-- Match native letterbox and reconnect backgrounds to the resolved tile theme while retaining the fixed guest display.
-- Clear obsolete empty grid dividers behind floating windows while retaining the grid home and populated groups.

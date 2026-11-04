@@ -1,3 +1,0 @@
-- Add confirmed identity release for a capsule left by a dead MetaViewer session; refuse live or unproven owners and protected holders.
-- Clear browser quarantine on retry only after an inactive native lease and verified capsule and login-view absence.
-- Show first-capsule identity contention in the existing nonblocking renderer notice and recover through Identities.

@@ -1,1 +1,0 @@
-- Fix Add capsule for browsers: the role and identity step no longer vanishes when the kit dialog closes itself.

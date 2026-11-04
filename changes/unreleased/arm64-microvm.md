@@ -1,2 +1,0 @@
-- Add configured ARM64 MicroVM create/run/stop through the core and Python SDK. The host owns the Firecracker profile and resource limits; uncertain operations retain custody and cannot be replayed as successful work.
-- Derive SDK workload ownership from its actual endpoint registration and forward headless state through preload to the capsule catalogue. The initial fixed job and its limits are documented in `docs/ARM64_MICROVM.md`.

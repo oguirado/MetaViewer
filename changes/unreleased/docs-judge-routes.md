@@ -1,4 +1,0 @@
-- Rewrite docs/JUDGES.md as the judge hub: reading map, requirements in numbers, capsules per tier, release limits and a paste block for a judge's own AI.
-- Add one install path per platform and tier to docs/JUDGE_QUICKSTART.md, each command with its success marker and failure route, pointing at the v0.2.6 x64 assets.
-- Add a symptom index, a refusal explanation method and known open bugs to docs/JUDGE_TROUBLESHOOTING.md.
-- Add question aliases under judge and install headings, update the app-only route to v0.2.6 and replace private-source line citations in docs/INSTALL.md.

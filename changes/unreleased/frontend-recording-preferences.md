@@ -1,3 +1,0 @@
-- Choose recordings and screenshot export folders through native host dialogs, outside the frozen settings contract.
-- Apply saved recording grants on the next packaged start and optionally export sealed recordings when stopping.
-- Report measured free space and preserve RAM captures when an export fails.

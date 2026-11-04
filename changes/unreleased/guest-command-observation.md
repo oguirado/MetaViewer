@@ -1,1 +1,0 @@
-- Show authenticated SDK guest commands and output in the creator capsule with read-only observations, preserving command correlation and rewind authority.

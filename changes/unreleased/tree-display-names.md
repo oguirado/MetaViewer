@@ -1,2 +1,0 @@
-- Add real program and browser icons to the working tree and include active MicroVM presentations.
-- Add inline desktop and capsule display names with bounded host-side persistence, preserving identity and control state.

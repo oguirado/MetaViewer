@@ -1,1 +1,0 @@
-- Fix the gate self-test version mutation so it no longer rewrites dependency ranges that contain the release version.

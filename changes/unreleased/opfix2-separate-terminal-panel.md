@@ -1,1 +1,0 @@
-- Keep the right terminal panel independent from capsule-paired terminals and open it without launching a session.

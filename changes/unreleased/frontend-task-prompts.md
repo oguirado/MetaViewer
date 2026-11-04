@@ -1,3 +1,0 @@
-- Prepare Create automation, Run automation and Direct task prompts ending in Task: for operator input.
-- Copy prompts with the actual paired capsule identity; withhold terminal insertion without an attested agent input target and explain where to paste.
-- Describe Identities as accounts and saved data for each capsule.

@@ -1,1 +1,0 @@
-- Update native capsule bounds when its presentation viewport resizes, including paired terminal drawer changes.

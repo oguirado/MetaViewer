@@ -1,1 +1,0 @@
-- Refuse whitespace in the judge installation home before host checks or writes, with a clear path correction; non-ASCII paths without whitespace remain supported.

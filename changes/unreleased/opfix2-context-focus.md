@@ -1,1 +1,0 @@
-- Keep terminal context menus local to their capsule so they preserve focus without claiming a global modal overlay.

@@ -1,1 +1,0 @@
-- Fix the handoff notice in the packaged app: the watcher now reads the state home where mw_run writes, not the private session one.

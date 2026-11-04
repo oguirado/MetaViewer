@@ -1,1 +1,0 @@
-- Defer native frame capture while a demonstration owns the control lock, preserving the live binding and resuming verified capture after sealing.

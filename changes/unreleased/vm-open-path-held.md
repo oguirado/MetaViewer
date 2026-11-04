@@ -1,1 +1,0 @@
-- The VM open path in the app is held back until it passes the preload allowlist and the full test suites.

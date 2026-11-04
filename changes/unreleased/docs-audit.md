@@ -1,1 +1,0 @@
-- Correct current documentation claims, judge entry paths, release availability, private component boundaries and VM capability notes.

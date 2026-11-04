@@ -1,3 +1,0 @@
-- Connect graphical VM and the MicroVM command-console tile to normal ARM64 capsule creation with explicit availability reasons and a protected, hash-checked local setup.
-- Introduce separate additive capsule transport, capability and resource-inventory contracts while preserving published schemas and the shared authenticated sequence domain.
-- Bind setup, launcher cancellation and resource reconciliation to exact owned identities, source and package pins. Retain custody when closure is incomplete or uncertain; keep external assets and private components outside the public source distribution.

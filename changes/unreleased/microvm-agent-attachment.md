@@ -1,1 +1,0 @@
-- Fix the paired MicroVM agent attachment so host agents receive the current private session connection automatically and both public attachment pointers close with their session.

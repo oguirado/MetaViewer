@@ -1,1 +1,0 @@
-- Add host paired terminals and live SDK task guidance to MicroVM tiles, replay authenticated workload observations for late agents, keep human Back authority, and show neutral unmeasured restore timing.

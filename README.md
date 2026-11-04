@@ -20,7 +20,6 @@ Version `0.2.6` | licence `AGPL-3.0-only` | Linux x64 and ARM64 | release [v0.2.
 {
   "schema": "mv.node.v1",
   "version": "0.2.6",
-  "version_file_at_docs_base": "0.2.5",
   "repository": "https://github.com/oguirado/MetaViewer",
   "release": "https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6",
   "setup": "bash scripts/judge/metaviewer-judge.sh install",

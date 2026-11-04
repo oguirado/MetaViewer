@@ -1,2 +1,0 @@
-- Route attached demo commands through the existing host recording controller, with process-driven tile and tree indicators and shared Stop sealing.
-- Retain recording ownership through sealing, restore native read-only capture, and refuse stale or mismatched app attachments.

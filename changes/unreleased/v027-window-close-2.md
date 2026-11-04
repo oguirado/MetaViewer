@@ -1,1 +1,0 @@
-- Fix closed desktop window tiles so the closed message and Stop remain visible, show a closed control badge, and count lost tiles separately. Permit explicit UI cleanup of lost human-controlled bindings while keeping input and frame subscriptions revoked.

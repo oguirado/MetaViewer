@@ -1,1 +1,0 @@
-- Preserve nonce-protected terminal geometry updates, remove the access banner from active output, and give xterm the approved inner spacing.

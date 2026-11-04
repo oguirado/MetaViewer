@@ -1,1 +1,0 @@
-- Preserve the pending window-loss event when an attached desktop window closes before the next capture poll, including input-first closure and resident capture. Deliver the lost state before the capture error so the tile exposes its existing recovery controls.

@@ -1,8 +1,0 @@
-- Let native liveness probes confirm absence after a failed Stop, while retaining uncertain reservations.
-- Keep lost capsule identities available to the host Stop capability; core lost-destroy policy remains unchanged.
-- Seal retained recordings after their surface has closed.
-- Publish lost snapshots when the core session closes so painted tiles lose their live input state.
-- Deliver a correlated capture-unavailable terminal before closing a connection after capture storage failure.
-- Retain validated control refusal reasons in host error metadata without changing the existing generic error message.
-- Include xdotool in the host-program dependency recovery command.
-- Stop private-window discovery promptly when its witnessed xpra process exits.

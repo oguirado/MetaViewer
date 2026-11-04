@@ -1,2 +1,0 @@
-- Keep the capsule live above its paired terminal by reserving a separate drawer row without resizing the guest resolution.
-- Refuse a late native preview result after the overlay closes, preserving the restored live view.

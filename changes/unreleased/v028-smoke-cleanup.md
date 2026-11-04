@@ -1,1 +1,0 @@
-- Kill the recorded smoke process group on exit, failure, interruption and timeout, keep smoke temporary files in private install state, and refuse a clean stop while smoke ownership or runtime evidence remains.

@@ -1,1 +1,0 @@
-- Request an 80 ms [TARGET] press/release gap for Host program keys, so polling applications can observe the held key. Requires the private native host-window key-hold option; older binaries refuse input. Browser input and frozen contracts are unchanged.

@@ -1,1 +1,0 @@
-- Hide desktop launchers requiring arguments unsupported by Host program and reject control or bidi characters in display names.

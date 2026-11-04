@@ -1,1 +1,0 @@
-- Update the judge guides with measured x64 results, refusals and the published release download.

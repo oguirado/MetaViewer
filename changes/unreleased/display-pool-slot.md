@@ -1,1 +1,0 @@
-- Fix the DISPLAY stream for every capsule after the first: it now reads the capsule X server, not the adapter pool slot.

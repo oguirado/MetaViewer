@@ -1,1 +1,0 @@
-- Restore reopened capsules with saved grid cells to their own floating group in both Floating and custom layouts without attaching as a tab to another floating group or disturbing existing groups; fall back to the next free cell when the remembered cell is occupied by a live panel.

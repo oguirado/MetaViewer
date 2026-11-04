@@ -1,1 +1,0 @@
-- Enable network and host-socket access for Muse sessions and add an explicit, default-off recording sandbox exception without changing approvals or other agent profiles.

@@ -1,1 +1,0 @@
-- Use reserved example sites and neutral names in the identity and demo dialog placeholders.

@@ -1,3 +1,0 @@
-- Document automation attachment, admitted-site setup, public-page refusals, holder recovery and the separate authoring and replay gates.
-- Accept the admitted home source returned by the demo site checker while retaining the builtin-source refusal.
-- Require executable workflow authoring and preflight in the creation prompt, and document the pinned runner's zero-locate refusal without expanding budgets.

@@ -1,1 +1,0 @@
-- Keep the terminal launcher inside its visible panel and wrap narrow-panel controls without horizontal overflow.

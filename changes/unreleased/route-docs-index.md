@@ -1,4 +1,0 @@
-- Index every H2 and H3 of every tracked Markdown document, plus one lead node per file, in `route/docs.jsonl` with path, anchor, title, Answers line, sha256 and byte span, built deterministically by `tools/route_docs.py build`.
-- Add `route_query.py docs` (field-weighted BM25, shortlist under 2000 bytes and 20 rows, `no_query_term` abstention), `any` (docs, code and findings in one shortlist), `check` (freshness, anchors, links and study spans, prints `ROUTE_OK`) and `--level dossier`.
-- Merge `route/study/*.jsonl` findings ahead of older rows for the same file, and verify every study span against the tree.
-- Make `route/` the stated router in `llms.txt` and `AGENTS.md`, explain that "router unavailable" concerns only the catalogue router, and add an agent entry file that points to `AGENTS.md`.

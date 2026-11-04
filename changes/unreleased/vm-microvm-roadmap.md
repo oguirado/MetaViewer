@@ -1,2 +1,0 @@
-- Document the current VM limits, proposed VM and MicroVM launch flow, image compatibility requirements, and staged acceptance gates.
-- Record the independently reviewed ARM64 graphical episode and stale-input refusal while retaining unproved creation, editing, and platform gates.

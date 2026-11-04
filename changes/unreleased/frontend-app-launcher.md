@@ -1,2 +1,0 @@
-- Browse and search real installed desktop apps in Add capsule, with local icons and recent MetaViewer launches.
-- Keep Host program isolation warnings, binary validation and the typed binary fallback.

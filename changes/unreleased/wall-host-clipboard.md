@@ -1,1 +1,0 @@
-- Fix Copy ID for AI on tiles: the wall now uses the host clipboard instead of the ambient one, which reports "Copy unavailable".

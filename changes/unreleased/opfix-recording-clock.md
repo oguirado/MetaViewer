@@ -1,1 +1,0 @@
-- Keep the complete recording clock visible in narrow capsule headers without displacing their controls.

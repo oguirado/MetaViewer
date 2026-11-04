@@ -1,1 +1,0 @@
-- Copy only the full capsule identifier from Copy ID for AI, keeping task prompts in their dedicated actions.

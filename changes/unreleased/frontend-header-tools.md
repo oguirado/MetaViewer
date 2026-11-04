@@ -1,2 +1,0 @@
-- Keep Record, Screenshot and Copy ID icon buttons in wide capsule headers, with the recording state always visible.
-- Retain narrow-tile hover controls, native overlay coordination, action identities and fixed canvas geometry.

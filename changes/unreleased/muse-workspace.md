@@ -1,1 +1,0 @@
-- Fix the Muse workspace and document an owner-only runtime location for sandboxed attachment access.

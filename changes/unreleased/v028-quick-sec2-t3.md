@@ -1,1 +1,0 @@
-- Reject reserved session VM and browser profile names when admitting program resources.

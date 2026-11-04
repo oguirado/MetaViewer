@@ -1,5 +1,0 @@
-- Restore access to recording and screenshot exports from each live capsule menu and give Copy ID its action tooltip.
-- Rename the Desktop window picker search label to Search windows while retaining the capsule kind.
-- Separate the command palette title and close button with the existing spacing token.
-- Publish copied screenshots atomically so interrupted writes cannot leave truncated final archives.
-- Retire workspace aliases and saved cells before deleting a reusable identity, and prune ended surface aliases.

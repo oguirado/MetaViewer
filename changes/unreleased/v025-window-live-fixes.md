@@ -1,1 +1,0 @@
-- Desktop window capsules: read the real tool output and pass the person's X11 session to capture and input.

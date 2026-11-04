@@ -1,2 +1,0 @@
-- Clear pending identity release confirmation when Identities closes or reopens.
-- Preserve recovery observer evidence across failed capsule retries; clear it after verified release or successful capsule creation.

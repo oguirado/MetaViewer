@@ -1,1 +1,0 @@
-- Explain the person's natural-language Direct task, capsule attachment context, the model's exact observed target selection and independent outcome check.

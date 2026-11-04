@@ -1,2 +1,0 @@
-- Add `docs/dossiers/core.md`, a routed dossier of the Rust core: admission refusal order, journal layout and errors, journal-full session end, `mv-replay` exit codes and path rules, frame evidence, REWIND phases and codes, recording limits.
-- Add `route/study/core.jsonl`, 39 core findings with byte spans checked against this commit.

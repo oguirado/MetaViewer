@@ -1,2 +1,0 @@
-- Show that a ready MicroVM needs no capsule frames without claiming a graphical Core connection.
-- Remove empty workspace restore groups when revealing a workload so the panel can fill its tile.

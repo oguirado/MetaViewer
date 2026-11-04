@@ -1,1 +1,0 @@
-- Keep deck-only launch shortcuts out of paired drawers, correct the Hide anchor and namespace-safe dialog focus, and verify independent terminal overlay ownership.

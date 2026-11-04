@@ -1,1 +1,0 @@
-- Bump the release to 0.2.4 with its notes.

@@ -1,1 +1,0 @@
-- Remove Holdings app and Desktop from the Add capsule catalog; Identity browser and Program stay.

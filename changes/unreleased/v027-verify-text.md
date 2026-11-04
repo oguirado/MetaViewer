@@ -1,6 +1,0 @@
-- Verify program click effects across the surface with hash-checked RGB evidence excluding identified clocks; unchanged actions still fail.
-- Add direct program --text after a core-verified field focus click, refusing known password fields and recording OCR exact, unreadable uncertified, or mismatch outcomes.
-- Add offline effect and ordered click/publish/type/publish regressions; update positive receipt fixtures to publish real pixel changes.
-- Add program `--goal focused --text` for operator-asserted current focus: one core-admitted type action, no click or model call, with existing exact/unreadable/mismatch OCR verdicts [TARGET, unit decision].
-- Keep the grounded focus-click form and browser step coverage; guard program text to one step and keep `--key` browser only.
-- Cover empty focused observations, known password refusal, OCR outcomes and public parser guards with offline tests.

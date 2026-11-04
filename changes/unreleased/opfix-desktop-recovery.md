@@ -1,1 +1,0 @@
-- Recover missing live capsule panels when returning to a desktop and add Refresh to rebuild the current wall without changing capsules.

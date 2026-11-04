@@ -1,1 +1,0 @@
-- Make the compact paired Capsule ID chip copy only the capsule identifier.

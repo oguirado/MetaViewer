@@ -1,3 +1,0 @@
-- Add Automate, Use automation and No automation prompts beside Terminal Bootstrap, using its clipboard and paste flow without submitting input.
-- Allow saved programs to reopen as human or agent using their persisted resolved binary; hide browser login metadata for programs.
-- [TARGET, unit decision] Store program binary metadata privately beside host identity markers; older program rows without metadata require an initial Add capsule launch.

@@ -1,1 +1,0 @@
-- Group capsule kinds before Recent and installed apps, with one isolation note per app section and no redundant placement badge on app cards.

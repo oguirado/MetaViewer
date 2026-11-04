@@ -1,1 +1,0 @@
-- Ship workflow guidance in both Linux package architectures and document the real attachment and read-only capsule observation path.

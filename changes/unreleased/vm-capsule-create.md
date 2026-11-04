@@ -1,1 +1,0 @@
-- Open a configured ARM64 graphical VM through the existing capsule creation channel while keeping browser defaults and verified-frame presentation unchanged.
