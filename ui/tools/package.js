@@ -735,6 +735,7 @@ Source it in a subshell, because it points XDG_RUNTIME_DIR at the private runtim
  * identity tool here when packaged (PKG-FIX ID-01/B1); the RAM-admission reclaim
  * tool ships next to it (L-04). */
 export const OPERATOR_RESOURCES = Object.freeze([...new Set(['docs/AGENT_ENTRY.md', 'docs/AUTOMATE_FROM_DEMO.md',
+  'docs/MW_RUN_FIRST_RUN.md', 'tools/mw_run_browser_goal.md', 'tools/mw_run_program.md',
   'tools/mv_identity.py', 'tools/mv_ram_admission.py', 'deps.lock', 'VERSION',
   'tests/e2e/e2e1_slice/live.py','agents/metaviewer_agents/mw_run.py',
   'tools/mw_run_backend.py','tools/mw_run_program.py','tools/mw_program_muse.py',...publicRuntimeFiles(repo)])]);
@@ -3015,7 +3016,9 @@ Public agents and tools are bundled under resources/operator. MV_OPERATOR_REPO
 optionally overrides this runtime. Private compiled sidecars are supplied through
 MV_WENDER_EXECUTABLE and MV_VISION_EXECUTABLE with pinned distribution hashes.
 MemoryWeb user data defaults to the user data directory outside the app.
-Use MetaViewer copies the bundled resources/operator/docs/AGENT_ENTRY.md prompt.
+Create automation, Run automation and Direct task prepare prompts pointing to
+resources/operator/docs/AGENT_ENTRY.md. The person adds the task and submits it;
+the app never sends Enter.
 An external AI attaches to the running session through the pointer described in
 resources/operator/ATTACH.md. The identity tool used by Identities and Automate
 is resources/operator/tools/mv_identity.py (python3, standard library only);

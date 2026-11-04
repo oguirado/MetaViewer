@@ -8,13 +8,16 @@ visible in the current observation; a general task description is not grounded.
 `--planner rules` is the default and needs no Muse account. It requires the locked
 Wender and vision dependencies; it is not a general game solver.
 
-Copy the running app's **Copy env path** (`METAVIEWER_ATTACH`), replace the
-placeholder below and source it in a subshell. It supplies `MV_CORE_CONFIG`,
-`XDG_RUNTIME_DIR` and `MV_SRF_STATE_DIR`; legacy container programs also need
-`MV_SRF_BIN_DIR` and `SRF_IDENTITY_STORE_ROOT`. Supply the verified roots
-`MV_WENDER_ROOT` and `VQA_VE_ROOT` when using checkout dependencies. Do not guess
-missing paths: obtain the pinned roots from the operator. A verified compiled
-runtime is supported for programs; its browser support is separately gated.
+Resolve `ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env`
+and source it in a subshell: `set -a; . "$ENV"; set +a`. Use the terminal's
+original runtime directory to locate it, and stop if the recorded app PID is
+no longer live. The file supplies `MV_CORE_CONFIG`, `XDG_RUNTIME_DIR` and
+`MV_SRF_STATE_DIR`; legacy container programs also need `MV_SRF_BIN_DIR` and
+`SRF_IDENTITY_STORE_ROOT`. `METAVIEWER_ATTACH` is a launcher stdout prefix, not a
+UI control. Supply the verified roots `MV_WENDER_ROOT` and `VQA_VE_ROOT` when
+using checkout dependencies. Do not guess missing paths: obtain the pinned roots
+from the operator. A verified compiled runtime is supported for programs; its
+browser support is separately gated.
 
 [TARGET, unit decision] Click verification uses a core `changed_region` over
 the complete surface, followed by an independent, hash-checked RGB comparison
@@ -115,7 +118,7 @@ Use the public engine entry against an already running agent-owned program capsu
 
 ```sh
 (
-  set -a; . "<copied-current.env-path>"; set +a
+  set -a; . "$ENV"; set +a
   export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-program.XXXXXX)"
   PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
     --surface-kind program --identity '<program-profile>' --planner rules \

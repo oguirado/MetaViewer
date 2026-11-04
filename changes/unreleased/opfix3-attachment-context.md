@@ -1,0 +1,1 @@
+- Require one retained attachment context and exact capsule identity matching when multiple application instances may replace the shared pointer.

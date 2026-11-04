@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -47,7 +48,8 @@ test('B3-06 Copy ID writes only the exact capsule identifier', async () => {
 });
 
 test('B3-06 ready prompt preserves the choice between goal and stored workflow modes', () => {
-  const prompt=buildCapsuleReadyLine({surfaceId:'surf-demo',profileId:'demo'});
+  assert.equal(buildCapsuleReadyLine({surfaceId:'surf-demo',profileId:'demo'}),'CAPSULE=surf-demo  IDENTITY=demo');
+  const prompt=readFileSync(new URL('../../docs/AGENT_ENTRY.md',import.meta.url),'utf8').replace(/\s+/g,' ');
   assert.match(prompt,/goal mode/i);
   assert.match(prompt,/stored.workflow mode/i);
   assert.match(prompt,/--goal/);
@@ -57,7 +59,8 @@ test('B3-06 ready prompt preserves the choice between goal and stored workflow m
 });
 
 test('B3-11 goal prompt distinguishes compiled goal support from stored-workflow refusal', () => {
-  const prompt = workflowPrompt('no-automation');
+  assert.match(workflowPrompt('no-automation'),/section "Direct task"/);
+  const prompt=readFileSync(new URL('../../docs/AGENT_ENTRY.md',import.meta.url),'utf8').replace(/\s+/g,' ');
   assert.match(prompt, /compiled.*browser goals|browser goals.*compiled/i);
   assert.match(prompt, /MW_COMPILED_BROWSER_UNAVAILABLE.*stored.workflow/);
   assert.doesNotMatch(prompt, /wait for the compiled browser build/);
