@@ -518,6 +518,11 @@ if [ "$MODE" = facts ]; then
     exit 0
 fi
 
+if [ "$TIER" != T0 ] && [ "$UID_NOW" = 0 ]; then
+    refuse JUDGE_ROOT "Electron cannot run safely as root (never --no-sandbox)" "log in as a normal user and re-run without sudo; install requests administrator steps itself"
+    exit 2
+fi
+
 # Optional host capability: absence never gates browser or container programs.
 host_missing=
 for host_tool in xpra Xvfb xauth xdotool; do

@@ -416,7 +416,7 @@ step_verify_smoke() {
         say METAVIEWER_MAIN_SMOKE_OK
     else
         rc=$?
-        fail JUDGE_SMOKE "the install smoke failed (rc $rc): $(tail -n 3 "$log" | tr '\n' ' ')" "see $log; check DISPLAY/xvfb-run and the AppArmor profile, then re-run install"
+        fail JUDGE_SMOKE "the install smoke failed (rc $rc): $(tail -n 3 "$log" | tr '\n' ' ')" "see $log; run as a non-root user, check DISPLAY/xvfb-run and the AppArmor profile, then re-run install"
     fi
 }
 
