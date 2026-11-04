@@ -436,6 +436,8 @@ Double-click a desktop or capsule name, or focus it and press F2, to edit its di
 When the session journal fills, new work is refused and capsules stop in order.
 The last accepted journal remains replayable. Frozen frames cease to represent
 live capsules. Close and reopen MetaViewer through its normal application entry
-to start a fresh session. If a capsule could not be stopped, stop the remaining
-capsules before reopening. See [Full session journals](JOURNAL_END.md) for the
+to start a fresh session. Active and creating capsules are shown as lost while
+cleanup is unconfirmed. If a capsule could not be stopped, close MetaViewer and
+use operating-system controls to stop any remaining capsules before reopening;
+in-app stop is unavailable once the session has ended. See [Full session journals](JOURNAL_END.md) for the
 error codes, cleanup behavior and recovery details.
