@@ -148,6 +148,7 @@ updateh-db8505f33fcd	agents/tools/update_headless_mirror.py
 protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
 agents-dossier.md	changes/unreleased/agents-dossier.md
+doc-seal.md	changes/unreleased/doc-seal.md
 fix2f5d-52fda4e9618f	changes/unreleased/fix2-f5-docs-claims.md
 fix2f5r-b1aaf3f75979	changes/unreleased/fix2-f5-readme-probes.md
 router-round-two.md	changes/unreleased/router-round-two.md
