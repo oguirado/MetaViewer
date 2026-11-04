@@ -1,0 +1,2 @@
+- Document the daemon adapter and judge scripts in a routed dossier, docs/dossiers/adapter.md, with checked source coordinates.
+- Add route/study/adapter.jsonl: 684 findings for daemon-adapter and scripts, each with a byte span verified against this tree.
