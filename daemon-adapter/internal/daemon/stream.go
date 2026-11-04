@@ -293,7 +293,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			return exitLoop(err)
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
-		if (in.Schema == "capsule_envelope/v0.2" || in.Schema == "rewind_envelope/v0.2") && !capsuleHelloSeen {
+		if (in.Schema == "capsule_envelope/v0.2" || in.Schema == "rewind_envelope/v0.2" || in.Schema == "graphical_session_envelope/v0.2") && !capsuleHelloSeen {
 			err = errors.New("authenticated core hello required before requests")
 			fail(err)
 			return exitLoop(err)
@@ -303,7 +303,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		_, sentFrame := frameIDs[body.ProposalID]
 		frameMu.Unlock()
 		isFrameRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "STALE_FRAME" && sentFrame
-		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" {
+		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" && body.Schema != "graphical_session_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)

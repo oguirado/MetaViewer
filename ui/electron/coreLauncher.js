@@ -99,7 +99,7 @@ export const CORE_MAX_PATH_CHARS = 4096;
  * the validated runtime dir itself.
  * @type {ReadonlyArray<string>}
  */
-export const ALLOWED_CORE_ENV = Object.freeze(['LANG', 'LC_ALL', 'PATH', 'TMPDIR', 'TZ']);
+export const ALLOWED_CORE_ENV = Object.freeze(['LANG', 'LC_ALL', 'PATH', 'TMPDIR', 'TZ', 'MV_GRAPHICAL_SESSION_ENABLED']);
 
 /**
  * [TARGET, unit decision] Exact environment allowlist for the bundled daemon
@@ -149,7 +149,58 @@ export const ALLOWED_ADAPTER_ENV = Object.freeze([
   'MV_RECORDING_DESTINATION',
   'MV_RECORDING_CAPABILITY_ID',
   'MV_DISPLAY_TAP',
+  'MV_GRAPHICAL_SESSION_ENABLED',
+  'SRF_GRAPHICAL_VM_ENTRY',
+  'SRF_GRAPHICAL_VM_ENTRY_SHA256',
+  'SRF_GRAPHICAL_QEMU_IMG',
+  'SRF_GRAPHICAL_QEMU_IMG_SHA256',
 ]);
+
+const GRAPHICAL_SESSION_ENV = Object.freeze([
+  'MV_GRAPHICAL_SESSION_ENABLED',
+  'SRF_GRAPHICAL_VM_ENTRY',
+  'SRF_GRAPHICAL_VM_ENTRY_SHA256',
+  'SRF_GRAPHICAL_QEMU_IMG',
+  'SRF_GRAPHICAL_QEMU_IMG_SHA256',
+]);
+
+/** Exact opt-in pins required for the graphical rewind VM; no filesystem authority here.
+ * @param {unknown} env Alleged environment record.
+ * @param {string} [arch] Host architecture.
+ * @returns {boolean} Whether all required graphical pins are present and well formed.
+ */
+export function graphicalSessionPinsReady(env, arch = process.arch) {
+  if (arch !== 'arm64' || env === null || typeof env !== 'object' || Array.isArray(env)) return false;
+  const pins = /** @type {Record<string, unknown>} */ (env);
+  if (pins.MV_GRAPHICAL_SESSION_ENABLED !== '1') return false;
+  for (const key of ['SRF_GRAPHICAL_VM_ENTRY', 'SRF_GRAPHICAL_QEMU_IMG']) {
+    const value = pins[key];
+    if (typeof value !== 'string' || value.length < 1 || value.length > CORE_MAX_PATH_CHARS
+        || !isAbsolute(value) || normalize(value) !== value || value.startsWith('//') || value.endsWith('/') || /[\0\r\n]/.test(value)) return false;
+  }
+  for (const key of ['SRF_GRAPHICAL_VM_ENTRY_SHA256', 'SRF_GRAPHICAL_QEMU_IMG_SHA256']) {
+    if (typeof pins[key] !== 'string' || !/^[0-9a-f]{64}$/.test(/** @type {string} */ (pins[key]))) return false;
+  }
+  return true;
+}
+
+/**
+ * @param {unknown} parent Alleged environment record.
+ * @param {string} [arch] Host architecture.
+ * @returns {Readonly<Record<string,string>>} Validated adapter environment subset.
+ */
+export function graphicalSessionAdapterEnv(parent, arch = process.arch) {
+  if (parent === null || typeof parent !== 'object' || Array.isArray(parent)) {
+    fail('ENV_SHAPE', 'parent environment must be an object');
+  }
+  const env = /** @type {Record<string, unknown>} */ (parent);
+  const present = GRAPHICAL_SESSION_ENV.filter((key) => Object.hasOwn(env, key));
+  if (present.length === 0 || (env.MV_GRAPHICAL_SESSION_ENABLED === '0' && present.length === 1)) return Object.freeze({});
+  if (!graphicalSessionPinsReady(env, arch)) {
+    fail('GRAPHICAL_SESSION_ENV', 'graphical VM requires the complete arm64 executable pin set');
+  }
+  return Object.freeze(Object.fromEntries(GRAPHICAL_SESSION_ENV.map((key) => [key, /** @type {string} */ (env[key])] )));
+}
 
 /**
  * Forbidden environment name prefixes (loader/debugger injection
@@ -283,7 +334,7 @@ export function scrubChildEnv(rawEnv, runtimeDir) {
   const parent = /** @type {Record<string, unknown>} */ (rawEnv);
   const out = /** @type {Record<string, string>} */ ({});
   for (const name of ALLOWED_CORE_ENV) {
-    if (name === 'PATH') {
+    if (name === 'PATH' || name === 'MV_GRAPHICAL_SESSION_ENABLED') {
       continue;
     }
     const raw = parent[name];
@@ -292,6 +343,8 @@ export function scrubChildEnv(rawEnv, runtimeDir) {
     }
     out[name] = /** @type {string} */ (raw);
   }
+  const graphicalEnv = graphicalSessionAdapterEnv(parent);
+  if (Object.hasOwn(graphicalEnv, 'MV_GRAPHICAL_SESSION_ENABLED')) out.MV_GRAPHICAL_SESSION_ENABLED = '1';
   const path = sanitizePathValue(parent.PATH);
   if (path === null) {
     fail('ENV_PATH', 'PATH must sanitize to at least one absolute segment');
@@ -343,6 +396,7 @@ export function scrubAdapterEnv(rawEnv, runtimeDir) {
     if (name === 'MV_RECORDING_DESTINATION' || name === 'MV_RECORDING_CAPABILITY_ID' || name === 'MV_SRF_NET_MODES') {
       continue;
     }
+    if (GRAPHICAL_SESSION_ENV.includes(name)) continue;
     if (Object.hasOwn(base, name)) {
       out[name] = base[name];
       continue;
@@ -365,6 +419,7 @@ export function scrubAdapterEnv(rawEnv, runtimeDir) {
     out.MV_RECORDING_CAPABILITY_ID = /** @type {string} */ (capabilityId);
   }
   out.XDG_RUNTIME_DIR = /** @type {string} */ (runtimeDir);
+  Object.assign(out, graphicalSessionAdapterEnv(parent));
   return Object.freeze(out);
 }
 

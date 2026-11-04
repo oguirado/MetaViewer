@@ -1,0 +1,44 @@
+{
+  "schema": "graphical_session/v0.2",
+  "surface_id": "surface-demo",
+  "runtime_id": "runtime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "owner_id": "actor-demo",
+  "generation": 2,
+  "authority_epoch": 2,
+  "authority": "core",
+  "phase": "ready",
+  "ownership": "held",
+  "pending_request_id": null,
+  "points": [
+    {
+      "point_id": "point-p1",
+      "generation": 1,
+      "label": "p1",
+      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "created_mono_ns": 1
+    },
+    {
+      "point_id": "point-p2",
+      "generation": 1,
+      "label": "p2",
+      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "created_mono_ns": 2
+    },
+    {
+      "point_id": "point-p3",
+      "generation": 1,
+      "label": "p3",
+      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "created_mono_ns": 3
+    },
+    {
+      "point_id": "point-p4",
+      "generation": 1,
+      "label": "p4",
+      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "created_mono_ns": 4
+    }
+  ],
+  "backend": "qemu",
+  "isa": "aarch64"
+}

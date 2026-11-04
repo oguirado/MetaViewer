@@ -9,6 +9,7 @@ pub mod admission;
 pub mod catalog;
 pub mod control;
 pub mod guest_command;
+pub mod graphical_session;
 pub mod headless;
 pub mod journal;
 pub mod record;

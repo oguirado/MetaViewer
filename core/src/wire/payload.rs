@@ -2236,6 +2236,8 @@ pub struct CapsuleStateEvent {
 #[serde(untagged)]
 pub enum Command {
     GuestCommandObservation(Box<super::command_observation::GuestCommandObservation>),
+    GraphicalSessionRequest(Box<super::graphical_session::GraphicalSessionRequest>),
+    GraphicalSessionEvent(Box<super::graphical_session::GraphicalSessionEvent>),
     CapsuleStateRequest(Box<CapsuleStateRequest>),
     CapsuleStateEvent(Box<CapsuleStateEvent>),
     RewindRequest(Box<super::rewind::RewindRequest>),

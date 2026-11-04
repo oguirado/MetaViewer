@@ -1,0 +1,33 @@
+{
+  "schema": "graphical_session_envelope/v0.2",
+  "msg_id": "msg-14",
+  "ts_ns": 1,
+  "from": {
+    "component": "core",
+    "instance": "core-1"
+  },
+  "to": {
+    "component": "daemon",
+    "instance": "daemon-1"
+  },
+  "session_id": "session-1",
+  "seq": 14,
+  "nonce": "nonce-14",
+  "body": {
+    "schema": "graphical_session_event/v0.2",
+    "event_id": "event-restore-refused",
+    "request_id": "request-restore-001",
+    "owner_id": "actor-demo",
+    "surface_id": "surface-demo",
+    "generation": 2,
+    "authority_epoch": 2,
+    "op": "restore",
+    "event": "refused",
+    "reason_code": "POLICY",
+    "point_id": null,
+    "session": null,
+    "elapsed_ms": null,
+    "frame_sha256": null,
+    "frame_generation": null
+  }
+}

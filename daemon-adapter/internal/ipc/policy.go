@@ -29,6 +29,7 @@ type SchemaPolicy struct {
 	capsule     *schemaNode
 	rewind      *schemaNode
 	observation *schemaNode
+	graphical   *schemaNode
 }
 
 var _ Policy = (*SchemaPolicy)(nil)
@@ -282,7 +283,19 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return nil, statErr
 	}
-	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot, observation: observationRoot}, nil
+	var graphicalRoot *schemaNode
+	if _, statErr := fs.ReadFile(source, "graphical_session_envelope.schema.json"); statErr == nil {
+		graphicalRoot, err = resolve("graphical_session_envelope.schema.json", "")
+		if err != nil {
+			return nil, err
+		}
+		if graphicalRoot.kind != "object" || !graphicalRoot.closed || graphicalRoot.props["schema"] == nil || graphicalRoot.props["schema"].constant != "graphical_session_envelope/v0.2" || graphicalRoot.props["body"] == nil || len(graphicalRoot.props["body"].choices) != 2 {
+			return nil, errors.New("closed graphical session envelope contract required")
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return nil, statErr
+	}
+	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot, observation: observationRoot, graphical: graphicalRoot}, nil
 }
 func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 	var e Envelope
@@ -315,6 +328,8 @@ func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 		selected = p.rewind
 	case "guest_command_observation_envelope/v0.2":
 		selected = p.observation
+	case "graphical_session_envelope/v0.2":
+		selected = p.graphical
 	default:
 		return e, errors.New("unknown envelope discriminator")
 	}

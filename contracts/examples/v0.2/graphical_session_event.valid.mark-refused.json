@@ -1,0 +1,17 @@
+{
+  "schema": "graphical_session_event/v0.2",
+  "event_id": "event-mark-refused",
+  "request_id": "request-mark-001",
+  "owner_id": "actor-demo",
+  "surface_id": "surface-demo",
+  "generation": 2,
+  "authority_epoch": 2,
+  "op": "mark",
+  "event": "refused",
+  "reason_code": "POLICY",
+  "point_id": null,
+  "session": null,
+  "elapsed_ms": null,
+  "frame_sha256": null,
+  "frame_generation": null
+}

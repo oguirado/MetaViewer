@@ -1,0 +1,23 @@
+{
+  "schema": "graphical_session/v0.2",
+  "surface_id": "surface-demo",
+  "runtime_id": "runtime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "owner_id": "actor-demo",
+  "generation": 2,
+  "authority_epoch": 2,
+  "authority": "core",
+  "phase": "stopped",
+  "ownership": "released",
+  "pending_request_id": null,
+  "points": [
+    {
+      "point_id": "point-p1",
+      "generation": 1,
+      "label": "saved",
+      "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "created_mono_ns": 100
+    }
+  ],
+  "backend": "qemu",
+  "isa": "aarch64"
+}

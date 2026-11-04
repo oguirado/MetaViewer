@@ -50,6 +50,7 @@
 //! [TARGET, unit decision] Server shutdown/Drop and serve() teardown flush the
 //! authority journal and join its background sync worker before returning.
 mod capture;
+mod graphical_session;
 mod guest_command;
 mod headless;
 mod layout;
@@ -197,6 +198,7 @@ fn adapter_input_refusal(detail: &str) -> Refusal {
 pub struct Server {
     config: Config,
     rewind_enabled: bool,
+    graphical_session_enabled: bool,
     authority: Authority,
     root: PathBuf,
     replay: ReplayTable,
@@ -446,6 +448,7 @@ impl Server {
         let frame_timings = timings::Writer::start(root.join("artifacts/frame_timings.jsonl"));
         Ok(Self {
             rewind_enabled: std::env::var("MV_REWIND_ENABLED").ok().as_deref() == Some("1"),
+            graphical_session_enabled: std::env::var("MV_GRAPHICAL_SESSION_ENABLED").ok().as_deref() == Some("1"),
             frame_timings,
             frame_clock: None,
             config,
@@ -507,6 +510,7 @@ impl Server {
                 if let Ok(now_ns) = self.now() {
                     let _ = self.mark_headless_unknown(now_ns);
                     let _ = self.mark_guest_command_unknown(now_ns);
+                    let _ = self.mark_graphical_session_unknown_at(now_ns);
                 }
                 let mut pending: Vec<_> = self
                     .human_inputs
@@ -1330,6 +1334,12 @@ impl Server {
             (_, Command::CapsuleStateRequest(request)) => {
                 return self.capsule_state_request_at(now_ns, &env, request, boundary);
             }
+            (Component::Ui, Command::GraphicalSessionRequest(request)) => {
+                return self.graphical_session_request_at(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::GraphicalSessionEvent(event)) => {
+                return self.graphical_session_event_at(now_ns, &env, event, epoch, boundary);
+            }
             (Component::Daemon, Command::CapsuleStateEvent(event)) => {
                 let out = self.authority.apply_with_witnesses(
                     Input::CapsuleStateEvent {
@@ -1373,6 +1383,14 @@ impl Server {
                 return self.headless_event(now_ns, &env, event, epoch, boundary);
             }
             (Component::Ui, Command::RecordRequest(request)) => {
+                let value = serde_json::to_value(request)?;
+                if matches!(value["op"].as_str(), Some("ram_start" | "disk_start"))
+                    && value["params"]["surface_id"].as_str().is_some_and(|sid| {
+                        self.authority.state().graphical_session.blocks_mutation(sid)
+                    })
+                {
+                    return self.unsupported_at(now_ns, &env, boundary);
+                }
                 return self.capture_wire(now_ns, &env, request, boundary);
             }
             (Component::Agent, Command::MvToolCall(call)) => {
@@ -1423,6 +1441,12 @@ impl Server {
                     return self.unsupported_at(now_ns, &env, boundary);
                 }
                 let sid = value["params"]["surface_id"].as_str();
+                let graph_fenced = self.authority.state().graphical_session.pending.is_some()
+                    && op == "create"
+                    || sid.is_some_and(|id| self.authority.state().graphical_session.blocks_mutation(id));
+                if graph_fenced && !matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe") {
+                    return self.unsupported_at(now_ns, &env, boundary);
+                }
                 if matches!(op, "destroy" | "frame_subscribe" | "frame_unsubscribe")
                     && !sid.is_some_and(|id| {
                         self.authority.state().surfaces.get(id).is_some_and(|s| {
@@ -2013,6 +2037,7 @@ impl Server {
     fn poll_tool_waiters_at(&mut self, now_ns: u64) -> Result<()> {
         self.poll_headless_at(now_ns)?;
         self.poll_guest_command_at(now_ns)?;
+        self.poll_graphical_session_at(now_ns)?;
         let prev = self.route_now_ns.replace(now_ns);
         let result = self.poll_tool_waiters();
         self.route_now_ns = prev;
@@ -2644,6 +2669,9 @@ async fn connection_with_liveness(
         );
         let hello = s.config.core.hello.clone();
         s.send_at(now_ns, ready.endpoint(), Command::Hello(Box::new(hello)))?;
+        if ready.endpoint().component == Component::Daemon {
+            s.mark_graphical_session_unknown_at(now_ns)?;
+        }
         Ok((id, epoch))
     })();
     let (id, epoch) = match admitted {

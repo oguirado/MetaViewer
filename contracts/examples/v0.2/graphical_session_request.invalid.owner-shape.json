@@ -1,0 +1,8 @@
+{
+  "schema": "graphical_session_request/v0.2",
+  "request_id": "request-attach-001",
+  "surface_id": "surface-demo",
+  "op": "attach",
+  "params": {},
+  "owner_id": "forged"
+}

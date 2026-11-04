@@ -1,0 +1,1 @@
+- Add an opt-in graphical QEMU session family and authenticated checkpoint authority, separate from MicroVM rewind. End-to-end VM tile acceptance remains pending.

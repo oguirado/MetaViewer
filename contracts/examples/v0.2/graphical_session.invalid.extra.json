@@ -1,0 +1,16 @@
+{
+  "schema": "graphical_session/v0.2",
+  "surface_id": "surface-demo",
+  "runtime_id": "runtime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "owner_id": "actor-demo",
+  "generation": 2,
+  "authority_epoch": 2,
+  "authority": "core",
+  "phase": "ready",
+  "ownership": "held",
+  "pending_request_id": null,
+  "points": [],
+  "backend": "qemu",
+  "isa": "aarch64",
+  "pid": 123
+}

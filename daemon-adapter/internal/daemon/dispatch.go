@@ -47,6 +47,19 @@ func NewHandler(manager *capsule.Manager, publisher *frames.Publisher) (ipc.Hand
 		if header.Schema == "capsule_state_request/v0.2" {
 			return dispatchState(ctx, manager, envelope)
 		}
+		if header.Schema == "graphical_session_request/v0.2" {
+			var q capsule.GraphicalRequest
+			if err := json.Unmarshal(envelope.Body, &q); err != nil {
+				return nil, err
+			}
+			pubs := map[string]*frames.Publisher{}
+			if binding, err := manager.SubscriptionBinding(q.SurfaceID); err == nil {
+				if profile, ok := manager.ProfileFor(binding.Surface.ProfileID); ok {
+					pubs[profile.RAMRoot] = publisher
+				}
+			}
+			return dispatchGraphicalSession(ctx, manager, nil, pubs, envelope)
+		}
 		var request capsule.Request
 		if err := json.Unmarshal(envelope.Body, &request); err != nil {
 			return nil, err

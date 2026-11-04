@@ -1,0 +1,24 @@
+{
+  "schema": "graphical_session_envelope/v0.2",
+  "msg_id": "msg-1",
+  "ts_ns": 1,
+  "from": {
+    "component": "ui",
+    "instance": "ui-1"
+  },
+  "to": {
+    "component": "core",
+    "instance": "core-1"
+  },
+  "session_id": "session-1",
+  "seq": 1,
+  "nonce": "nonce-1",
+  "body": {
+    "schema": "graphical_session_request/v0.2",
+    "request_id": "request-attach-001",
+    "surface_id": "surface-demo",
+    "op": "attach",
+    "params": {},
+    "owner_id": "actor-demo"
+  }
+}

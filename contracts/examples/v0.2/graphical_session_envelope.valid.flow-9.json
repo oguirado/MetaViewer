@@ -1,0 +1,55 @@
+{
+  "schema": "graphical_session_envelope/v0.2",
+  "msg_id": "msg-9",
+  "ts_ns": 1,
+  "from": {
+    "component": "daemon",
+    "instance": "daemon-1"
+  },
+  "to": {
+    "component": "ui",
+    "instance": "ui-1"
+  },
+  "session_id": "session-1",
+  "seq": 9,
+  "nonce": "nonce-9",
+  "body": {
+    "schema": "graphical_session_event/v0.2",
+    "event_id": "event-mark-completed",
+    "request_id": "request-mark-001",
+    "owner_id": "actor-demo",
+    "surface_id": "surface-demo",
+    "generation": 2,
+    "authority_epoch": 2,
+    "op": "mark",
+    "event": "completed",
+    "reason_code": null,
+    "point_id": "point-new1",
+    "session": {
+      "schema": "graphical_session/v0.2",
+      "surface_id": "surface-demo",
+      "runtime_id": "runtime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "owner_id": "actor-demo",
+      "generation": 2,
+      "authority_epoch": 2,
+      "authority": "core",
+      "phase": "ready",
+      "ownership": "held",
+      "pending_request_id": null,
+      "points": [
+        {
+          "point_id": "point-p1",
+          "generation": 1,
+          "label": "saved",
+          "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "created_mono_ns": 100
+        }
+      ],
+      "backend": "qemu",
+      "isa": "aarch64"
+    },
+    "elapsed_ms": 19,
+    "frame_sha256": null,
+    "frame_generation": null
+  }
+}

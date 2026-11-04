@@ -75,6 +75,7 @@ type NativeInventory interface {
 	Unknown(string) error
 }
 type Config struct {
+	GraphicalSessions bool
 	// [TARGET, unit decision] Reserved launcher identity from MV_SRF_LIVE_PROFILE.
 	SlotLiveProfile string
 	Slots           SlotStore
@@ -227,27 +228,29 @@ type InputEvidence struct {
 	GroundTruth       *GroundTruth          `json:"ground_truth,omitempty"`
 }
 type Manager struct {
-	slots            SlotStore
-	slotInitErr      error
-	mu               sync.Mutex
-	cfg              Config
-	runner           cli.Runner
-	clock            cli.Clock
-	bindings         map[string]Binding
-	quarantined      map[string]bool
-	creates          map[string]pendingCreate
-	destroying       map[string]bool
-	pending          map[string]*pendingInput
-	inputEpochs      map[string]uint64
-	used             map[string]bool
-	refresh          map[string]bool
-	views            map[string]bool
-	loginLocks       map[string]bool
-	lostDone         map[string]chan struct{}
-	identityTemplate *Profile
-	identityDisplays []string
-	dynamicProfiles  map[string]bool
-	hostSeq          map[string]uint64
+	graphical         *graphicalSessionState
+	graphicalCaptures map[string]int
+	slots             SlotStore
+	slotInitErr       error
+	mu                sync.Mutex
+	cfg               Config
+	runner            cli.Runner
+	clock             cli.Clock
+	bindings          map[string]Binding
+	quarantined       map[string]bool
+	creates           map[string]pendingCreate
+	destroying        map[string]bool
+	pending           map[string]*pendingInput
+	inputEpochs       map[string]uint64
+	used              map[string]bool
+	refresh           map[string]bool
+	views             map[string]bool
+	loginLocks        map[string]bool
+	lostDone          map[string]chan struct{}
+	identityTemplate  *Profile
+	identityDisplays  []string
+	dynamicProfiles   map[string]bool
+	hostSeq           map[string]uint64
 	// Test seam for native startup; installed before any manager operation.
 	hostXpraStart func(context.Context, *ProcessRunner, string, string, string) (*hostXpraProcess, error)
 }
@@ -1187,6 +1190,7 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 	if m.hasPending(q.SurfaceID) {
 		return nil, fault("POLICY", "input must be drained before destroy")
 	}
+	m.stopGraphicalLocked(q.SurfaceID)
 	m.destroying[q.SurfaceID] = true
 	defer delete(m.destroying, q.SurfaceID)
 	// Drain outside mu: capture subscribers may be waiting to acquire it.
@@ -1226,6 +1230,9 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 	delete(m.quarantined, b.Surface.ProfileID)
 	delete(m.loginLocks, b.Container)
 	b.Surface.State = "destroyed"
+	if g := m.graphical; g != nil && g.surface == q.SurfaceID && g.run == b.RunID {
+		m.graphical = nil
+	}
 	m.bindings[q.SurfaceID] = b
 	delete(m.inputEpochs, q.SurfaceID)
 	delete(m.refresh, q.SurfaceID)
@@ -1302,6 +1309,10 @@ func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
 }
 func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()
+	if m.graphicalCaptureBlocked(ctx, id) {
+		m.mu.Unlock()
+		return Binding{}, NativeFrame{}, fault("BUSY", "graphical rewind owns the surface")
+	}
 	b, ok := m.bindings[id]
 	if ok && m.hasPendingHostLossLocked(b) {
 		m.mu.Unlock()
@@ -1321,6 +1332,13 @@ func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame,
 	}
 	epoch := m.beginCapture(id)
 	profile := m.cfg.Profiles[b.Surface.ProfileID]
+	if m.cfg.GraphicalSessions && b.Program == "notepad-rw-vm" {
+		if m.graphicalCaptures == nil {
+			m.graphicalCaptures = map[string]int{}
+		}
+		m.graphicalCaptures[id]++
+		defer func() { m.mu.Lock(); m.graphicalCaptures[id]--; m.mu.Unlock() }()
+	}
 	args := []string{"frame", "--container", b.Container}
 	if b.Window != "" {
 		args = append(args, "--window", b.Window)
@@ -1476,6 +1494,9 @@ func (m *Manager) input(ctx context.Context, r Request, version string, evidence
 	b, ok := m.bindings[q.SurfaceID]
 	if !ok || b.Surface.State != "active" || b.recoveryProbe != nil || q.ProposalID == "" || len(q.ProposalID) > 128 {
 		return nil, fault("surface", "input identity required")
+	}
+	if m.graphicalBlocks(q.SurfaceID) {
+		return nil, fault("BUSY", "graphical rewind owns the surface")
 	}
 	if m.destroying[q.SurfaceID] {
 		return nil, fault("POLICY", "surface is draining")

@@ -29,6 +29,7 @@ import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import {createRewindHost} from './rewindHost.js';
+import {createGraphicalSessionHost} from './graphicalSessionHost.js';
 import {createGuestCommandHost} from './guestCommandHost.js';
 import {observationEnvelopeValid} from './guestCommandObservationValues.js';
 import {guestCommandProfileOwnerSync,arm64CapsuleStatusSync} from './guestCommandProfile.js';
@@ -40,6 +41,7 @@ import { isDeepStrictEqual } from 'node:util';
 /** Exact capsule-family tag selection; hello, list and graphical traffic stay legacy.
  * @param {any} body */
 export function envelopeTagForBody(body) {
+ if(['graphical_session_request/v0.2','graphical_session_event/v0.2'].includes(body?.schema))return 'graphical_session_envelope/v0.2';
  if(['rewind_request/v0.2','rewind_event/v0.2'].includes(body?.schema))return 'rewind_envelope/v0.2';
  if(body?.schema==='guest_command_observation/v0.2')return 'guest_command_observation_envelope/v0.2';
  return ['headless_request/v0.2','headless_event/v0.2','guest_command_request/v0.2','guest_command_event/v0.2'].includes(body?.schema)?'capsule_envelope/v0.2':'envelope/v0.2';
@@ -285,6 +287,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       headless.disconnect();
       guestCommand.disconnect();
       rewind?.disconnect();
+      graphicalSession?.disconnect();
       if (disposed) return; disposed = true; live = false;
       // [TARGET, unit decision] End every painted lifetime before transport
       // teardown so renderer snapshots close WRITE and offer session recovery.
@@ -307,6 +310,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const headless = createHeadlessHost({send,
       available:()=>live && !disposed && process.arch === 'arm64' && headlessOwner !== null && agentPeers.length === 1 && headlessOwner === 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'),
       ownerId:agentPeers.length === 1 ? 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex') : ''});
+    const graphicalSession=env.MV_GRAPHICAL_SESSION_ENABLED==='1'&&process.arch==='arm64'&&agentPeers.length===1?createGraphicalSessionHost({send,available:()=>live&&!disposed,ownerId:'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')}):null;
     let rewind=/** @type {ReturnType<typeof createRewindHost>|null} */(null);
     const guestCommand=createGuestCommandHost({send,observationIdentity:agentPeers.length===1?{coreInstance:config.core.endpoint.instance,uiInstance:ui.endpoint.instance,agentInstance:agentPeers[0].endpoint.instance}:null,commandAllowed:()=>!rewind||rewind.commandAllowed(),stopTarget:()=>rewind?.stopTarget(),cancelAvailable:()=>env.MV_REWIND_ENABLED!=='1',sessionId:config.session_id,ownerId:agentPeers.length===1?'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'):'',available:()=>live&&!disposed&&arm64CapsuleStatusSync(env).microvm.available&&guestCommandOwner!==null&&agentPeers.length===1&&guestCommandOwner==='actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')});
     rewind=createRewindHost({send,available:()=>env.MV_REWIND_ENABLED==='1'&&process.arch==='arm64'&&guestCommand.status().available,ownerId:guestCommandOwner??'',guest:guestCommand.status,commitReady:guestCommand.commitRewind});
@@ -499,6 +503,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         if (!isDeepStrictEqual(body,config.core.hello)) throw fail();
         live = true;clearTimeout(helloTimer);ready();return;
       }
+      if(body.schema==='graphical_session_event/v0.2'){if(!graphicalSession)throw fail();graphicalSession.receive(body);return;}
       if(body.schema==='rewind_event/v0.2'){if(!rewind)throw fail();rewind.receive(body);return;}
       const observationMetadata={session_id:env.session_id,from:env.from,to:env.to,seq:env.seq};
       if(body.schema==='guest_command_observation/v0.2'){if(!observationEnvelopeValid(env))throw fail();guestCommand.observe(body,observationMetadata);return;}
@@ -532,6 +537,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (body.schema === 'surface_event/v0.2' && ['created','state_changed'].includes(body.event)) {
         const state = body.data?.surface;
         if (state?.schema !== 'surface/v0.2' || !id(state.surface_id)) throw fail();
+        if(state.state==='destroyed')graphicalSession?.surfaceClosed(state.surface_id);
         if (['destroyed','lost'].includes(state.state)) {
           if (body.event === 'state_changed') publishState(state);
           display.removeSurface(state.surface_id);
@@ -922,6 +928,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       headless,
       guestCommand,
       rewind,
+      ...(graphicalSession?{graphicalSession}:{}),
       /** @param {(state:any)=>void} cb */
       subscribeCapture(cb) {
         if(disposed || typeof cb !== 'function' || captureListeners.size >= MAX_ITEMS) throw fail();

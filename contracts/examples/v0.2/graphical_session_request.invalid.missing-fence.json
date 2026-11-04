@@ -1,0 +1,12 @@
+{
+  "schema": "graphical_session_request/v0.2",
+  "request_id": "request-mark-001",
+  "surface_id": "surface-demo",
+  "op": "mark",
+  "params": {
+    "label": "checkpoint"
+  },
+  "generation": null,
+  "authority_epoch": 1,
+  "owner_id": "actor-demo"
+}

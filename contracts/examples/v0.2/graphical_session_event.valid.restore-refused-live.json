@@ -1,0 +1,31 @@
+{
+  "schema": "graphical_session_event/v0.2",
+  "event_id": "event-restore-refused",
+  "request_id": "request-restore-001",
+  "owner_id": "actor-demo",
+  "surface_id": "surface-demo",
+  "generation": 2,
+  "authority_epoch": 2,
+  "op": "restore",
+  "event": "refused",
+  "reason_code": "POLICY",
+  "point_id": null,
+  "session": {
+    "schema": "graphical_session/v0.2",
+    "surface_id": "surface-demo",
+    "runtime_id": "runtime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "owner_id": "actor-demo",
+    "generation": 2,
+    "authority_epoch": 2,
+    "authority": "core",
+    "phase": "ready",
+    "ownership": "held",
+    "pending_request_id": null,
+    "points": [],
+    "backend": "qemu",
+    "isa": "aarch64"
+  },
+  "elapsed_ms": null,
+  "frame_sha256": null,
+  "frame_generation": null
+}
