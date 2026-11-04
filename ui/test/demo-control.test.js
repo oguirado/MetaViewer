@@ -104,3 +104,17 @@ test('attached CLI retains the locate-wait repair diagnostic from the real host'
   assert.equal(reply.error,'ACTING_STEP_LOCATE_WAIT_REQUIRED');
   assert.match(reply.hint,/locate_wait_ms.*5000/);
 });
+
+test('demo control rejects non-array args before invoking a host operation', async t => {
+  const f = await fixture(t);
+  for (const [method,args] of [['demo.stop',''], ['demo.check',{length:1,0:{site:'site'}}]]) {
+    const row={schema:'metaviewer.demo_control/v1',session_id:'pkg-synthetic',method,args};
+    assert.throws(()=>assertDemoRequest(row),/DEMO_REQUEST/);
+    const socket=connect(f.server.path);
+    socket.write(JSON.stringify(row)+'\n');
+    const [reply]=await once(socket,'data');
+    socket.end();
+    assert.deepEqual(JSON.parse(reply).reply,{ok:false,code:'DEMO_REFUSED'});
+    assert.equal(f.buttons.state().phase,'idle');
+  }
+});

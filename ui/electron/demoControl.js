@@ -8,7 +8,7 @@ import {assertButtonCall} from './preload.js';
 export const DEMO_CONTROL_SCHEMA='metaviewer.demo_control/v1';
 /** @param {any} row */
 export function assertDemoRequest(row) {
-  if(!row || typeof row!=='object' || Array.isArray(row) || Object.keys(row).sort().join(',')!=='args,method,schema,session_id' || row.schema!==DEMO_CONTROL_SCHEMA || typeof row.session_id!=='string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(row.session_id) || !['demo.start','demo.stop','demo.prompt','demo.check'].includes(row.method))throw new Error('DEMO_REQUEST');
+  if(!row || !Array.isArray(row.args) || typeof row!=='object' || Array.isArray(row) || Object.keys(row).sort().join(',')!=='args,method,schema,session_id' || row.schema!==DEMO_CONTROL_SCHEMA || typeof row.session_id!=='string' || !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(row.session_id) || !['demo.start','demo.stop','demo.prompt','demo.check'].includes(row.method))throw new Error('DEMO_REQUEST');
   assertButtonCall(row.method,row.args);return row;
 }
 /** @param {{env:any,buttons:any,privateDirectory:Function}} options */

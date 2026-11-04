@@ -86,6 +86,25 @@ case $JUDGE_HOME in
     /*) ;;
     *) fail JUDGE_USAGE "MV_JUDGE_HOME must be an absolute path" "export MV_JUDGE_HOME=/absolute/path" ;;
 esac
+# Socket files live in short private runtime roots, independent of this home.
+# Refuse filesystem-unrepresentable overrides before mkdir or asset work.
+if command -v python3 >/dev/null 2>&1; then
+    python3 -c '
+import os, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+parent = path
+try:
+    while not parent.exists():
+        parent = parent.parent
+    name_max = os.pathconf(parent, "PC_NAME_MAX")
+    path_max = os.pathconf(parent, "PC_PATH_MAX")
+    if any(len(os.fsencode(part)) > name_max for part in path.parts) or len(os.fsencode(str(path / "run/smoke-processes/2147483647.pid"))) >= path_max:
+        sys.exit(1)
+except OSError:
+    sys.exit(1)
+' "$JUDGE_HOME" || fail JUDGE_HOME_PATH "MV_JUDGE_HOME cannot fit the filesystem path limits" "export MV_JUDGE_HOME=\"\$HOME/mv-judge\" and retry"
+fi
 if [ -n "${MV_JUDGE_KIT:-}" ]; then
     KIT=$MV_JUDGE_KIT
 elif [ -f "$SELF_DIR/../../VERSION" ] && [ -d "$SELF_DIR/../../tools" ]; then
@@ -401,8 +420,138 @@ ensure_pkg_tool_deps() {
         fail JUDGE_SMOKE "package tool imports still fail after npm ci" "see $log; restore the complete kit and retry npm --prefix $ui ci --ignore-scripts"
 }
 
+# [TARGET, unit decision] Short smoke roots are private and recorded under run/.
+# Reconciliation never signals a PID: both the leader identity and its entire
+# original session/group must be gone before its ownership record is removed.
+smoke_state() {
+    python3 -c '
+import json, os, re, shutil, stat, subprocess, sys, tempfile
+from pathlib import Path
+home, action, owner = Path(sys.argv[1]), sys.argv[2], int(sys.argv[3])
+records, roots = home / "run/smoke-processes", home / "run/smoke-roots"
+def private(path, mode, directory=False):
+    st = path.lstat()
+    if st.st_uid != os.getuid() or stat.S_IMODE(st.st_mode) != mode or not (stat.S_ISDIR(st.st_mode) if directory else stat.S_ISREG(st.st_mode)):
+        raise ValueError("unverified smoke state: " + str(path))
+    return st
+def proc(pid):
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+def gone(pid, start, group, session, scan_group=True, session_scope=False):
+    current = proc(pid)
+    if current is not None and (current[19] != str(start) or current[2:4] != [str(group), str(session)]):
+        raise ValueError("smoke process identity changed: " + str(pid))
+    if current is not None and current[0] not in ("Z", "X"):
+        return False
+    if not scan_group:
+        return True
+    for item in Path("/proc").iterdir():
+        if item.name.isdecimal():
+            fields = proc(item.name)
+            if fields and fields[0] not in ("Z", "X") and fields[3] == str(session) and (session_scope or fields[2] == str(group)):
+                return False
+    return True
+def remove_root(path, dev, ino):
+    if path.parent != Path("/tmp") or not re.fullmatch(r"mvj\.[a-z0-9_]+", path.name):
+        raise ValueError("unverified short smoke root")
+    try:
+        st = private(path, 0o700, True)
+    except FileNotFoundError:
+        return
+    if (st.st_dev, st.st_ino) != (dev, ino):
+        raise ValueError("smoke directory identity changed")
+    shutil.rmtree(path)
+try:
+    for directory in (records, roots):
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        private(directory, 0o700, True)
+    if action == "allocate":
+        fields = proc(owner)
+        if fields is None:
+            raise ValueError("smoke launcher identity unavailable")
+        path = Path(tempfile.mkdtemp(prefix="mvj.", dir="/tmp"))
+        st = private(path, 0o700, True)
+        row = dict(path=str(path), dev=st.st_dev, ino=st.st_ino, pid=owner, phase="allocated",
+                   start=fields[19], group=int(fields[2]), session=int(fields[3]))
+        receipt = roots / (path.name + ".json")
+        try:
+            with open(receipt, "x", opener=lambda p, f: os.open(p, f, 0o600)) as stream:
+                json.dump(row, stream)
+        except BaseException:
+            shutil.rmtree(path)
+            raise
+        print(path)
+    elif action == "run":
+        path = Path(sys.argv[4])
+        receipt = roots / (path.name + ".json")
+        private(receipt, 0o600)
+        row = json.loads(receipt.read_text())
+        st = private(path, 0o700, True)
+        if row["path"] != str(path) or (row["dev"], row["ino"]) != (st.st_dev, st.st_ino) or row["pid"] != owner or row["phase"] != "allocated":
+            raise ValueError("unverified smoke supervisor handoff")
+        # The supervisor records its new session before starting any children.
+        # A caller shell that survives an interrupted install cannot pin it.
+        os.setsid()
+        pid = os.getpid()
+        fields = proc(pid)
+        row.update(pid=pid, start=fields[19], group=pid, session=pid, phase="running")
+        temp = receipt.with_suffix(".tmp")
+        with open(temp, "x", opener=lambda p, f: os.open(p, f, 0o600)) as stream:
+            json.dump(row, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, receipt)
+        rc = subprocess.run(sys.argv[5:]).returncode
+        sys.exit(rc if rc >= 0 else 128 - rc)
+    else:
+        active = False
+        dead = []
+        for record in records.iterdir():
+            private(record, 0o600)
+            text = record.read_text().split()
+            if len(text) != 2 or not all(v.isdecimal() for v in text) or int(text[0]) <= 1 or record.name != text[0] + ".pid":
+                raise ValueError("unverified smoke process record: " + str(record))
+            pid, start = map(int, text)
+            if gone(pid, start, pid, pid):
+                dead.append(record)
+            else:
+                active = True
+                print("JUDGE_SMOKE_ACTIVE: recorded smoke group remains: " + str(pid), file=sys.stderr)
+        for receipt in roots.iterdir():
+            private(receipt, 0o600)
+            row = json.loads(receipt.read_text())
+            path = Path(row["path"])
+            allocated = row.get("phase") == "allocated"
+            released = allocated and action == "release" and str(path) == sys.argv[4] and row["pid"] == owner
+            if not active and (released or gone(row["pid"], row["start"], row["group"], row["session"], not allocated, row.get("phase") == "running")):
+                remove_root(path, row["dev"], row["ino"])
+                receipt.unlink()
+            else:
+                active = True
+                print("JUDGE_SMOKE_ACTIVE: recorded smoke runtime remains: " + str(path), file=sys.stderr)
+        # Legacy roots have no per-root receipt. Only reconcile them after a
+        # verified dead process record and with no unresolved ownership records.
+        legacy = home / "run/smoke-tmp"
+        if dead and not active and legacy.exists():
+            private(legacy, 0o700, True)
+            for path in legacy.iterdir():
+                if re.fullmatch(r"mv-clean-[A-Za-z0-9]+", path.name):
+                    private(path, 0o700, True)
+                    shutil.rmtree(path)
+        for record in dead:
+            record.unlink()
+        if active:
+            sys.exit(2)
+except (OSError, ValueError, KeyError, TypeError) as error:
+    print("JUDGE_SMOKE_STATE: " + str(error), file=sys.stderr)
+    sys.exit(2)
+' "$JUDGE_HOME" "$1" "$$" "${2:-}" "${@:3}"
+}
+
 step_verify_smoke() {
-    local log=$JUDGE_HOME/logs/smoke.log rc
+    local log=$JUDGE_HOME/logs/smoke.log rc smoke_runtime
     mkdir -p "$JUDGE_HOME/logs"
     if [ ! -f "$PKG_TOOL" ]; then
         fail JUDGE_SMOKE "the package verification tool is missing from the kit ($PKG_TOOL)" "extract the full judge kit again"
@@ -413,13 +562,15 @@ step_verify_smoke() {
     else
         fail JUDGE_SMOKE "package verification failed: $(tail -n 3 "$log" | tr '\n' ' ')" "download the release tarball again and re-run install"
     fi
-    mkdir -p "$JUDGE_HOME/run/smoke-tmp" "$JUDGE_HOME/run/smoke-processes" &&
-        chmod 0700 "$JUDGE_HOME/run/smoke-tmp" "$JUDGE_HOME/run/smoke-processes" ||
-        fail JUDGE_SMOKE "cannot create private smoke state" "make $JUDGE_HOME/run writable"
-    if TMPDIR="$JUDGE_HOME/run/smoke-tmp" MV_PACKAGE_SMOKE_STATE_DIR="$JUDGE_HOME/run/smoke-processes" timeout 600 "$NODE_BIN" "$PKG_TOOL" --smoke "$ASSET_DIR/metaviewer-linux-$ARCHN.tar.gz" >>"$log" 2>&1; then # MUT:JUDGE_SMOKE
+    smoke_runtime=$(smoke_state allocate) ||
+        fail JUDGE_SMOKE_STATE "cannot create private smoke state" "make $JUDGE_HOME/run and /tmp writable"
+    if TMPDIR="$smoke_runtime" MV_PACKAGE_SMOKE_STATE_DIR="$JUDGE_HOME/run/smoke-processes" smoke_state run "$smoke_runtime" timeout 600 "$NODE_BIN" "$PKG_TOOL" --smoke "$ASSET_DIR/metaviewer-linux-$ARCHN.tar.gz" >>"$log" 2>&1; then # MUT:JUDGE_SMOKE
+        smoke_state release "$smoke_runtime" ||
+            fail JUDGE_SMOKE_STATE "smoke ownership remains" "verify the recorded group has exited, then retry install"
         say METAVIEWER_MAIN_SMOKE_OK
     else
         rc=$?
+        smoke_state release "$smoke_runtime" || true
         fail JUDGE_SMOKE "the install smoke failed (rc $rc): $(tail -n 3 "$log" | tr '\n' ' ')" "see $log; run as a non-root user, check DISPLAY/xvfb-run and the AppArmor profile, then re-run install"
     fi
 }
@@ -604,6 +755,7 @@ cmd_install_locked() {
     local assets_used
     [ -z "$(running_pid)" ] || fail JUDGE_RUNNING "MetaViewer is running" "bash $0 stop"
     mkdir -p "$JUDGE_HOME" && chmod 0700 "$JUDGE_HOME" || fail JUDGE_ASSET "cannot create $JUDGE_HOME" "set MV_JUDGE_HOME to a writable directory"
+    smoke_state reconcile || fail JUDGE_SMOKE_ACTIVE "interrupted smoke ownership is still live or unverifiable" "inspect run/smoke-processes and run/smoke-roots; let the recorded group exit, then retry install"
     pf_or_exit --tier "$TIER" --phase static
     step_sysdeps
     [ "$TIER" != T2 ] || pf_or_exit --tier "$TIER" --phase static
@@ -796,7 +948,7 @@ cmd_stop() {
     remove_owned_pid "$pid"
     # Retain interrupted/unverified smoke ownership records. Stop must never
     # turn missing cleanup proof into a clean verdict or kill guessed PIDs.
-    for f in "$JUDGE_HOME/run/smoke-processes"/* "$JUDGE_HOME/run/smoke-tmp"/*; do
+    for f in "$JUDGE_HOME/run/smoke-processes"/* "$JUDGE_HOME/run/smoke-tmp"/* "$JUDGE_HOME/run/smoke-roots"/*; do
         [ -e "$f" ] || [ -L "$f" ] || continue
         leaks=$((leaks + 1))
         printf 'JUDGE_STOP_LEAK: smoke ownership/runtime %s remains -- fix: verify its recorded process identity and group have exited before removing this state\n' "$f" >&2

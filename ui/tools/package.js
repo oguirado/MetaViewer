@@ -2743,6 +2743,12 @@ export async function cleanInstallSmoke(artifact) {
   const clean=await fs.mkdtemp(join(tmpdir(),'mv-clean-'));
   try {
     validateOutput(clean,repo);
+    // Linux sockaddr_un includes the terminating NUL. Check both the core
+    // socket and Chromium's temporary SingletonSocket before starting children.
+    if ([join(clean,'host-runtime/metaviewer/core.sock'),
+      join(clean,'scoped_dirXXXXXX/SingletonSocket')].some(path => Buffer.byteLength(path) >= 108)) {
+      throw new Error('PKG_SMOKE_SOCKET_PATH: set TMPDIR to a short private directory under /tmp and retry; use the judge installer for recorded cleanup');
+    }
     const types=await execute('tar',['-tvf',artifact],{maxBuffer:1024*1024});
     if (types.stdout.split('\n').filter(Boolean).some(line => !['-','d'].includes(line[0]))) throw new Error('PKG_ARCHIVE_ALIAS');
     const listing=await execute('tar',['-tf',artifact],{maxBuffer:1024*1024});
