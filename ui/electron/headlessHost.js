@@ -43,15 +43,43 @@ export function createHeadlessHost({send, available, ownerId, timeoutMs=35000}) 
       try {send(body);} catch {clearTimeout(p.timer);pending=null;uncertain=true;code='OUTCOME_UNKNOWN';resolve(publish());}
     });
   }
+  /** Adopt only an authenticated core lifecycle for this already-owned workload.
+   * No request is sent and no renderer authority is manufactured. @param {any} event */
+  function adoptExternal(event) {
+    const d=event.data, op=d.op, next=d.session;
+    if(pending || !session || session.ownership!=='held' || retired?.body.request_id===event.request_id
+      || !['accepted','outcome_unknown'].includes(event.event) || !['run','stop'].includes(op))return null;
+    if(op==='run') {
+      if(uncertain || jobAttempted || session.phase!=='ready' || session.job!==null
+        || !next.job || next.job.status!==(event.event==='accepted'?'accepted':'unknown') || next.job.value!==null)throw Error('HEADLESS_JOB');
+    } else {
+      if(!['ready','completed','uncertain'].includes(session.phase) && !uncertain)throw Error('HEADLESS_ORDER');
+      if(!isDeepStrictEqual(next.job,session.job)) {
+        const old=session.job, job=next.job;
+        if(!uncertain || !old || !job || job.status!=='unknown' || job.value!==null
+          || job.job_id!==old.job_id || job.n!==old.n || job.operation!==old.operation)throw Error('HEADLESS_JOB');
+      }
+    }
+    if(next.ownership!=='held' || next.phase!==(event.event==='outcome_unknown'?'uncertain':op==='run'?'running':'stopping'))throw Error('HEADLESS_ORDER');
+    const body={schema:'headless_request/v0.2',request_id:event.request_id,op,
+      params:{workload_id:session.workload_id,generation:session.generation,
+        ...(op==='run'?{job_id:next.job.job_id,operation:'sumsq',n:next.job.n}:{})}};
+    const p={body,accepted:false,resolve:()=>{},timer:/** @type {ReturnType<typeof setTimeout>|null} */(null)};
+    p.timer=setTimeout(()=>{if(pending!==p)return;pending=null;retired=p;uncertain=true;code='OUTCOME_UNKNOWN';publish();},timeoutMs);
+    if(op==='run')jobAttempted=true;
+    pending=p;code=null;return p;
+  }
   /** @param {any} event */
   function receive(event) {
-    if(!validEvent(event))throw Error('HEADLESS_PROTOCOL');
-    const p=pending;
+    if(closed || !validEvent(event))throw Error('HEADLESS_PROTOCOL');
+    if(seen.has(event.event_id) || seen.size>=32)throw Error('HEADLESS_REPLAY');
+    const incoming=event.data.session;
+    if(incoming && (incoming.owner_id!==ownerId || (session && (incoming.workload_id!==session.workload_id || incoming.generation!==session.generation))))throw Error('HEADLESS_OWNER');
+    const p=pending ?? adoptExternal(event);
     if(!p || event.request_id!==p.body.request_id) {
       // A late outcome never revives a timed-out operation or grants a new attempt.
-      if(uncertain) {
-        if(!p && retired && event.request_id===retired.body.request_id && event.data?.session) {
-          const s=event.data.session;
+      if(uncertain && !p && retired && event.request_id===retired.body.request_id && event.data?.session) {
+        const s=event.data.session;
           if(s.owner_id!==ownerId || (session && (s.workload_id!==session.workload_id || s.generation!==session.generation)))throw Error('HEADLESS_OWNER');
           // Retain a late authoritative tuple for cleanup only. Never turn a timeout into successful completion.
           if(retired.body.op==='create' ? s.job!==null : retired.body.op==='run' && (s.job?.job_id!==retired.body.params.job_id || s.job?.n!==retired.body.params.n))throw Error('HEADLESS_JOB');
@@ -62,12 +90,10 @@ export function createHeadlessHost({send, available, ownerId, timeoutMs=35000}) 
             if(event.data.op!==retired.body.op || s.phase!=='uncertain')throw Error('HEADLESS_ORDER');
             session=copy(s);publish();
           }
-        }
-        return;
+        seen.add(event.event_id);return;
       }
       throw Error('HEADLESS_CORRELATION');
     }
-    if(seen.has(event.event_id) || seen.size>=32)throw Error('HEADLESS_REPLAY');
     const d=event.data, op=p.body.op;
     if(event.event==='refused') {
       if(p.accepted || (session ? d.workload_id!==session.workload_id || d.generation!==session.generation : d.workload_id!==null || d.generation!==null))throw Error('HEADLESS_REFUSAL');
@@ -88,7 +114,7 @@ export function createHeadlessHost({send, available, ownerId, timeoutMs=35000}) 
     }
     if(event.event==='outcome_unknown') {
       if(d.op!==op || s.phase!=='uncertain')throw Error('HEADLESS_ORDER');
-      uncertain=true;code='OUTCOME_UNKNOWN';
+      retired=p;uncertain=true;code='OUTCOME_UNKNOWN';
     } else {
       if(!p.accepted || (op==='run' ? event.event!=='completed'||s.phase!=='completed' : event.event!=='state_changed'||s.phase!==(op==='create'?'ready':'stopped')))throw Error('HEADLESS_ORDER');
       uncertain=false;code=null;

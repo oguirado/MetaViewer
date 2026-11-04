@@ -148,6 +148,7 @@ changes-README.md	changes/README.md
 adapter-cbafcbab0a3b	changes/unreleased/adapter-epoch-handoff.md
 agentpr-f8d684f8c4df	changes/unreleased/agent-program-starts-agent-controlled.md
 arm64ci-bd58bfab8e71	changes/unreleased/arm64-ci-inventory-regressions.md
+arm64ex-9eff3edc9918	changes/unreleased/arm64-explicit-recovery.md
 arm64gu-8f9d6dc80ac1	changes/unreleased/arm64-guest-commands.md
 arm64mi-da546ca53e79	changes/unreleased/arm64-microvm-rewind.md
 arm64-microvm.md	changes/unreleased/arm64-microvm.md
@@ -2048,12 +2049,15 @@ init-9e0d02ed864a	daemon-adapter/rewind_runtime/__init__.py
 config-37550db413b9	daemon-adapter/rewind_runtime/config.py
 control-acc806a00b16	daemon-adapter/rewind_runtime/controller.py
 native-3017070e4f89	daemon-adapter/rewind_runtime/native.py
+recovery.py	daemon-adapter/rewind_runtime/recovery.py
 testcon-4c0756b4843b	daemon-adapter/rewind_runtime/test_controller.py
 test_native.py	daemon-adapter/rewind_runtime/test_native.py
+test_recovery.py	daemon-adapter/rewind_runtime/test_recovery.py
 cliiden-e5ce120f22de	daemon-adapter/testdata/cli_identity_valid.json
 cli_malformed.txt	daemon-adapter/testdata/cli_malformed.txt
 guestco-c4153ef42c85	daemon-adapter/tools/guest_command_runner.py
 headless_runner.py	daemon-adapter/tools/headless_runner.py
+rewind_recover.py	daemon-adapter/tools/rewind_recover.py
 rewind_runner.py	daemon-adapter/tools/rewind_runner.py
 testhea-e85579ae90cc	daemon-adapter/tools/test_headless_runner.py
 testrew-38a1e34309ba	daemon-adapter/tools/test_rewind_generation.py
@@ -2420,6 +2424,7 @@ testage-f3850bae48b0	tests/test_agent_entry_prompt.py
 testarm-eed64c3a9150	tests/test_arm64_capsule_reconcile.py
 testarm-adb7e46ad774	tests/test_arm64_capsules.py
 testarm-f2264bc6e1e5	tests/test_arm64_capsules_session.py
+testarm-537ede4d3196	tests/test_arm64_crash_recovery.py
 testass-670edc3dc170	tests/test_assembly_smoke.py
 test_budget_basis.py	tests/test_budget_basis.py
 test_budget_gate.py	tests/test_budget_gate.py
@@ -2790,6 +2795,7 @@ guestwo-d31657ddc4ab	ui/test/guest-workload-generation.test.js
 handoff-8d0c5534ac13	ui/test/handoff-notice.test.js
 handoff-3ec2ac4efaee	ui/test/handoffstyle-notice.test.js
 headless-app.test.js	ui/test/headless-app.test.js
+headles-be6f19c61aa0	ui/test/headless-guest-interleave.test.js
 headless-host.test.js	ui/test/headless-host.test.js
 headles-45d6c774b7f6	ui/test/headless-package.test.js
 headles-ed1e949ee231	ui/test/headless-panel.test.js

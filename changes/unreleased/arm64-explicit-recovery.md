@@ -1,0 +1,1 @@
+- Preserve shared-actor headless state and add explicit custody-checked recovery for ARM64 sessions and newly sealed orphan runtimes.
