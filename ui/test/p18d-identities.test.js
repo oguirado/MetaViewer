@@ -337,3 +337,41 @@ test('recovery runner preserves native registry and admission witnesses across i
   assert.equal(captured.env.MV_RAM_ADMISSION_DIR,'/isolated/admission');
   assert.equal(captured.env.UNRELATED_SECRET,undefined);
 });
+
+
+test('release confirmation is cleared when Identities closes and reopens',async t=>{
+  let released=0;
+  globalThis.metaviewerRoles={
+    choices:async()=>[{profileId:'account-a',available:true,currentMode:'closed',held:true,holder:'srf-id-orphan'}],
+    releaseIdentity:async()=>{released++;return {ok:true};},
+  };
+  t.after(()=>delete globalThis.metaviewerRoles);
+  const props=vue.reactive({open:true,host:{identity:{list:async()=>({ok:true,rows:[{id:'account-a',label:'Account',domains:[]}]})}}});
+  const wrapper=vue.defineComponent({setup:()=>()=>vue.h(component,props)});
+  const component=await dialog();
+  const view=mount(wrapper,{});t.after(view.close);await tick();
+  button(view.root,'Release').props.onClick();await tick();
+  assert(nodes(view.root).some(n=>n.props?.['aria-label']==='Release identity?'));
+  props.open=false;await tick();props.open=true;await tick();
+  assert.equal(nodes(view.root).some(n=>n.props?.['aria-label']==='Release identity?'),false);
+  assert.equal(released,0);
+  button(view.root,'Release').props.onClick();await tick();
+  assert(nodes(view.root).some(n=>n.props?.['aria-label']==='Release identity?'),'fresh confirmation remains available');
+});
+
+test('successful release followed by failed list refresh retains the refresh diagnosis',async t=>{
+  let listed=0,released=0;
+  globalThis.metaviewerRoles={
+    choices:async()=>[{profileId:'account-a',available:true,currentMode:'closed',held:true,holder:'srf-id-orphan'}],
+    releaseIdentity:async()=>{released++;return {ok:true};},
+  };
+  t.after(()=>delete globalThis.metaviewerRoles);
+  const view=mount(await dialog(),{open:true,host:{identity:{list:async()=>{if(listed++)throw Error('IDENTITY_UNAVAILABLE');return {ok:true,rows:[{id:'account-a',label:'Account',domains:[]}]};}}}});
+  t.after(view.close);await tick();button(view.root,'Release').props.onClick();await tick();
+  const confirmation=nodes(view.root).find(n=>n.props?.['aria-label']==='Release identity?');
+  button(confirmation,'Release').props.onClick();await tick();await tick();
+  assert.equal(released,1);
+  assert.match(text(view.root),/Identity released/);
+  assert.match(text(view.root),new RegExp(identityErrorText('IDENTITY_UNAVAILABLE')));
+  assert.doesNotMatch(text(view.root),/Release could not be verified/);
+});

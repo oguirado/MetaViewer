@@ -1081,3 +1081,20 @@ test('orphan identity refusal uses the renderer notice; other boot failures keep
   await showStartupFailure(dialog,{code:'IDENTITY_UNAVAILABLE'},'boot');
   assert.equal(shown.length,2);
 });
+
+test('early identity contention is replayed once after the renderer bridge is ready',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'orphan-boot-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const bin=join(root,'srf-bin');await mkdir(bin);
+  const status=()=>({availability:'live',pid:5252,handshakeSeen:true,code:'ADAPTER_LIVE',reason:null,userMessage:null});
+  const fx=await createStubBootFixture(root,{
+    env:{MV_SRF_BIN_DIR:bin},adapterStart:async()=>status(),adapterStatus:status,
+    coreRequest:async()=>({schema:'surface_event/v0.2',event:'error',data:{code:'IDENTITY_UNAVAILABLE',detail:'held identity'}}),
+  });
+  const boot=await bootProductionMain(fx.handles);t.after(()=>boot.dispose());
+  const notices=fx.ipcSent.filter(m=>m.channel==='metaviewer:authority.createSurface');
+  assert.equal(notices.length,1);
+  assert.equal(notices[0].payload.code,'IDENTITY_UNAVAILABLE');
+  assert.equal(fx.dialogs.length,0);
+  assert.equal(fx.capsuleStates.has('pending:mv-live-1'),false);
+});

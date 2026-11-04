@@ -595,7 +595,11 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         typeof choice.holder !== 'string' || !/^srf-id-[a-z0-9-]{1,40}$/.test(choice.holder)) throw refuse('IDENTITY_PROTECTED');
     if (creating || summarizeSurfaces(capsuleStates).bound.has(choice.profileId)) throw refuse('PROFILE_ALREADY_BOUND');
     creating = true;
-    try { return await recoveryTool('recover',{id:choice.profileId,holder:choice.holder,observerPid:unavailableIdentities.has(choice.profileId) ? recoveryAdapterPid() : null}); }
+    try {
+      const reply = await recoveryTool('recover',{id:choice.profileId,holder:choice.holder,observerPid:unavailableIdentities.has(choice.profileId) ? recoveryAdapterPid() : null});
+      if (reply?.ok === true) unavailableIdentities.delete(choice.profileId);
+      return reply;
+    }
     catch (error) { console.info(`METAVIEWER_IDENTITY_RELEASE_FAILED code=${/^[A-Z][A-Z0-9_]{1,63}$/.test(/** @type {any} */(error)?.message) ? /** @type {any} */(error).message : 'UNAVAILABLE'}`); throw Object.assign(refuse('IDENTITY_RELEASE_REFUSED'), {reason:'Release could not be verified. A live session or missing ownership evidence still holds this identity.'}); }
     finally { creating = false; }
   }
@@ -913,7 +917,6 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       capsuleStates.set(key,{profile_id:profile.id,state:'creating'});
       clearMode = await stageMode(env.MV_SRF_STATE_DIR, profile.id, choice.role);
       if (disposed) throw refuse('XPRA_HOST_CLOSED');
-      unavailableIdentities.delete(profile.id);
       const reply = await core.request(profile.request);
       if (reply?.schema !== 'surface_event/v0.2' || reply.event !== 'created') {
         const code=surfaceCreateRefusal(reply);
@@ -932,6 +935,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
         }
         throw refuse(disposed ? 'XPRA_HOST_CLOSED' : 'CAPSULE_MODE_UNPROVEN');
       }
+      unavailableIdentities.delete(profile.id);
       openingRoles.set(surface.surface_id,choice.role);
       capsuleStates.set(surface.surface_id,surface);
       return {ok:true,surfaceId:surface.surface_id,role:choice.role};

@@ -159,7 +159,7 @@ function syncModal(/** @type {boolean} */ open){
 }
 watch(()=>props.open,open=>syncModal(open),{immediate:true,flush:'sync'});
 onBeforeUnmount(()=>syncModal(false));
-watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=false;if(open)void invoke('list');},{immediate:true,flush:'sync'});
+watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=false;pendingRelease.value=null;if(open)void invoke('list');},{immediate:true,flush:'sync'});
 </script>
 <template>
   <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Keep a separate browser session for each account." confirm-label="Add identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
