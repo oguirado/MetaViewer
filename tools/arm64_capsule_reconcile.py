@@ -577,6 +577,13 @@ def seal_inventory(config_path, producer, producer_path):
 def seal_coordinator(config_path, producer_path):
     return append_inventory(config_path, 'setup', {'stage': 'coordinator_sealed', 'producer': 'setup'}, producer_path)
 
+def collected_scope_without_main_pid(unit, observed):
+    """systemd has no MainPID property for an absent, collected scope."""
+    return (type(unit) is str and unit.endswith('.scope') and type(observed) is dict
+            and 'MainPID' not in observed and observed.get('LoadState') == 'not-found'
+            and observed.get('ActiveState') == 'inactive' and observed.get('ControlGroup') == '')
+
+
 class Observations:
     """Read-only public metadata; errors remain unknown, never empty success."""
     def _query(self, argv, allow_absent_unit=False):
@@ -621,7 +628,8 @@ class Observations:
             key, value = line.split('=', 1)
             need(key not in result, 'duplicate unit property')
             result[key] = value
-        need({'LoadState', 'ActiveState', 'ControlGroup', 'InvocationID', 'MainPID'} <= set(result), 'unit witness incomplete')
+        need({'LoadState', 'ActiveState', 'ControlGroup', 'InvocationID'} <= set(result)
+             and ('MainPID' in result or collected_scope_without_main_pid(unit, result)), 'unit witness incomplete')
         return result
 
     def cgroup(self, group):
@@ -659,8 +667,10 @@ def prove_process(observer, pid, start):
 
 def prove_unit(observer, bound):
     observed = observer.unit(bound['unit'])
-    need(type(observed) is dict and {'LoadState', 'ActiveState', 'ControlGroup', 'InvocationID', 'MainPID'} <= set(observed), 'unit observation incomplete')
-    need(observed['ActiveState'] in ('inactive', 'failed') and observed['MainPID'] == '0', 'unit still active or unknown')
+    need(type(observed) is dict and {'LoadState', 'ActiveState', 'ControlGroup', 'InvocationID'} <= set(observed)
+         and ('MainPID' in observed or collected_scope_without_main_pid(bound['unit'], observed)), 'unit observation incomplete')
+    need(observed['ActiveState'] in ('inactive', 'failed')
+         and (observed.get('MainPID') == '0' or collected_scope_without_main_pid(bound['unit'], observed)), 'unit still active or unknown')
     if observed['LoadState'] == 'not-found':
         need(observed['ActiveState'] == 'inactive' and observed['ControlGroup'] == '', 'collected unit ambiguous')
     else:
