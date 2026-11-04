@@ -70,4 +70,41 @@ textarea,pre{font-family:monospace}pre{white-space:pre-wrap;overflow-wrap:anywhe
 .restore-response{display:grid;gap:.25rem;padding:1rem;margin:.75rem 0;border:1px solid var(--mv-semantic-border-default);border-radius:var(--mv-semantic-radius-md);background:var(--mv-semantic-surface-panel)}.restore-response strong{font-size:clamp(1.5rem,3vw,2.5rem);line-height:1.15;font-variant-numeric:tabular-nums}.restore-response small{color:var(--mv-semantic-text-muted)}
 :deep(.rewind-timeline){background:var(--mv-semantic-surface-panel);border-color:var(--mv-semantic-border-default)}:deep(.rewind-timeline .rewind-controls){gap:.75rem}:deep(.rewind-timeline li){border-color:var(--mv-semantic-border-subtle)}
 .rewind-back{position:relative}.rewind-back summary{display:flex;align-items:center;gap:.35rem;cursor:pointer}.rewind-back ul{position:absolute;top:100%;left:0;z-index:3;min-width:15rem;width:max-content;max-width:calc(100vw - 3rem);max-height:50vh;overflow:auto;list-style:none;margin:.5rem 0;padding:0;border:1px solid var(--mv-semantic-border-default);border-radius:.5rem;background:var(--mv-semantic-surface-panel)}.rewind-back li button{display:grid;gap:.25rem;width:100%;text-align:left}.rewind-back li span{font-size:.85em}.rewind-back summary:focus-visible{outline:3px solid var(--mv-semantic-focus-ring);outline-offset:3px}@media(max-width:650px){header{display:block}.controls .danger{margin-left:0}}
+/* Local alias for the application scheme name; values mirror the product token authority. */
+:root[data-theme-scheme="mv-dark"][data-theme-contrast="normal"] .guest-command-panel{
+  color-scheme:dark;
+  --mv-semantic-accent-primary: var(--mv-primitive-color-blue-300);
+  --mv-semantic-accent-primary-contrast: var(--mv-primitive-color-neutral-1050);
+  --mv-semantic-border-default: var(--mv-primitive-color-neutral-500);
+  --mv-semantic-border-subtle: var(--mv-primitive-color-neutral-500);
+  --mv-semantic-focus-ring: var(--mv-primitive-color-blue-300);
+  --mv-semantic-status-error-border: var(--mv-primitive-color-red-700);
+  --mv-semantic-status-error-surface: var(--mv-primitive-color-red-950);
+  --mv-semantic-status-error-text: var(--mv-primitive-color-red-100);
+  --mv-semantic-surface-canvas: var(--mv-primitive-color-neutral-1000);
+  --mv-semantic-surface-elevated: var(--mv-primitive-color-slate-500);
+  --mv-semantic-surface-interactive: var(--mv-primitive-color-slate-500);
+  --mv-semantic-surface-panel: var(--mv-primitive-color-neutral-950);
+  --mv-semantic-text-disabled: var(--mv-primitive-color-neutral-450);
+  --mv-semantic-text-muted: var(--mv-primitive-color-neutral-400);
+  --mv-semantic-text-primary: var(--mv-primitive-color-neutral-50);
+}
+:root[data-theme-scheme="mv-dark"][data-theme-contrast="high"] .guest-command-panel{
+  color-scheme:dark;
+  --mv-semantic-accent-primary: var(--mv-primitive-color-blue-100);
+  --mv-semantic-accent-primary-contrast: var(--mv-primitive-color-neutral-1100);
+  --mv-semantic-border-default: var(--mv-primitive-color-neutral-400);
+  --mv-semantic-border-subtle: var(--mv-primitive-color-neutral-500);
+  --mv-semantic-focus-ring: var(--mv-primitive-color-neutral-0);
+  --mv-semantic-status-error-border: var(--mv-primitive-color-neutral-0);
+  --mv-semantic-status-error-surface: var(--mv-primitive-color-neutral-1100);
+  --mv-semantic-status-error-text: var(--mv-primitive-color-neutral-0);
+  --mv-semantic-surface-canvas: var(--mv-primitive-color-neutral-1100);
+  --mv-semantic-surface-elevated: var(--mv-primitive-color-neutral-1100);
+  --mv-semantic-surface-interactive: var(--mv-primitive-color-neutral-1100);
+  --mv-semantic-surface-panel: var(--mv-primitive-color-neutral-1100);
+  --mv-semantic-text-disabled: var(--mv-primitive-color-neutral-100);
+  --mv-semantic-text-muted: var(--mv-primitive-color-neutral-50);
+  --mv-semantic-text-primary: var(--mv-primitive-color-neutral-0);
+}
 </style>

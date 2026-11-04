@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import {MV_PRIMARY_SCHEME} from '../src/settings/settingsModel.js';
 const panel=readFileSync(new URL('../src/components/GuestCommandPanel.vue',import.meta.url),'utf8');
 const load=()=>import('../src/wall/restoreDuration.js');
 function fixture(){
@@ -50,4 +52,26 @@ test('every panel CSS variable is defined by the actual application token author
  const undefinedVariables=source=>[...new Set([...source.matchAll(/var\(\s*(--[a-z0-9-]+)/g)].map(m=>m[1]))].filter(name=>!defined.has(name));
  assert.deepEqual(undefinedVariables(panel),[]);
  assert.deepEqual(undefinedVariables(panel+'\n.bad{color:var(--mv-semantic-undefined-proof)}'),['--mv-semantic-undefined-proof']);
+});
+
+const themeCSS=readFileSync(new URL('../src/design/metaviewer.css',import.meta.url),'utf8');
+const declarations=body=>Object.fromEntries([...body.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;]+);/g)].map(m=>[m[1],m[2].trim()]));
+function canonicalTheme(contrast){const selector=`:root[data-theme-scheme="dark"][data-theme-contrast="${contrast}"]`;const start=themeCSS.indexOf(selector);assert.notEqual(start,-1);return declarations(themeCSS.slice(start).split('{')[1].split('}')[0]);}
+function panelTheme(contrast,source=panel){const selector=`:root[data-theme-scheme="${MV_PRIMARY_SCHEME}"][data-theme-contrast="${contrast}"] .guest-command-panel`;const start=source.indexOf(selector);return start<0?{}:declarations(source.slice(start).split('{')[1].split('}')[0]);}
+test('actual selected mv-dark resolves canonical dark/high panel colors, not root light defaults',()=>{
+ assert.equal(MV_PRIMARY_SCHEME,'mv-dark');
+ const base=declarations(themeCSS.split(':root {')[1].split('}')[0]);
+ const used=new Set([...panel.matchAll(/var\(\s*(--mv-semantic-[a-z0-9-]+)/g)].map(m=>m[1]));
+ for(const contrast of ['normal','high']){
+  const canonical=canonicalTheme(contrast),local=panelTheme(contrast),expected=Object.fromEntries(Object.entries(canonical).filter(([name])=>used.has(name)));
+  assert.deepEqual(local,expected);assert.notEqual(local['--mv-semantic-surface-canvas'],base['--mv-semantic-surface-canvas']);
+  assert.equal(local['--mv-semantic-surface-canvas'],canonical['--mv-semantic-surface-canvas']);
+ }
+ assert.deepEqual(panelTheme('normal',panel.replaceAll('data-theme-scheme="mv-dark"','data-theme-scheme="unselected-dark"')),{});
+});
+test('compiled theme bridge scopes assignments to panel without changing the document root',()=>{
+ const {parse,compileStyle}=createRequire(import.meta.url)('@vue/compiler-sfc');const descriptor=parse(panel).descriptor;
+ const result=compileStyle({source:descriptor.styles[0].content,filename:'GuestCommandPanel.vue',id:'data-v-theme-proof',scoped:true});assert.deepEqual(result.errors,[]);
+ assert.match(result.code,/:root\[data-theme-scheme="mv-dark"\]\[data-theme-contrast="normal"\] \.guest-command-panel\[data-v-theme-proof\]/);
+ assert.doesNotMatch(result.code,/:root\[data-theme-scheme="mv-dark"\]\[data-theme-contrast="normal"\]\s*\{/);
 });
