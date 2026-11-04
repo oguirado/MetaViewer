@@ -177,5 +177,5 @@ test('paired terminal capability survives Dockview isolated router roots',async(
 test('closed wall fixture refuses an omitted router dependency', async () => {
   await assert.rejects(compileSfc('wall/WallWorkspace.vue', {
     'capsule-ui-kit/DockWorkspace': Workspace, './SurfacePanel.vue': SurfacePanel,
-  }), /Unmapped SFC dependency: \.\/capsulePanelRouter\.js/);
+  }, {defaultStubs:false}), /Unmapped SFC dependency: \.\/workloadPanelParams\.js/);
 });

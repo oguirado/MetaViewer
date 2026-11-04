@@ -400,3 +400,5 @@ roles from the same source as their visible text.
 - [License](../LICENSE)
 
 Wide capsule headers keep Record, Screenshot and Copy ID available as icon buttons. Narrow tiles reveal them on header hover or focus. Recording state stays in the header; hover does not resize the capsule view.
+
+Add capsule lists locally installed desktop applications before capsule kinds. Search matches app names and binaries. Recent contains only successful Host program launches made by MetaViewer. Applications run as Host programs, not isolated; choose Human or Agent before starting. Desktop launch arguments and field codes are not forwarded. Hidden, unavailable and terminal-only entries are omitted. The Host program binary field remains available as a fallback; isolated Program requires the executable in its own image.

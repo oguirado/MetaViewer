@@ -5,6 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { parse } from '@vue/compiler-sfc';
 
 const SFC_URL = new URL('../src/catalog/CatalogLauncher.vue', import.meta.url);
 const CSS_URL = new URL('../src/catalog/catalog.css', import.meta.url);
@@ -12,7 +13,7 @@ const sfc = readFileSync(SFC_URL, 'utf8');
 const css = readFileSync(CSS_URL, 'utf8');
 
 const script = (sfc.match(/<script setup>([\s\S]*?)<\/script>/) ?? [])[1] ?? '';
-const template = (sfc.match(/<template>([\s\S]*?)<\/template>/) ?? [])[1] ?? '';
+const template = parse(sfc).descriptor.template?.content ?? '';
 assert.ok(script.length > 0 && template.length > 0);
 
 /** Fail when text carries any inline-style vector (CSP: style-src + nonce). */
@@ -68,7 +69,7 @@ test('launcher composes the kit dialog with catalog bindings and events', () => 
 
 test('unknown kinds render as conditional typed error rows in the empty slot', () => {
   assert.ok(template.includes('#empty'));
-  assert.ok(template.includes('v-if="catalogErrors.length || disabledArmKinds.length"'));
+  assert.ok(template.includes('v-if="catalogErrors.length || disabledArmKinds.length || appListError"'));
   assert.ok(template.includes('v-for="row in catalogErrors"'));
   assert.ok(template.includes(':key="row.key"'));
   assert.ok(template.includes('catalog-launcher/error-'));
@@ -78,8 +79,8 @@ test('unknown kinds render as conditional typed error rows in the empty slot', (
   assert.ok(!template.includes('{{ row.message }}'));
   assert.ok(template.includes('aria-label="Unavailable capsule kinds"'));
   // Negative control: an unconditional slot (kit fallback lost) fails.
-  const unconditional = template.replace('v-if="catalogErrors.length || disabledArmKinds.length" ', '');
-  assert.throws(() => assert.ok(unconditional.includes('v-if="catalogErrors.length || disabledArmKinds.length"')),
+  const unconditional = template.replace('v-if="catalogErrors.length || disabledArmKinds.length || appListError" ', '');
+  assert.throws(() => assert.ok(unconditional.includes('v-if="catalogErrors.length || disabledArmKinds.length || appListError"')),
     assert.AssertionError);
 });
 

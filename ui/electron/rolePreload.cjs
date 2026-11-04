@@ -8,6 +8,7 @@ if (process.isMainFrame && location.origin === 'app://metaviewer') {
     releaseIdentity: choice => invoke('release-identity', {choice}),
     programs: () => invoke('programs'),
     listWindows: () => invoke('list-windows'),
+    listApps: () => invoke('list-apps'),
     surfaces: () => invoke('surfaces'),
     create: choice => invoke('create', {choice}),
     createProgram: choice => invoke('create-program', {choice}),

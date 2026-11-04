@@ -214,10 +214,15 @@ test('App refreshes availability on opening and rejects stale replies; launcher 
 
   const launcher = await readFile(new URL('../src/catalog/CatalogLauncher.vue', import.meta.url), 'utf8');
   assert.match(launcher, /vmAvailable: \{ type: Boolean, default: false \}/);
-  const expression = launcher.match(/const dialogTypes = computed\(\(\) => (.+)\);/)[1];
+  const {parse,compileScript} = await import('@vue/compiler-sfc');
+  const descriptor = parse(launcher).descriptor;
+  const compiled = compileScript(descriptor,{id:'app-catalog'});
+  const declaration = compiled.scriptSetupAst.flatMap(n=>n.declarations || []).find(n=>n.id.name==='dialogTypes');
+  const arrow = declaration.init.arguments[0];
+  const expression = `(${descriptor.scriptSetup.content.slice(arrow.start,arrow.end)})()`;
   for (const vmAvailable of [undefined, false, true]) {
     for (const kinds of [CATALOG_KIND_IDS, CATALOG_KIND_IDS.map(kind=>({kind}))]) {
-      const types = vm.runInNewContext(expression, {normalized:{value:normalizeCatalogEntries(kinds)}, availableCatalogKindIds, props:{vmAvailable}});
+      const types = vm.runInNewContext(expression, {normalized:{value:normalizeCatalogEntries(kinds)},installedApps:{value:[]},recentApps:{value:[]},availableCatalogKindIds,props:{vmAvailable}});
       assert.deepEqual([...types].map(type=>type.id), [...availableCatalogKindIds(vmAvailable)]);
     }
   }

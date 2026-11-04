@@ -1,4 +1,4 @@
-import {guestWorkloadTile} from '../src/wall/guestWorkloadTile.js';
+import {guestWorkloadTile,validGuestWorkloadTile} from '../src/wall/guestWorkloadTile.js';
 // WallWorkspace contract: kit DockWorkspace composition, one panel per
 // capsuleId, local presentation intents, opaque emit forwarding.
 import { test, describe, after } from 'node:test';
@@ -658,7 +658,7 @@ export default defineComponent({
   async function loadCompiledWall({oldPanelKind=false} = {}) {
     mkdirSync(tmpDir, { recursive: true });
     let source=readSfc();
-    if(oldPanelKind) { assert.ok(source.includes('markRaw({CapsulePanel:CapsuleContentRouter})')); source=source.replace('markRaw({CapsulePanel:CapsuleContentRouter})','markRaw({GuestWorkloadPanel:CapsuleContentRouter})'); }
+    if(oldPanelKind) { assert.ok(source.includes('CapsulePanel: CapsuleContentRouter')); source=source.replace('CapsulePanel: CapsuleContentRouter','GuestWorkloadPanel: CapsuleContentRouter'); }
     const { descriptor, errors } = parse(source, { filename: 'WallWorkspace.vue' });
     assert.equal(errors.length, 0);
     const compiled = compileScript(descriptor, { id: 'wall-workspace-test', inlineTemplate: true });
@@ -815,13 +815,15 @@ export default defineComponent({
     const tile=guestWorkloadTile(snapshot); assert.ok(tile);
     async function render(params,tiles,oldPanelKind=false){
       const loaded=await loadCompiledWall({oldPanelKind});loaded.dockStub.resetStub();loaded.panelStub.resetPanelStub();loaded.dockStub.routerParams.params=params;
-      const seen=[];const mounted=mountWall(loaded,{extraProps:{workloadTiles:tiles},workloadSlot:({workload})=>{seen.push(workload);return vue.h('button',{'data-stop-generation':workload.generation},'Stop');}});
+      const seen=[];const mounted=mountWall(loaded,{extraProps:{workloadTiles:tiles,validateWorkloadTile:validGuestWorkloadTile},workloadSlot:({workload})=>{seen.push(workload);return vue.h('button',{'data-stop-generation':workload.generation},'Stop');}});
       try{return {html:mounted.html,seen,graphical:loaded.panelStub.capturedPanelProps.length};}finally{mounted.app.unmount();loaded.dockStub.routerParams.params={capsuleId:'cap-1'};}
     }
     const nominal=await render({sessionId:tile.id},[tile]);
     assert.equal(nominal.seen.length,1);assert.equal(nominal.seen[0],tile);assert.equal(nominal.graphical,0);assert.ok(nominal.html.includes('data-stop-generation="7"'));
-    for(const [params,tiles] of [[{sessionId:'foreign'},[tile]],[{sessionId:tile.id},[tile,tile]],[{sessionId:tile.id,capsuleId:'cap-1'},[tile]],[{sessionId:tile.id,extra:true},[tile]],[{sessionId:tile.id},[{...tile,generation:8}]]]){
-      const refused=await render(params,tiles);assert.equal(refused.seen.length,0);assert.equal(refused.graphical,0);assert.ok(refused.html.includes('no longer available'));
+    for(const [params,tiles,invalidParams] of [[{sessionId:'foreign'},[tile],false],[{sessionId:tile.id},[tile,tile],false],[{sessionId:tile.id,capsuleId:'cap-1'},[tile],true],[{sessionId:tile.id,extra:true},[tile],true],[{sessionId:tile.id},[{...tile,generation:8}],false]]){
+      const refused=await render(params,tiles);assert.equal(refused.seen.length,0);assert.equal(refused.graphical,0);
+      assert.ok(refused.html.includes(invalidParams?'Missing capsule id or invalid capsule presentation.':'This capsule presentation is no longer available.'));
+      assert.ok(refused.html.includes(invalidParams?'role="alert"':'role="status"'));
     }
     const old=await render({sessionId:tile.id},[tile],true);
     assert.throws(()=>assert.equal(old.seen.length,1),assert.AssertionError,'old excluded panel kind kills the passing nominal');
@@ -836,8 +838,8 @@ export default defineComponent({
       const { app, html } = mountWall(loaded);
       try {
         assert.equal(loaded.panelStub.capturedPanelProps.length, 0);
-        assert.ok(html.includes('This capsule presentation is no longer available.'));
-        assert.ok(html.includes('role="status"'));
+        assert.ok(html.includes('Missing capsule id or invalid capsule presentation.'));
+        assert.ok(html.includes('role="alert"'));
       } finally {
         app.unmount();
       }

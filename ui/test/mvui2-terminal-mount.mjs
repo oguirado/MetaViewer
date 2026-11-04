@@ -21,7 +21,7 @@ export const text = (n) => [n.text ?? '', ...(n.children ?? []).map(text)].join(
 export const nodes = (n) => [n, ...(n.children ?? []).flatMap(nodes)];
 
 /** @param {string} file @param {Record<string, unknown>} deps */
-export async function compileSfc(file, deps) {
+export async function compileSfc(file, deps, {defaultStubs=true} = {}) {
   const { descriptor } = parse(readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8'));
   let code = compileScript(descriptor, { id: 'mvui2v1', inlineTemplate: true }).content;
   code = code.replace(/^import\s+['"][^'"]+['"];?\s*$/gm, '');
@@ -33,7 +33,7 @@ export async function compileSfc(file, deps) {
     if(spec==='./guestWorkloadTile.js'||spec==='./wall/guestWorkloadTile.js')deps[spec]=guestWorkloadTile;
     if(spec==='../electron/guestCommandValues.js')deps[spec]=guestCommandValues;
     if(spec==='../electron/rewindValues.js')deps[spec]=rewindValues;
-    addOperatorStubs(deps);
+    if(defaultStubs) addOperatorStubs(deps);
     assert.ok(spec in deps, `Unmapped SFC dependency: ${spec}`);
     return `const ${sfcImportBinding(bindings)} = globalThis.__mvui2v1Deps[${JSON.stringify(spec)}];`;
   });
@@ -52,12 +52,12 @@ export const SidebarIcon = await compileSfc('../.kit/capsule-ui-kit/src/shell/Si
 export const UiButton = await compileSfc('../.kit/capsule-ui-kit/src/ui/UiButton.vue', { 'openvue/button': OpenVueButton });
 
 /** @param {string} name @param {Record<string, any>} children */
-export function childStub(name, children) {
+export function childStub(name, children, slotArgs = {}) {
   return vue.defineComponent({
     inheritAttrs: false,
     setup(_, ctx) {
       children[name] = ctx;
-      return () => vue.h('section', {}, Object.values(ctx.slots).flatMap((slot) => slot?.() ?? []));
+      return () => vue.h('section', {}, Object.values(ctx.slots).flatMap((slot) => slot?.(slotArgs) ?? []));
     },
   });
 }

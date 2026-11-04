@@ -1,5 +1,6 @@
 import { acquireCapsuleCreation } from './profilePicker.js';
 import { programBinaries } from './programBinaries.js';
+import { desktopApplications } from './desktopApplications.js';
 import { isForeignIdentity, isProtectedIdentity } from './identityProtection.js';
 import { hostKeyboardLayout } from './keyboardLayout.js';
 import { stageOpeningMode } from './openingMode.js';
@@ -414,6 +415,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     return [...profiles, ...configuredVMProfiles(env, process.arch), ...dynamicProfiles.values(), ...programProfiles.values(), ...windowProfiles.values()];
   };
   const roleFor = (/** @type {any} */ surface) => openingRoles.get(surface.surface_id) ?? roleOf(surface.profile_id);
+  const installedApps = desktopApplications({env:{...process.env,...env},stateDir:join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR,'app-launcher'),resolve:binary=>resolveHostBinary(binary,{...process.env,...env}),nativeImage:electron.nativeImage});
   const savedPrograms = programBinaries(join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR, 'program-binaries'));
   // [TARGET, unit decision] The desktop role owner decorates the existing core
   // request, so marker carry completes before the successful copy reaches UI.
@@ -897,6 +899,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       openingRoles.set(surface.surface_id, role);
       programProfiles.set(profileId, {id:profileId, surfaceId:surface.surface_id, binary:resolved.name, path:resolved.path, role, hostXpra:choice.hostXpra === true});
       capsuleStates.set(surface.surface_id, surface);
+      if (choice.hostXpra === true) await installedApps.launched(resolved.path).catch(() => {});
       return {ok:true, surfaceId:surface.surface_id, profileId, role, binary:resolved.name, path:resolved.path};
     } finally {
       if (key) capsuleStates.delete(key);
@@ -1022,7 +1025,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   const handler = async (event, message) => {
     if (disposed || !admit(event) || !message || message.schema !== 'metaviewer.roles/v0.3') throw refuse('XPRA_SENDER_REFUSED');
     const {op} = message;
-    const keys = ['choices','programs','surfaces','list-windows'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window','release-identity'].includes(op) ? 'choice,op,schema'
+    const keys = ['choices','programs','surfaces','list-windows','list-apps'].includes(op) ? 'op,schema' : ['create','open','create-program','create-window','release-identity'].includes(op) ? 'choice,op,schema'
       : ['mount','resize'].includes(op) ? 'bounds,op,schema,surfaceId'
       : op === 'visibility' ? 'op,schema,surfaceId,visible' : op === 'theme' ? 'op,schema,surfaceId,theme' : 'op,schema,surfaceId';
     if (!exact(message,keys)) throw refuse('XPRA_PAYLOAD_REFUSED');
@@ -1033,6 +1036,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       if (op === 'choices') return await choices();
       if (op === 'release-identity') return await releaseIdentity(message.choice);
       if (op === 'programs') return await programs();
+      if (op === 'list-apps') return await installedApps.list();
       if (op === 'list-windows') {
         const rows = await listHostWindowChoices();
         pruneProgramProfiles();
