@@ -1,6 +1,7 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 // CAPID-UI (FEEDBACK row 7, pillar P2): every wall tile shows its capsule id
 // (short, full id on hover) and a keyboard-reachable "Copy ID for AI" action
-// that copies one ready line: the id plus the documented mw_run attach usage.
+// that copies only the complete host-issued capsule identifier.
 //
 // Layers: the pure module (grammar, short form, ready line, copy outcomes,
 // timed confirmation), then the REAL SurfacePanel SFC mounted on a custom
@@ -215,12 +216,12 @@ function pureOracle(m) {
 async function copyOracle(m) {
   const failures = [];
   const check = async (name, fn) => { try { await fn(); } catch (error) { failures.push(`${name}: ${error.message.split('\n').slice(0, 4).join(' ').slice(0, 300)}`); } };
-  await check('copy writes exactly the ready line', async () => {
+  await check('copy writes exactly the capsule identifier', async () => {
     const clipboard = clipboardDouble();
     const out = await m.copyCapsuleReadyLine({ surfaceId: SURFACE, profileId: IDENTITY }, clipboard);
     assert.equal(out.state, 'copied');
-    assert.deepEqual(clipboard.writes, [m.buildCapsuleReadyLine({ surfaceId: SURFACE, profileId: IDENTITY })]);
-    assert.ok(clipboard.writes[0].includes('mw_run'), 'the line is not the bare id');
+    assert.deepEqual(clipboard.writes, [SURFACE]);
+    assert.equal(out.text, SURFACE);
   });
   await check('refusing clipboard projects unavailable and never throws', async () => {
     const out = await m.copyCapsuleReadyLine({ surfaceId: SURFACE, profileId: IDENTITY }, clipboardDouble({ reject: true }));
@@ -338,18 +339,19 @@ async function panelOracle(Panel) {
     assert.equal(button.props.disabled, false);
     assert.notEqual(button.props.tabindex, -1);
     assert.equal(button.props['aria-label'], `Copy ID for AI: capsule ${SURFACE}`);
+    assert.equal(button.props.title, `Copy ID for AI: capsule ${SURFACE}`);
     assert.equal(textOf(button), 'Copy ID for AI');
     assert.equal(button.props['data-semantic-anchor'], `tile-${SURFACE}-copy-id`);
     close();
   });
-  await check('click copies the ready line and shows Copied, then clears', async () => {
+  await check('click copies only the full identifier and shows Copied, then clears', async () => {
     mock.timers.enable({ apis: ['setTimeout'] });
     try {
       const { root, close, clipboard } = await mountPanel(Panel);
       const button = byId(root, `tile-${SURFACE}-copy-id`);
       button.props.onClick();
       await flush();
-      assert.deepEqual(clipboard.writes, [capsuleId.buildCapsuleReadyLine({ surfaceId: SURFACE, profileId: IDENTITY })]);
+      assert.deepEqual(clipboard.writes, [SURFACE]);
       const status = byClass(root, 'mv-tile-capid__status');
       assert.ok(status, 'confirmation mounts');
       assert.equal(status.props.role, 'status');
@@ -398,7 +400,7 @@ async function panelOracle(Panel) {
       byId(root, `tile-${SURFACE}-copy-id`).props.onClick();
       await flush();
       assert.equal(clipboard.writes.length, 1);
-      assert.ok(clipboard.writes[0].includes(SURFACE));
+      assert.equal(clipboard.writes[0], SURFACE);
       assert.equal(clipboard.writes[0].includes('--identity'), false);
       close();
     } finally {
@@ -508,7 +510,7 @@ describe('wall tile id chip and Copy ID for AI', () => {
   });
   test('the chip adds no lane control to SurfacePanel and no template v-if', () => {
     const template = PANEL_SOURCE.slice(PANEL_SOURCE.indexOf('<template>'));
-    assert.doesNotMatch(template, /v-if|<button|tabindex/);
+    assert.doesNotMatch(withoutPairedTerminalControl(template), /v-if|<button|tabindex/);
     assert.match(template, /:surface-id=/);
     assert.match(template, /:profile-id=/);
     assert.match(template, /:tile-state="tile\.tile"/);
@@ -518,8 +520,8 @@ describe('wall tile id chip and Copy ID for AI', () => {
 
 describe('mutants are rejected by the oracles', () => {
   const CASES = [
-    ['copy writes the bare id instead of the ready line', 'copy',
-      (s) => s.replace('await target.writeText(text);', 'await target.writeText(ids.surfaceId);')],
+    ['copy writes a prompt instead of the bare identifier', 'copy',
+      (s) => s.replace('await target.writeText(text);', 'await target.writeText(buildCapsuleReadyLine(ids));')],
     ['identity grammar not enforced', 'pure',
       (s) => s.replace('return typeof id === \'string\' && CAPSULE_IDENTITY_RE.test(id);', 'return typeof id === \'string\' && id.length > 0;')],
     ['surface id grammar not enforced', 'pure',
@@ -555,7 +557,7 @@ describe('mutants are rejected by the oracles', () => {
     ['confirmation always shown', (c) => c.replace('<span v-if="copyStatusText !== \'\'" role="status"', '<span role="status"')],
     ['chip shown in display-only tiles', (c) => c.replace('<div v-if="!props.displayOnly" class="mv-tile-chrome"', '<div class="mv-tile-chrome"')],
     ['wrong id source (profile instead of surface id)', (c) => c.replace('surfaceId: capSurfaceId.value,\n  profileId', 'surfaceId: props.profileId || capSurfaceId.value,\n  profileId')],
-    ['button not a button (div)', (c) => c.replace('      <button\n        :id="copyIdDomId"\n        type="button"', '      <div\n        :id="copyIdDomId"').replace('{{ CAPSULE_COPY_LABEL }}</button>', '{{ CAPSULE_COPY_LABEL }}</div>')],
+    ['button not a button (div)', (c) => c.replace('      <button\n        :id="copyIdDomId"\n        type="button"', '      <div\n        :id="copyIdDomId"').replace('{{ CAPSULE_COPY_LABEL }}</span></button>', '{{ CAPSULE_COPY_LABEL }}</span></div>')],
     ['chip falls back to the capsule id without a surface id', (c) => c.replace('const capSurfaceId = computed(() => props.surfaceId);', 'const capSurfaceId = computed(() => props.surfaceId || props.capsuleId);')],
     ['reset timer not cleared on unmount', (c) => c.replace("onBeforeUnmount(() => { copyFeedback.dispose(); });", '')],
   ];

@@ -30,7 +30,7 @@ func (r *stateFrameRunner) Run(ctx context.Context, args []string, stdin []byte)
 }
 
 func TestStateChangeFreshFrame(t *testing.T) {
-	for _, mode := range []string{"release", "capture-failure", "publisher-failure", "list"} {
+	for _, mode := range []string{"release", "capture-failure", "publisher-failure", "list", "list-capture-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			root, err := os.MkdirTemp("/dev/shm", "mv-state-frame-")
 			if err != nil {
@@ -77,7 +77,8 @@ func TestStateChangeFreshFrame(t *testing.T) {
 			}
 			before := initial.Data.FrameRef
 			params := map[string]string{"surface_id": before.SurfaceID}
-			if mode != "list" {
+			listing := mode == "list" || mode == "list-capture-failure"
+			if !listing {
 				captures := runner.captures
 				taken := call("take_control", map[string]string{"surface_id": before.SurfaceID, "owner": "human"})
 				if len(taken) != 1 || runner.captures != captures {
@@ -94,14 +95,14 @@ func TestStateChangeFreshFrame(t *testing.T) {
 				t.Fatalf("static poll: %+v changed=%v err=%v", polled, changed, err)
 			}
 			captures := runner.captures
-			runner.fail = mode == "capture-failure"
+			runner.fail = mode == "capture-failure" || mode == "list-capture-failure"
 			if mode == "publisher-failure" {
 				if err := pub.Close(); err != nil {
 					t.Fatal(err)
 				}
 			}
 			op := "release_control"
-			if mode == "list" {
+			if listing {
 				op = "list"
 				params = map[string]string{}
 			}
@@ -123,6 +124,28 @@ func TestStateChangeFreshFrame(t *testing.T) {
 				binding, err := m.SubscriptionBinding(before.SurfaceID)
 				if err != nil || binding.Surface.Control != "agent" {
 					t.Fatalf("release failed: %+v %v", binding, err)
+				}
+				if runner.fail {
+					// Native control can be busy during release (for example while
+					// sealing a demo). The next real static capture must still publish.
+					runner.fail = false
+					binding, native, err := m.Capture(context.Background(), before.SurfaceID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					recovered, changed, err := pub.PublishIfChanged(before.SurfaceID, binding, native)
+					if err != nil || !changed || recovered.Generation <= before.Generation || recovered.SHA256 != before.SHA256 {
+						t.Fatalf("FRESH_FRAME_RECOVERY_REQUIRED: %+v changed=%v err=%v", recovered, changed, err)
+					}
+					// Once published, ordinary static polls deduplicate again.
+					binding, native, err = m.Capture(context.Background(), before.SurfaceID)
+					if err != nil {
+						t.Fatal(err)
+					}
+					polled, changed, err := pub.PublishIfChanged(before.SurfaceID, binding, native)
+					if err != nil || changed || polled.Generation != recovered.Generation {
+						t.Fatalf("recovered static poll: %+v changed=%v err=%v", polled, changed, err)
+					}
 				}
 				return
 			}

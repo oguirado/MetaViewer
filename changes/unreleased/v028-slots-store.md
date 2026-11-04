@@ -1,0 +1,1 @@
+- Add the capsule save slot store: atomic generations, streaming payload hash, crash recovery, quotas.

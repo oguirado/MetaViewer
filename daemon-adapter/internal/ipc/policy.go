@@ -24,8 +24,11 @@ type Authority interface {
 }
 type SchemaPolicy struct {
 	Authority
-	config   Config
-	envelope *schemaNode
+	config      Config
+	envelope    *schemaNode
+	capsule     *schemaNode
+	rewind      *schemaNode
+	observation *schemaNode
 }
 
 var _ Policy = (*SchemaPolicy)(nil)
@@ -243,7 +246,43 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 	if n.kind != "object" || !n.closed || n.props["schema"] == nil || n.props["schema"].constant != "envelope/v0.2" || n.props["body"] == nil || len(n.props["body"].choices) == 0 {
 		return nil, errors.New("closed v0.2 envelope contract required")
 	}
-	return &SchemaPolicy{Authority: authority, config: c, envelope: n}, nil
+	var capsuleRoot *schemaNode
+	if _, statErr := fs.ReadFile(source, "capsule_envelope.schema.json"); statErr == nil {
+		capsuleRoot, err = resolve("capsule_envelope.schema.json", "")
+		if err != nil {
+			return nil, err
+		}
+		if capsuleRoot.kind != "object" || !capsuleRoot.closed || capsuleRoot.props["schema"] == nil || capsuleRoot.props["schema"].constant != "capsule_envelope/v0.2" || capsuleRoot.props["body"] == nil || len(capsuleRoot.props["body"].choices) != 4 {
+			return nil, errors.New("closed capsule envelope contract required")
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return nil, statErr
+	}
+	var rewindRoot *schemaNode
+	if _, statErr := fs.ReadFile(source, "rewind_envelope.schema.json"); statErr == nil {
+		rewindRoot, err = resolve("rewind_envelope.schema.json", "")
+		if err != nil {
+			return nil, err
+		}
+		if rewindRoot.kind != "object" || !rewindRoot.closed || rewindRoot.props["schema"] == nil || rewindRoot.props["schema"].constant != "rewind_envelope/v0.2" || rewindRoot.props["body"] == nil || len(rewindRoot.props["body"].choices) != 2 {
+			return nil, errors.New("closed rewind envelope contract required")
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return nil, statErr
+	}
+	var observationRoot *schemaNode
+	if _, statErr := fs.ReadFile(source, "guest_command_observation_envelope.schema.json"); statErr == nil {
+		observationRoot, err = resolve("guest_command_observation_envelope.schema.json", "")
+		if err != nil {
+			return nil, err
+		}
+		if observationRoot.kind != "object" || !observationRoot.closed || observationRoot.props["schema"] == nil || observationRoot.props["schema"].constant != "guest_command_observation_envelope/v0.2" || observationRoot.props["body"] == nil || observationRoot.props["body"].ref == nil || observationRoot.props["body"].ref.props["schema"] == nil || observationRoot.props["body"].ref.props["schema"].constant != "guest_command_observation/v0.2" {
+			return nil, errors.New("closed command observation contract required")
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return nil, statErr
+	}
+	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot, observation: observationRoot}, nil
 }
 func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 	var e Envelope
@@ -262,7 +301,24 @@ func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 	if err := d.Decode(&v); err != nil {
 		return e, err
 	}
-	if !p.envelope.accept(v) || !terminalLengthsOK(v) {
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return e, errors.New("closed envelope object required")
+	}
+	var selected *schemaNode
+	switch obj["schema"] {
+	case "envelope/v0.2":
+		selected = p.envelope
+	case "capsule_envelope/v0.2":
+		selected = p.capsule
+	case "rewind_envelope/v0.2":
+		selected = p.rewind
+	case "guest_command_observation_envelope/v0.2":
+		selected = p.observation
+	default:
+		return e, errors.New("unknown envelope discriminator")
+	}
+	if selected == nil || !selected.accept(v) || !terminalLengthsOK(v) {
 		return e, errors.New("closed v0.2 envelope/body refused")
 	}
 	err := json.Unmarshal(raw, &e)

@@ -38,18 +38,18 @@ function strictHostDouble(initialText = null) {
 test('restart simulation: a new store instance loads values saved through the double', async () => {
   const host = createMemorySettingsHost();
   const first = createHostSettingsStore(host);
-  assert.equal(await first.save({ scheme: 'mv-dark', density: 'compact' }), true);
+  assert.equal(await first.save({ scheme: 'mv-light', density: 'compact' }), true);
   const second = createHostSettingsStore(host);
-  assert.deepEqual({ ...(await second.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await second.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
 });
 
 test('negative control: a fresh double boots defaults, proving values came from storage', async () => {
   const host = createMemorySettingsHost();
-  await createHostSettingsStore(host).save({ scheme: 'mv-dark', density: 'compact' });
+  await createHostSettingsStore(host).save({ scheme: 'mv-light', density: 'compact' });
   const fresh = createHostSettingsStore(createMemorySettingsHost());
-  assert.deepEqual({ ...(await fresh.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await fresh.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
   assert.throws(
-    () => assert.deepEqual({ scheme: 'mv-dark' }, { scheme: 'mv-light' }),
+    () => assert.deepEqual({ scheme: 'mv-light' }, { scheme: 'mv-dark' }),
     assert.AssertionError,
     'the restart assertion above can fail',
   );
@@ -57,51 +57,51 @@ test('negative control: a fresh double boots defaults, proving values came from 
 
 test('unknown keys from a load refuse with full-default fallback and never send on save', async () => {
   const host = createMemorySettingsHost(
-    '{"scheme":"mv-dark","density":"compact","panel-width":320,"experimental":true}',
+    '{"scheme":"mv-light","density":"compact","panel-width":320,"experimental":true}',
   );
   const store = createHostSettingsStore(host);
   await assert.rejects(store.load(), /ERR_SETTINGS_UNKNOWN_KEY/);
-  assert.deepEqual({ ...(await store.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
-  assert.equal(await store.save({ scheme: 'mv-light', density: 'compact' }), true);
-  assert.equal(host.calls.at(-1)?.json, settings('mv-light'));
+  assert.deepEqual({ ...(await store.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.equal(await store.save({ scheme: 'mv-dark', density: 'compact' }), true);
+  assert.equal(host.calls.at(-1)?.json, settings('mv-dark'));
   assert.deepEqual(JSON.parse(/** @type {string} */ (host.calls.at(-1)?.json)), {
-    scheme: 'mv-light',
+    scheme: 'mv-dark',
     density: 'compact',
     wallFps: 30,
     recordingFps: 3,
   });
   const again = createHostSettingsStore(host);
-  assert.deepEqual({ ...(await again.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await again.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
 });
 
 test('negative control: a host double that refuses unknown keys would refuse the old merge-back', async () => {
-  const host = strictHostDouble('{"scheme":"mv-dark","density":"compact","panel-width":320}');
+  const host = strictHostDouble('{"scheme":"mv-light","density":"compact","panel-width":320}');
   await assert.rejects(
-    host.saveSettings('{"scheme":"mv-dark","density":"compact","panel-width":320}'),
+    host.saveSettings('{"scheme":"mv-light","density":"compact","panel-width":320}'),
     /SETTINGS_UNKNOWN_KEY/,
     'the double refuses unknown keys, proving the save below can fail',
   );
   const store = createHostSettingsStore(host);
   await assert.rejects(store.load(), /ERR_SETTINGS_UNKNOWN_KEY/);
-  assert.deepEqual({ ...(await store.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
-  assert.equal(await store.save({ scheme: 'mv-light', density: 'compact' }), true);
-  assert.equal(host.calls.at(-1)?.json, settings('mv-light'));
+  assert.deepEqual({ ...(await store.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.equal(await store.save({ scheme: 'mv-dark', density: 'compact' }), true);
+  assert.equal(host.calls.at(-1)?.json, settings('mv-dark'));
 });
 
 test('invalid values fall back per field while missing keys resolve defaults', async () => {
   const empty = createHostSettingsStore(createMemorySettingsHost('{}'));
-  assert.deepEqual({ ...(await empty.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await empty.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
   const unknownOnly = createHostSettingsStore(createMemorySettingsHost('{"future":1}'));
   await assert.rejects(unknownOnly.load(), /ERR_SETTINGS_UNKNOWN_KEY/);
-  assert.deepEqual({ ...(await unknownOnly.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await unknownOnly.load().catch(() => defaultMvSettings())) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
   const badScheme = createHostSettingsStore(createMemorySettingsHost('{"scheme":"invented"}'));
-  assert.deepEqual({ ...(await badScheme.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await badScheme.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
   const badDensity = createHostSettingsStore(createMemorySettingsHost('{"density":"huge"}'));
-  assert.deepEqual({ ...(await badDensity.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
-  const validSchemeBadDensity = createHostSettingsStore(createMemorySettingsHost('{"scheme":"mv-dark","density":7}'));
-  assert.deepEqual({ ...(await validSchemeBadDensity.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await badDensity.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
+  const validSchemeBadDensity = createHostSettingsStore(createMemorySettingsHost('{"scheme":"mv-light","density":7}'));
+  assert.deepEqual({ ...(await validSchemeBadDensity.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
   const badSchemeValidDensity = createHostSettingsStore(createMemorySettingsHost('{"scheme":"invented","density":"compact"}'));
-  assert.deepEqual({ ...(await badSchemeValidDensity.load()) }, { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 });
+  assert.deepEqual({ ...(await badSchemeValidDensity.load()) }, { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 });
 });
 
 test('save carries only the four closed keys; strict decode still refuses unknown keys', async () => {

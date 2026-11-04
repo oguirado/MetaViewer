@@ -1,0 +1,10 @@
+import {createApp,h,ref} from 'vue';
+import IdentitiesDialog from '../src/identities/IdentitiesDialog.vue';
+import DemoDialog from '../src/demo/DemoDialog.vue';
+import {installKitTheme} from 'capsule-ui-kit/theme';
+import 'capsule-ui-kit/theme.css';
+import '../src/App.vue';
+const host={identity:{list:async()=>({ok:true,rows:[]})}};
+const dialog=new URLSearchParams(location.search).get('dialog')==='demo'?DemoDialog:IdentitiesDialog;
+const app=createApp({setup(){const open=ref(true);return()=>h('main',{class:'mv-shell'},[h(dialog,{open:open.value,host,onClose:()=>{open.value=false;}})]);}});
+installKitTheme(app);app.mount('#app');

@@ -1,0 +1,1 @@
+- Retain independent paired terminal views and output per capsule when hidden or switching desktops, including smaller tiles.

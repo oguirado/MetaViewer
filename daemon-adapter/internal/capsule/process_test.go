@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -333,5 +334,180 @@ func TestRuntimeRequiresBinaryEnvironment(t *testing.T) {
 	t.Setenv("MV_SRF_BIN_DIR", "")
 	if _, e := NewRuntime(Config{}, func() uint64 { return 1 }); e == nil {
 		t.Fatal("missing binary environment accepted")
+	}
+}
+
+// A writable demonstration owns the native control lock until sealing. Capture
+// must wait without spawning a frame command or declaring the capsule absent.
+func TestDemoControlLockDefersFrameAndResumes(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	os.Chmod(state, 0700)
+	binary := filepath.Join(root, "srf-identity-surface")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'frame-resumed'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(state, "control.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(root, []string{"PATH=/usr/bin:/bin", "MV_SRF_STATE_DIR=" + state}, 4096, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{binary, "frame", "--container", "srf-id-demo"}
+	for i := 0; i < 3; i++ {
+		out, err := r.Run(context.Background(), args, nil)
+		var f *cli.Fault
+		if !errors.As(err, &f) || f.Code != "native_busy" || IsAbsenceFault(err) || len(out) != 0 {
+			t.Fatalf("recording contention must defer capture, got %q, %v", out, err)
+		}
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.Run(context.Background(), args, nil)
+	if err != nil || string(out) != "frame-resumed" {
+		t.Fatalf("capture did not resume after seal: %q %v", out, err)
+	}
+}
+
+func TestConcurrentFrameProbesDoNotReportNativeBusy(t *testing.T) {
+	state := t.TempDir()
+	os.Chmod(state, 0700)
+	if err := os.WriteFile(filepath.Join(state, "control.lock"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(t.TempDir(), []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state}, 4096, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	failures := make(chan error, 2)
+	start := make(chan struct{})
+	for range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for range 20000 {
+				if err := r.deferBusyFrame(); err != nil {
+					failures <- err
+					return
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(failures)
+	for err := range failures {
+		t.Errorf("no native holder: %v", err)
+	}
+}
+
+func TestTwoCapsulesCreateAndPollWhileNativeFrameHoldsLock(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	os.Chmod(state, 0700)
+	if err := os.WriteFile(filepath.Join(state, "control.lock"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "srf-identity-surface")
+	script := `#!/bin/sh
+exec 9>"$5/control.lock"
+flock -x 9 || exit 1
+printf ready > "$5/$3.ready"
+while [ ! -f "$5/release" ]; do sleep .005; done
+printf frame
+`
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(root, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state}, 4096, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 2)
+	frame := func(id string) {
+		out, err := r.Run(context.Background(), []string{binary, "frame", "--container", id}, nil)
+		if err == nil && string(out) != "frame" {
+			err = fmt.Errorf("wrong frame: %q", out)
+		}
+		results <- err
+	}
+	go frame("capsule-first")
+	defer os.WriteFile(filepath.Join(state, "release"), nil, 0600)
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(state, "capsule-first.ready")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first capture did not acquire native lock")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	go frame("capsule-created")
+	select {
+	case err := <-results:
+		if err != nil {
+			t.Errorf("create capture collided with polling: %v", err)
+		}
+		os.WriteFile(filepath.Join(state, "release"), nil, 0600)
+		if err := <-results; err != nil {
+			t.Error(err)
+		}
+	case <-time.After(20 * time.Millisecond):
+		os.WriteFile(filepath.Join(state, "release"), nil, 0600)
+		for range 2 {
+			if err := <-results; err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	for range 5 {
+		for _, id := range []string{"capsule-first", "capsule-created"} {
+			frame(id)
+			if err := <-results; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestNativeFrameQueueCancellationDoesNotSpawn(t *testing.T) {
+	root, state := t.TempDir(), t.TempDir()
+	os.Chmod(state, 0700)
+	marker := filepath.Join(state, "spawned")
+	binary := filepath.Join(root, "srf-identity-surface")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(root, []string{"PATH=" + os.Getenv("PATH"), "MV_SRF_STATE_DIR=" + state}, 4096, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.nativeGate <- struct{}{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = r.Run(ctx, []string{binary, "frame", "--container", "capsule-queued"}, nil)
+	var refused *preSpawnRefusal
+	if !errors.As(err, &refused) {
+		t.Fatalf("queue cancellation must prove no spawn: %v", err)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("cancelled queue spawned command")
+	}
+	<-r.nativeGate
+	out, err := r.Run(context.Background(), []string{binary, "frame", "--container", "capsule-queued"}, nil)
+	if err != nil || len(out) != 0 {
+		t.Fatalf("released queue did not resume: %q %v", out, err)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal(err)
 	}
 }

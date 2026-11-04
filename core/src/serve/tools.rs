@@ -58,6 +58,7 @@ fn is_dispatched_current_epoch_agent_pending(
 #[derive(Default)]
 pub(super) struct ToolState {
     pub(super) surfaces: BTreeMap<String, Value>,
+    stoppable_lost_surfaces: BTreeSet<String>,
     destroyed: BTreeSet<String>,
     destroyed_order: VecDeque<String>,
     frames: BTreeMap<String, Value>,
@@ -88,6 +89,9 @@ impl ToolState {
                 SurfaceEvent::Case0(_) | SurfaceEvent::Case1(_) => {
                     let surface = &value["data"]["surface"];
                     if let Some(id) = surface["surface_id"].as_str() {
+                        if surface["kind"].as_str() != Some("game_capsule") {
+                            self.stoppable_lost_surfaces.insert(id.to_owned());
+                        }
                         if matches!(surface["state"].as_str(), Some("destroyed" | "lost")) {
                             self.surfaces.remove(id);
                             self.frames.remove(id);
@@ -95,6 +99,7 @@ impl ToolState {
                             self.layout.remove(id);
                             self.placements.remove(id);
                             if surface["state"].as_str() == Some("destroyed") {
+                                self.stoppable_lost_surfaces.remove(id);
                                 self.record_destroyed(id);
                             } else {
                                 self.evict_destroyed();
@@ -506,6 +511,9 @@ impl ToolState {
     }
     pub(super) fn is_destroyed_surface(&self, id: &str) -> bool {
         self.destroyed.contains(id)
+    }
+    pub(super) fn is_stoppable_lost_surface(&self, id: &str) -> bool {
+        self.stoppable_lost_surfaces.contains(id)
     }
     pub(super) fn layout_visibility(&self, id: &str) -> Option<String> {
         self.layout.get(id).cloned()

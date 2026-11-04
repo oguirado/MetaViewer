@@ -174,3 +174,21 @@ fail the run (`tests/test_check_contracts.py`).
 Do not edit a schema in place for a breaking change: open
 `contracts/v0.3/`. Additive, backward-compatible work still ships the
 schema and both fixtures before the code that uses them.
+
+## Headless fixed-job lifecycle
+
+`headless_request`, `headless_event` and embedded `headless_session` define an additive
+non-graphical lifecycle. Create selects only `headless-sumsq`; the trusted host chooses
+profile/backend/ISA. Run permits only a bounded sumsq integer. No image path, command
+line, owner override, frame or terminal byte stream is accepted from the requester.
+The core binds ownership to its registered agent and remembers the creating UI
+endpoint for responses. This initial implementation admits one ARM Firecracker
+workload in a fresh core session with no graphical create history. While its ownership
+is held, graphical creates are refused; a confirmed stopped state releases this
+exclusion, but does not permit another headless create in the same session.
+
+The core journals each request before forwarding it and validates every daemon
+state/job transition. A bounded pending deadline or executor loss preserves unknown
+ownership, never success. Missing workload identity is not fabricated; that case
+requires external owner reconciliation. `action_proposal` remains frame-bound and
+unchanged. The headless schemas are not evidence of an installed native provider.

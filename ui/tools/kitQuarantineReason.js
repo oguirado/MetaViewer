@@ -14,12 +14,23 @@ export function kitQuarantineReason(source) {
   return source;
 }
 
+/** Keep Chromium's hidden nonce attribute compatible with its nonce property.
+ * @param {string} source */
+export function kitGeometryNonce(source) {
+  const before = "if (existing) return existing.getAttribute('nonce') === nonce ? existing : null;";
+  const after = "if (existing) return (existing.nonce || existing.getAttribute('nonce')) === nonce ? existing : null;";
+  if (source.split(before).length !== 2) throw Error('KIT_GEOMETRY_NONCE_OVERLAY_DRIFT');
+  return source.replace(before, after);
+}
+
 export function kitQuarantineReasonPlugin() {
   return {
     name:'metaviewer-kit-quarantine-reason', enforce:'pre',
     /** @param {string} source @param {string} id */
     transform(source, id) {
-      if (id.replaceAll('\\','/').endsWith('/.kit/capsule-ui-kit/src/workspace/DockWorkspace.vue')) return kitQuarantineReason(source);
+      const path = id.replaceAll('\\','/');
+      if (path.endsWith('/.kit/capsule-ui-kit/src/workspace/DockWorkspace.vue')) return kitQuarantineReason(source);
+      if (path.endsWith('/.kit/capsule-ui-kit/src/workspace/kitGeometrySheet.js')) return kitGeometryNonce(source);
     },
   };
 }

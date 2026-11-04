@@ -12,6 +12,7 @@ import os
 import stat
 import time
 import socket
+import signal
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1549,6 +1550,78 @@ finally:s.close()
                 self.b.vision.perceive.assert_called_once()
                 self.assertEqual(self.b.vision.perceive.call_args.args[0]['generation'],3)
 
+    def test_navigation_keys_use_core_receipts_without_planner_or_text_readback(self):
+        for key in program.PROGRAM_KEYS:
+            with self.subTest(key=key):
+                self.b.pending = {}
+                planner, submit, settle, order, submitted = self.text_fixture()
+                self.b.program_binding = dict(host_xpra=True)
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(host.tools, 'propose', side_effect=submit), \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle):
+                    moves = program.run_moves(self.b, planner, 'focused-key', 1, 1000, key=key)
+                planner.plan_step.assert_not_called()
+                self.b.vision.perceive.assert_not_called()
+                self.assertEqual(order, ['key', 'publish'])
+                self.assertEqual(len(submitted), 1)
+                self.assertEqual(moves[0]['action'], dict(type='key', keys=['Return' if key == 'Enter' else key]))
+                self.assertEqual(moves[0]['status'], 'verified_key')
+                self.assertFalse(moves[0]['gameplay_verified'])
+                receipt = json.loads(Path(self.b.program_attempts[0]['receipt_artifact']).read_text())
+                self.assertEqual(receipt['verification'], moves[0]['verification'])
+
+    def test_navigation_refuses_legacy_password_and_ambiguous_dispatch_outcomes(self):
+        for binding in ({}, dict(host_xpra=False)):
+            self.text_fixture()
+            self.b.program_binding = binding
+            with patch.object(self.b, 'ownership'), patch.object(host.tools, 'propose') as submit:
+                with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_KEY_HOST_ONLY'):
+                    program.run_moves(self.b, None, 'focused-key', 1, 1000, key='Enter')
+            submit.assert_not_called()
+        self.text_fixture()
+        self.b.program_binding = dict(host_xpra=True)
+        perceive = self.b.perceive.side_effect
+        def password(observed, **kwargs):
+            sensed = perceive(observed)
+            sensed['table']['elements'][0]['name'] = 'Password'
+            return sensed
+        self.b.perceive.side_effect = password
+        with patch.object(self.b, 'ownership'), patch.object(host.tools, 'propose') as submit:
+            with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_PASSWORD'):
+                program.run_moves(self.b, None, 'focused-key', 1, 1000, key='Enter')
+        submit.assert_not_called()
+        self.text_fixture()
+        self.b.program_binding = dict(host_xpra=True)
+        with patch.object(self.b, 'ownership'), \
+             patch.object(host.tools, 'propose', side_effect=TimeoutError('reply lost')) as submit:
+            with self.assertRaisesRegex(TimeoutError, 'reply lost'):
+                program.run_moves(self.b, None, 'focused-key', 1, 1000, key='Right')
+        submit.assert_called_once()
+        self.assertEqual(self.b.program_attempts[-1]['status'], 'input_uncertain')
+
+    def test_navigation_request_and_rebind_guards(self):
+        for goal, steps, text, key, planner in (
+                ('focused-key', 1, None, None, 'rules'),
+                ('focused-key', 1, None, 'Escape', 'rules'),
+                ('focused-key', 2, None, 'Up', 'rules'),
+                ('focused-key', 1, 'hello', 'Enter', 'rules'),
+                ('focused', 1, None, 'Enter', 'rules'),
+                ('focused-key', 1, None, 'Enter', 'muse')):
+            with self.subTest(goal=goal, steps=steps, key=key, planner=planner):
+                with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_KEY_REQUEST'):
+                    program.validate_key_request(goal, steps, text, key, planner)
+        for change in (dict(surface_id='other'), dict(width=101), dict(height=81),
+                       dict(generation=0), dict(sha256='b' * 64)):
+            self.text_fixture()
+            self.b.program_binding = dict(host_xpra=True)
+            old = self.b.observe(1000)['frame_ref']
+            sensed = self.b.perceive(dict(frame_ref=old))
+            self.b.observe.side_effect = None
+            self.b.observe.return_value = dict(frame_ref=dict(old, **change))
+            with patch.object(self.b, 'ownership'), self.assertRaises(host.OwnerRefused):
+                self.b.rebind(sensed, dict(action=dict(type='key', keys=['Up']),
+                    target=None, focused_program_key=True), 1000)
+
     def test_focused_text_one_admission_without_planner_and_ocr_verdicts(self):
         for ocr, expected in (('hello', 'exact'), (None, 'not_readable'), ('wrong', 'mismatch')):
             with self.subTest(ocr=ocr):
@@ -1916,6 +1989,80 @@ finally:s.close()
             self.assertEqual(program.run_entry(args), 0)
         custody.assert_not_called()
         muse.assert_not_called()
+
+    def test_verified_focus_click_then_clean_type_refusal_stays_rc5(self):
+        for reason in ('changed', 'stale'):
+            with self.subTest(reason=reason):
+                planner, submit, settle, order, submitted = self.text_fixture()
+                self.b.wender = self.root
+                real_propose = self.b.propose
+
+                def refuse_type(sensed, plan, max_ms):
+                    if plan['action']['type'] == 'type':
+                        if reason == 'changed':
+                            raise program.ProgramObservationChanged(frame(), frame(2), {})
+                        raise host.tools.ToolRefusal('STALE_FRAME', None)
+                    return real_propose(sensed, plan, max_ms)
+
+                args = SimpleNamespace(identity='alice', goal='Message', text='hello', steps=1,
+                                       timeout_ms=1000, planner='rules', model_timeout_ms=120000)
+                with patch.dict(os.environ, XDG_STATE_HOME=str(self.root)), \
+                     patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+                     patch.object(program, 'ProgramBackend', return_value=self.b), \
+                     patch.object(program, 'VCorePerceptionAdapter', return_value=self.b.vision), \
+                     patch.object(program, 'WenderSubprocessAdapter', return_value=planner), \
+                     patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(self.b, 'propose', side_effect=refuse_type), \
+                     patch.object(host.tools, 'propose', side_effect=submit) as propose, \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle) as verify, \
+                     contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+                    rc = program.run_entry(args)
+                self.assertEqual(rc, 5)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN')
+                report = json.loads(Path(result['report']).read_text())
+                self.assertEqual(report['status'], 'input_uncertain')
+                self.assertEqual(len(report['moves']), 1)
+                self.assertEqual(report['moves'][0]['action']['type'], 'click')
+                self.assertEqual(report['attempts'][-1]['status'], 'refused_before_dispatch')
+                self.assertTrue(self.b.program_clean_refusal)
+                propose.assert_called_once()
+                verify.assert_called_once()
+                self.assertEqual(order, ['click', 'publish'])
+
+    def test_report_deadline_after_uncertain_move_keeps_rc5(self):
+        self.b.observe = Mock(return_value=dict(frame_ref=frame()))
+        self.b.wender = self.root
+        real_write = host.ReplayOwner.write
+        report_timers = []
+
+        def uncertain(*args, **kwargs):
+            self.b.program_moves = [dict(status='verified_move')]
+            self.b.program_attempts = [dict(status='input_uncertain')]
+            raise host.OwnerRefused('MW_PROGRAM_DEADLINE')
+
+        def write(path, raw):
+            if path.name == 'report.json':
+                remaining = signal.getitimer(signal.ITIMER_REAL)[0]
+                report_timers.append(remaining)
+                if remaining > 0:
+                    signal.raise_signal(signal.SIGALRM)
+            return real_write(path, raw)
+
+        with patch.dict(os.environ, XDG_STATE_HOME=str(self.root)), \
+             patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+             patch.object(program, 'ProgramBackend', return_value=self.b), \
+             patch.object(program, 'VCorePerceptionAdapter'), patch.object(program, 'WenderSubprocessAdapter'), \
+             patch.object(program, 'run_moves', side_effect=uncertain), \
+             patch.object(host.ReplayOwner, 'write', side_effect=write), \
+             contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+            rc = mw_run.main(['--identity', 'alice', '--surface-kind', 'program',
+                              '--goal', 'Covered square'], runner=program.run_entry)
+        self.assertEqual(rc, 5)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN')
+        self.assertEqual(json.loads(Path(result['report']).read_text())['rc'], 5)
+        self.assertEqual(report_timers, [0])
 
     def test_text_entry_uncertified_verdict_is_explicit_and_mismatch_nonzero(self):
         for readback,rc,code in (('exact',0,'PROGRAM_BOUNDED_ACTIONS_VERIFIED'),

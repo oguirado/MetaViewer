@@ -19,6 +19,8 @@ OpenSuperficies recorder source (read only, surface/record.go):
 - the RAM copy is removed once the private export is sealed and digested.
 - a site written by an AI is untrusted data: check copies it without following
   links, refuses special files and bounds the tree.
+- interactive workflow steps need a positive locate wait before site admission;
+  the authoring prompt uses 5000 ms, matching the builtin sites.
 """
 import argparse
 import hashlib
@@ -29,6 +31,7 @@ import re
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -381,12 +384,112 @@ def check(site):
             copy_site(source_fd, dest, {'files': 0, 'bytes': 0})
         finally:
             os.close(source_fd)
+        # Inspect only the bounded, link-free copy, never mutate authored data.
+        for path in sorted((dest / 'workflows').rglob('*.json')):
+            workflow = strict_json(path.read_bytes())
+            if not isinstance(workflow, dict) or workflow.get('schema') != 'mw.workflow.v1':
+                continue
+            steps = workflow.get('steps')
+            need(isinstance(steps, list), 'INVALID_WORKFLOW')
+            for step in steps:
+                need(isinstance(step, dict) and isinstance(step.get('action'), dict), 'INVALID_WORKFLOW')
+                if step['action'].get('kind') in ('click', 'right_click', 'double_click', 'paste', 'key', 'scroll', 'drag'):
+                    wait = step.get('locate_wait_ms')
+                    need(type(wait) is int and wait > 0, 'ACTING_STEP_LOCATE_WAIT_REQUIRED')
         for flags in ([], ['--check']):
             result = subprocess.run([sys.executable, '-I', str(copy / 'tools/build_index.py'), '--root', str(copy), *flags],
                                     cwd=copy, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, timeout=180, check=False)
             need(result.returncode == 0, 'MEMORYWEB_CHECK_FAILED')
     return {'site': site, 'validated': True, 'source': origin}
+
+
+def remote_demo(args):
+    """Attach to the host controller; Ctrl+C and the tile Stop share one seal.
+
+    An explicitly attached session never silently falls back to an unowned
+    native recorder. Standalone tooling retains its existing native path.
+    """
+    session = os.environ.get('MV_SESSION_ID')
+    runtime = os.environ.get('XDG_RUNTIME_DIR')
+    need(isinstance(runtime, str) and runtime.startswith('/'), 'DEMO_HOST_UNAVAILABLE')
+    path = private_tree(Path(runtime) / 'metaviewer/demo.sock')
+    identity.private(path.parent)
+    try:
+        metadata = path.lstat()
+        need(stat.S_ISSOCK(metadata.st_mode) and metadata.st_uid == os.getuid()
+             and stat.S_IMODE(metadata.st_mode) == 0o600, 'DEMO_HOST_UNAVAILABLE')
+    except OSError as error:
+        raise Refused('DEMO_HOST_UNAVAILABLE') from error
+    method = 'demo.start' if args.verb == 'record' else 'demo.' + args.verb
+    values = ({'identity': args.identity, 'demo': args.demo} if args.verb == 'record'
+              else {'demo': args.demo, 'site': args.site} if args.verb == 'prompt'
+              else {'site': args.site})
+    if args.verb == 'record':
+        identity.checked_id(args.identity)
+    if args.verb != 'check':
+        identifier(args.demo)
+    if args.verb != 'record':
+        identifier(args.site, SITE)
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(30)
+        try:
+            client.connect(str(path))
+        except OSError as error:
+            raise Refused('DEMO_HOST_UNAVAILABLE') from error
+        def send(verb, arguments):
+            client.sendall((json.dumps({'schema': 'metaviewer.demo_control/v1',
+                                       'session_id': session, 'method': verb,
+                                       'args': arguments}) + '\n').encode())
+        send(method, [values])
+        if args.verb != 'record':
+            client.settimeout(None)
+        pending = b''
+        announced = False
+        stopping = False
+        while True:
+            try:
+                chunk = client.recv(65536)
+                need(bool(chunk), 'DEMO_REFUSED')
+                pending += chunk
+                need(len(pending) <= 65536, 'DEMO_REFUSED')
+                while b'\n' in pending:
+                    raw, pending = pending.split(b'\n', 1)
+                    row = strict_json(raw)
+                    need(isinstance(row, dict) and set(row) <= {'schema', 'session_id', 'event', 'reply', 'result', 'text'}
+                         and row.get('schema') == 'metaviewer.demo_control/v1'
+                         and row.get('session_id') == session, 'DEMO_REFUSED')
+                    reply = row.get('reply')
+                    if (args.verb == 'check' and row.get('event') == 'done'
+                            and isinstance(reply, dict) and reply.get('ok') is False
+                            and reply.get('code') == 'ACTING_STEP_LOCATE_WAIT_REQUIRED'):
+                        raise Refused('ACTING_STEP_LOCATE_WAIT_REQUIRED')
+                    need(isinstance(reply, dict) and reply.get('ok') is True, 'DEMO_REFUSED')
+                    if row.get('event') == 'ready':
+                        need(args.verb == 'record' and not announced, 'DEMO_REFUSED')
+                        url = reply.get('url', '')
+                        parsed = urlsplit(url)
+                        need(parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost', '::1')
+                             and not parsed.username and not parsed.password
+                             and not any(ord(x) < 32 for x in url), 'DEMO_REFUSED')
+                        announced = True
+                        client.settimeout(None)
+                        print(json.dumps({'url': url}), flush=True)
+                    elif row.get('event') == 'done':
+                        need(args.verb != 'record' or announced, 'DEMO_REFUSED')
+                        if args.verb == 'prompt':
+                            need(isinstance(row.get('text'), str), 'DEMO_REFUSED')
+                            return row['text']
+                        need(isinstance(row.get('result'), dict), 'DEMO_REFUSED')
+                        return row['result']
+                    else:
+                        raise Refused('DEMO_REFUSED')
+            except KeyboardInterrupt:
+                if args.verb != 'record':
+                    raise
+                if not stopping:
+                    stopping = True
+                    send('demo.stop', [])
 
 
 def main(argv=None):
@@ -402,13 +505,23 @@ def main(argv=None):
             sub.add_argument('--site', required=True)
     try:
         args = parser.parse_args(argv)
+        remote = bool(os.environ.get('MV_SESSION_ID')) and os.environ.get('MV_DEMO_HOST_CHILD') != '1'
         if args.verb == 'prompt':
-            print(prompt(args.demo, args.site))
+            print(remote_demo(args) if remote else prompt(args.demo, args.site))
             return 0
-        result = record(args.identity, args.demo) if args.verb == 'record' else check(args.site)
+        result = remote_demo(args) if remote else record(args.identity, args.demo) if args.verb == 'record' else check(args.site)
         print(json.dumps({'schema': 'metaviewer.demo/v1', 'ok': True, 'result': result}))
         return 0
-    except (Refused, ForbiddenVerb, OSError, ValueError, KeyError, TypeError,
+    except Refused as error:
+        if str(error) == 'ACTING_STEP_LOCATE_WAIT_REQUIRED':
+            print(json.dumps({'schema': 'metaviewer.demo/v1', 'ok': False,
+                              'error': 'ACTING_STEP_LOCATE_WAIT_REQUIRED',
+                              'hint': 'Set locate_wait_ms to 5000 on every interactive step, then run check again.'}))
+            return 6
+        code = str(error) if str(error) == 'DEMO_HOST_UNAVAILABLE' else 'DEMO_REFUSED'
+        print(json.dumps({'schema': 'metaviewer.demo/v1', 'ok': False, 'error': code}))
+        return 6
+    except (ForbiddenVerb, OSError, ValueError, KeyError, TypeError,
             subprocess.TimeoutExpired, KeyboardInterrupt):
         # No native output, event data, filesystem exception or credential escapes.
         print(json.dumps({'schema': 'metaviewer.demo/v1', 'ok': False, 'error': 'DEMO_REFUSED'}))

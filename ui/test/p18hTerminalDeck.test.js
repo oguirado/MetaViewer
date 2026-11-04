@@ -1,3 +1,4 @@
+import * as agentPromptGate from '../src/terminal/agentPromptGate.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -6,6 +7,7 @@ import vm from 'node:vm';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as vue from 'vue';
 import * as deckModel from '../src/terminal/terminalDeckModel.js';
+import {createPairedTerminals} from '../src/terminal/pairedTerminals.js';
 import { assertSpawnProfile } from '../electron/ptyBroker.js';
 
 function extractEntryPrompt(markdown) {
@@ -727,7 +729,7 @@ async function compileSfc(relPath, deps = {}, mutateSource = null) {
   const { descriptor } = parse(source);
   let code = compileScript(descriptor, { id: `p18h-${++serial}`, inlineTemplate: true }).content;
   const key = `__p18hDeps_${serial}`;
-  globalThis[key] = { ...deps, vue };
+  globalThis[key] = { './pairedTerminals.js':{createPairedTerminals}, './agentPromptGate.js':agentPromptGate, ...deps, vue };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '');
   code = code.replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_line, binding, _q, spec) => {
     const normalized = binding
@@ -891,28 +893,14 @@ test('P18H TerminalDeckView component renders screen bar, popover profiles, Cust
   }
 });
 
-test('P18H App.vue mounts TerminalDeckView on More -> Terminal and hides capsule walls without revoking human views', () => {
+test('P18H terminal dock keeps live wall presentation and excludes idle dock from modal ownership', () => {
   const appSource = readText('../src/App.vue');
-  assert.ok(
-    appSource.includes('<UiButton role="menuitem" id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal"'),
-    'More menu must contain the Terminal item',
-  );
-  assert.ok(
-    appSource.includes('<TerminalDeckView :open="terminalDeckOpen"'),
-    'App.vue must mount TerminalDeckView when terminalDeckOpen is true',
-  );
-  assert.ok(
-    appSource.includes('<DesktopWorkspace v-else :hidden="creativeOpen || terminalDeckOpen"'),
-    'Entering the Terminal deck must hide the capsule wall (hide-not-revoke)',
-  );
-  assert.ok(
-    appSource.includes('<RoleSurface :presentation-active="desktopActive && !creativeOpen && !terminalDeckOpen"'),
-    'Entering the Terminal deck must deactivate RoleSurface presentation (hide-not-revoke) and restore it on exit',
-  );
-  assert.ok(
-    appSource.includes('(terminalOpen.value && !terminalDeckOpen.value)'),
-    'App.vue modalOpen must not hold data-mv-modal open while the full-screen Terminal Deck is idle',
-  );
+  assert.ok(appSource.includes('id="shell-terminal"') && appSource.includes('data-semantic-anchor="terminal/toggle"'));
+  assert.ok(appSource.includes('class="mv-terminal-dock"'));
+  assert.ok(appSource.includes(':hidden="creativeOpen"'));
+  assert.ok(appSource.includes('<RoleSurface :presentation-active="desktopActive && !creativeOpen"'));
+  assert.ok(!appSource.includes(':presentation-active="desktopActive && !creativeOpen && !terminalDeckOpen"'));
+  assert.ok(appSource.includes('(terminalOpen.value && !terminalDeckOpen.value)'));
 });
 
 test('P18H-R2-PTY: terminalHost and ptyUtility resolve packaged node-pty from <resources>/build-native/pty-runtime/node-pty and fail closed when absent (with mutant)', async (t) => {
@@ -2127,6 +2115,13 @@ test('V023-T2: right-click context menu renders Copy/Paste above deck, disables 
     await tick();
     const bootstrapPanel = mounted.findById('terminal-deck-bootstrap-panel');
     assert.equal(bootstrapPanel.props['data-pasted-slot-id'], exactSlotId);
+    const identityInput = mounted.findById('terminal-deck-bootstrap-paste-target');
+    assert.equal(identityInput.props.value, exactSlotId, 'compact pill preserves the complete pasted identity');
+    assert.equal(identityInput.props.placeholder, 'Paste AI ID…');
+    identityInput.props.onInput({target:{value:'edited-id'}});
+    await tick();
+    assert.equal(mounted.findById('terminal-deck-bootstrap-paste-target').props.value, 'edited-id');
+
     assert.equal(mounted.vm.controller.state.lastPastedText, exactSlotId);
 
     // 8. Packaged Electron clipboard round-trip across authorityWire + preload contextBridge
@@ -2811,3 +2806,213 @@ test('V024-WALL-FIXES: real broker refusal code (CLASS_LIMIT), dismissible error
   }
 });
 
+
+
+test('paired terminal keeps newest requested capsule focused and retains hidden sessions', async () => {
+  const harness = createBrokerDouble(), waiting = [];
+  harness.broker.open = () => new Promise(resolve => waiting.push(resolve));
+  class Terminal {loadAddon() {} attachCustomKeyEventHandler() {} onData() {return {dispose(){}};} open() {} write() {} focus() {} blur() {} dispose() {}}
+  const View = await compileSfc('../src/terminal/TerminalDeckView.vue', {
+    '@xterm/xterm': {Terminal}, '@xterm/addon-fit': {FitAddon:class {fit(){}}},
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},
+    './terminalDeckModel.js':deckModel,
+  });
+  const target=vue.ref({surfaceId:'surface-a',profileId:'identity-a',title:'Alpha'}), open=vue.ref(true), focus=[];
+  let deck;
+  const Root={setup(){return ()=>vue.h(View,{ref:value=>{deck=value;},open:open.value,pairedTarget:target.value,terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage(),'onPair-focus':id=>focus.push(id)});}};
+  const mounted=mountTree(Root);
+  try {
+    await tick(); assert.equal(waiting.length,1);
+    target.value={surfaceId:'surface-b',profileId:'identity-b',title:'Beta'};await tick();assert.equal(deck.$props.pairedTarget.surfaceId,'surface-b');assert.equal(waiting.length,1,'broker admission serializes opens');
+    waiting[0]({session:'pair-a'});await tick();assert.equal(waiting.length,2);
+    assert.equal(deck.controller.state.focusedSlotId,null,'obsolete Alpha opens in background');
+    waiting[1]({session:'pair-b'});await tick();
+    const b=deck.controller.state.focusedSlotId;assert.ok(b);assert.equal(focus.at(-1),'surface-b');
+    assert.equal(deck.controller.state.focusedSlotId,b,'latest Beta retains focus');
+    const pairedInput=mounted.findById('terminal-deck-copy-capsule-id');
+    assert.match(mounted.textOf(pairedInput),/surface-b/,'chip shows the actual capsule id, not its workflow prompt');
+    assert.equal(pairedInput.props['aria-label'],'Copy capsule ID');
+    assert.equal(pairedInput.props.onInput,undefined,'paired identity cannot be edited');await tick();
+    assert.match(mounted.textOf(mounted.findById('terminal-deck-copy-capsule-id')),/surface-b/);
+
+    assert.match(mounted.textOf(mounted.root),/Beta.*Host shell/);
+    open.value=false;await tick();open.value=true;await tick();
+    assert.equal(waiting.length,2,'reopening retains the paired PTY');
+    target.value={surfaceId:'surface-a',profileId:'identity-a',title:'Alpha'};await tick();
+    assert.equal(focus.at(-1),'surface-a');assert.notEqual(deck.controller.state.focusedSlotId,b);
+    assert.equal(waiting.length,2,'switching back reuses Alpha');
+  } finally {mounted.app.unmount();}
+});
+
+
+test('terminal viewport resize fits retained contents without taking focus',async()=>{
+  const previous=globalThis.ResizeObserver;let observer,focus=0,fits=0;
+  class Observer {constructor(cb){this.cb=cb;this.nodes=new Set();observer=this;}observe(n){this.nodes.add(n);}unobserve(n){this.nodes.delete(n);}disconnect(){this.disconnected=true;}}
+  globalThis.ResizeObserver=Observer;
+  const harness=createBrokerDouble();
+  class Terminal {cols=80;rows=24;loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){focus++;}dispose(){}}
+  const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{
+    '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){fits++;}}},
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel,
+  });
+  const mounted=mountTree(View,{terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage()});
+  try {
+    await mounted.vm.controller.launchProfile('shell');await tick();
+    const node=[...observer.nodes][0];assert.ok(node);
+    const beforeFocus=focus,beforeFit=fits,beforeResize=harness.resizeCalls.length;
+    observer.cb([{target:node,contentRect:{width:450,height:600}}]);
+    assert.equal(focus,beforeFocus);assert.equal(fits,beforeFit+1);assert.equal(harness.resizeCalls.length,beforeResize+1);
+    observer.cb([{target:node,contentRect:{width:450,height:600}}]);
+    assert.equal(harness.resizeCalls.length,beforeResize+1,'unchanged character dimensions do not resend PTY resize');
+    observer.cb([{target:node,contentRect:{width:0,height:0}}]);assert.equal(fits,beforeFit+2,'hidden viewport is not fitted');
+  } finally {mounted.app.unmount();globalThis.ResizeObserver=previous;}
+  assert.equal(observer.disconnected,true);
+});
+
+
+test('compact paired drawer never shows or dispatches the previous capsule while a new pair opens',async()=>{
+ const harness=createBrokerDouble();let finish,opens=0,disposed=0;
+ harness.broker.open=async()=>{if(++opens===2)return await new Promise(resolve=>{finish=resolve;});return {session:'drawer-a'};};
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){disposed++;}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{
+  '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){}}},
+  '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel,
+ });
+ const target=vue.ref({surfaceId:'surface-a',title:'Alpha'}),compact=vue.ref(true);let deck;
+ const Root={setup(){return ()=>vue.h(View,{ref:value=>{deck=value;},open:true,compact:compact.value,pairedTarget:target.value,terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage()});}};
+ const mounted=mountTree(Root);
+ const articles=()=>{const walk=n=>[...(n.tag==='article'?[n]:[]),...n.children.flatMap(walk)];return walk(mounted.root);};
+ try {
+  await tick();assert.equal(articles().filter(n=>!n.props.hidden).length,1);
+  target.value={surfaceId:'surface-b',title:'Beta'};await tick();assert.equal(typeof finish,'function');
+  assert.equal(articles().filter(n=>!n.props.hidden).length,0,'previous capsule terminal is not displayed under Beta');
+  assert.equal(mounted.findById('terminal-deck-bootstrap-panel'),null,'previous workflow binding is not actionable');
+  finish({session:'drawer-b'});await tick();assert.equal(articles().filter(n=>!n.props.hidden).length,1);
+  const sessions=deck.controller.state.screens.flatMap(s=>s.slots.map(t=>t.sessionId));
+  compact.value=false;await tick();assert.equal(articles().filter(n=>!n.props.hidden).length,2);
+  assert.deepEqual(deck.controller.state.screens.flatMap(s=>s.slots.map(t=>t.sessionId)),sessions);
+  assert.equal(opens,2);assert.equal(disposed,0,'moving to full dock retains both terminal instances');
+ } finally {mounted.app.unmount();}
+});
+
+
+test('paired workflow chooses a host agent then refuses authentication without writing input',async()=>{
+  const harness=createBrokerDouble({providers:new Map([['agent-codex',{argv:['/tools/codex']}]])});
+  class Terminal {loadAddon(){} attachCustomKeyEventHandler(){} onData(){return {dispose(){}};} open(){} write(){} focus(){} blur(){} dispose(){}}
+  const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{
+    '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){}}},
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},
+    './terminalDeckModel.js':deckModel,
+  });
+  const mounted=mountTree(View,{open:true,pairedTarget:{surfaceId:'surface-a',profileId:'identity-a',title:'Alpha'},
+    hostProviders:[{id:'agent-codex',label:'Codex'}],terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage()});
+  try {
+    await tick();await tick();
+    const initial=mounted.vm.controller.state.focusedSlotId;
+    await mounted.findById('terminal-deck-no-automation').props.onClick();await tick();
+    assert.ok(mounted.findById('terminal-deck-agent-choice'));assert.equal(harness.openCalls.length,1);
+    const launch=mounted.findById('terminal-deck-launch-agent-codex').props.onClick();await tick();await tick();
+    assert.equal(harness.openCalls.at(-1).command,'agent-codex');
+    assert.equal(mounted.vm.controller.state.focusedSlotId,initial,'same capsule retains the paired slot');
+    const session=mounted.vm.controller.findSlot(initial).slot.sessionId;
+    harness.sessionFacade.emitData(session,'Sign in with ChatGPT');
+    await launch;await tick();
+    assert.match(mounted.textOf(mounted.root),/Nothing pasted/);assert.deepEqual(harness.writeCalls,[]);
+    assert.equal(mounted.findById('terminal-deck-agent-choice'),null);
+  } finally {mounted.app.unmount();}
+});
+
+test('Custom CLI rejects C0, DEL and C1 before creating a shell or writing bytes',async()=>{
+ const harness=createBrokerDouble({providers:[],enforceAdmission:true});
+ const controller=deckModel.createTerminalDeckController({broker:harness.broker,sessionFacade:harness.sessionFacade});
+ try {
+  for(const value of ['echo\tBAD','echo\x1b[2J','echo\x7fBAD','echo\x85BAD','echo\x9bBAD','\techo bad']) await assert.rejects(()=>controller.launchCustomCli(value),/single line/);
+  assert.equal(harness.openCalls.length,0);assert.equal(harness.writeCalls.length,0);
+ } finally {controller.dispose();}
+});
+
+test('paired deck namespaces its controls and ignores shortcuts from another deck',async()=>{
+ const h=createBrokerDouble();
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,idPrefix:'surface-a',terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});
+ try {
+  const root=mounted.findById('surface-a-mv-terminal-deck');assert.ok(root);
+  assert.equal(mounted.findById('mv-terminal-deck'),null);
+  assert.ok(mounted.findById('surface-a-terminal-deck-new'));
+  let consumed=false;
+  root.props.onKeydown({key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>({})},preventDefault(){consumed=true;},stopPropagation(){},stopImmediatePropagation(){}});
+  await tick();assert.equal(consumed,false);assert.equal(h.openCalls.length,0);
+ } finally {mounted.app.unmount();}
+});
+
+test('paired Capsule ID chip copies only its identifier',async()=>{
+ const h=createBrokerDouble();let copied='';
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,pairedTarget:{surfaceId:'surface-chip',title:'Chip fixture'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,clipboard:{async writeText(text){copied=text;}},storage:createMemoryStorage()});
+ try {
+  await tick();const chip=mounted.findById('terminal-deck-copy-capsule-id');assert.ok(chip,'paired identity is a copy button');
+  await chip.props.onClick();assert.equal(copied,'surface-chip');assert.deepEqual(h.writeCalls,[]);
+ } finally {mounted.app.unmount();}
+});
+
+test('terminal context menu keeps focus without claiming global modal ownership',async()=>{
+ const h=createBrokerDouble(),globalClaims=[],surfaceClaims=[];let deck;
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const Root={setup(){vue.provide('overlayCoordinator',{set:(owner,open)=>globalClaims.push(open),setSurface:(owner,id,open)=>surfaceClaims.push({id,open})});return()=>vue.h(View,{ref:v=>{deck=v;},open:true,compact:true,pairedTarget:{surfaceId:'surface-context',title:'Context'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});}};
+ const mounted=mountTree(Root);
+ try {
+  await tick();const id=deck.controller.state.focusedSlotId;assert.ok(id);globalClaims.length=0;
+  deck.onTileContextMenu(id,{clientX:40,clientY:50,preventDefault(){},stopPropagation(){}});await tick();
+  assert.equal(deck.controller.state.focusedSlotId,id);assert.equal(deck.contextMenu.open,true);
+  assert.equal(globalClaims.includes(true),false,'local context menu must not deactivate all capsule views');
+  assert.deepEqual(surfaceClaims.at(-1),{id:'surface-context',open:true});
+ } finally {mounted.app.unmount();}
+ assert.equal(surfaceClaims.at(-1).open,false,'unmount releases only this menu owner');
+});
+
+test('independent terminal workspaces isolate launch shortcuts and compose overlay ownership',async()=>{
+ async function oracle(mutate){
+  const a=createBrokerDouble(),b=createBrokerDouble(),owners=new Set();let left,right;
+  class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+  class FitAddon {fit(){}}
+  const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel},mutate);
+  const Root={setup(){vue.provide('overlayCoordinator',{set:(owner,open)=>open?owners.add(owner):owners.delete(owner)});return()=>[
+   vue.h(View,{ref:v=>{left=v;},open:true,idPrefix:'left',terminalBroker:a.broker,terminalBinding:a.sessionFacade,storage:createMemoryStorage()}),
+   vue.h(View,{ref:v=>{right=v;},open:true,idPrefix:'right',terminalBroker:b.broker,terminalBinding:b.sessionFacade,storage:createMemoryStorage()}),
+  ];}};
+  const mounted=mountTree(Root);
+  try {
+   await tick();const root=mounted.findById('left-mv-terminal-deck');
+   const event={key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>vue.reactive(root)},preventDefault(){},stopPropagation(){},stopImmediatePropagation(){}};
+   root.props.onKeydown(event);mounted.findById('right-mv-terminal-deck').props.onKeydown(event);await tick();
+   assert.equal(a.openCalls.length,1);assert.equal(b.openCalls.length,0,'foreign shortcut cannot launch a terminal');
+   left.controller.setLauncherOpen(true);right.controller.setLauncherOpen(true);await tick();
+   assert.equal(owners.size,2,'each workspace owns its own overlay lease');
+   left.controller.setLauncherOpen(false);await tick();assert.equal(owners.size,1);
+  } finally {mounted.app.unmount();}
+  assert.equal(owners.size,0);
+ }
+ await oracle();
+ await assert.rejects(()=>oracle(source=>source.replace('const launcherOverlayOwner = {};',"const launcherOverlayOwner = 'shared-owner';")),{code:'ERR_ASSERTION'});
+});
+
+test('paired drawer cannot create an invisible unpaired shell with deck-only shortcuts',async()=>{
+ const h=createBrokerDouble();
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,idPrefix:'surface:with.dots',pairedTarget:{surfaceId:'surface:with.dots'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});
+ try {
+  await tick();assert.equal(h.openCalls.length,1);
+  const root=mounted.findById('surface:with.dots-mv-terminal-deck');let stopped=false;
+  root.props.onKeydown({key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>vue.reactive(root)},preventDefault(){stopped=true;},stopPropagation(){},stopImmediatePropagation(){}});
+  await tick();assert.equal(stopped,true);assert.equal(h.openCalls.length,1,'new-terminal shortcut belongs to the separate side panel');
+  const hide=mounted.findById('surface:with.dots-terminal-deck-hide');assert.ok(hide);assert.equal(hide.props['data-semantic-anchor'],'terminal/hide');
+ } finally {mounted.app.unmount();}
+});

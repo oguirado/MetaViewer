@@ -1,0 +1,5 @@
+- Keep judge install smoke sockets in a short private temporary root with recorded supervisor ownership and actionable path-length refusals.
+- Reconcile interrupted smoke process identities and exited private roots before installation while preserving live or unverifiable groups.
+- Prevent concurrent native frame probes and captures from reporting false recorder contention while retaining real lock-holder detection.
+- End journal admission cleanly when a headless, guest-command or rewind timer reaches journal capacity, preserving peer connections and ordered cleanup.
+- Reject demo control requests whose args field is not an array before invoking host operations.

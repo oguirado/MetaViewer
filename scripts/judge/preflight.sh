@@ -9,18 +9,17 @@
 # and the run exits 2. Warnings (JUDGE_OS) never change the exit code. Nothing
 # is installed, written or escalated here; sudo is never called.
 #
-# [TARGET, unit decision] This unit implements the table of
-# STRATEGY_JUDGE_PORTABILITY section 2.2. Missing handoffs are filled here:
-#   - Tiers: T0 fixture, T1 packaged app, T2 app plus one browser capsule.
+# Preflight phases and supported host overrides:
+#   - Tiers: T0 private fixture, T1 packaged app, T2 live capsules.
 #   - Phase `static` runs the checks the installer cannot fix (host facts);
 #     phase `all` also checks what install provides (bundle, tools, images).
 #   - Test seams (all optional, default to the real host): MV_JUDGE_PROC,
 #     MV_JUDGE_OS_RELEASE, MV_JUDGE_SHM_DIR, MV_JUDGE_CPUSET_FILE,
 #     MV_JUDGE_RUN_USER_ROOT, MV_JUDGE_APPARMOR_DIR, MV_JUDGE_FW_WITNESS.
-#   - JUDGE_REQUIRE_CPUSET defaults to 10-14 until the cpuset fix lands in
-#     OpenSuperficies (H01); MV_JUDGE_REQUIRE_CPUSET=none removes the check.
+#   - MV_JUDGE_REQUIRE_CPUSET defaults to none; set it explicitly to check
+#     the logical CPUs required by a custom capsule runtime.
 #   - Thresholds marked [TARGET] come from the strategy table, not from a
-#     measurement on a small machine.
+#     host measurement.
 # Lines marked `# MUT:<code>` are the deciding predicates that the offline
 # mutation tests negate.
 set -u
@@ -95,7 +94,7 @@ else
 fi
 
 
-# [TARGET, unit decision] Docker metadata may wait up to 120 seconds; image
+# Docker metadata may wait up to 120 seconds; image
 # load/save/pull/build may take 1800 seconds. Kill a stuck client after grace.
 # Environment overrides allow slower machines and offline deadline controls.
 bounded_docker() {
@@ -348,7 +347,7 @@ chk_docker() {
     command -v docker >/dev/null 2>&1 || return 0 # JUDGE_SYSDEP reports it
     if DOCKER_INFO=$(bounded_docker info --format '{{.SecurityOptions}}|{{.OperatingSystem}}|{{.DockerRootDir}}' 2>/dev/null); then : # MUT:JUDGE_DOCKER
     else
-        refuse JUDGE_DOCKER "'docker info' failed or timed out for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info"
+        refuse JUDGE_DOCKER "'docker info' failed or timed out for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info; without Docker, omit --capsules (docs/JUDGE_NO_DOCKER.md)"
         return
     fi
     DOCKER_ROOT=${DOCKER_INFO##*|}
@@ -516,6 +515,11 @@ fi
 if [ "$MODE" = facts ]; then
     facts
     exit 0
+fi
+
+if [ "$TIER" != T0 ] && [ "$UID_NOW" = 0 ]; then
+    refuse JUDGE_ROOT "Electron cannot run safely as root (never --no-sandbox)" "log in as a normal user and re-run without sudo; install requests administrator steps itself"
+    exit 2
 fi
 
 # Optional host capability: absence never gates browser or container programs.

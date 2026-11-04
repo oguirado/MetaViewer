@@ -48,11 +48,11 @@ func TestFrozenCeilings(t *testing.T) {
 }
 
 const (
-	minContractFixtureCount  = 488
-	minContractEntryCount    = 489
-	minContractSchemaCount   = 21
-	pinnedFixtureSet488SHA   = "0152797c88a120d4870524f0b8cbed6eeae16a2e0a0089a895968987a89d3e8a"
-	pinnedFixtureSet489SHA   = "ca0ef707054090c6576c47ca7838b5a43da82767ec7e4da195787d7c9589d9c0"
+	minContractFixtureCount = 542
+	minContractEntryCount   = 543
+	minContractSchemaCount  = 23
+	pinnedFixtureSet488SHA  = "65d137826119d750852c08194f55097822dc6a7113efeba2be35d715d8cf1773"
+	pinnedFixtureSet489SHA  = "fb0b7d559fe823b623dc0556c1d04ddd848705b68603db27b0c91185c5dd6038"
 )
 
 func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, error) {
@@ -67,6 +67,62 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 	schemas, err := filepath.Glob(filepath.Join(schemasDir, "*.schema.json"))
 	if err != nil {
 		return nil, err
+	}
+	// Preserve every original count/name-set pin; additive examples have a
+	// separate exhaustive content pin rather than relaxing the legacy oracle.
+	allFiles := files
+	files = nil
+	seenAdditive := 0
+	seenRewind := 0
+	seenObservation := 0
+	for _, file := range allFiles {
+		name := filepath.Base(file)
+		if pin, added := commandObservationFixturePins[name]; added {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(raw)
+			if hex.EncodeToString(sum[:]) != pin {
+				return nil, fmt.Errorf("command observation fixture bytes changed: %s", name)
+			}
+			seenObservation++
+		} else if strings.HasPrefix(name, "guest_command_observation") {
+			return nil, fmt.Errorf("unrecorded command observation fixture: %s", name)
+		} else if pin, added := rewindFixturePins[name]; added {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(raw)
+			if hex.EncodeToString(sum[:]) != pin {
+				return nil, fmt.Errorf("rewind fixture bytes changed: %s", name)
+			}
+			seenRewind++
+		} else if strings.HasPrefix(name, "rewind_") {
+			return nil, fmt.Errorf("unrecorded rewind fixture: %s", name)
+		} else if pin, added := additiveFixturePins[name]; added {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(raw)
+			if hex.EncodeToString(sum[:]) != pin {
+				return nil, fmt.Errorf("additive fixture bytes changed: %s", filepath.Base(file))
+			}
+			seenAdditive++
+		} else {
+			files = append(files, file)
+		}
+	}
+	if seenObservation != len(commandObservationFixturePins) {
+		return nil, errors.New("command observation fixture corpus incomplete")
+	}
+	if seenRewind != len(rewindFixturePins) {
+		return nil, errors.New("rewind fixture corpus incomplete")
+	}
+	if seenAdditive != len(additiveFixturePins) {
+		return nil, errors.New("additive fixture corpus incomplete")
 	}
 	if len(entries) < minContractEntryCount || (len(files) != minContractFixtureCount && len(files) != minContractFixtureCount+1) || len(schemas) < minContractSchemaCount {
 		return nil, fmt.Errorf("fixture corpus count mismatch: entries=%d files=%d schemas=%d", len(entries), len(files), len(schemas))
@@ -99,7 +155,7 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 	for _, s := range schemas {
 		prefix := strings.TrimSuffix(filepath.Base(s), ".schema.json")
 		hasValid, hasInvalid := false, false
-		for _, f := range files {
+		for _, f := range allFiles {
 			base := filepath.Base(f)
 			if strings.HasPrefix(base, prefix+".valid.") {
 				hasValid = true
