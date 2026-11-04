@@ -225,6 +225,7 @@ microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
 microvm-2ad050142531	changes/unreleased/microvm-rewind-theme.md
 microvm-f937fea84c3b	changes/unreleased/microvm-workspace-presentation.md
 muse-agent-profile.md	changes/unreleased/muse-agent-profile.md
+musepri-3519d4a7c519	changes/unreleased/muse-private-session.md
 muse-workspace.md	changes/unreleased/muse-workspace.md
 mutatio-9bd8e2d9afd9	changes/unreleased/mutation-regression-tests.md
 mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
@@ -2563,6 +2564,7 @@ test_live_teardown.py	tests/test_live_teardown.py
 test_meta_site.py	tests/test_meta_site.py
 testmic-3835fbfca5c2	tests/test_microvm_scripted_scene.py
 test_multi_capsule.py	tests/test_multi_capsule.py
+test_muse_session.py	tests/test_muse_session.py
 test_mv_demo.py	tests/test_mv_demo.py
 test_mv_demo_flow.py	tests/test_mv_demo_flow.py
 test_mv_identity.py	tests/test_mv_identity.py
@@ -2633,6 +2635,7 @@ generat-4f785fccb627	tools/generate_headless_contracts.py
 generat-d976ac2a00ac	tools/generate_rewind_bindings.py
 generat-59ec76fa9902	tools/generate_rewind_sdk.py
 microvm-759c305ea218	tools/microvm_scripted_scene.py
+muse_session.py	tools/muse_session.py
 mv_demo.py	tools/mv_demo.py
 mv_identity.py	tools/mv_identity.py
 mv_ram_admission.py	tools/mv_ram_admission.py
@@ -2696,6 +2699,7 @@ identityMarkers.js	ui/electron/identityMarkers.js
 identityProtection.js	ui/electron/identityProtection.js
 keyboardLayout.js	ui/electron/keyboardLayout.js
 main.js	ui/electron/main.js
+museWorkspace.js	ui/electron/museWorkspace.js
 nativePreview.js	ui/electron/nativePreview.js
 nesting.js	ui/electron/nesting.js
 openingMode.js	ui/electron/openingMode.js
@@ -2931,6 +2935,7 @@ multica-199756b14b9b	ui/test/multicap-profile-picker.test.js
 multisl-cc0b2c69edc0	ui/test/multislot-u5a-ui.test.js
 multisl-575193d23c36	ui/test/multislotfix-sweep.test.js
 museage-22ed427e19e1	ui/test/muse-agent-profile.test.js
+musewor-f28501451dc2	ui/test/muse-workspace.test.js
 mutFram-75dd51c221d3	ui/test/mutFrameRefFix.test.mjs
 mutSett-c59c7ff27d3d	ui/test/mutSettingsHarden.test.mjs
 mutTerm-33a768ed0f4f	ui/test/mutTerminalHarden.test.mjs
