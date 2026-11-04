@@ -95,3 +95,12 @@ test('preload admits only closed real recorder states and nested subscribers are
   assert.equal(delivered.length,1);
   assert.throws(()=>createOperatorFacade({nested:true}).demo.subscribe(()=>{}),/NESTED/);
 });
+test('attached CLI retains the locate-wait repair diagnostic from the real host',async t=>{
+  const f=await fixture(t);
+  await writeFile(join(f.root,'tools/mv_demo.py'),"import json,sys\nprint(json.dumps({'schema':'metaviewer.demo/v1','ok':False,'error':'ACTING_STEP_LOCATE_WAIT_REQUIRED'}))\nsys.exit(6)\n");
+  const result=await client(['check','--site','site'],f.env).done;
+  assert.equal(result.rc,6);
+  const reply=JSON.parse(result.out);
+  assert.equal(reply.error,'ACTING_STEP_LOCATE_WAIT_REQUIRED');
+  assert.match(reply.hint,/locate_wait_ms.*5000/);
+});

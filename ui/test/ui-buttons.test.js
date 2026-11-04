@@ -72,6 +72,16 @@ test('refused recording cannot supply a prompt; malformed URLs and output refuse
   const started=f.service.request('demo.start',[{identity:'account',demo:'demo'}]);f.children[0].stdout.emit('data',Buffer.from('{"url":"https://remote.example/"}\n'));assert.equal((await started).ok,false);
   const check=f.service.request('demo.check',[{site:'site'}]);close(f.children[1],{},6);assert.deepEqual(await check,{ok:false,code:'DEMO_REFUSED'});
 });
+test('check keeps the known locate refusal across host and preload, without forwarding authored text',async()=>{
+  for(const code of ['ACTING_STEP_LOCATE_WAIT_REQUIRED','untrusted arbitrary error']) {
+    const f=fixture();
+    const api=createOperatorFacade({invoke:(_channel,args)=>f.service.request('demo.check',args)});
+    const result=api.demo.check({site:'site'});
+    f.children[0].stdout.emit('data',Buffer.from(JSON.stringify({schema:'metaviewer.demo/v1',ok:false,error:code,hint:'untrusted text'})+'\n'));
+    f.children[0].emit('close',6);
+    assert.deepEqual(await result,{ok:false,code:code==='ACTING_STEP_LOCATE_WAIT_REQUIRED'?code:'DEMO_REFUSED'});
+  }
+});
 test('preload exposes closed buttons and nested mode refuses before transport',async()=>{
   const calls=[];const api=createOperatorFacade({invoke:async(...args)=>{calls.push(args);return {ok:true};}});
   await api.entry.copy();assert.deepEqual(calls,[['metaviewer:entry.copy',[]]]);await assert.rejects(api.entry.copy({path:'evil'}));

@@ -93,8 +93,13 @@ export function createButtonService({root,demoRoot=root,clipboard,env=process.en
       if(settled)return;settled=true;phase='idle';clearTimeout(timer);clearTimeout(stopTimer);onState();
       let reply={ok:false,code:'DEMO_REFUSED'};
       try {
-        if(failed || rc!==0)throw new Error();
         const text=output.toString('utf8');
+        if(!failed && rc===6 && verb==='check') {
+          const row=JSON.parse(text.trim());
+          // Forward only this static diagnostic, never authored paths or text.
+          if(row.schema==='metaviewer.demo/v1' && row.ok===false && row.error==='ACTING_STEP_LOCATE_WAIT_REQUIRED')reply={ok:false,code:'ACTING_STEP_LOCATE_WAIT_REQUIRED'};
+        }
+        if(failed || rc!==0)throw new Error();
         if(verb==='prompt'){const block=promptBlock(text);payload=copyPrompt?block:text;if(copyPrompt)copyBounded(clipboard,block);}
         else {
           const row=JSON.parse(text.trim().split('\n').at(-1)??'');
