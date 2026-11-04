@@ -1265,6 +1265,8 @@ def run_entry(args):
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
             host.ClientError, host.tools.ToolRefusal, host.tools.VerificationFailed,
             host.subprocess.SubprocessError) as error:
+        if callable(getattr(args, 'finish_wall_deadline', None)):
+            args.finish_wall_deadline()
         result.update(rc=6, receipt=None,
                       verdict_code=getattr(error, 'code', getattr(error, 'reason_code', 'MW_PROGRAM_CONFIG')))
         attempts = getattr(backend, 'program_attempts', [])
@@ -1284,6 +1286,8 @@ def run_entry(args):
             result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
         message = str(error)[:4096]
         print('mw_run_program: ' + str(error), file=sys.stderr)
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     if evidence is not None and evidence.is_dir():
         # [TARGET, unit decision] C2 marks belong to the removed RAM workspace.
         # Keep semantic observations without publishing a dangling file reference.
@@ -1311,8 +1315,6 @@ def run_entry(args):
             uncertain = bool(getattr(backend, 'program_moves', [])) or result['rc'] == 5
             result.update(rc=5 if uncertain else 6,
                           verdict_code='INPUT_UNCERTAIN' if uncertain else 'MW_PRIVATE_OUTPUT', receipt=None)
-    if callable(getattr(args, 'finish_wall_deadline', None)):
-        args.finish_wall_deadline()
     print(json.dumps(result))
     return result['rc']
 

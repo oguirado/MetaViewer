@@ -359,6 +359,8 @@ def run_entry(args):
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
             host.ClientError, host.tools.ToolRefusal, host.tools.VerificationFailed,
             host.subprocess.SubprocessError) as error:
+        if callable(getattr(args, 'finish_wall_deadline', None)):
+            args.finish_wall_deadline()
         code = getattr(error, 'code', getattr(error, 'reason_code', 'MW_BROWSER_GOAL_CONFIG'))
         message = str(error)
         if code in ('SURFACE_NOT_AGENT_CONTROLLED', 'MW_PROGRAM_CONTROL'):
@@ -388,6 +390,8 @@ def run_entry(args):
                            'inspect the capsule and settle the pending input first')
         message = message[:4096]
         print('mw_run_browser_goal: ' + message, file=sys.stderr)
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     if evidence is not None and evidence.is_dir():
         try:
             atomic_journal(evidence / 'report.json', dict(result, goal_completed=None,
@@ -403,7 +407,5 @@ def run_entry(args):
             else:
                 result.update(rc=5 if getattr(backend, 'moves', []) else 6,
                               verdict_code='MW_PRIVATE_OUTPUT', receipt=None)
-    if callable(getattr(args, 'finish_wall_deadline', None)):
-        args.finish_wall_deadline()
     print(json.dumps(result))
     return result['rc']

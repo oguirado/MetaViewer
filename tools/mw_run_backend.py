@@ -1021,6 +1021,8 @@ def run_entry(args):
             rc, code, receipt = execute(args, home, evidence, backend, trace=trace)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
             ClientError, tools.ToolRefusal, tools.VerificationFailed, subprocess.SubprocessError) as error:
+        if callable(getattr(args, 'finish_wall_deadline', None)):
+            args.finish_wall_deadline()
         code = getattr(error, 'code', getattr(error, 'reason_code', 'MW_RUN_CONFIG'))
         message = str(error)
         if isinstance(error, subprocess.TimeoutExpired):
@@ -1036,6 +1038,8 @@ def run_entry(args):
                                               'wender-agent checkout at its deps.lock commit')
         print('mw_run: ' + (message if message and message.startswith(code) else
                             code + (': ' + message if message else '')), file=sys.stderr, flush=True)
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     result = dict(schema='metaviewer.mw_run/v1', rc=rc, verdict_code=code, receipt=receipt, report=report)
     if report is not None:
         try:
@@ -1045,7 +1049,5 @@ def run_entry(args):
             result['report'] = None
             if result['rc'] not in (4, 5):
                 result.update(rc=6, verdict_code='MW_PRIVATE_OUTPUT')
-    if callable(getattr(args, 'finish_wall_deadline', None)):
-        args.finish_wall_deadline()
     print(json.dumps(result, separators=(',', ':')))
     return result['rc']
