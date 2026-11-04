@@ -1,0 +1,1 @@
+- Preserve terminal selection ownership before mouse-reporting applications intercept input, keep right-click local, and avoid redundant resize and focus during selection.

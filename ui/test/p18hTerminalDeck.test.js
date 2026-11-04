@@ -2846,13 +2846,13 @@ test('paired terminal keeps newest requested capsule focused and retains hidden 
 
 
 test('terminal viewport resize fits retained contents without taking focus',async()=>{
-  const previous=globalThis.ResizeObserver;let observer,focus=0,fits=0;
+  const previous=globalThis.ResizeObserver;let observer,terminal,focus=0,fits=0,fittedCols=80;
   class Observer {constructor(cb){this.cb=cb;this.nodes=new Set();observer=this;}observe(n){this.nodes.add(n);}unobserve(n){this.nodes.delete(n);}disconnect(){this.disconnected=true;}}
   globalThis.ResizeObserver=Observer;
   const harness=createBrokerDouble();
-  class Terminal {cols=80;rows=24;loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){focus++;}dispose(){}}
+  class Terminal {cols=80;rows=24;constructor(){terminal=this;}loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){focus++;}dispose(){}}
   const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{
-    '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){fits++;}}},
+    '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){fits++;terminal.cols=fittedCols;}}},
     '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel,
   });
   const mounted=mountTree(View,{terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage()});
@@ -2860,6 +2860,7 @@ test('terminal viewport resize fits retained contents without taking focus',asyn
     await mounted.vm.controller.launchProfile('shell');await tick();
     const node=[...observer.nodes][0];assert.ok(node);
     const beforeFocus=focus,beforeFit=fits,beforeResize=harness.resizeCalls.length;
+    fittedCols=50; // The first observation represents a real change in character width.
     observer.cb([{target:node,contentRect:{width:450,height:600}}]);
     assert.equal(focus,beforeFocus);assert.equal(fits,beforeFit+1);assert.equal(harness.resizeCalls.length,beforeResize+1);
     observer.cb([{target:node,contentRect:{width:450,height:600}}]);
@@ -3014,5 +3015,61 @@ test('paired drawer cannot create an invisible unpaired shell with deck-only sho
   root.props.onKeydown({key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>vue.reactive(root)},preventDefault(){stopped=true;},stopPropagation(){},stopImmediatePropagation(){}});
   await tick();assert.equal(stopped,true);assert.equal(h.openCalls.length,1,'new-terminal shortcut belongs to the separate side panel');
   const hide=mounted.findById('surface:with.dots-terminal-deck-hide');assert.ok(hide);assert.equal(hide.props['data-semantic-anchor'],'terminal/hide');
+ } finally {mounted.app.unmount();}
+});
+
+test('forced mouse selection chooses its terminal before xterm stops mousedown propagation',async()=>{
+ const h=createBrokerDouble(),terms=[];let copied='';
+ class Terminal {cols=80;rows=24;selection='';focusCalls=0;constructor(){terms.push(this);}loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){this.focusCalls++;}dispose(){}getSelection(){return this.selection;}hasSelection(){return !!this.selection;}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,terminalBroker:h.broker,terminalBinding:h.sessionFacade,clipboard:{async writeText(text){copied=text;}},storage:createMemoryStorage()});
+ try {
+  const first=await mounted.vm.controller.launchProfile('shell');await tick();
+  await mounted.vm.controller.launchProfile('shell');await tick();
+  terms[0].selection='FIRST_TERMINAL_SELECTION';const before=h.resizeCalls.length;const focusBefore=terms[0].focusCalls;
+  // Shift selection in a mouse-reporting TUI stops the bubbling mousedown.
+  mounted.findById(`terminal-deck-tile-${first.id}`).props.onPointerdownCapture?.({button:0,shiftKey:true});await tick();
+  assert.ok(terms[0].focusCalls>focusBefore,'Shift selection must take keyboard focus from the other workspace');
+  await mounted.vm.controller.copySelection();
+  assert.equal(copied,'FIRST_TERMINAL_SELECTION');assert.equal(terms[0].selection,copied);
+  assert.equal(h.resizeCalls.length,before,'selection does not resize either PTY');assert.deepEqual(h.writeCalls,[]);
+ } finally {mounted.app.unmount();}
+});
+
+test('right-click preserves selected text and stops before mouse-reporting applications',async()=>{
+ for(const compact of [false,true]) {
+  const h=createBrokerDouble();let copied='';
+  class Terminal {selection='SELECTED_TEXT';loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}getSelection(){return this.selection;}hasSelection(){return true;}}
+  class FitAddon {fit(){}}
+  const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+  const mounted=mountTree(View,{open:true,compact,pairedTarget:compact?{surfaceId:'surface-mouse'}:null,terminalBroker:h.broker,terminalBinding:h.sessionFacade,clipboard:{async writeText(text){copied=text;}},storage:createMemoryStorage()});
+  try {
+   if(!compact)await mounted.vm.controller.launchProfile('shell');await tick();
+   const id=mounted.vm.controller.state.focusedSlotId;let prevented=false,stopped=false;
+   const event={button:2,clientX:80,clientY:100,preventDefault(){prevented=true;},stopPropagation(){stopped=true;}};
+   mounted.findById(`terminal-deck-tile-${id}`).props.onMousedownCapture?.(event);await tick();
+   assert.equal(prevented,true);assert.equal(stopped,true,'right mouse input must not reach the PTY');
+   let nativePrevented=false;mounted.findById('mv-terminal-deck').props.onContextmenu?.({preventDefault(){nativePrevented=true;}});
+   assert.equal(nativePrevented,true,'the menu opening under the pointer must not trigger a native browser menu');
+   assert.equal(mounted.vm.contextMenu.hasSelection,true);
+   await mounted.vm.onContextMenuCopy();assert.equal(copied,'SELECTED_TEXT');assert.deepEqual(h.writeCalls,[]);
+  } finally {mounted.app.unmount();}
+ }
+});
+
+test('Shift hover is local before a forced selection but drag movement remains available',async()=>{
+ const h=createBrokerDouble();
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});
+ try {
+  const slot=await mounted.vm.controller.launchProfile('shell');await tick();
+  const viewport=mounted.findById(`terminal-deck-viewport-${slot.id}`);let stopped=false;
+  viewport.props.onMousemoveCapture?.({shiftKey:true,buttons:0,stopPropagation(){stopped=true;}});
+  assert.equal(stopped,true,'Shift hover must not report a mouse move to the TUI');
+  stopped=false;viewport.props.onMousemoveCapture?.({shiftKey:true,buttons:1,stopPropagation(){stopped=true;}});
+  assert.equal(stopped,false,'the document selection service must still receive drag moves');
  } finally {mounted.app.unmount();}
 });
