@@ -1,12 +1,25 @@
 # ARM64 MicroVM rewind
 
-Unreleased feature branch. A developer-controlled ARM64 packaged application at commit `8b44747c83f0ad760aed2550277aa88cd417fb30` completed real Create, guest commands, Mark, header Back restoration, Pause, Resume and confirmed Stop with closed resources [MEASURED]. Normal end-user setup, the next integrated package, whole gate and hosted CI remain separate acceptance gates.
+Core routing for Rewind is in this tree (`core/src/serve/rewind.rs`, `core/src/rewind_flow.rs`). An earlier developer-controlled ARM64 packaged application at commit `8b44747c83f0ad760aed2550277aa88cd417fb30` completed real Create, guest commands, Mark, header Back restoration, Pause, Resume and confirmed Stop with closed resources [MEASURED]. Normal end-user setup, the next integrated package, whole gate and hosted CI remain separate acceptance gates.
 
 The goal is to add a MicroVM from **Add capsule**, work inside its command console, mark a known state and return to it with **Back**. The MicroVM command header provides the classic double-left rewind icon and a short list of timed checkpoints. Its optional header slot exposes `{capabilities, onRestore(point_id)}` so the shared frontend can place the same controls without acquiring native authority. A selected checkpoint requests one return operation; a running guest is explicitly paused first, and restoration proceeds only after that pause is confirmed. Commands remain fenced while the operation is uncertain.
 
 The ARM64 rewind profile uses an immutable boot image and a mutable RAM workspace. Checkpoints contain full guest memory and machine state. They are local, disposable and disappear when the owning session closes. They are not durable save slots. Writable block disks, graphical Firecracker desktops and x64 rewind are not enabled by this profile.
 
 External effects are not rewound. A completed network request or a change outside the guest cannot be reversed by restoring guest memory. A failed restore retains the last verified checkpoint. A new manual restore is offered only after the failed native attempt is confirmed closed; uncertainty does not trigger retries or replay commands.
+
+## Live result
+
+Answers: has Rewind been run; how long does Back take; does replay verify a Rewind session.
+
+| Observation | Tag |
+| --- | --- |
+| Three files created in the guest, deleted, then **Back** restored all three | [MEASURED: operator live run on ARM64 MicroVM, 4 Nov 2026] |
+| Restore time shown by the app: 387.5 ms | [MEASURED: same run] |
+| `mv-replay` exit 0 on that session journal | [MEASURED: same run] |
+| `mv-replay` with relative, symlinked or copied session paths gives `Invalid`; pass absolute real paths of the original session | [MEASURED: same run] |
+
+The raw receipt of that run is not in this repository. Why rewind is restricted to guest state: [WHY_CAPSULES.md#rewind](WHY_CAPSULES.md#rewind).
 
 ## Controls and evidence
 

@@ -50,7 +50,7 @@ Use a neutral public page for a rehearsal and verify that it actually loads befo
    before admission with `ACTING_STEP_LOCATE_WAIT_REQUIRED` and a fix hint.
    Correct the authored data and check again before replay. This selects the
    builtin acquisition window; runtime/test budgets and schema limits stay fixed.
-   [CITED: `memoryweb-builtin/sites/meta-ai/workflows/new-chat.json`, `tools/mv_demo.py`]
+   [CITED: `memoryweb-builtin/sites/sample-chat/workflows/new-chat.json`, `tools/mv_demo.py`]
 
 [TARGET] The following is the single prompt template used by the
 host and the later button. The host substitutes the marked values after checking

@@ -1,5 +1,7 @@
 # Judge tour: MetaViewer after installation
 
+Answers: tour, what can I try, demo steps, feature walkthrough, what is verified
+
 For refusal codes and source-backed next steps, see [Judge troubleshooting](JUDGE_TROUBLESHOOTING.md).
 
 Use this tour with your AI after completing [Judge Quickstart](JUDGE_QUICKSTART.md).
@@ -17,6 +19,8 @@ result on that architecture. Do not treat a parser test as live verification.
 
 ## Open the wall
 
+Answers: open the app, start, Core connected
+
 **Shows:** the installed application and its connection to the core.
 
 ```bash
@@ -33,6 +37,8 @@ missing image, display or Docker requirement.
 arm64 — live wall used for the verified flows below.
 
 ## Browser capsule as Human and Agent
+
+Answers: browser capsule, human mode, agent mode, open a website
 
 **Shows:** separate browser identities and human/agent roles.
 Click **＋ Add capsule → Identity browser**, click **Create Capsule**, then
@@ -57,6 +63,8 @@ arm64 — Human and Agent browser flows verified.
 
 ## Views and desktops
 
+Answers: views, desktops, layouts, tile presets, Ctrl+1
+
 **Shows:** organization of running capsules. Use the left **Humans** / **Agents**
 tree, then select a desktop or capsule. Use desktop **+** to create a desktop.
 In a tile's **⋮ → Move to desktop**, choose **Move and go** for the destination.
@@ -75,6 +83,8 @@ arm64 — views verified; desktop operations available, separately unverified.
 
 ## Take control and Release
 
+Answers: take control, emergency, release control, handoff
+
 **Shows:** human interruption of an Agent capsule. On its tile click **⋮ →
 Take control (emergency)** (or **Control** in the tile header). Wait for
 **Interactive**, click the tile, and use it. Click **Release** in the input strip
@@ -91,6 +101,8 @@ arm64 — verified [CITED: maintainer evaluation; raw receipt absent].
 
 ## Identity data and release
 
+Answers: identities, stored data, saved login, release hold
+
 In **Identities**, **Stored data** offers Save, Overwrite, Load, Copy to a new
 capsule and Delete slot. Stop the capsule and close login before using these
 controls. Slots hold stored data, including signed-in sessions, rather than open
@@ -104,6 +116,8 @@ without isolation.
 [CITED: `../ui/src/catalog/CatalogLauncher.vue`]
 
 ## Program capsule
+
+Answers: program capsule, run a Linux app, gnome-calculator, container program
 
 **Shows:** a Linux GUI program in a container, separate from your desktop.
 Click **＋ Add capsule → Program**, click **Create Capsule**, choose
@@ -121,6 +135,8 @@ from the release package [CITED: maintainer evaluation; raw receipt absent]; arm
 automation verified, standalone Program launch is not separately attested.
 
 ## Host program and Desktop window
+
+Answers: host program, desktop window, not isolated, xpra, attach a window
 
 **Shows:** host-backed applications. **These run on your computer and are not
 isolated.** Their access and signed-in sessions are real host access.
@@ -151,6 +167,8 @@ press **Stop** on that old tile before attaching again. arm64 — both verified.
 
 ## Terminal and the prompt buttons
 
+Answers: terminal, paired terminal, prompt buttons, agent CLI
+
 **Shows:** the paired terminal dock and capsule drawer. Open **Terminal** on the
 right or the capsule's terminal control. Pairing opens a host shell for that capsule;
 it does not prove an agent is running. Choose **＋ New terminal**, an installed agent
@@ -180,6 +198,8 @@ same attachment. A copied prompt is not proof that an AI CLI is installed.
 
 ## Prepare commands for your AI
 
+Answers: commands for my AI, mw_run, operator commands
+
 Replace the attachment placeholder with the path from the `METAVIEWER_ATTACH` line printed in the terminal running `metaviewer-judge.sh run`.
 Run this setup in a dedicated shell; it changes that shell's runtime environment.
 The directory created below is private temporary RAM evidence, not durable storage.
@@ -200,6 +220,8 @@ Muse Code installed and authenticated and sends observations to that provider.
 Both need the verified runtime dependencies.
 
 ## Automate a browser goal
+
+Answers: browser goal, automate a website, rules planner, Muse
 
 **Shows:** bounded action planning against an existing Agent browser. After the
 setup, replace the identity and goal with the copied profile and a unique exact
@@ -226,6 +248,8 @@ Muse on x64 remains unverified. arm64 — browser goal with
 Muse verified.
 
 ## Automate a program: calculator
+
+Answers: automate a program, calculator goal
 
 **Shows:** GUI actions on a running Agent calculator; the button route below has
 arm64 verification. For the measured x64 recording route, use typed input.
@@ -273,6 +297,8 @@ Muse on x64 remains unverified. arm64 — calculator 7+8 by Muse verified.
 
 ## Text in a program
 
+Answers: type text in a program, uncertified text, OCR readback
+
 **Shows:** explicit operator text with readback. Open a harmless editor, take
 control, focus its text field, then release control. Only when you can assert
 that the field is focused, run after the same attachment setup:
@@ -297,6 +323,8 @@ without a supplied exact OCR readback result.
 
 ## Wall stop: login or CAPTCHA
 
+Answers: login wall, CAPTCHA, stop for human
+
 **Shows:** automation stopping at an observed login, CAPTCHA or bot-check wall.
 On an authorized local test page that presents such a wall, ask the AI to observe
 and use the browser-goal flow. Do not seek a public challenge to bypass.
@@ -311,6 +339,8 @@ inspect receipts rather than retrying.
 stop verified on local pages only.
 
 ## Screenshot and Record
+
+Answers: screenshot, record, recording, capture
 
 **Shows:** capture of a live capsule. In the strip above its tile, click
 **Screenshot**. Click **Record**, interact with harmless content, then **Stop**
@@ -339,6 +369,8 @@ now. Automatic saving waits for an active folder; failed exports retain RAM capt
 
 ## Stop and clean up
 
+Answers: stop, cleanup, close tile vs stop capsule
+
 **Shows:** explicit lifecycle cleanup. Stop recording and inspect temporary
 reports first. Use each tile's **⋮ → Stop capsule**; closing a tile with **✕**
 only hides its presentation and can leave the capsule running. Desktop window
@@ -357,6 +389,8 @@ review it with the operator; do not remove unrelated host resources.
 available, separate cleanup verification not documented here.
 
 ## Architecture support at this snapshot
+
+Answers: x64 vs arm64, what is verified on which architecture, VM, MicroVM, rewind
 
 | Flow / limitation | Linux x64 | Linux arm64 |
 | --- | --- | --- |
@@ -380,5 +414,15 @@ available, separate cleanup verification not documented here.
 Windows 10 WSL has no nested KVM. ARM64 VM, MicroVM and rewind require
 [developer setup](ARM64_CAPSULE_SETUP.md); this tour does not install them.
 
-Sources: the live checks above and the linked code.
+Maintainer-reported developer observations [CITED: README.md, maintainer report only], not reproduced here: a plain start offers browsers,
+Host program and Program; `--arm64` offers VM and MicroVM only. Switching a Host
+program between human and agent restarts that program. A full session journal
+ends the session, so use a fresh session for each long run. On an ARM64 MicroVM,
+3 files were deleted and **Back** restored them, with 387.5 ms shown by the app;
+`mv-replay` then returned rc 0 on that session journal when given its absolute real
+path. Open issues are listed in [known open bugs](JUDGE_TROUBLESHOOTING.md#known-open-bugs).
+
+The live-run receipts and video takes are not published in this repository;
+their public location is `ABSENT — do not invent`. The linked code establishes
+implementation behavior, not those live outcomes.
 This tour's claims are limited to the supplied evaluation statements and this checkout.

@@ -1,0 +1,3 @@
+- Add docs/AI_AT_THE_CONTROLS.md: why and how an AI operates MetaViewer, agent CLI profiles, Copy ID for AI and Direct task, the operating recipe, core checks, refusals and journals, the live demonstration with its conditions, and limits.
+- Rewrite docs/MW_RUN_FIRST_RUN.md as a site-neutral first run: goal mode on a Program capsule, stored-workflow mode with placeholders, refusals, and rechecked STALE_FRAME coordinates.
+- Add a reading map, question lines and live limits to docs/AI_OPERATOR_GUIDE.md, and question lines to docs/AGENT_ENTRY.md.

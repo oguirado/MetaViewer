@@ -1,0 +1,1 @@
+- Add docs/WHY_CAPSULES.md explaining why MetaViewer runs applications as capsules, what each capsule kind isolates and does not, how it compares with plain desktops, tabs, containers, VMs and remote desktops, and why a refusal is a feature; correct stale source coordinates and counts in the architecture, reference and ARM64 documents.

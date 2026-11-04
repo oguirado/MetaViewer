@@ -7,11 +7,11 @@ app.whenReady().then(async()=>{
   let result;
   for(let n=0;n<100;n++){
    result=await win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('input')).map(e=>e.placeholder)`);
-   if(result.includes(dialog==='demo'?'meta-ai':'dev.meta.ai, example.com'))break;
+   if(result.includes(dialog==='demo'?'sample-chat':'example.com, example.org'))break;
    await new Promise(resolve=>setTimeout(resolve,100));
   }
-  assert.ok(result.includes(dialog==='demo'?'meta-ai':'dev.meta.ai, example.com'),'rendered Meta site example');
-  assert.ok(!result.some(value=>/perplexity|pplx/.test(value)));
+  assert.ok(result.includes(dialog==='demo'?'sample-chat':'example.com, example.org'),'rendered neutral site example');
+  assert.ok(!result.some(value=>/perplexity|pplx|meta\.ai|meta-ai/.test(value)));
  }
  console.log('OPFIX_EXAMPLES_PASS');app.quit();
 }).catch(error=>{console.error(error);app.exit(1);});

@@ -1,27 +1,49 @@
 # Installing and Building MetaViewer on Linux (`arm64` and `x64`)
 
+Answers: build from source, developer install, install guide, how to compile
+
+**Judges:** use the packaged kit in [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md#judge-paths-by-platform-and-tier)
+(one path per platform and tier); this page is for building from source and for
+the package internals. The release assets are x64 only; on arm64 this page is the
+install route.
+
+| You want | Section |
+| --- | --- |
+| Toolchain versions | [Required Toolchains and Pins](#required-toolchains-and-pins) |
+| Build and test | [3. Building from Source and Running the Gate](#3-building-from-source-and-running-the-gate) |
+| Install a tarball by hand | [2. Installing from the Release Package Tarball](#2-installing-from-the-release-package-tarball) |
+| `PKG_…` error codes | [7. Troubleshooting Gate and Package Failures](#7-troubleshooting-gate-and-package-failures) |
+| Where data is stored | [5. RAM-First Data Policy and XDG Locations](#5-ram-first-data-policy-and-xdg-locations) |
+| Remove everything | [6. Uninstall](#6-uninstall) |
+
 I build and test MetaViewer on Linux as a desktop shell for isolated application surfaces governed by a Rust admission and journaling core (multi-capsule acceptance remains [TARGET]; current-pin live wall fps and latency are unmeasured). I distinguish the earlier debug-core live21 and release-core live22 results in [historical live evidence](../README.md#historical-live-evidence). This guide covers platform and toolchain requirements, installing and verifying the deterministic Linux release tarball, building from source and running the offline gate, resolving optional pinned external components, the RAM-first capture policy and XDG storage layout, uninstallation, and troubleshooting with exact gate and package error codes.
 
 ## 1. Platform and Requirements
 
-MetaViewer is Linux-first: **`linux-arm64` (`aarch64`) is the primary target** and **`linux-x64` (`x86_64`) is supported** [CITED: `ui/tools/package.js`, `.github/workflows/ci.yml`, `.github/workflows/package.yml`].
+Answers: supported platforms, architectures, macOS, Windows, requirements
+
+MetaViewer supports Linux: **`linux-arm64` (`aarch64`) is the primary target** and **`linux-x64` (`x86_64`) is supported** [CITED: `ui/tools/package.js`, `.github/workflows/ci.yml`, `.github/workflows/package.yml`].
 
 macOS and Windows are **not supported**. In `ui/tools/package.js`, `packageArchitecture()` rejects any architecture other than `arm64` and `x64` with `PKG_ARCH_UNSUPPORTED` (checking ELF machine `183` for `arm64` and `62` for `x64`) [CITED: `ui/tools/package.js`]. In `.github/workflows/ci.yml`, the `build-macos` and `build-windows` jobs are non-blocking (`continue-on-error: true`), excluded from `ci-required.needs`, and emit `NOT_APPLICABLE` gate receipts [CITED: `.github/workflows/ci.yml`].
 
 ### Required Toolchains and Pins
 
+Answers: Rust version, Go version, Node version, Electron version, toolchain pins
+
 | Component | Required Version / Pin | Source of Truth | Notes |
 | --- | --- | --- | --- |
-| Release version | `0.2.5` [CITED] | `VERSION`, `Cargo.toml`, `agents/pyproject.toml`, `ui/package.json` | Enforced for parity by the `manifests` and `laws` gate legs (`tools/gate.sh`). |
-| Node.js | `>=24` [CITED] | `ui/package.json` (`engines.node`) | Checked by `ui/tools/package.js` and `tools/gate.sh`; hosted CI runs Node `24` (`.github/workflows/ci.yml`). |
-| Electron | `44.9.2` [CITED] | `ui/package.json`, `ui/electron/main.js` (`ELECTRON_PIN`) | Supplied from local disk via `ELECTRON_OVERRIDE_DIST_PATH` or `MV_ELECTRON_ZIP_DIR`; network downloads are disabled (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`). |
-| Rust compiler & Clippy | `1.97` (`1.97.0` in CI) [CITED] | `Cargo.toml` (`rust-version`) | Used to compile `metaviewer-core` and `mv-replay` (`core/Cargo.toml`) and run `cargo clippy --offline`. |
-| Rust formatter | `1.92.0` [CITED] | `tools/gate.sh`, `.github/workflows/ci.yml` | Invoked as `rustup run 1.92.0 cargo fmt --all --check`. |
-| Go | `1.26.0` [CITED] | `daemon-adapter/go.mod` | Builds `mv-daemon-adapter` offline with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`. |
-| Python | `>=3.11` (`3.12` in CI) [CITED] | `agents/pyproject.toml` (`requires-python`) | Standard library only (`dependencies = []`); `tools/gate.sh` requires Python's `tomllib`. |
-| Capsule UI Kit | `0.2.1` (`aaada9dedc177b096e8b4764959e258e76c1ef02`) [CITED] | `ui/kit.lock.json` | Content hash `1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2`, staged from a local checkout via `CAPSULE_UI_KIT_REPO` or `MV_KIT_CHECKOUT`. |
+| Release version | `0.2.5` [CITED: `VERSION`] | `VERSION`, `Cargo.toml`, `agents/pyproject.toml`, `ui/package.json` | Enforced for parity by the `manifests` and `laws` gate legs (`tools/gate.sh`). |
+| Node.js | `>=24` [CITED: `ui/package.json`] | `ui/package.json` (`engines.node`) | Checked by `ui/tools/package.js` and `tools/gate.sh`; hosted CI runs Node `24` (`.github/workflows/ci.yml`). |
+| Electron | `44.9.2` [CITED: `ui/package.json`] | `ui/package.json`, `ui/electron/main.js` (`ELECTRON_PIN`) | Supplied from local disk via `ELECTRON_OVERRIDE_DIST_PATH` or `MV_ELECTRON_ZIP_DIR`; network downloads are disabled (`ELECTRON_SKIP_BINARY_DOWNLOAD=1`). |
+| Rust compiler & Clippy | `1.97` (`1.97.0` in CI) [CITED: `Cargo.toml`] | `Cargo.toml` (`rust-version`) | Used to compile `metaviewer-core` and `mv-replay` (`core/Cargo.toml`) and run `cargo clippy --offline`. |
+| Rust formatter | `1.92.0` [CITED: `tools/gate.sh`] | `tools/gate.sh`, `.github/workflows/ci.yml` | Invoked as `rustup run 1.92.0 cargo fmt --all --check`. |
+| Go | `1.26.0` [CITED: `daemon-adapter/go.mod`] | `daemon-adapter/go.mod` | Builds `mv-daemon-adapter` offline with `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local`. |
+| Python | `>=3.11` (`3.12` in CI) [CITED: `agents/pyproject.toml`] | `agents/pyproject.toml` (`requires-python`) | Standard library only (`dependencies = []`); `tools/gate.sh` requires Python's `tomllib`. |
+| Capsule UI Kit | `0.2.1` (`aaada9dedc177b096e8b4764959e258e76c1ef02`) [CITED: `ui/kit.lock.json`] | `ui/kit.lock.json` | Content hash `1bee78c76a0a2a41d085beed918ca6ca791beaf53b952d4a9367dad660fd6dc2`, staged from a local checkout via `CAPSULE_UI_KIT_REPO` or `MV_KIT_CHECKOUT`. |
 
 ### Headless Display and Host Utilities
+
+Answers: xvfb, host utilities, headless build
 
 For headless UI smoke tests (`ui-smoke` leg in `tools/gate.sh`) and clean-install package verification (`--smoke` in `ui/tools/package.js`), the host must provide:
 
@@ -34,18 +56,22 @@ RAM admission serializes native creates across daemons and reserves 512 MiB per 
 
 ### Hardware
 
+Answers: hardware, RAM, CPU, disk for building
+
 No hardware profile has been measured on a small machine; every figure is [TARGET] unless a source is cited. MetaViewer needs 64-bit Linux (`x86_64` or `aarch64`, Ubuntu 24.04 recommended) [CITED: `ui/tools/package.js`]. No GPU or CUDA is required: the pinned vision component is integer/CPU only [CITED: vision-engine README at the pinned commit]. A judge-oriented walkthrough is in [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md) and a complete AI operator guide is in [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md).
 
 | Profile | CPU | RAM | `/dev/shm` free | Free disk | Other |
 | --- | --- | --- | --- | --- | --- |
 | Offline fixture | 2 cores [TARGET] | 4 GiB [TARGET] | n/a | 2 GB [TARGET] | Node `>=24` [CITED: `ui/package.json`] |
 | App without capsules | 2 cores [TARGET] | 4 GiB recommended; preflight still requires `floor + 512 MiB` available [TARGET]; resident size of Electron, core and adapter: ABSENT — do not invent | 512 MiB [CITED: frame budget] | 2 GB [TARGET]; tarball size: ABSENT — do not invent | X11 or XWayland; unprivileged user namespaces |
-| Live browser and program capsules, current pin (laptop-ready) | 8 logical CPUs recommended, no CPU pinning required (`MV_JUDGE_REQUIRE_CPUSET=none`) [TARGET] | 16 GiB recommended [TARGET]: first-capsule daemon floor of min(20 GiB, 25 percent of `MemTotal`), plus 512 MiB per running incumbent [CITED: `daemon-adapter/internal/daemon/ram_admission.go`]; UI creation separately requires at least `6` GiB free [CITED: `ui/electron/profilePicker.js`]; warns below `floor + 4 GiB` [TARGET] | 1 GiB minimum, 2.5 GiB recommended [TARGET] | 15 GB minimum, 30 GB recommended [TARGET]; about 1.09 GiB deduplicated image archive (`opensuperficies-identity-browser-<arch>:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, `opensuperficies-desktop-<arch>:1.1.0`) [MEASURED, operator host] | rootful Docker, `docker` group; sudo-free Docker profile provisioning (uid `10001`) |
+| Live browser and program capsules, current pin (laptop-ready) | 8 logical CPUs recommended, no CPU pinning required (`MV_JUDGE_REQUIRE_CPUSET=none`) [TARGET] | 16 GiB recommended [TARGET]: initial capsule daemon floor of min(20 GiB, 25 percent of `MemTotal`), plus 512 MiB per running incumbent [CITED: `daemon-adapter/internal/daemon/ram_admission.go`]; UI creation separately requires at least `6` GiB free [CITED: `ui/electron/profilePicker.js`]; warns below `floor + 4 GiB` [TARGET] | 1 GiB minimum, 2.5 GiB recommended [TARGET] | 15 GB minimum, 30 GB recommended [TARGET]; about 1.09 GiB deduplicated image archive (`opensuperficies-identity-browser-<arch>:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, `opensuperficies-desktop-<arch>:1.1.0`) [MEASURED, operator host] | rootful Docker, `docker` group; sudo-free Docker profile provisioning (uid `10001`) |
 | Up to 4 concurrent capsules | 8 cores [TARGET] | 16–32 GiB [TARGET] | 2.5–9 GiB [TARGET] | 15–30 GB [TARGET] | as above (4-slot default `MV_SRF_PROFILES` pool on `:100`..`:103`) |
 
 Capsule RAM admission is described under [Concurrent identities and RAM admission](#concurrent-identities-and-ram-admission). VM-kind capsules are outside the judge matrix: they need `/dev/kvm` and at least 16 GiB of `MemAvailable` [CITED: operator strategy note].
 
 ### Ubuntu packages
+
+Answers: apt packages for building
 
 On Ubuntu 24.04, for both architectures [TARGET; not yet verified on a clean host], install the host utilities named above plus the display and container tools:
 
@@ -61,6 +87,8 @@ sudo apt-get install xvfb x11-utils xauth tar zip strace git coreutils util-linu
 
 ## Identities
 
+Answers: identity store, profiles, login identities, SRF_IDENTITY_STORE_ROOT
+
 Browser sessions are credentials: the operator logs in by hand inside the native
 capsule view. MetaViewer has no password vault and agents never type credentials.
 Distinct identity ids may use the same domains for separate accounts.
@@ -73,30 +101,22 @@ even when MemoryWeb is unused; choose a separate reserved home directory.
 The identity store must be outside both the repository and MemoryWeb home;
 overlapping paths, including symlink aliases, are refused as
 `MUT-PROFILE-IN-REPO`. Control directories must be private to the current user.
-Host identity ids are limited to a suffix of at most 40 characters [TARGET],
-so an explicit `srf-id-<identity>` fits native `capsuleRE` [CITED:
-OpenSuperficies `a9ac1ac8`, `src/browserid/surface/surface.go:184`].
-Login requests that explicit capsule on start and uses the validated native reply;
-an active lease may instead name any native-valid capsule, including a random
-`srf-id-<hex>` capsule started elsewhere.
+Host identity ids follow the public tool's `ID` pattern: lowercase letters,
+digits and hyphens, with a length of 2–40 characters [CITED: `tools/mv_identity.py:44`].
+The host validates returned capsule names with `CAPSULE` and refuses mismatches
+[CITED: `tools/mv_identity.py:47`, `tools/mv_identity.py:852`].
 
-Before a real start, the operator must provision `profiles/<identity>` as a
-private directory with mode `0700` and owner uid `10001` [CITED: OpenSuperficies
-`a9ac1ac8`, `src/browserid/surface/surface.go:392-393`; `3cb86d752`,
-`src/browserid/surface/surface.go:404-407`].
-Native `srf-identity-admin create` creates `profiles/<identity>` owned by the
-calling operator and exposes no chown or container provisioning verb; changing
-ownership to uid `10001` on the host requires a one-time operator provisioning
-command before the first login:
-`sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/<identity>"`.
-Without this step, `login` refuses before native start with
-`PROFILE_NOT_PROVISIONED` (or `PROFILE_MISSING` if `profiles/<identity>` was
-removed) and surfaces that command in the Identities dialog. Keep `metadata`,
-`locks` and `state` directories owned by the calling operator.
+`create` calls the public tool's Docker provisioning helper. Before a new
+login starts, `profile_state` requires a directory with mode `0700` and owner
+uid `10001` [CITED: `tools/mv_identity.py:50`, `tools/mv_identity.py:636`].
+`PROFILE_MISSING` or `PROFILE_NOT_PROVISIONED` means those checks failed;
+check Docker access and the installed judge images, then retry identity
+creation [CITED: `tools/mv_identity.py:58`, `tools/mv_identity.py:358`, `tools/mv_identity.py:531`].
+Keep the store and its control directories private to the operator. These
+are public host checks, not claims about private component internals.
 
 ```bash
 python3 tools/mv_identity.py create --id account-main --label 'Main account' --domains example.com
-# One-time host provisioning before login: sudo install -d -m 0700 -o 10001 -g 10001 "$SRF_IDENTITY_STORE_ROOT/profiles/account-main"
 python3 tools/mv_identity.py list
 python3 tools/mv_identity.py show --id account-main
 python3 tools/mv_identity.py login --id account-main
@@ -111,20 +131,22 @@ view. Native teardown restores read-only mode; capsule stop/start keeps the same
 profile directory. The tool does not inspect cookies, Local Storage or any
 profile payload and does not assert that authentication succeeded.
 
-[CITED: `tools/mv_ram_admission.py`] The pinned native admin exposes only create/show, so
-list enumerates metadata names and obtains native show replies. Delete removes
+[CITED: `tools/mv_identity.py:440`] List enumerates metadata names and obtains
+show replies through the public host tool. Delete removes
 only the exact validated identity while holding the native per-id guard; an
 active or malformed lease refuses deletion. Deletion never releases another
 identity's lease and leaves other identities' metadata and profiles untouched.
-It may require the operator's existing native profile-removal permissions.
+The public tool invokes its Docker profile-removal helper; failed removal
+retains the metadata so the operation can be retried [CITED: `tools/mv_identity.py:445`, `tools/mv_identity.py:531`].
 
 During a registered login view, the adapter refuses agent-origin input with
 `LOGIN_ACTIVE`, including while login opens or teardown is uncertain. Human
-input retains the existing `take_control` requirement. Native registration is
-`views/<container>.pid` under the state directory (OpenSuperficies
-`src/browserid/surface/viewstop.go:20-31`); the host also reserves a pending marker
-before launching login. If a crash leaves `views/<container>.login-pending`,
-first stop the native login view and verify that no login process is still
+input retains the existing `take_control` requirement. The public adapter
+checks for `views/<container>.pid` and `views/<container>.login-pending` and
+blocks input on a check error [CITED: `daemon-adapter/internal/capsule/login_lock.go:14`].
+These checks do not establish how the private runtime implements login.
+If a crash leaves `views/<container>.login-pending`, stop the native login view
+and verify that no login process is still
 opening or holding that capsule. Set `container` to the exact validated capsule
 name from the native start reply or active lease. Run
 `"$MV_SRF_BIN_DIR/srf-identity-surface" view-stop --container "$container" --state-dir "$MV_SRF_STATE_DIR" --store-root "$SRF_IDENTITY_STORE_ROOT"`.
@@ -141,6 +163,8 @@ provide an identities menu (create, log in, list, delete) and a human-control
 banner during login; all credential entry remains in the capsule view.
 
 ## 2. Installing from the Release Package Tarball
+
+Answers: install the tarball by hand, what is in the package
 
 The packaging pipeline (`scripts/bootstrap.sh` and `ui/tools/package.js`) produces a deterministic GNU tar archive outside the repository at `$MV_PKG_OUT/MetaViewer-linux-<arch>.tar` (`MetaViewer-linux-arm64.tar` on `arm64`, `MetaViewer-linux-x64.tar` on `x64`) alongside `$MV_PKG_OUT/MetaViewer-linux-<arch>.sha256` [CITED: `ui/tools/package.js`].
 
@@ -196,6 +220,8 @@ On launch, the packaged entry creates an isolated `0700` temporary runtime direc
 - **Nested display-only mode**: pass `--nested-depth=1` (`./metaviewer --nested-depth=1`) only for the separate display-only view [CITED: `ui/tools/package.js`].
 
 ## 3. Building from Source and Running the Gate
+
+Answers: build from source, compile, run tests, offline gate
 
 All source builds and tests run offline against pre-populated local caches (`--offline` for Cargo and npm, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local` for Go) [CITED: `tools/gate.sh`, `ui/tools/package.js`].
 
@@ -280,13 +306,15 @@ Hosted CI runs on both `ubuntu-24.04` (`x64` / `x86_64`) and `ubuntu-24.04-arm` 
 
 ## 4. Optional Pinned Components and Resolution (`deps.lock`)
 
+Answers: deps.lock, external components, OpenSuperficies path
+
 External runtime components are pinned in `deps.lock` by component name, kind, repository, version, and full 40-character lowercase Git commit SHA. Under Law L2 and Law L5, they stay in their own repositories and are **never vendored** into this tree [CITED: `LAWS.md`, `deps.lock`, `tools/gate.sh`]:
 
 | Component | Kind | Repository | Version | Pinned Commit (`deps.lock`) | Runtime Environment Variable |
 | --- | --- | --- | --- | --- | --- |
-| `vision-engine` | `python_package` | `oguirado/vision-engine` | `v0.2.0` [CITED] | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED] | `VQA_VE_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
-| `wender-agent` | `python_package` | `oguirado/wender-agent` | `v0.3.0` [CITED] | `96120967b435b72fc6d29635f3844dae140388a9` [CITED] | `MV_WENDER_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
-| `opensuperficies` | `go_binary` | `oguirado/OpenSuperficies` | `os-cu-w9-mv1` [CITED] | `3cb86d752f38457b6730eefd235d4da4c4039721` [CITED] | `MV_SRF_BIN_DIR` [CITED: `daemon-adapter/internal/daemon/environment.go`] |
+| `vision-engine` | `python_package` | `oguirado/vision-engine` | `v0.2.0` [CITED: `deps.lock`] | `3bb54835db8a2e545311cfcc45185a0dfbd9313a` [CITED: `deps.lock`] | `VQA_VE_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
+| `wender-agent` | `python_package` | `oguirado/wender-agent` | `v0.3.0` [CITED: `deps.lock`] | `96120967b435b72fc6d29635f3844dae140388a9` [CITED: `deps.lock`] | `MV_WENDER_ROOT` [CITED: `agents/metaviewer_agents/perception/deps_lock.py`] |
+| `opensuperficies` | `go_binary` | `oguirado/OpenSuperficies` | `os-cu-w9-mv1` [CITED: `deps.lock`] | `3cb86d752f38457b6730eefd235d4da4c4039721` [CITED: `deps.lock`] | `MV_SRF_BIN_DIR` [CITED: `daemon-adapter/internal/daemon/environment.go`] |
 
 I keep MetaViewer, OpenSuperficies, vision-engine, and wender-agent in their own repositories. I use the exact commit column as checkout authority; version fields are release labels [CITED: `deps.lock`]. I use persistent `vadapt.vserve` when its raw-frame handshake succeeds (including a typed `ring` capability), with one-shot `vadapt.cu_describe` fallback. I use `wender.plan.cli` over the pipe-only planner boundary; MetaViewer retains action admission and execution [CITED: `agents/metaviewer_agents/perception/vcore.py`, `agents/metaviewer_agents/wender_bridge.py`]. Assembly CI runs that boundary with `--require-planner` [CITED: `.github/workflows/assembly.yml`].
 
@@ -311,6 +339,8 @@ The Go daemon adapter (`daemon-adapter/internal/daemon/environment.go`) and pack
 
 ## 5. RAM-First Data Policy and XDG Locations
 
+Answers: where is data stored, XDG paths, recordings location
+
 ### RAM-First Capture and Recording Export
 
 I designed frame transport and surface recording to be strictly RAM-first [CITED: `docs/ARCHITECTURE.md`, `core/src/record/capture/export.rs`, `ui/electron/captureBridge.js`]:
@@ -330,6 +360,8 @@ I designed frame transport and surface recording to be strictly RAM-first [CITED
 
 ## 6. Uninstall
 
+Answers: uninstall, remove MetaViewer
+
 MetaViewer installs no system-wide daemons, privileged helpers, or root-owned files [CITED: `ui/tools/package.js`, `ui/electron/authorityWire.js`].
 
 To remove an installed release bundle and all user state:
@@ -347,6 +379,8 @@ rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/metaviewer" \
 If you built from source, also remove your external `MV_PKG_OUT` and `CARGO_TARGET_DIR` directories, any exported capture archives under `MV_RECORDING_DESTINATION`, and the repository checkout.
 
 ## 7. Troubleshooting Gate and Package Failures
+
+Answers: PKG error codes, gate failed, smoke failed
 
 ### Packaging, `--verify-install`, and `--smoke` Error Codes (`ui/tools/package.js`)
 
@@ -386,6 +420,8 @@ If you built from source, also remove your external `MV_PKG_OUT` and `CARGO_TARG
 | `DESTINATION_UNSET` / `NOT_SEALED` / `DESTINATION_UNAVAILABLE` / `DESTINATION_EXISTS` / `LIMIT` / `CAPTURE_UNAVAILABLE` | `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs` | Recording export requires a `sealed` recording, `MV_RECORDING_DESTINATION` set to an existing writable directory outside the repository, and an archive size within `16 MiB` (`4096` frames max) [CITED: `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`]. |
 
 ## Capsule network
+
+Answers: capsule network, proxy, egress, srf-idnet
 
 OpenSuperficies is pinned to `3cb86d752f38457b6730eefd235d4da4c4039721`
 [CITED: `deps.lock`]. This is the interim net-modes pin, not the final open-ready
@@ -464,6 +500,8 @@ startup snapshot determines the argv used for that capsule. These adapter-local 
 The hosted web runner retains its explicit offline barrier.
 
 ### Concurrent identities and RAM admission
+
+Answers: several capsules, RAM admission refused, concurrent identities
 
 [CITED: `tools/mv_ram_admission.py`] Configure `MV_SRF_PROFILES` with separate browser profile
 IDs (`mv-live-1` through `mv-live-4`), the one shared existing canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` (or disjoint canonical `/dev/shm/` roots), and distinct `Display` values (`:100` to `:103`).
@@ -548,7 +586,7 @@ record for the next start: **Open (default)** or **Dedicated proxy with allowlis
 (exact hostnames separated by commas or spaces, `1–256` [CITED: `ui/src/netmode/NetworkPanel.vue`]). Profiles shared by capsules share this policy.
 The startup capability snapshot displays **legacy** when Open is unavailable,
 including when `MV_SRF_NET_MODES` is unset. Dedicated proxy requires the
-`proxied` capability; Open requires identity image `0.2.0` [CITED] and the
+`proxied` capability; Open requires identity image `0.2.0` [CITED: `daemon-adapter/internal/capsule/manager.go`] and the
 operator-installed firewall witness and the final Open-ready native pin. The
 current interim pin does not satisfy that final prerequisite.
 The host refuses saving an
@@ -559,9 +597,12 @@ in plain words. After `NET_OPEN_PREREQ`, nothing is saved by default; the
 operator may explicitly choose **Confirm save for next start anyway** to save
 the record for a future start once Open is available. Network is separate from global settings.
 
-[CITED: `tools/mv_ram_admission.py`] The trusted launcher supplies `MV_HANDOFF_PATHS`, a JSON
-array of owner handoff paths (`output.with_suffix('.handoff.json')`), to Electron.
-The host watches only these private files; paths never cross renderer IPC.
+[CITED: `ui/electron/operatorBridge.js:285`] With `MV_HANDOFF_PATHS` set,
+Electron uses the supplied JSON array of absolute `.handoff.json` paths; an
+explicit empty array disables discovery. With the variable absent, the host
+also discovers handoff records in private run directories and validates them
+before displaying a notice. Invalid configuration is not treated as absence.
+File paths stay in the host; they never cross renderer IPC.
 The persistent activity row says “CAPTCHA or bot check: solve it in the capsule,
 then re-run”. **Take control** uses the existing control intent. **Acknowledge**
 saves a private adjacent `.ack.json` record before hiding the row; failed
@@ -569,6 +610,8 @@ persistence leaves it visible. Acknowledgement does not resume an agent run.
 
 
 ## Automation entry, demo authoring, and private MemoryWeb home
+
+Answers: automation, mw_run, MemoryWeb home
 
 Configure `MV_MW_HOME` as an absolute private site-data directory, or use the
 checkout's gitignored `memoryweb/` default. Home admission requires an owner-only

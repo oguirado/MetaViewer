@@ -1,28 +1,7 @@
 # MetaViewer
-Linux desktop wall of browser and application surfaces with human/agent control.
-Rust admits actions and journals outcomes; Electron/Vue renders admitted snapshots.
-Start judging here:
-1. README.md — what it is, how to run, what is proven.
-2. docs/JUDGE_QUICKSTART.md — packaged installation; docs/JUDGE_NO_DOCKER.md for T1.
-3. docs/JUDGE_TOUR.md — supported gestures and reported live limits.
-4. docs/REFERENCE.md#engineering-triptych — authority, negative knowledge and replay.
-5. docs/EVIDENCE.md — public tests, external reports and missing receipts.
-AGENTS.md and catalogue/protocol.json describe contributor editing and routing.
-Status: router unavailable.
-This status concerns the disabled contributor catalogue router; use the separate route/route_query.py code map below.
-Code map that works today, see route/README.md: python3 route/route_query.py ask "<question>"; also locate, error, find, where, file. It reports FRESH or STALE per file.
-Release authority: VERSION; pending changes: changes/unreleased/.
-
-Task preparation: Create automation, Run automation, and Direct task end with "Task: ". Unpaired prompts copy to clipboard. Paired controls offer installed, host-owned agent CLI profiles; after a recognized input prompt, they paste with bracketed paste and never send Enter. Missing, exited, unready or authentication-waiting agents receive no prompt. Plain shells remain copy-only. These controls prepare text; they do not execute workflows. See docs/AGENT_ENTRY.md.
-
-Current shell: three columns [CITED: ui/src/App.vue], left Humans/Agents tree with desktops and capsules, center wall, paired terminal dock and capsule drawer. Dark is the default for new settings. Compact grid presets retain full tooltips; Custom grid sets snapping rows/columns, and floating placement uses the next free cell where possible. Storyboard is not available in live navigation.
-Identities: Stored data manages slots containing saved data and signed-in sessions, not open tabs; stop the capsule and close login first. Release verifies a previous-session hold, retains saved browser data and refuses live or unverified ownership. The launcher lists installed host apps without isolation. Settings has a Recording card for rate, folders and RAM/disk-on-stop mode. Agent launch uses terminal profiles or Custom CLI then Launch; pairing alone opens a host shell.
-ARM64 VM, MicroVM and rewind need developer setup with verified local assets, arm64 only; no judge install is promised. x64 VM and MicroVM are not in this release. Windows 10 WSL has no nested KVM. wender-agent, vision-engine and OpenSuperficies remain fully private. See docs/USER_GUIDE.md and docs/ARM64_CAPSULE_SETUP.md.
-
-Reference for AI readers: docs/REFERENCE.md, evidence tagged, with source coordinates and verification gates.
-
-Private boundary: wender-agent, vision-engine and OpenSuperficies are fully private.
-Their source and repositories are closed; only compiled x64 evaluation builds are public.
-MetaViewer is AGPL-3.0-only; private components have the limited permission in NOTICE-EVALUATION.md.
-Public source tests establish interfaces and refusal behavior, not private internals.
-Current live acceptance is separate from static source verification.
+Linux desktop wall of browser and application capsules under human or agent control.
+Ask first: python3 route/route_query.py any "<question>"
+Read the returned section or span: python3 route/route_query.py show "<reference>"
+Findings are leads; cited code proves a cause. Empty results mean not indexed, not absence.
+Before editing, read AGENTS.md and LAWS.md. Check: python3 route/route_query.py check
+Legacy catalogue: Status: router unavailable. Use route/. Query output labels byte coordinates explicitly.

@@ -1,0 +1,3 @@
+- Replace repeated error placeholders with source-coordinate lookup rows and reviewed diagnostic guidance.
+- Correct uncertain-input, profile, CLI discovery and lost-capsule troubleshooting; identify the campaign package inventory guard.
+- Preserve missing-code negative controls and cover replay diagnostics, stable anchors and compact output.

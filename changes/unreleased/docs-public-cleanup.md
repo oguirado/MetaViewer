@@ -1,0 +1,1 @@
+- Remove internal planning leftovers from the docs, rewrite the Meta model usage ledger, and state the measured ARM64 MicroVM rewind and capsule-kind facts in the VM roadmap.

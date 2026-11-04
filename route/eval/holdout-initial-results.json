@@ -1,0 +1,137 @@
+{
+  "unit": "bytes",
+  "results": [
+    {
+      "id": "H01",
+      "q": "When a tile binds before its display stream arrives, how does the router keep trying to obtain the handoff, and what makes it stop?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H02",
+      "q": "What does the display router do when frames stop arriving, and how can a tile learn that the stream is stale?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H03",
+      "q": "If a tile becomes hidden, how does the router avoid wasting work on frames, and what happens when the tile becomes visible again?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H04",
+      "q": "How does the capsule panel decide whether presentation parameters refer to a graphical workload or a microVM, and what is shown when they are invalid?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H05",
+      "q": "Why does the panel router reject accessor-backed or inherited presentation parameters instead of reading them?",
+      "any": {
+        "rank": 2,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H06",
+      "q": "What conditions must hold before a microVM workload is rendered, including how ambiguous matches are handled?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H07",
+      "q": "How does the embedded browser preserve a consistent desktop viewport when its tile is resized, and why does it use visual scaling rather than page zoom?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H08",
+      "q": "What does the readiness check require before considering the embedded desktop usable, beyond the remote connection being established?",
+      "any": {
+        "rank": null,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H09",
+      "q": "Under what conditions does waiting for the embedded client stop with an error, including if the renderer stops responding?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H10",
+      "q": "When a sender reconnects, how can its sequence rail restart without allowing a previously used nonce, and what connection condition must the caller enforce first?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H11",
+      "q": "What identity and sequence conditions cause recording replay evidence to fail before it is stored?",
+      "any": {
+        "rank": 1,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H12",
+      "q": "How does the replay table behave when its configured storage limit is reached, and what state can callers inspect afterward?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H13",
+      "q": "What commit-message rules are checked, and which allowed scopes and imperative verbs can satisfy the subject format?",
+      "any": {
+        "rank": 1,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H14",
+      "q": "When does a product-code change require an unreleased note, and what transition exception can permit a direct changelog edit?",
+      "any": {
+        "rank": 1,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H15",
+      "q": "How are malformed or unsafe unreleased note files detected, and which content and filename requirements are enforced?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    }
+  ],
+  "totals": {
+    "any": {
+      "positive": 15,
+      "top1": 3,
+      "top5": 4,
+      "negative": 0,
+      "abstained": 0,
+      "max_bytes": 1753
+    }
+  },
+  "measurement": "MEASURED",
+  "stage": "first unseen evaluation before follow-up normalization"
+}

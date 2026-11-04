@@ -1,0 +1,35 @@
+{
+  "review-r2.jsonl": {
+    "role": "development",
+    "source": "R2 review of a998df6157 supplied by operator",
+    "positive": 30,
+    "negative": 5,
+    "target_top5": 25,
+    "target_abstain": 4
+  },
+  "holdout.jsonl": {
+    "role": "initial holdout, subsequently used for normalization feedback; retain first-pass result",
+    "source": "Questions frozen from source after development tuning; no ranking outputs used to select questions",
+    "positive": 15,
+    "negative": 0,
+    "target_top5": 11
+  },
+  "questions.jsonl": {
+    "role": "legacy",
+    "source": "Original router-lane questions; not a held-out evaluation"
+  },
+  "units": "counts",
+  "status": "TARGET",
+  "commands": [
+    "python3 tools/route_eval.py --dataset route/eval/review-r2.jsonl --commands any --min-top5 25 --min-abstain 4",
+    "python3 tools/route_eval.py --dataset route/eval/holdout.jsonl --commands any --min-top5 11",
+    "python3 tools/route_eval.py --dataset route/eval/confirmation.jsonl --commands any --min-top5 11"
+  ],
+  "confirmation.jsonl": {
+    "role": "unseen final confirmation",
+    "source": "Questions frozen from different source files after final ranking freeze; no results used for tuning",
+    "positive": 15,
+    "negative": 0,
+    "target_top5": 11
+  }
+}

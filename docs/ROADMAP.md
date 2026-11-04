@@ -1,8 +1,9 @@
 # Hackathon roadmap
 
+Answers: what was the hackathon plan, was the roadmap followed, is this the current status
+
 Historical pre-event plan: the dates and milestones below are targets, not
-completion receipts. The current candidate is **0.2.5** [CITED: `../VERSION`],
-with implemented runtime components and pending integration fragments. The planned
+completion receipts. The current version is in [`../VERSION`](../VERSION). The planned
 seal below does not establish a released product. Use [README.md](../README.md),
 [CHANGELOG.md](../CHANGELOG.md) and [TESTING.md](TESTING.md) for current status.
 

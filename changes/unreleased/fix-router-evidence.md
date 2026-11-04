@@ -1,0 +1,4 @@
+- Combine live source, manifest, documentation and finding evidence in router results, with explicit source references and exact error priority.
+- Abstain when discriminating terms are missing or unsupported together, and keep evaluation data outside retrieval evidence.
+- Resolve documentation section references, label byte spans and fail on missing references.
+- Add frozen review and independent holdout datasets with reproducible routing gates.

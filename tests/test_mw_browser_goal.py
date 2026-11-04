@@ -245,7 +245,7 @@ class BrowserGoalTests(unittest.TestCase):
     def test_wall_fixtures_absorb_without_input(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location('goal_wall_fixture',
-            ROOT / 'tests/e2e/test_mw_run_chatgpt_offline.py')
+            ROOT / 'tests/e2e/test_mw_run_sample_chat_offline.py')
         fixture = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(fixture)
         for page in ('login', 'captcha'):
