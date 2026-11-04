@@ -521,6 +521,10 @@ export async function createMainBindings({env = process.env, createMessageChanne
           latestFrames.clear();
           lostFrames.clear();
           pendingDeliveries.clear();
+          // The core takes no further guest work: settle what was in flight.
+          headless.disconnect();
+          guestCommand.disconnect();
+          rewind?.disconnect();
         }
         journalEnded = true;
         const error = Object.assign(new Error('Session journal is full; start a new session.'), {code:'JOURNAL_FULL'});

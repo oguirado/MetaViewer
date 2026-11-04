@@ -2099,6 +2099,20 @@ test('journal capacity reports a closed notice and refuses new work without disp
 });
 
 
+test('journal end disconnects the guest hosts once', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
+  const seen = {headless:0,guestCommand:0,rewind:0};
+  for (const name of Object.keys(seen)) { bindings.core[name].subscribe(()=>{seen[name]+=1;}); seen[name]=0; }
+  const notice = {schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'closed'}};
+  f.send(notice);
+  await waitForCondition(() => seen.headless === 1 && seen.guestCommand === 1 && seen.rewind === 1);
+  f.send(notice);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(seen, {headless:1,guestCommand:1,rewind:1});
+});
+
+
 test('journal ended surfaces lose live presentation while stop is unconfirmed', async t => {
   const f = await fixture(t);
   const bindings = await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
