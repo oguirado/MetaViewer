@@ -37,7 +37,7 @@ test('H34 preset validates every panel before moving any earlier panel',async()=
  f.api.width=1000;f.api.height=800;assert.equal(f.controller.setPreset('grid').ok,false);assert.deepEqual(moved,[]);
 });
 test('H35 long open/close sessions retain bounded identity placement history',async()=>{
- const instrumented=source.replace('return Object.freeze({ handleReady, dispose, revealWorkload, revealSurface,', 'return Object.freeze({ historySizes:()=>[panelIdentities.size,identitySlots.size,panelOrder.length], handleReady, dispose, revealWorkload, revealSurface,');assert.notEqual(instrumented,source);
+ const instrumented=source.replace('return Object.freeze({ hasSurfacePanel, handleReady, dispose, revealWorkload, revealSurface,', 'return Object.freeze({ historySizes:()=>[panelIdentities.size,identitySlots.size,panelOrder.length], hasSurfacePanel, handleReady, dispose, revealWorkload, revealSurface,');assert.notEqual(instrumented,source);
  const wall=await loadWall(instrumented),panels=[],projection={rows:[]};
  const api={panels,groups:[],getPanel:id=>panels.find(p=>p.id===id),addPanel:options=>{const panel={...options,group:{id:'home',panels:[]},api:{setActive(){},close(){panels.splice(panels.indexOf(panel),1);}}};panel.group.panels.push(panel);panels.push(panel);return panel;}};
  const c=wall.createWallWorkspaceController({projectionView:{getProjection:()=>projection,getSnapshot:()=>({status:'live',stale:false,envelope:{projection}})}});
