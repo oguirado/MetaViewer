@@ -419,6 +419,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {()=>string|null} beginFloatingDrag
  * @property {(preset:string|null) => WallAdmissionResult<unknown>} setPreset
  * @property {() => void} refreshPreset
+ * @property {(id:string) => boolean} hasSurfacePanel
  * @property {(capsuleId:string,body:any) => WallAdmissionResult<unknown>} applyLayoutEcho
  * @property {(id:string) => WallAdmissionResult<Readonly<{panelId:string}>>} revealWorkload
  * @property {(capsuleId: unknown, placement: unknown) => WallAdmissionResult<Readonly<{ panelId: string }>>} revealSurface
@@ -1336,7 +1337,8 @@ export function createWallWorkspaceController(options = {}) {
     });
   }
 
-  return Object.freeze({ handleReady, dispose, revealWorkload, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, beginFloatingDrag, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
+  const hasSurfacePanel = (/** @type {string} */ id) => Boolean(api?.getPanel(WALL_PANEL_ID_PREFIX+id));
+  return Object.freeze({ hasSurfacePanel, handleReady, dispose, revealWorkload, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, beginFloatingDrag, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
 }
 
 /**
@@ -1577,9 +1579,10 @@ function resizeTile(/** @type {string} */ id, /** @type {string} */ action) { re
 function resizeFocused(/** @type {string} */ action) { return controller.resizeFocused(action); }
 /** Presentation only: used after an acknowledged capsule stop. @param {unknown} intent */
 function applyPresentationIntent(intent) { return controller.applyPresentationIntent(intent); }
+function hasSurfacePanel(/** @type {string} */ id) { return controller.hasSurfacePanel(id); }
 const presetTimer = setInterval(() => { controller.refreshPreset(); },150);
 presetTimer.unref?.();
-defineExpose({ revealWorkload:(/** @type {string} */ id)=>controller.revealWorkload(id), revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
+defineExpose({ hasSurfacePanel, revealWorkload:(/** @type {string} */ id)=>controller.revealWorkload(id), revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
 
 onBeforeUnmount(() => {
   releaseDrag();

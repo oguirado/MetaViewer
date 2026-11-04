@@ -1429,6 +1429,17 @@ function measureChrome() {
 onMounted(() => { measureChrome(); window.addEventListener('resize', measureChrome); });
 onBeforeUnmount(() => window.removeEventListener('resize', measureChrome));
 const presetError = ref('');
+const wallRefreshing = ref(false);
+async function refreshWall() {
+  if (wallRefreshing.value) return;
+  wallRefreshing.value = true;
+  try {
+    const result = await wall.value?.refreshCurrentDesktop();
+    presetError.value = result?.ok ? '' : 'Wall refresh is unavailable. Try again after the desktop is ready.';
+  } catch {
+    presetError.value = 'Wall refresh is unavailable. Try again after the desktop is ready.';
+  } finally { wallRefreshing.value = false; }
+}
 const activeDesktopPreset = computed(() => {
   const group = desktopState.value.views[desktopState.value.activeView];
   return group.desktops.find(desktop => desktop.id === group.active)?.preset ?? null;
@@ -1905,6 +1916,7 @@ onMounted(() => {
         <UiButton id="tile-preset-grid-3x2" data-semantic-anchor="wall/preset/grid-3x2" label="3×2" :aria-pressed="activeDesktopPreset === 'grid-3x2'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid-3x2')" />
         <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus" title="Focus + strip" aria-label="Focus + strip" :aria-pressed="activeDesktopPreset === 'focus-strip'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('focus-strip')" />
         <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Float" aria-label="Floating layout" :aria-pressed="activeDesktopPreset === 'floating'" title="Float every tile in a cascaded window" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('floating')" />
+        <UiButton id="wall-refresh" data-semantic-anchor="wall/refresh" label="Refresh" title="Rebuild the current desktop from live capsules" :disabled="!desktopStateLoaded || wallRefreshing" :aria-busy="wallRefreshing" @click="refreshWall" />
         <details id="shell-grid-tools" class="mv-grid-tools"><summary id="shell-grid-tools-toggle" data-semantic-anchor="wall/grid-tools" aria-label="Custom grid" title="Custom grid">⋯</summary></details>
         <span v-if="presetError" role="status">{{ presetError }}</span>
       </div>
