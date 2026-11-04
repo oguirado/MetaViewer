@@ -324,7 +324,7 @@ step_sysdeps() {
         0) ;;
         99) fail JUDGE_SUDO "required administrator step declined: install $pkgs" "sudo apt-get install -y $pkgs" ;;
         98) fail JUDGE_SUDO "sudo is not installed and you are not root" "su -c 'apt-get install -y $pkgs'" ;;
-        *) fail JUDGE_SYSDEP "apt-get failed (rc $rc) for: $pkgs" "sudo apt-get install -y $pkgs" ;;
+        *) fail JUDGE_SUDO "administrator package step failed (rc $rc) for: $pkgs; sudo authorization or apt-get may have failed" "read the administrator command's error above; ask an administrator to run apt-get install -y $pkgs, then re-run install as your normal user" ;;
     esac
     pkgs=$(pf --sysdep-packages --tier "$TIER")
     [ -z "$pkgs" ] || fail JUDGE_SYSDEP "packages still missing after apt-get: $pkgs" "sudo apt-get install -y $pkgs"

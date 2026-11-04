@@ -28,7 +28,12 @@ bash scripts/judge/metaviewer-judge.sh run
 ```
 
 Omit `--capsules` throughout. Install may request host packages or sandbox setup;
-review the printed requests. Headless smoke can use Xvfb as described in the
+review the printed requests. Missing tools are mapped to `xvfb`, `x11-utils`,
+`xauth`, `tar`, `zip`, `unzip`, `strace`, `git`, `coreutils`, `python3` and
+`python3-pip` [CITED: `../scripts/judge/preflight.sh`]. Package installation needs
+administrator authorization; if sudo refuses, ask an administrator to install the
+printed packages, then rerun the launcher as your normal user.
+Headless smoke can use Xvfb as described in the
 [quickstart](JUDGE_QUICKSTART.md#headless-installation), but seeing the wall
 requires a visible display. Downloads default to the checkout's `assets/`;
 use the documented `--dest` and `MV_JUDGE_ASSET_DIR` pair to keep them outside it.

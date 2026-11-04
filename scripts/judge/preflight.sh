@@ -348,7 +348,7 @@ chk_docker() {
     command -v docker >/dev/null 2>&1 || return 0 # JUDGE_SYSDEP reports it
     if DOCKER_INFO=$(bounded_docker info --format '{{.SecurityOptions}}|{{.OperatingSystem}}|{{.DockerRootDir}}' 2>/dev/null); then : # MUT:JUDGE_DOCKER
     else
-        refuse JUDGE_DOCKER "'docker info' failed or timed out for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info"
+        refuse JUDGE_DOCKER "'docker info' failed or timed out for this user; daemon availability or socket permission is unverified" "check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info; without Docker, omit --capsules (docs/JUDGE_NO_DOCKER.md)"
         return
     fi
     DOCKER_ROOT=${DOCKER_INFO##*|}
