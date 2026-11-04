@@ -125,6 +125,30 @@ class SessionTests(Fixture):
         with self.assertRaises(HelperReached):
             s.provision(self.value, self.root, 'synthetic', command=fake, kind='program', guard=lambda: None)
 
+    def test_exception_cleanup_loads_only_digest_bound_setup(self):
+        raw = json.dumps(self.value).encode()
+        s.setup.write_bytes_new(self.root / 'setup.json', raw)
+        s.setup.write_new(self.root / 'PLAN.json', {'registry_sha256': s.setup.digest(raw)})
+        guardian = {'unit': 'synthetic.scope', 'invocation': 'a' * 32,
+                    'cgroup': '/synthetic', 'device': 1, 'inode': 2}
+        s.setup.write_new(self.root / 'guardian.json', guardian)
+        for changed in (True, False):
+            with self.subTest(changed=changed):
+                (self.root / 'setup.json').write_bytes(raw + (b' ' if changed else b''))
+                with patch('sys.argv', ['session', '--internal-root', str(self.root)]), \
+                        patch.object(s, 'internal', side_effect=s.setup.Refused('synthetic failure')), \
+                        patch.object(s, 'inventory_module') as loader, \
+                        patch.object(s, 'inventory_append') as append, \
+                        patch.object(s, 'stop_guardian') as stop:
+                    self.assertEqual(s.main(), 2)
+                    stop.assert_called_once_with(guardian)
+                    if changed:
+                        loader.assert_not_called()
+                        append.assert_not_called()
+                    else:
+                        loader.assert_called_once_with(self.value)
+                        append.assert_called_once()
+
     def test_replayed_internal_root_refused_before_effect(self):
         self.directories()
         (self.root / 'event-0000.json').write_text('{}')

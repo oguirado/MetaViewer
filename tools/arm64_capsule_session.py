@@ -638,7 +638,10 @@ def main():
                 guardian = setup.decode(setup.read(root / 'guardian.json', private=True))
                 setup.closed(guardian, ('unit', 'invocation', 'cgroup', 'device', 'inode'))
                 try:
-                    value = setup.decode(setup.read(root / 'setup.json', private=True))
+                    plan = setup.decode(setup.read(root / 'PLAN.json', private=True))
+                    raw = setup.read(root / 'setup.json', private=True)
+                    setup.need(type(plan) is dict and setup.digest(raw) == plan.get('registry_sha256'), 'registry changed')
+                    value = setup.decode(raw)
                     inventory_append(root, inventory_module(value), 'unknown', id='setup', reason='setup_or_app_failure')
                 except (ValueError, OSError, subprocess.SubprocessError):
                     pass  # failed/partial inventory remains unsealed and held
