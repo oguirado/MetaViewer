@@ -27,6 +27,21 @@ test('startup uses the saved recording grant and explicit environment wins',asyn
  assert.throws(()=>validateCaptureFolder('relative'));assert.throws(()=>validateCaptureFolder(f.recordings+'\n'));await chmod(f.shots,0o500);assert.throws(()=>validateCaptureFolder(f.shots),/not writable/);const readonly=capturePreferencesHost({file:f.file,env:{MV_RECORDING_DESTINATION:f.shots},chooseDirectory:async()=>({canceled:true})});assert.equal(readonly.shouldSave(),false);assert.match((await readonly.snapshot()).warning,/not writable/);await chmod(f.shots,0o700);
  const link=join(f.root,'alias');await symlink(f.file,link);assert.throws(()=>readCapturePreferences(link));
 });
+test('judge default yields to a saved folder and activates disk saving after restart',async t=>{
+ const f=await fixture(t);
+ const env={PATH:'/usr/bin',MV_RECORDING_DEFAULT_DESTINATION:f.shots};
+ assert.equal(applySavedCapturePreferences(env,f.file).MV_RECORDING_DESTINATION,f.shots);
+ await writeCapturePreferences(f.file,{...defaultCapturePreferences(),mode:'disk-on-stop',recordingsFolder:f.recordings});
+ const boot=applySavedCapturePreferences(env,f.file);
+ assert.equal(boot.MV_RECORDING_DESTINATION,f.recordings);
+ const host=capturePreferencesHost({file:f.file,env:boot,chooseDirectory:async()=>({canceled:true})});
+ assert.equal((await host.snapshot()).active,true);assert.equal(host.shouldSave(),true);
+ const explicit={...env,MV_RECORDING_DESTINATION:f.shots};
+ assert.equal(applySavedCapturePreferences(explicit,f.file),explicit);
+ await writeCapturePreferences(f.file,{...defaultCapturePreferences(),recordingsFolder:join(f.root,'gone')});
+ const bad=applySavedCapturePreferences(env,f.file);
+ assert.equal(bad.MV_RECORDING_DESTINATION,undefined);assert.match(bad.MV_CAPTURE_PREFERENCES_ERROR,/unavailable/);
+});
 test('screenshot archive copy verifies bytes, digest and exclusive destination',async t=>{
  const f=await fixture(t);const bytes=Buffer.from('actual exported archive bytes'),digest=createHash('sha256').update(bytes).digest('hex');const item={id:'shot-one',bytes:bytes.length,sha256:digest};const name=`${item.id}-${digest}.tar`;await writeFile(join(f.recordings,name),bytes,{mode:0o600});
  await copyScreenshotArchive(f.recordings,f.shots,item);assert.deepEqual(await readFile(join(f.shots,name)),bytes);assert.equal((await stat(join(f.shots,name))).mode&0o777,0o600);

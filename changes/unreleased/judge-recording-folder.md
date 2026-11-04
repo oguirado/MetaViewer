@@ -1,0 +1,1 @@
+- Honor the selected recording folder after restart when launched by the judge installer, while retaining its default folder for new installations.
