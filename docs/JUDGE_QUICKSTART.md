@@ -52,7 +52,7 @@ From a fresh clone, fetch the assets in one command (Python is required):
 Obtain the judge kit from the public repository at the tag of the same release
 as the assets: set `RELEASE_TAG` to that published tag, run
 `git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/oguirado/MetaViewer.git`,
-then `cd MetaViewer` and fetch below.
+then `cd MetaViewer` and run `scripts/judge/fetch_assets.py` as shown below.
 
 Set these variables from the maintainer's matching release notes before fetching.
 The public [v0.2.5 pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
