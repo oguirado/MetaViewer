@@ -1,0 +1,3 @@
+- Show Humans and Agents as a working tree of desktops and real capsule states, with focus and restore actions.
+- Retain Host isolation warnings and pending-handoff indicators in navigation.
+- Hide the unavailable Storyboard entry in release navigation while retaining its implementation and fixtures.

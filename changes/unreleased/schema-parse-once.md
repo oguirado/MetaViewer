@@ -1,0 +1,1 @@
+- Parse each embedded contract schema once per process, which restores human input latency after new envelope alternatives.

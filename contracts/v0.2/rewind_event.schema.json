@@ -1,0 +1,955 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/rewind_event.schema.json",
+  "title": "Rewind event",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_event/v0.2",
+          "maxLength": 17
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "event": {
+          "type": "string",
+          "const": "accepted",
+          "maxLength": 8
+        },
+        "session": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "rewind_session/v0.2",
+              "maxLength": 19
+            },
+            "workload_id": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 73,
+              "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "owner_id": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 70,
+              "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "authority": {
+              "type": "string",
+              "const": "core",
+              "maxLength": 4
+            },
+            "guest_counter": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "compatibility_sha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "profile_id": {
+              "type": "string",
+              "const": "rewind-arm64-v1",
+              "maxLength": 15
+            },
+            "backend": {
+              "type": "string",
+              "const": "firecracker",
+              "maxLength": 11
+            },
+            "isa": {
+              "type": "string",
+              "const": "aarch64",
+              "maxLength": 7
+            },
+            "disk_scope": {
+              "type": "string",
+              "const": "immutable-boot-and-ram-workspace",
+              "maxLength": 32
+            },
+            "external_effects_warning": {
+              "type": "string",
+              "const": "External effects are not rewound.",
+              "maxLength": 33
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "pausing",
+                "resuming",
+                "marking",
+                "restoring",
+                "stopping"
+              ],
+              "maxLength": 9
+            },
+            "ownership": {
+              "type": "string",
+              "const": "held",
+              "maxLength": 4
+            },
+            "pending_request_id": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 72,
+              "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "points": {
+              "type": "array",
+              "items": {
+                "$ref": "rewind_point.schema.json"
+              },
+              "minItems": 0,
+              "maxItems": 2
+            },
+            "last_good_usable": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 7,
+                  "maxLength": 70,
+                  "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "workload_id",
+            "generation",
+            "authority_epoch",
+            "owner_id",
+            "authority",
+            "guest_counter",
+            "compatibility_sha256",
+            "profile_id",
+            "backend",
+            "isa",
+            "disk_scope",
+            "external_effects_warning",
+            "phase",
+            "ownership",
+            "pending_request_id",
+            "points",
+            "last_good_usable"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 18
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "pause",
+                "resume",
+                "mark",
+                "restore"
+              ],
+              "maxLength": 7
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 1
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "event",
+        "session",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 7
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_event/v0.2",
+          "maxLength": 17
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "event": {
+          "type": "string",
+          "const": "refused",
+          "maxLength": 7
+        },
+        "session": {
+          "oneOf": [
+            {
+              "$ref": "rewind_session.schema.json"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "pause",
+                "resume",
+                "mark",
+                "restore"
+              ],
+              "maxLength": 7
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "UNAVAILABLE",
+                "OWNER",
+                "STALE",
+                "BUSY",
+                "CAPACITY",
+                "POINT_UNAVAILABLE",
+                "INVALID",
+                "DUPLICATE"
+              ],
+              "maxLength": 17
+            }
+          },
+          "required": [
+            "op",
+            "code"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 2
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "event",
+        "session",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 7
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_event/v0.2",
+          "maxLength": 17
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "event": {
+          "type": "string",
+          "const": "completed",
+          "maxLength": 9
+        },
+        "session": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "rewind_session/v0.2",
+              "maxLength": 19
+            },
+            "workload_id": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 73,
+              "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "owner_id": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 70,
+              "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "authority": {
+              "type": "string",
+              "const": "core",
+              "maxLength": 4
+            },
+            "guest_counter": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "compatibility_sha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "profile_id": {
+              "type": "string",
+              "const": "rewind-arm64-v1",
+              "maxLength": 15
+            },
+            "backend": {
+              "type": "string",
+              "const": "firecracker",
+              "maxLength": 11
+            },
+            "isa": {
+              "type": "string",
+              "const": "aarch64",
+              "maxLength": 7
+            },
+            "disk_scope": {
+              "type": "string",
+              "const": "immutable-boot-and-ram-workspace",
+              "maxLength": 32
+            },
+            "external_effects_warning": {
+              "type": "string",
+              "const": "External effects are not rewound.",
+              "maxLength": 33
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "ready",
+                "paused",
+                "stopping"
+              ],
+              "maxLength": 8
+            },
+            "ownership": {
+              "type": "string",
+              "const": "held",
+              "maxLength": 4
+            },
+            "pending_request_id": {
+              "type": "null"
+            },
+            "points": {
+              "type": "array",
+              "items": {
+                "$ref": "rewind_point.schema.json"
+              },
+              "minItems": 0,
+              "maxItems": 2
+            },
+            "last_good_usable": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 7,
+                  "maxLength": 70,
+                  "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "schema",
+            "workload_id",
+            "generation",
+            "authority_epoch",
+            "owner_id",
+            "authority",
+            "guest_counter",
+            "compatibility_sha256",
+            "profile_id",
+            "backend",
+            "isa",
+            "disk_scope",
+            "external_effects_warning",
+            "phase",
+            "ownership",
+            "pending_request_id",
+            "points",
+            "last_good_usable"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 18
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "pause",
+                "resume",
+                "mark",
+                "restore"
+              ],
+              "maxLength": 7
+            },
+            "point_id": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 7,
+                  "maxLength": 70,
+                  "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "point_id"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 2
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "event",
+        "session",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 7
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_event/v0.2",
+          "maxLength": 17
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "event": {
+          "type": "string",
+          "const": "outcome_unknown",
+          "maxLength": 15
+        },
+        "session": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "schema": {
+                  "type": "string",
+                  "const": "rewind_session/v0.2",
+                  "maxLength": 19
+                },
+                "workload_id": {
+                  "type": "string",
+                  "minLength": 10,
+                  "maxLength": 73,
+                  "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+                },
+                "generation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "authority_epoch": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                },
+                "owner_id": {
+                  "type": "string",
+                  "minLength": 7,
+                  "maxLength": 70,
+                  "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+                },
+                "authority": {
+                  "type": "string",
+                  "const": "core",
+                  "maxLength": 4
+                },
+                "guest_counter": {
+                  "oneOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "compatibility_sha256": {
+                  "type": "string",
+                  "minLength": 64,
+                  "maxLength": 64,
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "profile_id": {
+                  "type": "string",
+                  "const": "rewind-arm64-v1",
+                  "maxLength": 15
+                },
+                "backend": {
+                  "type": "string",
+                  "const": "firecracker",
+                  "maxLength": 11
+                },
+                "isa": {
+                  "type": "string",
+                  "const": "aarch64",
+                  "maxLength": 7
+                },
+                "disk_scope": {
+                  "type": "string",
+                  "const": "immutable-boot-and-ram-workspace",
+                  "maxLength": 32
+                },
+                "external_effects_warning": {
+                  "type": "string",
+                  "const": "External effects are not rewound.",
+                  "maxLength": 33
+                },
+                "phase": {
+                  "type": "string",
+                  "enum": [
+                    "uncertain"
+                  ],
+                  "maxLength": 9
+                },
+                "ownership": {
+                  "type": "string",
+                  "const": "held",
+                  "maxLength": 4
+                },
+                "pending_request_id": {
+                  "type": "string",
+                  "minLength": 9,
+                  "maxLength": 72,
+                  "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+                },
+                "points": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "rewind_point.schema.json"
+                  },
+                  "minItems": 0,
+                  "maxItems": 2
+                },
+                "last_good_usable": {
+                  "oneOf": [
+                    {
+                      "type": "string",
+                      "minLength": 7,
+                      "maxLength": 70,
+                      "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "schema",
+                "workload_id",
+                "generation",
+                "authority_epoch",
+                "owner_id",
+                "authority",
+                "guest_counter",
+                "compatibility_sha256",
+                "profile_id",
+                "backend",
+                "isa",
+                "disk_scope",
+                "external_effects_warning",
+                "phase",
+                "ownership",
+                "pending_request_id",
+                "points",
+                "last_good_usable"
+              ],
+              "additionalProperties": false,
+              "maxProperties": 18
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "enum": [
+                "pause",
+                "resume",
+                "mark",
+                "restore"
+              ],
+              "maxLength": 7
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "TRANSPORT",
+                "TIMEOUT",
+                "NATIVE",
+                "SNAPSHOT",
+                "RESEED",
+                "CLOSURE"
+              ],
+              "maxLength": 9
+            }
+          },
+          "required": [
+            "op",
+            "code"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 2
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "event",
+        "session",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 7
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "rewind_event/v0.2",
+          "maxLength": 17
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^event-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 72,
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "event": {
+          "type": "string",
+          "const": "recovery_ready",
+          "maxLength": 14
+        },
+        "session": {
+          "type": "object",
+          "properties": {
+            "schema": {
+              "type": "string",
+              "const": "rewind_session/v0.2",
+              "maxLength": 19
+            },
+            "workload_id": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 73,
+              "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "generation": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "authority_epoch": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "owner_id": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 70,
+              "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "authority": {
+              "type": "string",
+              "const": "core",
+              "maxLength": 4
+            },
+            "guest_counter": {
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "compatibility_sha256": {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "profile_id": {
+              "type": "string",
+              "const": "rewind-arm64-v1",
+              "maxLength": 15
+            },
+            "backend": {
+              "type": "string",
+              "const": "firecracker",
+              "maxLength": 11
+            },
+            "isa": {
+              "type": "string",
+              "const": "aarch64",
+              "maxLength": 7
+            },
+            "disk_scope": {
+              "type": "string",
+              "const": "immutable-boot-and-ram-workspace",
+              "maxLength": 32
+            },
+            "external_effects_warning": {
+              "type": "string",
+              "const": "External effects are not rewound.",
+              "maxLength": 33
+            },
+            "phase": {
+              "type": "string",
+              "const": "recoverable",
+              "maxLength": 11
+            },
+            "ownership": {
+              "type": "string",
+              "const": "held",
+              "maxLength": 4
+            },
+            "pending_request_id": {
+              "type": "null"
+            },
+            "points": {
+              "type": "array",
+              "items": {
+                "$ref": "rewind_point.schema.json"
+              },
+              "minItems": 1,
+              "maxItems": 2
+            },
+            "last_good_usable": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 70,
+              "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+            }
+          },
+          "required": [
+            "schema",
+            "workload_id",
+            "generation",
+            "authority_epoch",
+            "owner_id",
+            "authority",
+            "guest_counter",
+            "compatibility_sha256",
+            "profile_id",
+            "backend",
+            "isa",
+            "disk_scope",
+            "external_effects_warning",
+            "phase",
+            "ownership",
+            "pending_request_id",
+            "points",
+            "last_good_usable"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 18
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "op": {
+              "type": "string",
+              "const": "restore",
+              "maxLength": 7
+            },
+            "failed_request_id": {
+              "type": "string",
+              "minLength": 9,
+              "maxLength": 72,
+              "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "point_id": {
+              "type": "string",
+              "minLength": 7,
+              "maxLength": 70,
+              "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+            },
+            "no_active_vmm": {
+              "type": "boolean",
+              "const": true
+            }
+          },
+          "required": [
+            "op",
+            "failed_request_id",
+            "point_id",
+            "no_active_vmm"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 4
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "owner_id",
+        "event",
+        "session",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 7
+    }
+  ]
+}

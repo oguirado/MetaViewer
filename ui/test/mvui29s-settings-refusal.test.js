@@ -109,8 +109,8 @@ test('malformed stored text falls back to defaults with no visible error', async
       await flush();
       assert.equal(byId(mounted, 'mv-settings-save-refusal'), undefined, `silent for ${bad}`);
       assert.doesNotMatch(text(mounted.root), /ERR_|unreadable|could not/, bad);
-      assert.equal(radio(mounted, 'mv-light').props.checked, true, bad);
-      assert.deepEqual(emitted, ['mv-light'], bad);
+      assert.equal(radio(mounted, 'mv-dark').props.checked, true, bad);
+      assert.deepEqual(emitted, ['mv-dark'], bad);
     } finally { mounted.close(); }
   }
 });
@@ -131,8 +131,8 @@ test('negative control: a transport failure still renders its typed refusal with
     assert.ok(row, 'transport failures stay loud, proving the silence check above can fail');
     assert.equal(row.props['data-refusal-code'], 'ERR_SETTINGS_SAVE_FAILED');
     assert.doesNotMatch(text(mounted.root), /PRIVATE|transport down/);
-    assert.deepEqual(emitted, ['mv-light']);
-    assert.equal(radio(mounted, 'mv-light').props.checked, true);
+    assert.deepEqual(emitted, ['mv-dark']);
+    assert.equal(radio(mounted, 'mv-dark').props.checked, true);
   } finally { mounted.close(); }
 });
 

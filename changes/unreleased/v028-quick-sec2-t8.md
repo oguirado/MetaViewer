@@ -1,0 +1,1 @@
+- Create sequence reservation temporary files exclusively so stale hard links cannot truncate unrelated files.

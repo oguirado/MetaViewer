@@ -32,12 +32,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -63,8 +67,19 @@ type ViewBackend interface {
 	Stop(context.Context, string) error
 }
 
+// NativeInventory is host-owned allocation custody; nil preserves legacy flows.
+type NativeInventory interface {
+	Pending(string, string, string, string) error
+	Bound(context.Context, string, string, string) error
+	Closed(context.Context, string) error
+	Unknown(string) error
+}
 type Config struct {
-	BinDir string
+	// [TARGET, unit decision] Reserved launcher identity from MV_SRF_LIVE_PROFILE.
+	SlotLiveProfile string
+	Slots           SlotStore
+	Inventory       NativeInventory
+	BinDir          string
 	// NetModes is trusted startup knowledge; absence preserves legacy argv/env.
 	NetModes                    []string
 	Profiles                    map[string]Profile
@@ -105,6 +120,7 @@ type Window struct {
 	URL   string `json:"url"`
 }
 type Binding struct {
+	InventoryID                                               string
 	HostXpra                                                  *hostXpraProcess
 	Role                                                      string
 	Surface                                                   Surface
@@ -211,6 +227,8 @@ type InputEvidence struct {
 	GroundTruth       *GroundTruth          `json:"ground_truth,omitempty"`
 }
 type Manager struct {
+	slots            SlotStore
+	slotInitErr      error
 	mu               sync.Mutex
 	cfg              Config
 	runner           cli.Runner
@@ -403,6 +421,11 @@ func NewManager(cfg Config, r cli.Runner, clock cli.Clock) (*Manager, error) {
 	cfg.Profiles = copyProfiles
 	m := &Manager{cfg: cfg, runner: r, clock: clock, bindings: make(map[string]Binding), quarantined: make(map[string]bool), destroying: make(map[string]bool), pending: make(map[string]*pendingInput), inputEpochs: make(map[string]uint64), used: make(map[string]bool), refresh: make(map[string]bool), views: make(map[string]bool), lostDone: make(map[string]chan struct{}), dynamicProfiles: make(map[string]bool), hostSeq: make(map[string]uint64)}
 	m.configureIdentityTemplate()
+	if err := m.initSlots(); err != nil {
+		// Slot custody failure disables this feature without stopping unrelated capture.
+		m.slots = nil
+		m.slotInitErr = err
+	}
 	return m, nil
 }
 func withinRAM(path string) bool {
@@ -452,6 +475,74 @@ func surfaceEvent(version, kind string, s Surface) json.RawMessage {
 		Surface Surface `json:"surface"`
 	}{s})
 }
+
+// releasedIdentityAbsent reads control metadata only. Unknown inventory never
+// clears quarantine; no native lifecycle operation is authorized here.
+func releasedIdentityAbsent(ctx context.Context, r *ProcessRunner, profile string) bool {
+	var root string
+	for _, entry := range r.env {
+		if strings.HasPrefix(entry, "SRF_IDENTITY_STORE_ROOT=") {
+			root = strings.TrimPrefix(entry, "SRF_IDENTITY_STORE_ROOT=")
+		}
+	}
+	if !filepath.IsAbs(root) || !profileID.MatchString(profile) {
+		return false
+	}
+	fd, err := syscall.Open(filepath.Join(root, "locks", profile+".json"), syscall.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return false
+	}
+	f := os.NewFile(uintptr(fd), "lease")
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0600 {
+		return false
+	}
+	owner, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || owner.Uid != uint32(os.Getuid()) || owner.Nlink != 1 {
+		return false
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, 4097))
+	var lease struct {
+		Active *bool  `json:"active"`
+		Holder string `json:"holder"`
+	}
+	if err != nil || len(raw) > 4096 || json.Unmarshal(raw, &lease) != nil || lease.Active == nil || *lease.Active || !strings.HasPrefix(lease.Holder, "srf-id-") || !identityContainer.MatchString(lease.Holder) || refuseProtectedContainer([]string{"--container", lease.Holder}) != nil {
+		return false
+	}
+	active, err := r.LoginActive(lease.Holder)
+	if err != nil || active {
+		return false
+	}
+	run := func(args ...string) ([]byte, error) {
+		cmd := exec.CommandContext(ctx, "docker", args...)
+		cmd.Env = r.env
+		out := &cappedBuffer{limit: r.limit}
+		cmd.Stdout = out
+		err := cmd.Run()
+		return out.buffer.Bytes(), err
+	}
+	contextRaw, err := run("context", "inspect", "--format", "{{json .Endpoints.docker.Host}}")
+	var endpoint string
+	if err != nil || json.Unmarshal(contextRaw, &endpoint) != nil || !strings.HasPrefix(endpoint, "unix:///") {
+		return false
+	}
+	out, err := run("ps", "-a", "--format", "{{.Names}}")
+	if err != nil {
+		return false
+	}
+	validName := regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if name == "" {
+			continue
+		}
+		if !validName.MatchString(name) || name == lease.Holder {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *Manager) Handle(ctx context.Context, r Request) ([]json.RawMessage, error) {
 	return m.handle(ctx, r, nil)
 }
@@ -766,6 +857,20 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	// Lost bindings retain their profile and capacity: native state may be orphaned.
 	// Only destroy with a verified stop receipt releases both; keep the old ID
 	// as a tombstone and generate a fresh ID for the replacement.
+	// [TARGET, unit decision] Reopen after an operator release only when the
+	// native lease is explicitly inactive and its capsule/view are absent.
+	// Bound/lost surfaces keep custody; a missing/invalid lease proves nothing.
+	if m.quarantined[q.ProfileID] && p.NativeKind == "browser" {
+		bound := false
+		for _, b := range m.bindings {
+			if b.Surface.ProfileID == q.ProfileID && b.Surface.State != "destroyed" {
+				bound = true
+			}
+		}
+		if r, ok := m.runner.(*ProcessRunner); ok && !bound && releasedIdentityAbsent(ctx, r, q.ProfileID) {
+			delete(m.quarantined, q.ProfileID)
+		}
+	}
 	active := len(m.quarantined)
 	for _, b := range m.bindings {
 		if b.Surface.State != "destroyed" {
@@ -893,6 +998,18 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	}
 	m.creates[q.ProfileID] = pending
 	defer delete(m.creates, q.ProfileID)
+	if m.cfg.Inventory != nil {
+		if e := m.cfg.Inventory.Pending(id, q.ProfileID, p.NativeKind, pending.Container); e != nil {
+			return nil, e
+		}
+	}
+	if m.cfg.Inventory != nil {
+		defer func() {
+			if err != nil {
+				_ = m.cfg.Inventory.Unknown(id)
+			}
+		}()
+	}
 	out, e := m.execute(ctx, p, args, nil)
 	var refused *preSpawnRefusal
 	if errors.As(e, &refused) {
@@ -907,7 +1024,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if e != nil && p.NativeKind != "holdings" && errors.As(e, &native) && native.Code == "unavailable" {
 		e = fault("identity_unavailable", detailIdentityUnavailable)
 	}
-	b := Binding{Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
+	b := Binding{InventoryID: id, Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
 	// Recover only the cleanup identity from syntactically valid bounded JSON.
 	// Readiness validation below remains closed and authoritative for admission.
 	var cleanup struct {
@@ -1040,6 +1157,11 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if b.Role == "" {
 		b.Role = "agent"
 	}
+	if m.cfg.Inventory != nil {
+		if e := m.cfg.Inventory.Bound(ctx, id, b.Container, b.RunID); e != nil {
+			return nil, e
+		}
+	}
 	if err := m.publishHumanBinding(b); err != nil {
 		return nil, err
 	}
@@ -1115,6 +1237,15 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 // An unavailable stop settles only previously proven absence; Holdings also
 // requires its independent ownership/removal verifier. Unknown outcomes retain the slot.
 func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
+	if m.cfg.Inventory != nil && b.InventoryID != "" {
+		defer func() {
+			if err == nil {
+				err = m.cfg.Inventory.Closed(ctx, b.InventoryID)
+			} else {
+				_ = m.cfg.Inventory.Unknown(b.InventoryID)
+			}
+		}()
+	}
 	if b.NativeKind == "host-xpra" {
 		if err := b.HostXpra.stop(); err != nil {
 			return err

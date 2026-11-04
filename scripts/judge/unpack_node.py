@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""[TARGET, unit decision] Preserve regular Node/npm files without archive links."""
+"""Preserve regular Node/npm files without archive links."""
 from pathlib import Path, PurePosixPath
 import shutil
 import sys

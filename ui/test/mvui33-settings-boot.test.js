@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI33 lane S: density boot and application. The entry resolves the stored
 // density before first paint and hands the frames port to App; App paints the
@@ -66,7 +70,7 @@ async function bootEntry(search, { host = null } = {}) {
     const code = main
       .replace(
         /^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
-        (_all, binding, _quote, specifier) => `const ${binding.trim()} = globalThis.__mvui33Boot[${JSON.stringify(specifier)}];`,
+        (_all, binding, _quote, specifier) => `const ${sfcImportBinding(binding)} = globalThis.__mvui33Boot[${JSON.stringify(specifier)}];`,
       )
       .replace(/^import\s+['"][^'"\n]+['"];?$/gm, '');
     serial += 1;
@@ -178,7 +182,7 @@ async function mountAppForDensity(initial = {}) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
       './surfaces/SurfaceCanvas.vue': stub,
-      './surfaces/tileScheduler.js': { createTileScheduler },
+      './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
     });
     const row = vue.reactive({
       id: 'cap-01', surfaceId: 'cap-01', title: 'Capsule', generation: 1,

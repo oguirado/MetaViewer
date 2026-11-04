@@ -65,6 +65,15 @@ export function createXpraHumanSession(host) {
     bringToFront() { check(); tile?.bringToFront?.(); },
     /** @param {boolean} visible */
     setVisible(visible) { check(); tile?.setVisible(visible); },
+    async preview() {
+      check(); if (!tile?.preview) throw Error('PREVIEW_UNAVAILABLE');
+      const image=await tile.preview(); check(); return image;
+    },
+    /** @param {{background:string,foreground:string}} theme */
+    async setTheme(theme) {
+      check(); if (!tile?.setTheme) throw Error('NATIVE_THEME_UNAVAILABLE');
+      await tile.setTheme(theme); check();
+    },
     close() {
       if (closing) return closing;
       revoked = true;

@@ -1,0 +1,47 @@
+import {headlessProfileOwnerSync} from '../electron/coreLauncher.js';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createServer} from 'node:net';
+import {once,EventEmitter} from 'node:events';
+import {mkdtemp,mkdir,writeFile,chmod,lstat,rm} from 'node:fs/promises';
+import {createHash} from 'node:crypto';
+import {envelopeTagForBody,createMainBindings} from '../electron/hostBindings.js';
+function useArm64Fixture(t){
+ const prior=Object.getOwnPropertyDescriptor(process,'arch');
+ Object.defineProperty(process,'arch',{value:'arm64'});
+ t.after(()=>Object.defineProperty(process,'arch',prior));
+}
+const reg=c=>({endpoint:{component:c,instance:c+'-headless'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component:c,component_version:'0.2.5',component_commit:'a'.repeat(40),dependencies:[]}});
+test('authenticated binding routes real headless envelope events, never a surface/frame request',async t=>{
+ useArm64Fixture(t);
+ const root=await mkdtemp('/dev/shm/mv-hl-');await mkdir(root+'/metaviewer',{mode:0o700});
+ const config={session_id:'headless-test',core:reg('core'),peers:[reg('ui'),reg('agent')]};
+ const owner='actor-'+createHash('sha256').update('agent:'+config.peers[1].endpoint.instance).digest('hex');
+ await writeFile(root+'/config',JSON.stringify(config),{mode:0o600});
+ await writeFile(root+'/profile',JSON.stringify({schema:'mv-headless-host/v1',owner_id:owner,guardian_unit:'synthetic.service',python:{},python_prefix:'/usr',runner:{},controller_relative:'mc06-controller/controller.py',files:[],config_template:{schema:'mc06-host-config/v1',runtime_admitted:true,owner_id:owner},state_root:root,runtime_root:root}),{mode:0o600});
+ let peer,seq=0;const requests=[];let current;
+ const send=body=>peer.write(JSON.stringify({schema:envelopeTagForBody(body),msg_id:'reply-'+(++seq),ts_ns:0,from:config.core.endpoint,to:config.peers[0].endpoint,session_id:config.session_id,seq,nonce:'nonce-'+seq,body})+'\n');
+ const server=createServer(socket=>{peer=socket;let buffer='';socket.on('data',data=>{buffer+=data;let i;while((i=buffer.indexOf('\n'))>=0){const e=JSON.parse(buffer.slice(0,i));buffer=buffer.slice(i+1);const r=e.body;assert.equal(e.schema,envelopeTagForBody(r));if(r.schema==='hello/v0.2'){send(config.core.hello);continue;}requests.push(r);if(r.schema!=='headless_request/v0.2')continue;
+ const emit=(event,session,op)=>send({schema:'headless_event/v0.2',event_id:'event-'+seq,request_id:r.request_id,event,data:{session:structuredClone(session),...(op?{op}:{})}});
+ if(r.op==='create')current={schema:'headless_session/v0.2',workload_id:'workload-real',generation:1,owner_id:owner,profile_id:'headless-sumsq-v1',backend:'firecracker',isa:'aarch64',phase:'starting',ownership:'held',job:null};
+ if(r.op==='run'){current.phase='running';current.job={job_id:r.params.job_id,operation:'sumsq',n:r.params.n,status:'accepted',value:null};}
+ if(r.op==='stop')current.phase='stopping';emit('accepted',current,r.op);
+ if(r.op==='run'){current.phase='completed';current.job.status='completed';current.job.value=385;}else current.phase=r.op==='create'?'ready':'stopped';if(r.op==='stop')current.ownership='released';emit(r.op==='run'?'completed':'state_changed',current);
+ } });});
+ server.listen(root+'/metaviewer/core.sock');await once(server,'listening');await chmod(root+'/metaviewer/core.sock',0o600);
+ let binding;t.after(async()=>{await binding?.core.dispose();peer?.destroy();await new Promise(r=>server.close(r));await rm(root,{recursive:true});});
+ const ino=(await lstat(root+'/metaviewer/core.sock')).ino;
+ binding=await createMainBindings({env:{XDG_RUNTIME_DIR:root,MV_CORE_CONFIG:root+'/config',MV_HEADLESS_ONLY:'1',MV_HEADLESS_PROFILE:root+'/profile'},createMessageChannel:()=>({port1:Object.assign(new EventEmitter(),{close(){},start(){},postMessage(){}}),port2:{close(){}}}),getPeerCredentials:()=>({pid:1,uid:process.getuid(),gid:process.getgid(),ino})});
+ const h=binding.core.headless;assert.equal(h.status().available,true);const notices=[];const unsubscribe=h.subscribe(s=>notices.push(s));
+ assert.equal((await h.request({op:'create'})).session.phase,'ready');assert.equal((await h.request({op:'run',workload_id:'workload-real',generation:1,n:10})).session.job.value,385);assert.equal((await h.request({op:'stop',workload_id:'workload-real',generation:1})).session.ownership,'released');
+ assert.deepEqual(requests.map(r=>r.schema),Array(3).fill('headless_request/v0.2'));assert.ok(notices.some(s=>s.session?.phase==='starting'));unsubscribe();
+});
+
+test('headless-transport keeps unsupported architecture unavailable',async t=>{
+ const root=await mkdtemp('/dev/shm/arch-control-');t.after(()=>rm(root,{recursive:true,force:true}));
+ const owner='actor-'+createHash('sha256').update('agent:arch-control').digest('hex');
+ await writeFile(root+'/profile',JSON.stringify({schema:'mv-headless-host/v1',owner_id:owner,guardian_unit:'synthetic.service',python:{},python_prefix:'/usr',runner:{},controller_relative:'mc06-controller/controller.py',files:[],config_template:{schema:'mc06-host-config/v1',runtime_admitted:true,owner_id:owner},state_root:root,runtime_root:root}),{mode:0o600});
+ const env={MV_HEADLESS_ONLY:'1',MV_HEADLESS_PROFILE:root+'/profile'};
+ assert.equal(headlessProfileOwnerSync(env,'arm64'),owner);
+ assert.equal(headlessProfileOwnerSync(env,'x64'),null);
+});

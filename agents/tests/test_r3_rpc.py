@@ -282,6 +282,31 @@ class R3AgentsRpcTests(unittest.TestCase):
         self.assertIn("record_stop budget exhausted", str(timeout_err.exception))
         self.assertEqual(seen_timeouts, [800, 300])
 
+    def test_sequence_reservation_does_not_truncate_hardlinked_temp(self):
+        cfg = cli_fixture.config()
+        with tempfile.TemporaryDirectory(prefix="mv-seq-link-") as tmp:
+            root = Path(tmp)
+            victim = root / "victim"
+            victim.write_bytes(b"preserve this data")
+            victim.chmod(0o600)
+            seq = root / "sequence"
+            seq.write_bytes(b"9")
+            seq.chmod(0o600)
+            os.link(victim, str(seq) + ".tmp")
+            tc = ToolClient(str(root / "unused.sock"), session_id="sess-1",
+                            local=cfg["peers"][0], core=cfg["core"], dependency_pins=[],
+                            sequence_path=str(seq), timeout_s=2.0,
+                            max_line_bytes=65536, max_reply_bytes=65536)
+            try:
+                self.assertEqual(_open_sequence_state(tc), 9)
+                tc._reserve()
+                self.assertEqual(victim.read_bytes(), b"preserve this data")
+                self.assertEqual(seq.read_bytes(), b"10")
+                self.assertEqual(seq.stat().st_nlink, 1)
+                self.assertFalse(Path(str(seq) + ".tmp").exists())
+            finally:
+                tc.close()
+
     def test_t3r3_10_sequence_reservation_atomic_under_partial_writes(self) -> None:
         cfg = cli_fixture.config()
         transitions = [

@@ -7,6 +7,8 @@ No browser URL, CDP or AX acquisition is required.
 [TARGET, unit decision] Click effects use the whole surface, excluding clock
 marks identified before dispatch. Text uses a verified field focus click or
 explicit operator-asserted current focus; OCR absence is explicitly uncertified.
+[TARGET, unit decision] focused-key sends one operator-selected navigation key
+to an agent Host program. It certifies delivery plus pixel effect, not gameplay.
 """
 import argparse
 from contextlib import contextmanager
@@ -36,6 +38,13 @@ from metaviewer_agents.wender_bridge import WenderSubprocessAdapter
 
 
 MODEL_CLICK_MIN_CONFIDENCE = 0.4  # [MEASURED, 40 live replies] wrong 0.35, lowest correct 0.45
+PROGRAM_KEYS = ('Up', 'Down', 'Left', 'Right', 'Enter')
+
+
+def validate_key_request(goal, steps, text, key, planner='rules'):
+    if key is not None or goal == 'focused-key':
+        host.need(goal == 'focused-key' and key in PROGRAM_KEYS and steps == 1 and
+                  text is None and planner == 'rules', 'MW_PROGRAM_KEY_REQUEST')
 
 
 class ProgramModelReplyRejected(RuntimeError):
@@ -302,7 +311,15 @@ class ProgramBackend(host.HostBackend):
         started = time.monotonic_ns()
         # Wender binds its target to sensed pixels. A moving or replaced target
         # requires a new planning tick, never a coordinate replay or input retry.
-        focused = plan.get('focused_text') is True and plan['action']['type'] == 'type' and plan.get('target') is None
+        focused_key = plan.get('focused_program_key') is True
+        if focused_key:
+            host.need(plan['action'] in [dict(type='key', keys=[native_key(key)]) for key in PROGRAM_KEYS] and
+                      plan.get('target') is None,
+                      'MW_PROGRAM_KEY_REQUEST')
+            self.ownership()
+            host.need(self.program_binding.get('host_xpra') is True, 'MW_PROGRAM_KEY_HOST_ONLY')
+        focused = (focused_key or plan.get('focused_text') is True and
+                   plan['action']['type'] == 'type' and plan.get('target') is None)
         if isinstance(self.client, host.ToolClient) and not focused:
             baseline = self.observe(remaining)['frame_ref']
             # Repeat subscribe requests a real same-pixel publication from the
@@ -677,6 +694,61 @@ def dispatch_text(backend, sensed, target, text, timeout_ms, *, focused=False):
         raise
 
 
+def key_focused(backend, key, timeout_ms):
+    # [TARGET, unit decision] No coordinate or model target is asserted. Only
+    # host custody permits this explicit navigation mode; text gates stay intact.
+    backend.ownership()
+    host.need(backend.program_binding.get('host_xpra') is True, 'MW_PROGRAM_KEY_HOST_ONLY')
+    sensed = backend.perceive(backend.observe(remaining_budget(backend, timeout_ms)), allow_empty=True)
+    for row in sensed['table']['elements']:
+        refuse_known_password(row)
+    action = dict(type='key', keys=[native_key(key)])
+    host.tools._check_action(action)
+    expectation = effect_expectation(sensed['frame'])
+    attempt = dict(status='dispatch_or_settlement_pending', action=action,
+                   expectation=expectation, target=None, source='operator_asserted_focus')
+    backend.program_attempts.append(attempt)
+    backend.active_attempt = attempt
+    journal_id = uuid.uuid4().hex
+    start = len(getattr(backend, 'frame_attempts', []))
+    admitted = None
+    try:
+        attempt['intent_artifact'] = atomic_journal(backend.evidence / ('intent-' + journal_id + '.json'),
+            dict(status='pending_dispatch', frame=sensed['frame'], action=action,
+                 expectation=expectation, target=None, source='operator_asserted_focus'))
+        admitted = backend.propose(sensed, dict(action=action, expectation=expectation,
+            target=None, program_effect=True, focused_program_key=True), remaining_budget(backend, timeout_ms))
+        attempt['status'] = 'settlement_pending'
+        verified = backend.wait_verify(admitted, remaining_budget(backend, timeout_ms))
+        record = dict(status='verified_key', action=action, expectation=expectation,
+                      before=sensed['frame_witness'],
+                      after=backend.retain(verified['receipt']['after_frame']), verification=verified,
+                      source='operator_asserted_focus', gameplay_verified=False)
+        attempt.update(status='verified_key', verification=verified, receipt_artifact=atomic_journal(
+            backend.evidence / ('receipt-' + journal_id + '.json'), record))
+        backend.program_moves.append(record)
+    except Exception as error:
+        rows = getattr(backend, 'frame_attempts', [])[start:]
+        nonexecution = all(r.get('status') in ('STALE_FRAME', 'MW_REBIND_PIXELS', 'intent_pending') or
+                           isinstance(error, host.tools.ToolRefusal) and r.get('status') == error.reason_code
+                           for r in rows)
+        if admitted is None and nonexecution:
+            attempt.update(status='refused_before_execution' if rows else 'refused_before_dispatch',
+                           reason_code=getattr(error, 'reason_code', getattr(error, 'code', 'MW_PROGRAM_KEY_REFUSED')))
+            backend.program_clean_refusal = True
+        else:
+            attempt['status'] = 'input_uncertain'
+        if isinstance(error, host.tools.VerificationFailed):
+            attempt['status'] = 'input_uncertain'
+            journal_verification_failure(backend, attempt, error, journal_id)
+        raise
+
+
+def native_key(key):
+    # The native transport takes X keysyms; Enter's X keysym is Return.
+    return 'Return' if key == 'Enter' else key
+
+
 class MuseProgramPlanner:
     """Opt-in model selects a real mark; Wender's custody CLI plans its click."""
     def __init__(self, backend, custody, timeout_ms):
@@ -955,9 +1027,10 @@ def journal_verification_failure(backend, attempt, error, journal_id):
             type=type(journal_error).__name__, message=str(journal_error)[:4096])
 
 
-def run_moves(backend, planner, goal, steps, timeout_ms, text=None):
+def run_moves(backend, planner, goal, steps, timeout_ms, text=None, key=None):
     """Return receipts only after both native input and core settlement verify."""
     validate_request(goal, steps, timeout_ms)
+    validate_key_request(goal, steps, text, key)
     if text is not None:
         host.tools._check_action(dict(type='type', text=text))
         host.need(steps == 1, 'MW_PROGRAM_TEXT_STEPS')
@@ -966,6 +1039,9 @@ def run_moves(backend, planner, goal, steps, timeout_ms, text=None):
     backend.program_moves = moves
     backend.program_attempts = []
     backend.program_clean_refusal = False
+    if goal == 'focused-key':
+        key_focused(backend, key, timeout_ms)
+        return moves
     if goal == 'focused':
         host.need(text is not None, 'MW_PROGRAM_FOCUSED_TEXT_REQUIRED')
         type_focused(backend, text, timeout_ms)
@@ -1108,6 +1184,7 @@ def main(argv=None):
     parser.add_argument('--identity', required=True)
     parser.add_argument('--goal', required=True)
     parser.add_argument('--text', help='Type at current focus with --goal focused, otherwise click a field; OCR readback follows')
+    parser.add_argument('--key', choices=PROGRAM_KEYS, help='One navigation key with --goal focused-key (Host program only)')
     parser.add_argument('--steps', type=int, default=1)
     parser.add_argument('--timeout-ms', type=int, default=10000)
     parser.add_argument('--planner', choices=('rules', 'muse'), default='rules')
@@ -1124,6 +1201,8 @@ def run_entry(args):
     try:
         validate_request(args.goal, args.steps, args.timeout_ms)
         text = getattr(args, 'text', None)
+        key = getattr(args, 'key', None)
+        validate_key_request(args.goal, args.steps, text, key, getattr(args, 'planner', 'rules'))
         if text is not None:
             host.tools._check_action(dict(type='type', text=text))
             host.need(args.steps == 1, 'MW_PROGRAM_TEXT_STEPS')
@@ -1164,13 +1243,14 @@ def run_entry(args):
                         tessdata_prefix=os.environ.get('TESSDATA_PREFIX'))
                     try:
                         planner = None
-                        if args.goal != 'focused':
+                        if args.goal not in ('focused', 'focused-key'):
                             planner = WenderSubprocessAdapter(wender_root=backend.wender,
                                 timeout=args.timeout_ms / 1000, verify_lock=True)
                             if getattr(args, 'planner', 'rules') == 'muse':
                                 planner = MuseProgramPlanner(backend, planner, args.model_timeout_ms)
                         moves = run_moves(backend, planner, args.goal, args.steps, args.timeout_ms,
-                                          **({'text': text} if text is not None else {}))
+                                          **({'text': text} if text is not None else {}),
+                                          **({'key': key} if key is not None else {}))
                     finally:
                         backend.vision.close()
             finally:
@@ -1185,6 +1265,8 @@ def run_entry(args):
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
             host.ClientError, host.tools.ToolRefusal, host.tools.VerificationFailed,
             host.subprocess.SubprocessError) as error:
+        if callable(getattr(args, 'finish_wall_deadline', None)):
+            args.finish_wall_deadline()
         result.update(rc=6, receipt=None,
                       verdict_code=getattr(error, 'code', getattr(error, 'reason_code', 'MW_PROGRAM_CONFIG')))
         attempts = getattr(backend, 'program_attempts', [])
@@ -1198,12 +1280,16 @@ def run_entry(args):
         clean_refusal = (clean_model_stop or
                          isinstance(error, ProgramObservationChanged) and
                          getattr(backend, 'program_clean_refusal', False))
-        if ((getattr(backend, 'program_moves', []) and not clean_refusal) or any(a.get('status') in
+        # Focus-click plus type is one requested step. A clean type refusal
+        # cannot erase the delivered click or invite replay of that whole step.
+        if ((getattr(backend, 'program_moves', []) and (text is not None or not clean_refusal)) or any(a.get('status') in
                 ('input_uncertain','dispatch_or_settlement_pending','settlement_pending')
                 for a in attempts)):
             result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
         message = str(error)[:4096]
         print('mw_run_program: ' + str(error), file=sys.stderr)
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     if evidence is not None and evidence.is_dir():
         # [TARGET, unit decision] C2 marks belong to the removed RAM workspace.
         # Keep semantic observations without publishing a dangling file reference.

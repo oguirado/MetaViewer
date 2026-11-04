@@ -1,0 +1,4 @@
+- Add a hidden-by-default paired terminal drawer in tall capsules, retaining the same session when moving to the side dock for grids.
+- Keep native capsule views and terminal overlays within their own tile, and preserve the last frame while a native view is covered.
+- Move Close into the expanded tool row so narrow headers retain the role, isolation warning and menu.
+- Apply narrow-cell constraints to the actual layout group so floating content and header controls stay inside the allocated cell.
