@@ -599,7 +599,7 @@
 .mv-tile-chrome--compact .mv-tile-copy-label { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .mv-tile-chrome--compact .saas-record-dot { width:9px; height:9px; animation:none; }
 .mv-tile-chrome--compact .saas-record-recording .saas-record-dot { border-radius:1px; }
-.mv-shell .mv-tile .mv-tile-chrome__badge--header { flex:none; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; padding:1px 4px; gap:3px; }
+.mv-shell .mv-tile .mv-tile-chrome__badge--header { flex:none; max-width:none; overflow:visible; white-space:nowrap; font-size:10px; padding:1px 4px; gap:3px; }
 .mv-shell .mv-tile .mv-tile-chrome__badge--header::before { width:5px; height:5px; }
 .mv-tile-chrome--compact .mv-tile-capid { flex:none; }
 .mv-tile-chrome--compact .mv-tile-capid__status,.mv-tile-chrome--compact .mv-tile-chrome__refusal { position:absolute; right:0; top:28px; max-width:100%; padding:5px 8px; background:var(--cuk-semantic-surface-panel); z-index:var(--cuk-semantic-z-index-overlay); }
