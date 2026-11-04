@@ -39,11 +39,14 @@ async function runArtifact(archive, dist) {
   let output = '';
   child.stdout.on('data', b => { output = (output + b).slice(-12000); });
   child.stderr.on('data', b => { output = (output + b).slice(-12000); });
-  const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 25000);
+  const timer = setTimeout(() => { output += '\nDISPLAY_E2E_BOOT stage=CHILD_TIMEOUT\n'; try { process.kill(-child.pid, 'SIGKILL'); } catch {} }, 25000);
   try {
     const rc = await new Promise((resolve, reject) => {
       child.on('error', reject);
-      child.on('exit', resolve);
+      child.on('close', (code, signal) => {
+        if (signal) output += `\nDISPLAY_E2E_BOOT signal=${signal}\n`;
+        resolve(code);
+      });
     });
     return { rc, output };
   } finally {

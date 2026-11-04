@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -25,14 +29,14 @@ async function loadApp(captured) {
     './terminal/SideTerminalOverlay.vue': overlay, './multislot/MultislotHost.vue': stub,
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': settings,
     './agent/AgentLaneHost.vue': stub, './surfaces/SurfaceCanvas.vue': stub,
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const { descriptor } = parse(readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8'));
   const compiled = compileScript(descriptor, { id: 'f3-app', inlineTemplate: true });
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__f3deps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__f3deps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)).default;
 }
@@ -58,7 +62,7 @@ test('mounted App injects settings and keeps overlays and expanded controls sync
     const settingsHost = vue.markRaw({ loadSettings: async () => null, saveSettings: async () => true });
     const row = { id: 'cap-01', title: 'Capsule', generation: 1, backendLifecycle: 'active' };
     const runtime = { projectionView: { getSnapshot: () => ({ envelope: null }), getProjection: () => ({ rows: [row] }), subscribe: () => () => {} } };
-    app = renderer().createApp(App, { settingsHost, runtime, layout: {}, scope: {}, storage: { readRaw: async () => null, writeAtomic: async () => {} } });
+    app = renderer().createApp(App, { fixture:{key:'one',ui:{},capsules:[]}, settingsHost, runtime, layout: {}, scope: {}, storage: { readRaw: async () => null, writeAtomic: async () => {} } });
     const vm = app.mount(root);
     const byId = id => find(root, node => node.props?.id === id);
     const settingsScreen = () => find(root, node => node.props?.class === 'mv-settings-screen');

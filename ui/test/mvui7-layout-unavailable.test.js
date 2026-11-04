@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -57,7 +61,7 @@ async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runti
       './settings/MvSettingsPanel.vue': slotStub, './agent/AgentLaneHost.vue': slotStub,
       './activity/ActivityStrip.vue': slotStub,
       './surfaces/SurfaceCanvas.vue': slotStub, './nested/nested.js': { resolveNestedMode, applyNestedWall },
-      './surfaces/tileScheduler.js': { createTileScheduler },
+      './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
     });
     const fixture = resolveFixture('one').fixture;
     const layout = createWallLayout(SCOPE, [...fixture.capsules]);
@@ -163,7 +167,7 @@ async function bootFixture(search) {
   };
   try {
     const code = main.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
-      (_all, binding, _quote, spec) => `const ${binding.trim()} = globalThis.__mvui7Boot[${JSON.stringify(spec)}];`)
+      (_all, binding, _quote, spec) => `const ${sfcImportBinding(binding)} = globalThis.__mvui7Boot[${JSON.stringify(spec)}];`)
       .replace(/^import\s+['"][^'"\n]+['"];?$/gm, '');
     await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#layout-${++serial}`);
     await tick();
@@ -268,30 +272,24 @@ for (const displayOnly of [false, true]) test(`notice grid mode renders correctl
     assert.equal(nodes(body).some(n => n.props?.class === 'mv-nested-wall'), displayOnly);
     const styles = parse(appSource).descriptor.styles.map(s => s.content).join('\n');
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested > .mv-shell-body' : '.mv-shell-body'),
-      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:3(?:;|$)/);
+      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:2(?:;|$)/);
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested' : '.mv-shell'),
-      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) auto minmax\(0,1fr\)/);
+      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) minmax\(0,1fr\)/);
   } finally { app.close(); }
 });
 
-test('entry copy feedback expires, restarts on repeat, and unmount cancels its timer',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  const previous=globalThis.metaviewer;
-  globalThis.metaviewer={operator:{entry:{copy:async()=>({ok:true})}}};
+test('removed entry action is absent from the sidebar in both rail states',async()=>{
   const app=await mountApp({readRaw:async()=>null,writeAtomic:async()=>{}});
-  try{
-    const click=async()=>{byId(app.view.root,'shell-use-metaviewer').props.onClick();await tick();};
-    await click();
-    const feedback=()=>nodes(app.view.root).find(n=>n.props?.class==='mv-entry-feedback');
-    assert.equal(text(feedback()),'Copied');assert.equal(feedback().props.role,'status');assert.equal(feedback().props['aria-live'],'polite');
-    t.mock.timers.tick(1500);await tick();assert.equal(text(feedback()),'Copied');
-    await click();t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'Copied');
-    t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'');
-    await click();
-    const {descriptor}=parse(appSource);
-    assert.ok(descriptor.styles.some(s=>/\.mv-entry-feedback\s*\{[^}]*position:\s*absolute/s.test(s.content)),'feedback cannot reflow top-bar actions');
-  }finally{app.close();globalThis.metaviewer=previous;}
-  t.mock.timers.tick(2000);
+  try {
+    assert.equal(byId(app.view.root,'shell-use-metaviewer'),undefined);
+    assert.equal(nodes(app.view.root).some(n=>n.props?.class==='mv-entry-feedback'),false);
+    const toggle=byId(app.view.root,'shell/navigation/toggle');
+    assert.ok(toggle);assert.equal(toggle.props['aria-expanded'],true);
+    toggle.props.onClick();await tick();
+    assert.equal(byId(app.view.root,'shell/navigation/toggle').props['aria-expanded'],false);
+    assert.equal(byId(app.view.root,'shell-use-metaviewer'),undefined);
+    assert.doesNotMatch(appSource,/entryTimer|copyEntry/);
+  } finally {app.close();}
 });
 
 test('empty frame projection with an authority runtime waits for capsule frames',async()=>{

@@ -360,7 +360,9 @@ describe('DISPLAY-POLISH (P12.1): adapter MV_DISPLAY_TAP allowlist and visible D
 
     // Mutant: drop MV_DISPLAY_TAP from ALLOWED_ADAPTER_ENV and verify the test fails
     const source = readFileSync(CORE_LAUNCHER_PATH, 'utf8');
-    const mutantSource = source.replace("  'MV_DISPLAY_TAP',\n", '');
+    const mutantSource = source.replace("  'MV_DISPLAY_TAP',\n", '')
+      .replace(/(from\s*['"])(\.\/[^'"]+)(['"])/g,
+        (_all, before, spec, after) => before + new URL(spec, new URL('../electron/coreLauncher.js', import.meta.url)).href + after);
     assert.notEqual(mutantSource, source, 'mutant must remove MV_DISPLAY_TAP from coreLauncher.js');
     const mutantMod = await import(
       `data:text/javascript;base64,${Buffer.from(mutantSource).toString('base64')}#mutant-core-launcher`

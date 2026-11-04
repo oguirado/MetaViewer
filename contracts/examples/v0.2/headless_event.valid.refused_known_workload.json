@@ -1,0 +1,12 @@
+{
+  "schema": "headless_event/v0.2",
+  "event_id": "event-52",
+  "request_id": "request-52",
+  "event": "refused",
+  "data": {
+    "workload_id": "workload-example",
+    "generation": 1,
+    "code": "POLICY",
+    "effect": "not_dispatched"
+  }
+}

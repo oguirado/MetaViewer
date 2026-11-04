@@ -10,8 +10,8 @@ capsules.
 
 - **Point your own AI at [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md)**: a single,
   self-contained guide that lets your AI install, configure, verify, and explain
-  every feature of MetaViewer (views, desktops, tile presets, browser/program/X11
-  capsules, human/agent hand-off, terminals, `Bootstrap`, identities, `Use MetaViewer`,
+  the supported judge flows (left tree, desktops, tile presets, browser/program/X11
+  capsules, human/agent hand-off, paired terminals, identities,
   and MemoryWeb / `mw_run` automation).
 - Full build and environment reference: [INSTALL.md](INSTALL.md).
 - Operator walkthrough: [USER_GUIDE.md](USER_GUIDE.md).
@@ -54,21 +54,25 @@ as the assets: set `RELEASE_TAG` to that published tag, run
 `git clone --branch "$RELEASE_TAG" --depth 1 https://github.com/oguirado/MetaViewer.git`,
 then `cd MetaViewer` and fetch below.
 
+Set these variables from the maintainer's matching release notes before fetching.
+The public [v0.2.5 pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
+has compiled x64 assets [CITED: release asset list]. Set `RELEASE_TAG=v0.2.5`
+when using that set. The matching asset base URL is:
+
 ```bash
-# Complete directory supplied by the release maintainer; add --capsules for T2.
-python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules
-# Or an explicit HTTPS release asset base URL with an independently obtained digest:
+export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.5
+# Copy SHA256SUMS_DIGEST from that release's notes before running this command.
 python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
 ```
 
-Set these variables to the actual directory or published release URL and manifest digest
-supplied by the maintainer. A publicly accessible complete release has not been established
-by the supplied evaluation evidence; the command refuses incomplete or corrupt sets. Do not assume
-that a GitHub Actions artifact is a published release. CI currently exports app and Node
-assets with `SHA256SUMS` for T1 only; T2 also needs the private component and image assets
-built by the maintainer. Checksums protect integrity, not publisher authenticity.
-The explicit fetch command authorizes the transfer; install still asks before downloading
-missing assets. No install begins until the fetch command has verified the selected set.
+That release has no ARM64 compiled assets. The generic
+architecture names below describe the packaging contract, not an available arm64
+download. Source builds and later release sets require their own matching assets.
+For a local release directory, use `--source "$RELEASE_ASSET_DIRECTORY"` instead.
+Do not assume that a GitHub Actions artifact is a published release. Fetch refuses
+incomplete or corrupt sets. Checksums protect integrity, not publisher authenticity.
+The explicit fetch command authorizes the transfer; install still asks before
+downloading missing assets. No install begins until the selected set is verified.
 
 Fetch maps the architecture printed by `uname -m` (`aarch64` to `arm64`,
 `x86_64` to `x64`) and writes verified files into `assets/`. A kit for the wrong architecture is
@@ -86,6 +90,23 @@ sha256sum -c ../MetaViewer-linux-<arch>.sha256
 Start in the directory containing the extracted tree; replace `<arch>` with `x64`
 or `arm64`. The checksum command runs inside the bundle, as described in
 [INSTALL.md](INSTALL.md#extract-and-verify-the-sha-256-manifest).
+
+## Before you start
+
+- Run as a normal user. Electron refuses root without disabling its sandbox;
+  do not add `--no-sandbox` to bypass it [CITED: `scripts/judge/preflight.sh` sandbox policy].
+- Use a desktop/logind session with an existing, user-owned `XDG_RUNTIME_DIR`.
+  On WSL2, enable systemd and use WSLg. A display alone does not supply the runtime
+  directory [CITED: `scripts/judge/preflight.sh`].
+- `install --yes` accepts administrator steps, including `apt-get update` and
+  package installation. Omit `--yes` to review each request [CITED: `scripts/judge/metaviewer-judge.sh`].
+- To keep downloads outside the checkout, set `MV_JUDGE_ASSET_DIR` to an absolute
+  writable directory and pass `--dest "$MV_JUDGE_ASSET_DIR"` to fetch. Fetch does
+  not read that variable itself. `MV_JUDGE_HOME` selects a separate absolute
+  installation/state directory; its default is `$XDG_DATA_HOME/metaviewer-judge`
+  (home fallback). Keep these variables set for doctor, install, run and stop
+  [CITED: `scripts/judge/fetch_assets.py`, `scripts/judge/metaviewer-judge.sh`].
+- Without Docker or private-runtime access, use [the app-only route](JUDGE_NO_DOCKER.md).
 
 ## 2. Check your machine (no changes made)
 
@@ -177,6 +198,11 @@ no destinations. A running browser capsule is not evidence of working public bro
 Arbitrary public browsing requires a compatible Open image and firewall; this kit does
 not invent wildcard approvals or silently change proxy policy.
 
+The release-package x64 WSL2 evaluation at c26/c27 [CITED: maintainer evaluation]
+verified Open network **with its firewall step**: a public site returned
+HTTP 200 [CITED: maintainer evaluation; raw receipt absent]; local network and Docker bridge access were blocked. This
+result does not certify a legacy kit or an install that declined the firewall.
+
 ### Headless installation
 
 The install smoke needs an X server. On a headless host, install the display tools and
@@ -204,12 +230,19 @@ command itself does not install npm packages.
 bash scripts/judge/metaviewer-judge.sh run
 ```
 
+The shell defaults to Dark unless a saved theme overrides it. Its three columns
+[CITED: `../ui/src/App.vue`, `../ui/src/settings/settingsModel.js`] hold the left tree,
+center wall and paired terminal dock. Storyboard is not available in live navigation.
+The launcher shows installed host apps. Custom grid (⋯) sets snapping rows and columns; newly
+floating tiles use the next free cell where possible.
+
 The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 `:101`, `mv-live-3` on `:102`, `mv-live-4` on `:103`):
 
-- Switch between **`Humans`** and **`Agents`** views (`Ctrl+Tab`), create virtual
-  desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1 tile`, `2 side by side`,
-  `2×2`, `Focus + strip`, `Floating layout`).
+- Use the left **`Humans`** / **`Agents`** tree to select desktops and capsules, create virtual
+  desktops with `+` and switch between existing desktops with `Ctrl+1..9`, and test tile layouts (`1` — one tile, `2` — two side by side,
+  `2×2`, `3×2`, `Focus` — focus + strip, `Float` — floating layout). The compact
+  controls retain descriptive accessible names and tooltips.
 - Click **`＋ Add capsule`** to launch an **`Identity browser`**, a Linux **`Program`**
   (inside `opensuperficies-program-host-<arch>:0.1.0`), **`Host program`**, or an X11
   **`Desktop window`**. Host program and Desktop window run on your computer and
@@ -217,11 +250,23 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 - Log into a site in human mode and click **`Mark as logged in`** to save its login
   status. Then choose **`Switch to agent mode`** separately to hand the capsule to
   the agent; watch live read-only, or click **`Take control (emergency)`**.
-- Click **`ID`** (**`Copy ID for AI`**), open **`More ▾ -> Terminal`**, click
-  **`🚀 Bootstrap`**, or click the top-bar **`Use MetaViewer`** button to connect an AI CLI.
+- Open the paired terminal dock or capsule drawer. Use **`＋ New terminal`** to select
+  an installed agent profile, or enter **`Custom CLI`** and **`Launch`**. Pairing starts a
+  host shell; it does not by itself launch an agent. **`Create automation`**,
+  **`Run automation`**, and **`Direct task`** prepare prompts ending in `Task: ` with
+  the paired identity. With an installed agent ready at its input prompt, the prompt is
+  pasted without Enter; type the task and submit it. Plain shells stay copy only.
+  These controls do not execute workflows.
 - Record a workflow and run `mw_run` from the terminal. There is no
   **`Automate from a demo`** menu action.
   Full step-by-step instructions: [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md).
+
+In **Identities**, **Stored data** manages saved slots (including signed-in sessions,
+not open tabs); stop the capsule and close login before using them. **Release**
+clears a verified previous-session hold without stopping a live session or deleting
+saved browser data. Settings has a **Recording** card for frame rate, storage mode
+and destination folders; review its next-start and host-override notices.
+See [USER_GUIDE.md](USER_GUIDE.md#stored-data-slots).
 
 ## 5. Stop
 
@@ -254,13 +299,13 @@ Full table and sources: [INSTALL.md](INSTALL.md#hardware). Designed for a standa
 8-core, 16 GiB RAM x64 or arm64 Linux laptop:
 
 - **App only (T1)**: 2+ cores, `floor + 512 MiB` available RAM (`floor = min(MemTotal/4, 20 GiB)`), `512 MiB` `/dev/shm` `tmpfs`, `2 GB` free disk [TARGET].
-- **Live capsules (T2)**: 8 logical CPUs recommended (no CPU pinning required; `MV_JUDGE_REQUIRE_CPUSET` defaults to `none`), 16 GiB RAM (`MemAvailable >= floor + 512 MiB` hard minimum, i.e. `4.5 GiB` on a 16 GiB machine [MEASURED]; warns below `floor + 4 GiB`, i.e. `8 GiB` [TARGET]), `>= 1 GiB` `/dev/shm` `tmpfs` (`>= 2.5 GiB` recommended [TARGET]), `>= 15 GB` free disk (`>= 30 GB` recommended [TARGET]), rootful Docker Engine.
+- **Live capsules (T2)**: 8 logical CPUs recommended (no CPU pinning required; `MV_JUDGE_REQUIRE_CPUSET` defaults to `none`), 16 GiB RAM (`MemAvailable >= floor + 512 MiB` install/doctor minimum, i.e. `4.5 GiB` on a 16 GiB machine [TARGET]; each **Add capsule** also needs at least `6` GiB MemAvailable or refuses with `RAM_ADMISSION_REFUSED` [CITED: `ui/electron/profilePicker.js`]; warns below `floor + 4 GiB`, i.e. `8 GiB` [TARGET]), `>= 1 GiB` `/dev/shm` `tmpfs` (`>= 2.5 GiB` recommended [TARGET]), `>= 15 GB` free disk (`>= 30 GB` recommended [TARGET]), rootful Docker Engine.
 - VM capsules are not part of judging.
 
 ## Troubleshooting
 
 The app includes public Python agents, tools, dependency locks and contracts in
-`resources/operator` [TARGET, unit decision]. Python remains a host prerequisite.
+`resources/operator` [CITED: `ui/tools/package.js`]. Python remains a host prerequisite.
 `MV_OPERATOR_REPO` optionally selects a developer checkout; an installed runtime
 uses sealed public files and keeps MemoryWeb data outside the app directory.
 
@@ -278,6 +323,17 @@ browser goals with rules or Muse. Stored browser workflows still need private
 APIs from a verified checkout and refuse `MW_COMPILED_WORKFLOW_UNAVAILABLE`
 in compiled mode. Live results are limited to the architecture table in
 [Judge tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
+The release-package x64 WSL2 checks at c26/c27 [CITED: maintainer evaluation]
+measured browser rules goals 10 of 10 [MEASURED], Agent `gnome-calculator` in
+both Host program and isolated Program, Desktop window `gedit` attach, type,
+resize and closed message, login wall `HUMAN_HANDOFF`, and clean stop.
+Calculator text `2+3` was sent with rc 0 [MEASURED] and verdict
+`PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`: exact readback and arithmetic are
+uncertified. Human Program `gedit` closed its window with `XPRA_MODE_REFUSED`.
+A closed Desktop window tile can retain a reused X11 id; if **Add** refuses,
+press **Stop** on that tile. Muse on x64 and real mouse drag under a window
+manager remain unverified. See the [tour](JUDGE_TOUR.md) for the arm64 column.
+
 Arm64 compiled private assets are absent.
 The version labels in `deps.lock` are retained even where release tags disagree.
 
@@ -291,7 +347,7 @@ The kit never installs these optional host packages automatically.
 | `PKG_ARCH_MISMATCH` | Kit for the wrong architecture; download the other one |
 | `RAM_ADMISSION_REFUSED` | Free memory, or run `python3 tools/mv_ram_admission.py reclaim --dry-run` to review stale reservations |
 | `NET_OPEN_PREREQ` | Open network prerequisites are missing; the firewall step was declined or the build is not Open-ready; use legacy |
-| `TERMINAL_UNAVAILABLE` | The side terminal is not packaged in this build; the rest of the wall is unaffected |
+| `TERMINAL_UNAVAILABLE` | The paired terminal dock and drawer cannot open a session in this build; the rest of the wall is unaffected |
 
 Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_admission.go`,
 `daemon-adapter/internal/capsule/egress_policy.go`, `ui/electron/terminalHost.js`].
@@ -300,8 +356,8 @@ Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_adm
 
 The sudo-free fallback calls the kit's `srf-identity-surface net up` with
 `--proxy-bin` pointing to the kit's `srf-egress-proxy`. The launcher selects the
-proxy entrypoint, internal network and bridge attachment and verifies
-`EGRESS_PROXY_READY`; it refuses an existing incompatible proxy without replacing it.
+proxy entrypoint, internal network and bridge attachment. It refuses if
+`srf-identity-surface net up` fails; it does not replace an existing incompatible proxy.
 Private metadata lives under `$MV_JUDGE_HOME/network`: separate `policy/`,
 `registry/` and `audit/` directories (mode `0700`), with policy and registry files
 at `0600`. The x64 source runs the proxy with the CLI caller's UID/GID, so these
@@ -316,11 +372,11 @@ entries and HTTPS `connect_ports` entries for each capsule and host. Leave
 `private_targets` absent to retain LAN/host blocking. Arbitrary public browsing
 is not available through this policy schema; no wildcard policy is implied.
 
-The x64 kit supplies browser image `0.1.1`. If a binary advertises Open and the
+A legacy x64 kit with browser image `0.1.1` does not inherit the measured Open result. If a binary advertises Open and the
 firewall witness is present, preflight requires `0.2.0` and refuses that image set.
 The installer detects this before offering a new firewall. Retagging `0.1.1` would not establish Open support; the upstream source disables
 Open for its default image. Use a legacy-only kit without an active Open witness, or obtain a compatible Open kit.
 
-## ARM64 VM preview
+## ARM64 developer setup
 
-The ARM64 Linux VM capsule is a preview for ARM64 hosts with KVM and a configured template. It is not offered on x64; judges on x64 lose nothing from the supported judging flow. See [VM roadmap](../VM_MICROVM_ROADMAP.md) for the current scope and evidence limits.
+ARM64 VM, MicroVM and rewind require developer setup on arm64 with KVM and verified local assets; they are not a judge installation route. x64 VM and MicroVM are not in this release. Windows 10 WSL has no nested KVM. See [local ARM64 setup](ARM64_CAPSULE_SETUP.md) and the [VM roadmap](../VM_MICROVM_ROADMAP.md) for prerequisites and evidence limits.

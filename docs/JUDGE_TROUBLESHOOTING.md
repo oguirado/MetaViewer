@@ -11,11 +11,16 @@ from the diagnostic or release maintainer; never paste them literally.
 
 [Quickstart](JUDGE_QUICKSTART.md) · [Tour and architecture verification table](JUDGE_TOUR.md#architecture-support-at-this-snapshot)
 
-This is a source reference, not additional live verification. The tour’s architecture
-table remains the authority for what was checked: x64 Program launch, Host program,
-Desktop window, calculator and program text do not gain verification from this page.
-Its x64 browser-goal result concerns local pages with rules; do not generalize it to
-public browsing. Arm64 kit installation is not separately attested.
+The tour’s architecture table scopes live verification. The release-package x64
+WSL2 evaluation at c26/c27 [CITED: maintainer evaluation] measured browser rules
+goals 10 of 10 [MEASURED]; Open network with its firewall step reached a public
+site with HTTP 200 [MEASURED], with local network and Docker bridge blocked.
+Agent `gnome-calculator` launched through both Host program and isolated Program;
+Desktop window `gedit` attach, type, resize and closed message, login wall
+`HUMAN_HANDOFF`, and clean stop were observed. Typed calculator `2+3` exited
+with rc 0 [MEASURED] but `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; do not certify
+readback or arithmetic. Muse on x64 and real mouse drag under a window manager
+remain unverified. Arm64 kit installation is not separately attested.
 “No known remedy” means stop and preserve the diagnostic, not guess a command
 or weaken a check.
 
@@ -36,7 +41,7 @@ considering new input ([readback](../tools/mw_run_browser_goal.py)).
 missing host binary available ([lookup](../daemon-adapter/internal/capsule/opening_mode.go)).
 **Host program** needs xpra and runs with real host access; it is not isolated
 ([runtime](../daemon-adapter/internal/capsule/host_xpra.go)). The tour records the
-observed refusal and live-check limits; these source facts do not upgrade them.
+observed launch results and live-check limits; these source facts do not upgrade them.
 `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` means typed but not read by OCR.
 Verdicts ending in `_BOUNDED_ACTIONS_VERIFIED` prove the moves, never the goal.
 
@@ -270,6 +275,13 @@ state before continuing; no source-backed code-specific remedy is available.
 
 ## Capsules
 
+**Reused X11 id:** a closed Desktop window tile can retain an id later reused by
+a new window. **Add** then refuses because the window is already attached.
+Press **Stop** on the old tile, including a tile showing the closed message,
+then refresh and select the intended live window. Closing with **✕** only hides
+it. The x64 observation is not permission to bypass the binding check
+[CITED: operator evaluation, c26/c27; [binding check](../ui/electron/roleHost.js)].
+
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
 | `MW_IDENTITY` | The identity is invalid or unavailable. | Select an existing identity and run again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
@@ -403,7 +415,7 @@ state before continuing; no source-backed code-specific remedy is available.
 | `XPRA_BINDING_REFUSED` | The requested surface cannot use this Xpra binding. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_BOUNDS_REFUSED` | The Xpra tile geometry is invalid or outside supported bounds. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_HOST_CLOSED` | The host tile closed while the operation was pending. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
-| `XPRA_MODE_REFUSED` | Changing the native Xpra input mode failed. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
+| `XPRA_MODE_REFUSED` | Changing the native Xpra input mode failed; on x64, Human Program `gedit` closed its window with this refusal [CITED: operator evaluation, c26/c27]. | Preserve the diagnostic and stop that tile. Human Program `gedit` is not a verified demo route; use the measured Agent calculator or attach an existing harmless `gedit` through Desktop window for those distinct flows. | [code](../ui/electron/roleHost.js) |
 | `XPRA_MODE_UNPROVEN` | The native acknowledgement did not prove the requested Xpra input mode. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_PAYLOAD_REFUSED` | The Xpra operation payload is unsupported or invalid. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_ROLE_OWNERSHIP` | The Xpra role or current surface ownership cannot authorize the operation. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
@@ -540,6 +552,9 @@ state before continuing; no source-backed code-specific remedy is available.
 | `MW_PROGRAM_TEXT_REFUSED` | Program text input was refused. | Inspect the report and editor state before considering another input. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `MW_PROGRAM_TEXT_STEPS` | Program text input requires a single bounded step. | Use --steps 1 with --text. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `MW_PROGRAM_UNKNOWN_OBSERVATION` | The program observation cannot be classified safely. | Inspect the capsule and acquire a supported observation. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_REQUEST` | The navigation request is unsupported. | Use focused-key with one arrow or Enter, one step, rules and no text. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_HOST_ONLY` | Navigation requires an Agent Host program custody binding. | Select a live Agent Host program before running again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_REFUSED` | The navigation input was refused. | Inspect the report and acquire a fresh observation before planning again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` | Text was typed, but OCR did not read it back; a successful exit does not certify the text. | Take control and inspect the editor; do not blindly type again. No command to force readable OCR is supplied. | [code](../tools/mw_run_program.py) |
 | `PROGRAM_BOUNDED_ACTIONS_VERIFIED` | The bounded moves were verified, never the whole goal. | Inspect the fresh capsule output and receipts; for a calculator, inspect the displayed result separately. | [code](../tools/mw_run_program.py) |
 

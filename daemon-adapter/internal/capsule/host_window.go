@@ -1,5 +1,9 @@
 package capsule
 
+// [TARGET, unit decision] Host program keys request an 80 ms native press/release gap.
+// Requires the private srf-host-window key-hold option; unsupported binaries
+// refuse the request. Browser input and contract messages are unchanged.
+
 import (
 	"bytes"
 	"context"
@@ -354,7 +358,11 @@ func (m *Manager) inputHostWindow(ctx context.Context, surfaceID, proposalID, or
 		if !regexp.MustCompile(`^[A-Za-z0-9_+]{1,32}$`).MatchString(key) {
 			return nil, fault("input", "invalid key chord")
 		}
-		callArgvs = [][]string{append(append([]string(nil), baseArgs...), "--key", key)}
+		keyArgs := append(append([]string(nil), baseArgs...), "--key", key)
+		if b.NativeKind == "host-xpra" {
+			keyArgs = append(keyArgs, "--key-hold-ms", "80")
+		}
+		callArgvs = [][]string{keyArgs}
 	case "type":
 		if len(text) == 0 || x != nil || y != nil || button != "" || len(keys) != 0 {
 			return nil, fault("input", "invalid text")

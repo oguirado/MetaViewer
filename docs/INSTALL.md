@@ -30,7 +30,7 @@ For headless UI smoke tests (`ui-smoke` leg in `tools/gate.sh`) and clean-instal
 
 Distribution-specific package manager commands (`apt`, `dnf`, `pacman`) for installing system packages are not documented yet.
 
-RAM admission serializes native creates across daemons and reserves 512 MiB per incumbent above a host `MemAvailable` floor of min(20 GiB, 25 percent of `MemTotal`) [TARGET, conductor decision; CITED: `daemon-adapter/internal/daemon/ram_admission.go`]. Reservations live in the uid-owned `0700` directory `$MV_RAM_ADMISSION_DIR`, or `$XDG_RUNTIME_DIR/metaviewer/ram-admission` when the override is unset; all daemons for the uid must share it. PID death alone never releases a reservation. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` as the operator to print each proposed removal and its proof, then explicitly use `--apply` after review. The command holds the admission lock, checks owner death, and reads the local Docker inventory (including stopped containers); named records require absence of the matching `srf-id-<profile>`, `srf-pg-<profile>`, and `srf-vm-<profile>` containers. Legacy hash-only records require absence of `srf-id-mv-*`, `srf-pg-mv-*`, and `srf-vm-mv-*` capsules. Random holdings names (`srf-ng-hcap-*`) cannot be mapped to profiles and conservatively keep reservations, as does unknown/remote inventory [TARGET, unit decision]. Unrelated protected containers do not block reclaim; the command never changes containers. Reclaim is never automatic; run it with the same Docker context and admission directory as the daemon. Offline tests use private admission directories and never reclaim host records.
+RAM admission serializes native creates across daemons and reserves 512 MiB per incumbent above a host `MemAvailable` floor of min(20 GiB, 25 percent of `MemTotal`) [CITED: `daemon-adapter/internal/daemon/ram_admission.go`]. Reservations live in the uid-owned `0700` directory `$MV_RAM_ADMISSION_DIR`, or `$XDG_RUNTIME_DIR/metaviewer/ram-admission` when the override is unset; all daemons for the uid must share it. PID death alone never releases a reservation. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` as the operator to print each proposed removal and its proof, then explicitly use `--apply` after review. The command holds the admission lock, checks owner death, and reads the local Docker inventory (including stopped containers). Any `srf-id-*` or `srf-ng-hcap-*` container, or any running `xpra*`/`Xvfb` host process, conservatively keeps all reservations. Named records additionally require absence of `srf-pg-<profile>` and `srf-vm-<profile>`; legacy hash-only records require absence of every `srf-id-*`, `srf-pg-*` and `srf-vm-*` container. Unknown or remote inventories keep reservations. The command never changes containers [CITED: `tools/mv_ram_admission.py`]. Reclaim is never automatic; run it with the same Docker context and admission directory as the daemon. Offline tests use private admission directories and never reclaim host records.
 
 ### Hardware
 
@@ -39,8 +39,8 @@ No hardware profile has been measured on a small machine; every figure is [TARGE
 | Profile | CPU | RAM | `/dev/shm` free | Free disk | Other |
 | --- | --- | --- | --- | --- | --- |
 | Offline fixture | 2 cores [TARGET] | 4 GiB [TARGET] | n/a | 2 GB [TARGET] | Node `>=24` [CITED: `ui/package.json`] |
-| App without capsules | 2 cores [TARGET] | 4 GiB (`floor + 512 MiB` admission minimum) [TARGET]; resident size of Electron, core and adapter: ABSENT — do not invent | 512 MiB [CITED: frame budget] | 2 GB [TARGET]; tarball size: ABSENT — do not invent | X11 or XWayland; unprivileged user namespaces |
-| Live browser and program capsules, current pin (laptop-ready) | 8 logical CPUs recommended, no CPU pinning required (`MV_JUDGE_REQUIRE_CPUSET=none`) [TARGET] | 16 GiB recommended [TARGET]: floor of min(20 GiB, 25 percent of `MemTotal`) plus 512 MiB admission minimum (`4.5 GiB` on a 16 GiB host) [CITED: `daemon-adapter/internal/daemon/ram_admission.go`]; warns below `floor + 4 GiB` [TARGET] | 1 GiB minimum, 2.5 GiB recommended [TARGET] | 15 GB minimum, 30 GB recommended [TARGET]; about 1.09 GiB deduplicated image archive (`opensuperficies-identity-browser:0.1.1`, `opensuperficies-program-host:0.1.0`, `opensuperficies-desktop:1.1.0`) [MEASURED, operator host] | rootful Docker, `docker` group; sudo-free Docker profile provisioning (uid `10001`) |
+| App without capsules | 2 cores [TARGET] | 4 GiB recommended; preflight still requires `floor + 512 MiB` available [TARGET]; resident size of Electron, core and adapter: ABSENT — do not invent | 512 MiB [CITED: frame budget] | 2 GB [TARGET]; tarball size: ABSENT — do not invent | X11 or XWayland; unprivileged user namespaces |
+| Live browser and program capsules, current pin (laptop-ready) | 8 logical CPUs recommended, no CPU pinning required (`MV_JUDGE_REQUIRE_CPUSET=none`) [TARGET] | 16 GiB recommended [TARGET]: first-capsule daemon floor of min(20 GiB, 25 percent of `MemTotal`), plus 512 MiB per running incumbent [CITED: `daemon-adapter/internal/daemon/ram_admission.go`]; UI creation separately requires at least `6` GiB free [CITED: `ui/electron/profilePicker.js`]; warns below `floor + 4 GiB` [TARGET] | 1 GiB minimum, 2.5 GiB recommended [TARGET] | 15 GB minimum, 30 GB recommended [TARGET]; about 1.09 GiB deduplicated image archive (`opensuperficies-identity-browser-<arch>:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, `opensuperficies-desktop-<arch>:1.1.0`) [MEASURED, operator host] | rootful Docker, `docker` group; sudo-free Docker profile provisioning (uid `10001`) |
 | Up to 4 concurrent capsules | 8 cores [TARGET] | 16–32 GiB [TARGET] | 2.5–9 GiB [TARGET] | 15–30 GB [TARGET] | as above (4-slot default `MV_SRF_PROFILES` pool on `:100`..`:103`) |
 
 Capsule RAM admission is described under [Concurrent identities and RAM admission](#concurrent-identities-and-ram-admission). VM-kind capsules are outside the judge matrix: they need `/dev/kvm` and at least 16 GiB of `MemAvailable` [CITED: operator strategy note].
@@ -55,8 +55,8 @@ sudo apt-get install xvfb x11-utils xauth tar zip strace git coreutils util-linu
 
 - Add `ffmpeg` only to record with the end-to-end stack.
 - Python is the Ubuntu 24.04 `3.12` [CITED: CI uses `3.12`]. The vision component additionally needs `python3 -m pip install --only-binary=:all: numpy==2.4.2` [CITED: `.github/workflows/ci.yml`].
-- Whether Ubuntu 24.04 repositories ship Node `>=24`: ABSENT — do not invent. The judge kit supplies Node `24` with a pinned digest [TARGET, decision D3].
-- Docker must be rootful Docker Engine reachable through the `docker` group (`sudo usermod -aG docker "$USER"`, then log in again). Rootless Docker is not supported: the adapter does not forward `DOCKER_HOST`. Docker Desktop on WSL2 is not supported; install `docker-ce` inside the same distro [TARGET, decision D2].
+- Whether Ubuntu 24.04 repositories ship Node `>=24`: ABSENT — do not invent. The judge kit supplies Node `24` with a pinned digest [CITED: `scripts/judge/metaviewer-judge.sh`].
+- Docker must be rootful Docker Engine reachable through the `docker` group (`sudo usermod -aG docker "$USER"`, then log in again). Rootless Docker is not supported: the adapter does not forward `DOCKER_HOST`. Docker Desktop on WSL2 is not supported; install `docker-ce` inside the same distro [CITED: `scripts/judge/preflight.sh`].
 - Ubuntu 24.04 may restrict unprivileged user namespaces (`kernel.apparmor_restrict_unprivileged_userns`), which the Electron sandbox needs [TARGET; to verify on a clean host].
 
 ## Identities
@@ -111,7 +111,7 @@ view. Native teardown restores read-only mode; capsule stop/start keeps the same
 profile directory. The tool does not inspect cookies, Local Storage or any
 profile payload and does not assert that authentication succeeded.
 
-[TARGET, unit decision] The pinned native admin exposes only create/show, so
+[CITED: `tools/mv_ram_admission.py`] The pinned native admin exposes only create/show, so
 list enumerates metadata names and obtains native show replies. Delete removes
 only the exact validated identity while holding the native per-id guard; an
 active or malformed lease refuses deletion. Deletion never releases another
@@ -150,7 +150,7 @@ Each release archive contains:
 - `MetaViewer-linux-<arch>/resources/bin/metaviewer-core` — the release-mode Rust authority core binary [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/resources/bin/mv-daemon-adapter` — the stripped Go daemon adapter binary [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/resources/app.asar` — the sealed ASAR bundle (`PACKAGED_ASSET_DIGESTS` embedded into `electron/main.js`, `electron/nesting.js` production entry, and `electron/package-pin.json`) [CITED: `ui/tools/package.js`].
-- `MetaViewer-linux-<arch>/resources/contracts/v0.2` — the `21` `[MEASURED: ls -1 contracts/v0.2/*.schema.json | wc -l]` versioned v0.2 JSON wire schemas [CITED: `ui/tools/package.js`].
+- `MetaViewer-linux-<arch>/resources/contracts/v0.2` — the `41` `[MEASURED: ls -1 contracts/v0.2/*.schema.json | wc -l]` versioned v0.2 JSON wire schemas [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/resources/deps.lock` and `MetaViewer-linux-<arch>/resources/kit.lock.json` — the external component and UI kit lockfiles [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>/INSTALL.md` — the bundled launch and manifest verification note [CITED: `ui/tools/package.js`].
 - `MetaViewer-linux-<arch>.sha256` — the SHA-256 manifest covering every regular file in `MetaViewer-linux-<arch>/` [CITED: `ui/tools/package.js`].
@@ -323,10 +323,10 @@ I designed frame transport and surface recording to be strictly RAM-first [CITED
 
 | Purpose | Environment Variable | Default / Fallback Path | Permissions & Rules |
 | --- | --- | --- | --- |
-| UI settings | `XDG_CONFIG_HOME` | `$XDG_CONFIG_HOME/metaviewer/settings.json` (fallback `$HOME/.config/metaviewer/settings.json`) | Directory mode `0700`, file mode `0600`, max `262144` bytes (`WIRE_MAX_BYTES`), closed `{scheme, density}` JSON (`mv-light` / `mv-dark`, `compact`), atomic temp write + `fsync` + rename (`ui/electron/authorityWire.js`). |
+| UI settings | `XDG_CONFIG_HOME` | `$XDG_CONFIG_HOME/metaviewer/settings.json` (fallback `$HOME/.config/metaviewer/settings.json`) | Directory mode `0700`, file mode `0600`, max `262144` bytes (`WIRE_MAX_BYTES`), closed `{scheme, density, wallFps, recordingFps}` JSON (`mv-light` / `mv-dark`, `compact` / `comfortable`; defaults `mv-dark`, `compact`, `30`, `3` [CITED: `ui/electron/authorityWire.js`]), atomic temp write + `fsync` + rename (`ui/electron/authorityWire.js`). |
 | Session journals & state | `XDG_STATE_HOME` | `$XDG_STATE_HOME/metaviewer/sessions/<session_id>/journal.jsonl` (fallback `$HOME/.local/state/metaviewer/...`) | Directory mode `0700`; hash-chained append-only JSONL journal (`core/src/journal/mod.rs`, `docs/USER_GUIDE.md`). |
 | Runtime IPC socket | `XDG_RUNTIME_DIR` | `$XDG_RUNTIME_DIR/metaviewer/core.sock` | Directory mode `0700`, socket mode `0600`, `SO_PEERCRED` UID check (`docs/ARCHITECTURE.md`). |
-| Packaged retail runtime | `TMPDIR` (via `os.tmpdir()`) | `<tmpdir>/mv-pkg-<random>/` | Created mode `0700` on packaged `./metaviewer` startup to isolate `XDG_RUNTIME_DIR`, `XDG_STATE_HOME`, and `XDG_CONFIG_HOME`; removed automatically when the app exits (`ui/tools/package.js`). |
+| Packaged retail runtime | `TMPDIR` (via `os.tmpdir()`) | `<tmpdir>/mv-pkg-<random>/` | Created mode `0700` on packaged `./metaviewer` startup to isolate `XDG_RUNTIME_DIR` and session `XDG_STATE_HOME`; removed automatically when the app exits. Settings use the admitted persistent `$XDG_CONFIG_HOME` or `$HOME/.config`; only if neither is usable does configuration fall back into the private runtime (`ui/tools/package.js`). |
 
 ## 6. Uninstall
 
@@ -392,7 +392,7 @@ OpenSuperficies is pinned to `3cb86d752f38457b6730eefd235d4da4c4039721`
 pin. Legacy and proxied remain usable. Browser capsules use `--net open` by
 default when the deployed binary advertises `open`.
 
-[TARGET, unit decision] The Electron launcher probes
+[CITED: `tools/mv_ram_admission.py`] The Electron launcher probes
 `$MV_SRF_BIN_DIR/srf-identity-surface capabilities` once before spawning the
 adapter. It copies the capabilities v1 `net_modes=…` token into the child-only
 `MV_SRF_NET_MODES` JSON array. Parent environment declarations are ignored.
@@ -400,7 +400,8 @@ Missing tokens, unavailable binaries and invalid or failed replies leave it
 unset, retaining legacy behavior. The adapter reads this snapshot at startup.
 
 Open means public internet only, with no LAN access or host services. Open
-requires the operator-built `opensuperficies-identity-browser-arm64:0.2.0` image
+requires the operator-built `opensuperficies-identity-browser-<arch>:0.2.0` image
+(`x64` or `arm64`, matching the host)
 [CITED: os-cu-0 `net_open_step0_v1.md`] with an entrypoint supporting
 `SRF_NET_MODE=open`, the subsequent native pin enabling `openImageReady`, and
 the installed native DOCKER-USER/INPUT firewall with a matching root-owned
@@ -464,7 +465,7 @@ The hosted web runner retains its explicit offline barrier.
 
 ### Concurrent identities and RAM admission
 
-[TARGET, unit decision] Configure `MV_SRF_PROFILES` with separate browser profile
+[CITED: `tools/mv_ram_admission.py`] Configure `MV_SRF_PROFILES` with separate browser profile
 IDs (`mv-live-1` through `mv-live-4`), the one shared existing canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` (or disjoint canonical `/dev/shm/` roots), and distinct `Display` values (`:100` to `:103`).
 Each entry uses the exact `capsule.Profile` JSON fields (`Kind`, `NativeKind`, `RAMRoot`,
 `Display`, `Width`, `Height`, `text_input`):
@@ -512,12 +513,12 @@ unbound quarantined profiles. A uid-owned `0700` admission directory is locked
 with `flock` throughout read/check/start/initial capture. Reservations are written
 before native start and released only after verified cleanup. The floor is the smaller of
 `20 GiB` and `MemTotal / 4` [TARGET, conductor decision]; the reserve
-is 512 MiB per incumbent [TARGET, unit decision], matching the configured shared
+is 512 MiB per incumbent [CITED: `tools/mv_ram_admission.py`], matching the configured shared
 frame budget. Unreadable or malformed
 meminfo refuses with `RAM_ADMISSION_REFUSED`. A failed post-check removes only the
 new surface; sibling allocations are never reclaimed to make admission pass.
 
-[TARGET, unit decision] The shared directory defaults to
+[CITED: `tools/mv_ram_admission.py`] The shared directory defaults to
 `$XDG_RUNTIME_DIR/metaviewer/ram-admission`. `MV_RAM_ADMISSION_DIR` selects the
 same canonical directory for daemons with private IPC runtime directories; live
 stacks preserve the parent runtime admission directory through this variable.
@@ -526,13 +527,13 @@ Records from crashed daemons remain counted: a dead PID does not prove that its
 native container is gone. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` to inspect records,
 then explicitly choose `reclaim --apply` to remove verified stale records. The
 command requires both a dead owner PID and a read-only local Docker inventory
-proving the recorded profile's `srf-id-<profile>`, `srf-pg-<profile>`, and `srf-vm-<profile>`
-containers absent (including stopped containers). New reservation names append
-`--<profile>` after the profile hash. Legacy hash-only records require absence
-of `srf-id-mv-*`, `srf-pg-mv-*`, and `srf-vm-mv-*` capsules. Random holdings container names cannot
-be mapped to profiles, so any `srf-ng-hcap-*` container conservatively keeps
-reservations. Unknown inventories keep reservations. Unrelated protected
-containers do not block reclaim; the command never changes containers.
+proving native resources absent (including stopped containers). Any `srf-id-*`
+or `srf-ng-hcap-*` container or running `xpra*`/`Xvfb` host process keeps all
+reservations. Named records additionally require absence of `srf-pg-<profile>`
+and `srf-vm-<profile>`. New names append `--<profile>` after the hash. Legacy
+hash-only records require absence of every `srf-id-*`, `srf-pg-*` and `srf-vm-*`
+container. Unknown or remote inventories keep reservations. The command never
+changes containers [CITED: `tools/mv_ram_admission.py`].
 Reclamation is never automatic.
 
 The **Identities** menu manages public account labels and domains; several
@@ -544,7 +545,7 @@ without a current-session witness.
 
 Each capsule's **Network** action edits its admitted profile's adapter egress
 record for the next start: **Open (default)** or **Dedicated proxy with allowlist**
-(exact hostnames, one per line). Profiles shared by capsules share this policy.
+(exact hostnames separated by commas or spaces, `1–256` [CITED: `ui/src/netmode/NetworkPanel.vue`]). Profiles shared by capsules share this policy.
 The startup capability snapshot displays **legacy** when Open is unavailable,
 including when `MV_SRF_NET_MODES` is unset. Dedicated proxy requires the
 `proxied` capability; Open requires identity image `0.2.0` [CITED] and the
@@ -558,7 +559,7 @@ in plain words. After `NET_OPEN_PREREQ`, nothing is saved by default; the
 operator may explicitly choose **Confirm save for next start anyway** to save
 the record for a future start once Open is available. Network is separate from global settings.
 
-[TARGET, unit decision] The trusted launcher supplies `MV_HANDOFF_PATHS`, a JSON
+[CITED: `tools/mv_ram_admission.py`] The trusted launcher supplies `MV_HANDOFF_PATHS`, a JSON
 array of owner handoff paths (`output.with_suffix('.handoff.json')`), to Electron.
 The host watches only these private files; paths never cross renderer IPC.
 The persistent activity row says “CAPTCHA or bot check: solve it in the capsule,
@@ -588,25 +589,25 @@ Packaged demo operations additionally require `MV_OPERATOR_REPO` pointing to an
 operator-owned MetaViewer checkout with the host tools and Git admission.
 [CITED: `tools/mw_home_check.py`, `tools/mv_demo.py`, `ui/tools/package.js`]
 
-**Use MetaViewer** copies only the fenced prompt in [AGENT_ENTRY.md](AGENT_ENTRY.md),
-verbatim including its final newline, then displays **Copied**. It launches no
-workflow. The operator gives that prompt to an agent with an already running,
+Use **🚀 Bootstrap** in the terminal deck to copy the fenced prompt in
+[AGENT_ENTRY.md](AGENT_ENTRY.md), including its final newline, or copy it from
+the document. The sidebar entry button is not available in this release. Copying
+launches no workflow. Give that prompt to an agent with an already running,
 logged-in identity and the configured core connection. The entry stops on
 refusal or `HUMAN_HANDOFF`; credentials must never be passed as text slots.
 [CITED: `ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]
 
-**Automate from a demo** opens the recording dialog. **Start** invokes
-`tools/mv_demo.py record`; demonstrate manually in the printed loopback viewer
-and use **Stop** to seal evidence and restore read-only access. **Copy prompt**
-invokes `tools/mv_demo.py prompt` and copies the substituted authoring prompt
-from [AUTOMATE_FROM_DEMO.md](AUTOMATE_FROM_DEMO.md). **Check site** invokes
-`tools/mv_demo.py check` against a temporary checkout copy. A successful check
-validates authored data; review and explicit workflow execution remain separate.
+The demo recording dialog has no menu entry in this release. Run
+`tools/mv_demo.py record`, `prompt` and `check` directly from an operator-owned
+checkout; see [demo authoring](AUTOMATE_FROM_DEMO.md) for command arguments.
+Record manually through the printed loopback viewer, then seal the evidence.
+`prompt` produces the authoring prompt and `check` validates the resulting site
+in a temporary checkout copy. Review and explicit workflow execution remain separate.
 Log in before recording and demonstrate with dummy data: text events retain only
 lengths, but frames can expose field contents. Recordings live under
 `$XDG_STATE_HOME/metaviewer/demos/<demo>` (fallback
 `$HOME/.local/state/metaviewer/demos/<demo>`), outside the MemoryWeb home.
-[CITED: `ui/src/demo/DemoDialog.vue`, `tools/mv_demo.py`]
+[CITED: `ui/src/App.vue`, `tools/mv_demo.py`]
 
 On CAPTCHA or bot-check handoff, execution stops and the notice stays until
 acknowledged. Take control and solve the challenge yourself. Acknowledge only

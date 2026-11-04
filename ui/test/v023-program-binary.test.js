@@ -47,6 +47,7 @@ function createLauncherHarness(sfcSource, buildIntentFn, apiDouble = null) {
   const events = [];
   const ctx = {
     props: { visible: true },
+    disabledArmKinds: { get value() { return catalogModel.unavailableArmCapsules(ctx.props.arm64Capabilities); } },
     buildCreateIntent: buildIntentFn,
     api: apiDouble,
     pendingIntent: { value: null },
@@ -1660,7 +1661,7 @@ test('V024-WALL-FIXES: mounted CatalogLauncher shows role and identity dialog wi
       },
     });
     globalThis.__v024CatalogDeps = {
-      '../../.kit/capsule-ui-kit/src/index-shell.js': { NewCapsuleDialog: KitNewCapsuleDialog },
+      './GroupedCapsuleDialog.vue': KitNewCapsuleDialog,
       './catalogModel.js': catalogModel,
     };
     const { descriptor } = parse(sfcSource);

@@ -245,11 +245,21 @@ class LauncherFlowRegressions(unittest.TestCase):
         from judge_sandbox import REPO
         quickstart = (REPO / 'docs/JUDGE_QUICKSTART.md').read_text()
         app = (REPO / 'ui/src/App.vue').read_text()
-        for label in ('1 tile', '2 side by side', '2\u00d72', 'Focus + strip', 'Floating layout'):
+        for preset, label, name in (
+            ('single', '1', '1 tile'), ('side-by-side', '2', '2 side by side'),
+            ('grid', '2\u00d72', None), ('grid-3x2', '3\u00d72', None),
+            ('focus-strip', 'Focus', 'Focus + strip'), ('floating', 'Float', 'Floating layout'),
+        ):
             self.assertIn(f'`{label}`', quickstart)
-            self.assertIn(f'label="{label}"', app)
+            import re
+            control = re.search(r'<UiButton id="tile-preset-' + preset + r'"[^>]+>', app)
+            self.assertIsNotNone(control, preset)
+            self.assertIn(f'label="{label}"', control.group())
+            self.assertIn(f'@click="setActiveDesktopPreset(\'{preset}\')"', control.group())
+            if name:
+                self.assertIn(f'aria-label="{name}"', control.group())
         self.assertIn('**`Switch to agent mode`** separately', quickstart)
-        self.assertIn('label="Use MetaViewer" @click="copyEntry"', app)
+        self.assertNotIn('label="Use MetaViewer"', app)
         role = (REPO / 'ui/src/surfaces/RoleSurface.vue').read_text()
         self.assertIn("Switch to {{ role === 'human' ? 'agent' : 'human' }} mode", role)
         self.assertIn("@click=\"runMenu(() => lifecycle('switchMode'))\"", role)
@@ -260,7 +270,7 @@ class LauncherFlowRegressions(unittest.TestCase):
         from judge_sandbox import REPO
         read = Path.read_text
         for relative, old in (
-            ('ui/src/App.vue', 'label="Use MetaViewer"'),
+            ('ui/src/App.vue', 'id="tile-preset-single"'),
             ('ui/src/surfaces/RoleSurface.vue', "Switch to {{ role === 'human' ? 'agent' : 'human' }} mode"),
         ):
             target = REPO / relative

@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 // UX-CHIP: verify the wall tile no longer renders the covering "View only —
@@ -40,7 +44,7 @@ const SurfaceCanvas = await importCode(rewriteImports(
   compileScript(parse(CANVAS_SOURCE).descriptor, { id: 'uxchip-canvas', inlineTemplate: true }).content,
   (bindings, spec) => {
     assert.ok(Object.hasOwn(CANVAS_DEPS, spec), `unmapped canvas dependency ${spec}`);
-    return `const ${bindings} = await import(${JSON.stringify(CANVAS_DEPS[spec])});`;
+    return `const ${sfcImportBinding(bindings)} = await import(${JSON.stringify(CANVAS_DEPS[spec])});`;
   }), 'uxchip-canvas');
 
 async function loadApp(source) {
@@ -83,13 +87,15 @@ async function loadApp(source) {
     './agent/AgentLaneHost.vue': stub,
     './activity/ActivityStrip.vue': stub,
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
+    '@openvue/icons/windowmaximize': {render:()=>null},
+    '../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': {render:()=>null},
     'capsule-ui-kit/ui': { UiButton: buttonStub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     './wall/DesktopWorkspace.vue': wallStub,
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const key = `__uxchip${++serial}`;
   globalThis[key] = deps;
@@ -97,7 +103,7 @@ async function loadApp(source) {
   const compiled = compileScript(descriptor, { id: `uxchip-app-${serial}`, inlineTemplate: true });
   const code = rewriteImports(compiled.content, (bindings, spec) => {
     assert.ok(Object.hasOwn(deps, spec), `unmapped App dependency ${spec}`);
-    return `const ${bindings} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(bindings)} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`;
   });
   return importCode(code, `uxchip-app-${serial}`);
 }
@@ -339,9 +345,9 @@ test('P18B mounted App stays quiescent across menu toggles and idle ticks', asyn
   const { root, activity, listenerCount } = await mountFixture(t);
   const initialListeners = listenerCount();
   t.after(() => assert.equal(listenerCount(), 0, 'document listeners are released on unmount'));
-  const more = findAll(root, n => n.props?.id === 'shell-more')[0];
-  assert.ok(!!more, 'More is reachable');
-  for (let i = 0; i < 20; i++) { more.props.onClick(); await tick(); }
+  const more = findAll(root, n => n.props?.id === 'shell-terminal')[0];
+  assert.ok(!!more, 'Terminal dock is reachable');
+  for (let i = 0; i < 20; i++) { await more.props.onClick(); await tick(); }
   await new Promise(resolve => setTimeout(resolve, 250));
   const settledCalls = activity.calls;
   const settledNodes = findAll(root, () => true).length;
