@@ -239,6 +239,7 @@ release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
 rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.md
 rewindr-f6d46b8b6090	changes/unreleased/rewind-recovery-package.md
 routed-map.md	changes/unreleased/routed-map.md
+schema-parse-once.md	changes/unreleased/schema-parse-once.md
 sidebar-74e83dfe487d	changes/unreleased/sidebar-entry-cleanup.md
 termina-d99d31338446	changes/unreleased/terminal-input-controls.md
 termina-ea00cc828bad	changes/unreleased/terminal-persist-copy-paste.md
