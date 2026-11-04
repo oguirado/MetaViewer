@@ -20,6 +20,7 @@ import { stateRequest, stateEvent } from './preload.js';
 import { createSettingsStore, DEFAULT_SETTINGS, INTENT_OPS, mapSurfaceInputRefusal, recordingDestination, validateCadence, validateIntentBody, validateProposalBody, validateSettings, validateSurfaceInputBatch } from './authorityWire.js';
 export { INTENT_OPS };
 import { createTerminalHost } from './terminalHost.js';
+import {installedAgentProfiles} from './agentProviders.js';
 import { createDisplayHost, displayBaseDir } from './displayReader.js';
 import { assertCaptureCall, assertCaptureReply, validCaptureState } from './captureBridge.js';
 import { createConnection } from 'node:net';
@@ -207,7 +208,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     }
     const channelFactory = createMessageChannel;
     const clipboardMod = electronMod?.clipboard ?? { writeText() {}, readText: () => '' };
-    const terminal = createTerminalHost({ createMessageChannel: channelFactory, clipboard: clipboardMod, env, resourcesPath: process.resourcesPath });
+    const terminal = createTerminalHost({ createMessageChannel: channelFactory, clipboard: clipboardMod, env, profiles: installedAgentProfiles(env), resourcesPath: process.resourcesPath });
     const display = createDisplayHost({ root: displayBaseDir(env), env, createDisplayChannel: channelFactory });  // ring spec v1.1 base
     electronMod?.app?.once?.('before-quit', () => { void terminal.dispose(); void display.dispose(); });
     /** @type {Set<(entry:any)=>any>} */ const listeners = new Set();

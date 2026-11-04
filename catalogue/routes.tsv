@@ -182,6 +182,7 @@ fronten-5d1bc7d41629	changes/unreleased/frontend-display-diagnostics.md
 fronten-de656921b5e2	changes/unreleased/frontend-header-tools.md
 fronten-0222318de737	changes/unreleased/frontend-live-terminal-drawer.md
 fronten-b6bbf2d128e7	changes/unreleased/frontend-paired-terminal.md
+fronten-9f64a7482841	changes/unreleased/frontend-recording-preferences.md
 fronten-2ced819e6ff6	changes/unreleased/frontend-rejected-preview.md
 fronten-f714efd566f6	changes/unreleased/frontend-stored-data-header.md
 fronten-7fcfcb869346	changes/unreleased/frontend-task-prompts.md
@@ -214,6 +215,7 @@ p18-opening-modes.md	changes/unreleased/p18-opening-modes.md
 p18b-header-menus.md	changes/unreleased/p18b-header-menus.md
 p18cr2d-0ee9a63466b2	changes/unreleased/p18c-r2-desktop-restore.md
 p18h-packaged-pty.md	changes/unreleased/p18h-packaged-pty.md
+paireda-f24b256557a9	changes/unreleased/paired-agent-preparation.md
 pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
 program-61837f6b5cd8	changes/unreleased/program-click-settle.md
 program-5f5847f0f976	changes/unreleased/program-current-baseline.md
@@ -2523,10 +2525,14 @@ xpra_lock_probe.cjs	tools/xpra_lock_probe.cjs
 xpratil-ab11c67cda1d	tools/xpra_tile_r3_client.py
 xpratil-fe982a28adff	tools/xpra_tile_r3_contracts.py
 ui-README.md	ui/README.md
+agentProviders.js	ui/electron/agentProviders.js
 authorityWire.js	ui/electron/authorityWire.js
 buttonBridge.js	ui/electron/buttonBridge.js
 bytePlane.js	ui/electron/bytePlane.js
 captureBridge.js	ui/electron/captureBridge.js
+capturePreferences.js	ui/electron/capturePreferences.js
+capture-21a22493728c	ui/electron/capturePreferencesBridge.js
+capture-5060e360d05e	ui/electron/capturePreferencesPreload.cjs
 coreLauncher.js	ui/electron/coreLauncher.js
 desktop-6f0b964ef041	ui/electron/desktopApplications.js
 desktopLayout.js	ui/electron/desktopLayout.js
@@ -2654,6 +2660,7 @@ BrokerL-921ee8c1c9e6	ui/src/terminal/BrokerLaunchControls.vue
 SideTer-dd1d47225092	ui/src/terminal/SideTerminalOverlay.vue
 TerminalDeckView.vue	ui/src/terminal/TerminalDeckView.vue
 TerminalView.vue	ui/src/terminal/TerminalView.vue
+agentPromptGate.js	ui/src/terminal/agentPromptGate.js
 pairedTerminals.js	ui/src/terminal/pairedTerminals.js
 providers.js	ui/src/terminal/providers.js
 sideTerminalFacade.js	ui/src/terminal/sideTerminalFacade.js
@@ -2680,6 +2687,7 @@ tileStates.js	ui/src/wall/tileStates.js
 wall.css	ui/src/wall/wall.css
 workloa-18ac85fe36ae	ui/src/wall/workloadPanelParams.js
 ac02pre-71a807ab974c	ui/test/ac02-present-budget.test.js
+agent-prompts.test.js	ui/test/agent-prompts.test.js
 argfram-b088a4e11407	ui/test/arg-frames-regression.test.js
 argshel-6ecedb311e55	ui/test/arg-shell-regressions.test.js
 arm64ca-9f7c42ffa000	ui/test/arm64-capsule-composition.test.js
@@ -2695,6 +2703,7 @@ capid-copy-id.test.js	ui/test/capid-copy-id.test.js
 capsule-42a71b98c2a0	ui/test/capsule-capability-contract.test.js
 capsule-8b53f481950d	ui/test/capsule-panel-routing.test.js
 capture-43df8ccddcb6	ui/test/capture-export.test.js
+capture-55b832c5abcd	ui/test/capture-preferences.test.js
 capture.test.js	ui/test/capture.test.js
 captureShell.mjs	ui/test/captureShell.mjs
 capture-3d7a966c605e	ui/test/captureTransport.test.js

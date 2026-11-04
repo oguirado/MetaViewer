@@ -101,4 +101,12 @@ Only a verified summary permits process success. A handoff exits with rc 4
 
 ## Paired-terminal task prompts
 
-**Create automation**, **Run automation**, and **Direct task** prepare the corresponding workflow instructions. They finish with `Task: ` for the operator to complete. The prompt is copied to the clipboard with the actual capsule identity when paired. Paste it into your agent CLI, never at a shell prompt. Pairing alone does not attest the foreground process, so automatic terminal insertion is withheld. Retain every safety instruction and wait for the operator's task before acting.
+**Create automation**, **Run automation**, and **Direct task** prepare the corresponding workflow instructions. They finish with `Task: ` for the operator to complete. Without an agent launch, the prompt is copied to the clipboard; paste it only into an agent CLI. A paired capsule can launch a host-owned agent profile and prepare its input as described below. Pairing alone never permits insertion into a plain shell. Retain every safety instruction and wait for the operator's task before acting.
+
+## Paired agent preparation
+
+Create automation, Run automation and Direct task offer installed agent CLIs for a paired capsule. Choosing one replaces that paired terminal process with the host-owned executable. The capsule identity is preserved. No command line or executable path comes from the renderer.
+
+The terminal waits at most 15 seconds [TARGET] for a recognized input prompt, then sends the instructions as one bracketed paste ending in `Task: `. It never sends Enter. Missing CLI, process exit, a changed pair, cancellation, no recognized prompt, or a visible authentication/workspace-trust question stop insertion. Authentication and trust remain the operator's actions. Selecting a workflow again launches a fresh process; this is not an authentication detector. Unpaired controls and plain-shell preparation retain copy-only behavior.
+
+Known input markers are deliberately narrow. An unfamiliar CLI release may remain unready and require manual paste. No successful agent task or authenticated account is implied by first output.
