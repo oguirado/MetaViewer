@@ -2975,3 +2975,44 @@ test('terminal context menu keeps focus without claiming global modal ownership'
  } finally {mounted.app.unmount();}
  assert.equal(surfaceClaims.at(-1).open,false,'unmount releases only this menu owner');
 });
+
+test('independent terminal workspaces isolate launch shortcuts and compose overlay ownership',async()=>{
+ async function oracle(mutate){
+  const a=createBrokerDouble(),b=createBrokerDouble(),owners=new Set();let left,right;
+  class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+  class FitAddon {fit(){}}
+  const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel},mutate);
+  const Root={setup(){vue.provide('overlayCoordinator',{set:(owner,open)=>open?owners.add(owner):owners.delete(owner)});return()=>[
+   vue.h(View,{ref:v=>{left=v;},open:true,idPrefix:'left',terminalBroker:a.broker,terminalBinding:a.sessionFacade,storage:createMemoryStorage()}),
+   vue.h(View,{ref:v=>{right=v;},open:true,idPrefix:'right',terminalBroker:b.broker,terminalBinding:b.sessionFacade,storage:createMemoryStorage()}),
+  ];}};
+  const mounted=mountTree(Root);
+  try {
+   await tick();const root=mounted.findById('left-mv-terminal-deck');
+   const event={key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>vue.reactive(root)},preventDefault(){},stopPropagation(){},stopImmediatePropagation(){}};
+   root.props.onKeydown(event);mounted.findById('right-mv-terminal-deck').props.onKeydown(event);await tick();
+   assert.equal(a.openCalls.length,1);assert.equal(b.openCalls.length,0,'foreign shortcut cannot launch a terminal');
+   left.controller.setLauncherOpen(true);right.controller.setLauncherOpen(true);await tick();
+   assert.equal(owners.size,2,'each workspace owns its own overlay lease');
+   left.controller.setLauncherOpen(false);await tick();assert.equal(owners.size,1);
+  } finally {mounted.app.unmount();}
+  assert.equal(owners.size,0);
+ }
+ await oracle();
+ await assert.rejects(()=>oracle(source=>source.replace('const launcherOverlayOwner = {};',"const launcherOverlayOwner = 'shared-owner';")),{code:'ERR_ASSERTION'});
+});
+
+test('paired drawer cannot create an invisible unpaired shell with deck-only shortcuts',async()=>{
+ const h=createBrokerDouble();
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,idPrefix:'surface:with.dots',pairedTarget:{surfaceId:'surface:with.dots'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});
+ try {
+  await tick();assert.equal(h.openCalls.length,1);
+  const root=mounted.findById('surface:with.dots-mv-terminal-deck');let stopped=false;
+  root.props.onKeydown({key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>vue.reactive(root)},preventDefault(){stopped=true;},stopPropagation(){},stopImmediatePropagation(){}});
+  await tick();assert.equal(stopped,true);assert.equal(h.openCalls.length,1,'new-terminal shortcut belongs to the separate side panel');
+  const hide=mounted.findById('surface:with.dots-terminal-deck-hide');assert.ok(hide);assert.equal(hide.props['data-semantic-anchor'],'terminal/hide');
+ } finally {mounted.app.unmount();}
+});

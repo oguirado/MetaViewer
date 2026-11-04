@@ -41,7 +41,7 @@ const props = defineProps({
 function domId(id) { return props.idPrefix ? `${props.idPrefix}-${id}` : id; }
 /** @param {unknown} id */
 function localId(id) { return typeof id === 'string' && props.idPrefix && id.startsWith(`${props.idPrefix}-`) ? id.slice(props.idPrefix.length+1) : id; }
-const emit = defineEmits(['update:open','pair-focus','request-dock']);
+const emit = defineEmits(['update:open','pair-focus']);
 
 class MvDeckTerminal extends Terminal {
   /** @param {any} options */
@@ -500,7 +500,9 @@ function onWindowKeyDown(event) {
   if (!props.open) return;
   const eventDeck = /** @type {Element|null} */ (event.target)?.closest?.('.mv-terminal-deck');
   if ((eventDeck && eventDeck !== deckRoot.value) || (props.compact && eventDeck !== deckRoot.value)) return;
-  if (props.compact && ['new-shell','next-screen','prev-screen'].includes(matchDeckShortcut(event) ?? '')) emit('request-dock');
+  if (props.compact && ['new-shell','next-screen','prev-screen'].includes(matchDeckShortcut(event) ?? '')) {
+    event.preventDefault();event.stopPropagation();return;
+  }
   if (pendingCloseSlotId.value) {
     if (event.key === 'Escape') controller.cancelPendingClose();
     else if (event.key === 'Tab') {
@@ -524,7 +526,7 @@ function onWindowKeyDown(event) {
 /** @param {FocusEvent} event */
 function containDialogFocus(event) {
   if (props.open && pendingCloseSlotId.value && !closeDialog.value?.contains?.(event.target)) {
-    closeDialog.value?.querySelector?.(`#${domId('terminal-deck-confirm-close-no')}`)?.focus?.();
+    closeDialog.value?.querySelector?.('[data-semantic-anchor="terminal/confirm-close/cancel"]')?.focus?.();
   }
 }
 
@@ -535,7 +537,7 @@ watch(pendingCloseSlotId, async (id, previous) => {
     closeContextMenu();
     controller.setLauncherOpen(false);
     await nextTick();
-    closeDialog.value?.querySelector?.(`#${domId('terminal-deck-confirm-close-no')}`)?.focus?.();
+    closeDialog.value?.querySelector?.('[data-semantic-anchor="terminal/confirm-close/cancel"]')?.focus?.();
   } else if (!id && previous) {
     await nextTick();
     if (dialogReturnFocus?.isConnected !== false && typeof dialogReturnFocus?.focus === 'function') dialogReturnFocus.focus();
@@ -999,7 +1001,7 @@ defineExpose({
     @keydown="onWindowKeyDown"
   >
     <header class="mv-terminal-deck__bar" aria-label="Terminal operator bar">
-      <button v-if="compact" :id="domId('terminal-deck-open-full')" data-semantic-anchor="terminal/open-dock" type="button" class="mv-terminal-deck__action-btn" @click="emit('update:open', false)">Hide terminal</button>
+      <button v-if="compact" :id="domId('terminal-deck-hide')" data-semantic-anchor="terminal/hide" type="button" class="mv-terminal-deck__action-btn" @click="emit('update:open', false)">Hide terminal</button>
       <div class="mv-terminal-deck__screens" role="tablist" aria-label="Terminal screens">
         <div
           v-for="(screen, sIdx) in screens"
