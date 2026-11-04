@@ -235,6 +235,7 @@ program-037135db5049	changes/unreleased/program-provider-kill-guard.md
 program-53a257f2b164	changes/unreleased/program-standard-dirs.md
 release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
 rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.md
+rewindr-f6d46b8b6090	changes/unreleased/rewind-recovery-package.md
 routed-map.md	changes/unreleased/routed-map.md
 sidebar-74e83dfe487d	changes/unreleased/sidebar-entry-cleanup.md
 termina-d99d31338446	changes/unreleased/terminal-input-controls.md
@@ -3130,6 +3131,7 @@ rewindc-8f1ae7f269b8	ui/test/rewind-core-optin.test.js
 rewind-header.test.js	ui/test/rewind-header.test.js
 rewind-host.test.js	ui/test/rewind-host.test.js
 rewindp-f5b4490f0ad8	ui/test/rewind-profile.test.js
+rewindr-aa871ef20945	ui/test/rewind-recovery-package.test.js
 roleanc-974ddb27a9ff	ui/test/role-ancestor-bound.test.js
 rolemen-aebcbe39861b	ui/test/role-menu-input-harness.mjs
 rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
