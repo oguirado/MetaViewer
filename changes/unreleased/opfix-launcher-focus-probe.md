@@ -1,0 +1,1 @@
+- Add a graphical launcher focus probe and document the unverified production-backend boundary.
