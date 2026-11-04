@@ -323,11 +323,11 @@ browser goals with rules or Muse. Stored browser workflows still need private
 APIs from a verified checkout and refuse `MW_COMPILED_WORKFLOW_UNAVAILABLE`
 in compiled mode. Live results are limited to the architecture table in
 [Judge tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
-The release-package x64 WSL2 checks at c26/c27 [CITED: maintainer evaluation]
-measured browser rules goals 10 of 10 [MEASURED], Agent `gnome-calculator` in
+The reported release-package x64 WSL2 checks [CITED: maintainer evaluation; raw receipt absent]
+reported browser rules goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent], Agent `gnome-calculator` in
 both Host program and isolated Program, Desktop window `gedit` attach, type,
 resize and closed message, login wall `HUMAN_HANDOFF`, and clean stop.
-Calculator text `2+3` was sent with rc 0 [MEASURED] and verdict
+Calculator text `2+3` was sent with rc 0 [CITED: maintainer evaluation; raw receipt absent] and verdict
 `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`: exact readback and arithmetic are
 uncertified. Human Program `gedit` closed its window with `XPRA_MODE_REFUSED`.
 A closed Desktop window tile can retain a reused X11 id; if **Add** refuses,

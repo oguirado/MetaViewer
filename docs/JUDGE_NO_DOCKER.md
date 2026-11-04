@@ -52,8 +52,13 @@ cleanup result. See [Judge troubleshooting](JUDGE_TROUBLESHOOTING.md) for refusa
 
 The [evidence guide](EVIDENCE.md) links public admission, journal, replay and
 corruption tests. Their fixtures are generated in temporary directories by the
-tests; they are not committed sample journals. A ready-made, scrubbed journal for
-there is no standalone replay command. For a session journal
+tests; they are not committed sample journals. Run the public authority and replay tests from the checkout:
+
+```bash
+cargo test -p metaviewer-core --test admission_matrix --test admission_journal --test t1_journal_verify
+```
+
+A ready-made, scrubbed session journal is not supplied. For a session journal
 you already own, the [replay instructions](USER_GUIDE.md#7-replay-of-a-session-journal-mv-replay)
 require both the journal and its witness root. The release package's documented
 binary list does not promise a bundled `mv-replay` executable; build it from
