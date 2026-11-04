@@ -50,7 +50,13 @@ func (m *Manager) prepare() (string, string, error) {
 	if e != nil {
 		return "", "", e
 	}
-	runtime, e := os.MkdirTemp(m.profile.RuntimeRoot, "headless-")
+	runtimePrefix := "headless-"
+	if m.profile.Rewind {
+		// The protected rewind base has a 70-byte native Unix-path limit.
+		// Keep the same exclusive allocation and custody, with a shorter name.
+		runtimePrefix = "r-"
+	}
+	runtime, e := os.MkdirTemp(m.profile.RuntimeRoot, runtimePrefix)
 	if e != nil {
 		return "", "", e
 	}
