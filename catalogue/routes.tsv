@@ -336,6 +336,10 @@ v028-copyfix.md	changes/unreleased/v028-copyfix.md
 v028-core-fix.md	changes/unreleased/v028-core-fix.md
 v028-docs-x64.md	changes/unreleased/v028-docs-x64.md
 v028-fit.md	changes/unreleased/v028-fit.md
+v028-flow2-direct.md	changes/unreleased/v028-flow2-direct.md
+v028flo-c3083af1faea	changes/unreleased/v028-flow2-indicator.md
+v028flo-67575cdf4eb1	changes/unreleased/v028-flow2-recovery.md
+v028-flow2-setup.md	changes/unreleased/v028-flow2-setup.md
 v028-grid6.md	changes/unreleased/v028-grid6.md
 v028jud-b1bae7918c82	changes/unreleased/v028-judge-home-whitespace.md
 v028-orphan-2.md	changes/unreleased/v028-orphan-2.md
@@ -1580,6 +1584,12 @@ uiinten-91ffc7ae4639	contracts/examples/v0.2/ui_intent.valid.variant-008.json
 uiinten-0c44acdf80ff	contracts/examples/v0.2/ui_intent.valid.variant-009.json
 uiinten-26427df46dac	contracts/examples/v0.2/ui_intent.valid.variant-010.json
 uiinten-2c2518589374	contracts/examples/v0.2/ui_intent.valid.variant-011.json
+democon-74cc1bf7131c	contracts/examples/v0.3/demo_control.invalid.extra.json
+democon-e4ec901b2bff	contracts/examples/v0.3/demo_control.valid.json
+democon-8c2848f10eb9	contracts/examples/v0.3/demo_control_response.invalid.extra.json
+democon-f8093b975dff	contracts/examples/v0.3/demo_control_response.valid.json
+demosta-23598be8d080	contracts/examples/v0.3/demo_state.invalid.extra.json
+demo_state.valid.json	contracts/examples/v0.3/demo_state.valid.json
 human_trace.jsonl	contracts/examples/v0.3/human_trace.jsonl
 opening-98a6ce9f1339	contracts/examples/v0.3/opening_mode.invalid.json
 opening-c888d372be2b	contracts/examples/v0.3/opening_mode.valid.json
@@ -1646,6 +1656,9 @@ surface-61831a5672f9	contracts/v0.2/surface_input.schema.json
 surface-c0c127a65733	contracts/v0.2/surface_request.schema.json
 termina-67ae74419fc5	contracts/v0.2/terminal_session.schema.json
 ui_intent.schema.json	contracts/v0.2/ui_intent.schema.json
+democon-fa00987397d3	contracts/v0.3/demo_control.schema.json
+democon-cad8e995cbae	contracts/v0.3/demo_control_response.schema.json
+demosta-9568921ad612	contracts/v0.3/demo_state.schema.json
 humantr-b1447e03437b	contracts/v0.3/human_trace.schema.json
 opening-ec86afc13d6e	contracts/v0.3/opening_mode.schema.json
 rolereq-907578dea231	contracts/v0.3/role_request.schema.json
@@ -2610,6 +2623,7 @@ capturePreferences.js	ui/electron/capturePreferences.js
 capture-21a22493728c	ui/electron/capturePreferencesBridge.js
 capture-5060e360d05e	ui/electron/capturePreferencesPreload.cjs
 coreLauncher.js	ui/electron/coreLauncher.js
+demoControl.js	ui/electron/demoControl.js
 desktop-6f0b964ef041	ui/electron/desktopApplications.js
 desktopLayout.js	ui/electron/desktopLayout.js
 desktopShortcuts.js	ui/electron/desktopShortcuts.js
@@ -2791,6 +2805,7 @@ capture-3d7a966c605e	ui/test/captureTransport.test.js
 contrast.test.js	ui/test/contrast.test.js
 coreLauncher.test.js	ui/test/coreLauncher.test.js
 creativ-f3bdf7f2988d	ui/test/creativeCapsule.test.js
+demo-control.test.js	ui/test/demo-control.test.js
 demoflo-dbdd4f1e86e9	ui/test/demoflow-dialog.test.js
 desktop-901a25840d3e	ui/test/desktop-applications.test.js
 display-b8cac33de3ce	ui/test/display-electron-main.mjs

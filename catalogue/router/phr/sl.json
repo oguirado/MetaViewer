@@ -1,1 +1,5 @@
+<<<<<<< HEAD
 {"sleep ns":[1670],"slot readback window ns":[1670],"slot surface":[1286],"slots bridge":[2522],"slots bridge go":[2522]}
+=======
+{"sleep ns":[1671],"slot readback window ns":[1671],"slot surface":[1292],"slots bridge":[2520],"slots bridge go":[2520]}
+>>>>>>> unit/v028-flow

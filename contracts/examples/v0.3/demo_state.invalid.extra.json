@@ -1,0 +1,7 @@
+{
+  "schema": "metaviewer.demo_state/v1",
+  "ok": true,
+  "phase": "idle",
+  "identity": "example",
+  "demo": "sample"
+}

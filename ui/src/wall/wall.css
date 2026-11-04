@@ -615,3 +615,10 @@
 .mv-tile-copy-icon { display:none; }
 .mv-tile-chrome--compact .mv-tile-copy-icon { display:block; }
 .mv-shell .mv-tile .mv-tile-chrome--compact .cuk-sidebar-icon { width:16px; height:16px; }
+
+.mv-tree-signal[data-tone="recording"] { color: var(--cuk-semantic-status-error-border); }
+.mv-demo-stop-error { color: var(--cuk-semantic-status-error-border); padding: .5rem; font-size: .8rem; }
+
+.mv-demo-stop { display: inline-flex; flex: none; min-width: 3em; align-items: center; justify-content: center; margin-inline-start: var(--cuk-semantic-spacing-xs); color: var(--cuk-semantic-text-primary); background: transparent; border: 1px solid var(--cuk-semantic-border-subtle); border-radius: var(--cuk-semantic-radius-sm); padding: var(--cuk-semantic-spacing-xxs) var(--cuk-semantic-spacing-xs); cursor: pointer; font: inherit; }
+.mv-demo-stop:disabled { opacity: .6; cursor: wait; }
+.mv-shell .mv-tile .mv-tile-chrome__badge--header[data-automation-recording="true"] { max-width: none; flex: none; }

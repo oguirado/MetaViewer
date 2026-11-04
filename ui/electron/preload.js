@@ -107,14 +107,14 @@ function validSnapshot(v) {
 // @ts-check
 /** [TARGET, unit decision] Operator button calls carry references only.
  * The host owns document paths, argv, clipboard contents and recording lifetime. */
-export const BUTTON_METHODS=Object.freeze(['entry.copy','demo.start','demo.stop','demo.prompt','demo.check']);
+export const BUTTON_METHODS=Object.freeze(['entry.copy','demo.start','demo.stop','demo.prompt','demo.check','demo.state']);
 /** @param {any} v @param {string[]} keys */
 const buttonExact=(v,keys)=>!!v && typeof v==='object' && !Array.isArray(v) && Reflect.ownKeys(v).length===keys.length && keys.every(k=>Object.hasOwn(v,k)) && Object.values(Object.getOwnPropertyDescriptors(v)).every(d=>'value' in d);
 /** @param {any} x @param {number} max */
 const buttonId=(x,max)=>typeof x==='string' && x.length<=max && /^[a-z0-9][a-z0-9-]*$/.test(x) && !/\s/.test(x);
 /** @param {string} method @param {any[]} args */
 export function assertButtonCall(method,args) {
-  const empty=['entry.copy','demo.stop'].includes(method);
+  const empty=['entry.copy','demo.stop','demo.state'].includes(method);
   if(!BUTTON_METHODS.includes(method) || args.length!==(empty?0:1))throw new Error('BUTTON_ARGS');
   if(empty)return;
   const v=args[0],keys=method==='demo.start'?['identity','demo']:method==='demo.prompt'?['demo','site']:['site'];
@@ -128,6 +128,7 @@ export function viewerUrl(value) {
 /** @param {string} method @param {any} v */
 export function assertButtonReply(method,v) {
   if(buttonExact(v,['ok','code']) && v.ok===false && ['BUTTON_UNAVAILABLE','DEMO_REFUSED','DEMO_BUSY','DEMO_NOT_RECORDING'].includes(v.code))return v;
+  if(method==='demo.state'){if(buttonExact(v,['schema','ok','phase','identity','demo']) && v.schema==='metaviewer.demo_state/v1' && v.ok===true && ['idle','starting','recording','sealing'].includes(v.phase) && (v.phase==='idle'?v.identity==='' && v.demo==='':buttonId(v.identity,40) && v.identity.length>=2 && buttonId(v.demo,40)))return v;throw new Error('BUTTON_REPLY');}
   if(v?.ok===true && (method==='demo.start'?buttonExact(v,['ok','url']) && viewerUrl(v.url):buttonExact(v,['ok'])))return v;
   throw new Error('BUTTON_REPLY');
 }
@@ -238,6 +239,13 @@ export function createOperatorFacade(transport) {
     return transport.subscribe?.('metaviewer:handoff.state',(/** @type {any} */v)=>{
       try { assertOperatorReply('handoff.list',v); } catch { return; } cb(v);
     }) ?? (()=>{});
+  };
+  /** @param {(v:any)=>void} cb */
+  out.demo.subscribe=(cb)=>{
+    if(transport.nested)throw new Error('NESTED_DISPLAY_ONLY');
+    return transport.subscribe?.('metaviewer:demo.state',(/** @type {any} */v)=>{
+      try{assertButtonReply('demo.state',v);}catch{return;}cb(v);
+    })??(()=>{});
   };
   for(const group of Object.values(out)) Object.freeze(group);
   return Object.freeze(out);
@@ -1861,7 +1869,7 @@ export function installPreload(electron) {
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
         if (nested && channel === 'metaviewer:side-terminal.port') throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
-        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port','metaviewer:handoff.state','metaviewer:headless.state','metaviewer:guest-command.state','metaviewer:guest-command.observation','metaviewer:rewind.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
+        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port','metaviewer:handoff.state','metaviewer:demo.state','metaviewer:headless.state','metaviewer:guest-command.state','metaviewer:guest-command.observation','metaviewer:rewind.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
           // The facade validates this authenticated host channel before transfer.
