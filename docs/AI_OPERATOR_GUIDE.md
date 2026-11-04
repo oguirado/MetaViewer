@@ -357,11 +357,8 @@ python3 tools/mv_identity.py \
 
 ## 11. `Use MetaViewer`: Attaching Any External AI (`docs/AGENT_ENTRY.md`)
 
-Click **`Use MetaViewer`** in the top bar to open the attachment modal:
-
-- **`Copy agent prompt`**: Copies a ready-to-paste prompt telling any external AI to
-  read `docs/AGENT_ENTRY.md` and `$XDG_RUNTIME_DIR/metaviewer/attach/current.env`.
-- **`Copy env path`**: Copies the path to `$XDG_RUNTIME_DIR/metaviewer/attach/current.env`.
+Copy the fenced prompt from [AGENT_ENTRY.md](AGENT_ENTRY.md) for your external AI.
+The sidebar entry button is not available in this release.
 
 While MetaViewer is running, it publishes owner-only `current.env` and
 `current.json` in the host runtime's `metaviewer/attach/` directory. The JSON
@@ -370,7 +367,7 @@ schema is `metaviewer.attach/v1`, with `schema`, `session_id`, `pid`,
 `MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`, and `MV_SESSION_ID`, plus available native,
 identity-store and dependency paths. Optional paths can be absent.
 
-Copy the absolute **Copy env path** before sourcing: sourcing changes
+Use the absolute host runtime attachment path before sourcing: sourcing changes
 `XDG_RUNTIME_DIR` to the app's private core runtime. Use a dedicated shell:
 
 ```text

@@ -293,9 +293,8 @@ for installation prerequisites and allowlist rules.
 
 ### Use MetaViewer
 
-Click **Use MetaViewer** to copy the text fenced prompt from
-[AGENT_ENTRY.md](AGENT_ENTRY.md), verbatim including its final newline. **Copied**
-confirms clipboard completion; the button launches no workflow. Give the prompt
+The sidebar entry button is not available in this release. Copy the fenced prompt
+from [AGENT_ENTRY.md](AGENT_ENTRY.md), including its final newline, and give it
 to your chosen agent with the operator present. It selects a stored workflow and
 runs `python3 -m metaviewer_agents.mw_run` from the agents directory against an
 already running browser identity. It neither starts a browser nor types credentials.

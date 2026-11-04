@@ -11,7 +11,7 @@ capsules.
 - **Point your own AI at [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md)**: a single,
   self-contained guide that lets your AI install, configure, verify, and explain
   the supported judge flows (left tree, desktops, tile presets, browser/program/X11
-  capsules, human/agent hand-off, paired terminals, identities, `Use MetaViewer`,
+  capsules, human/agent hand-off, paired terminals, identities,
   and MemoryWeb / `mw_run` automation).
 - Full build and environment reference: [INSTALL.md](INSTALL.md).
 - Operator walkthrough: [USER_GUIDE.md](USER_GUIDE.md).

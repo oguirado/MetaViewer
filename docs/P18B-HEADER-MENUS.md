@@ -9,7 +9,8 @@ only to the provided MetaViewer sources and the pinned UI kit surface.
 
 ## Header and tile actions
 
-The header exposes Use MetaViewer and the current Identities dialog directly.
+The Use MetaViewer sidebar entry is removed for this release. The host entry
+prompt API remains available.
 The left working tree groups Humans and Agents by desktop and capsule, with
 real state, counts and pending handoffs. Selecting a capsule restores and focuses
 its tile. Identities and Settings remain available in the sidebar and rail.

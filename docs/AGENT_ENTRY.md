@@ -1,8 +1,9 @@
 # Use MetaViewer
 
-This is the engine behind the **Use MetaViewer** button. The host copies the
-prompt below verbatim and shows **Copied**. It runs one stored workflow on one
-already running browser identity. Per-site command sets are outside this entry.
+Copy the fenced prompt below for an external agent. The sidebar entry button
+is not available in this release; the host prompt-copy API remains available.
+The prompt runs one stored workflow on one already running browser identity.
+Per-site command sets are outside this entry.
 
 ```text
 The MetaViewer checkout is $MV_OPERATOR_REPO; if it is unset, ask the operator.

@@ -61,10 +61,7 @@ watch(moreOpen, async open => {
 function closeMore(event) { if (!moreMenu.value?.contains(/** @type {Node|null} */ (event.target))) moreOpen.value = false; }
 onMounted(() => globalThis.document?.addEventListener?.('pointerdown', closeMore, true));
 onBeforeUnmount(() => globalThis.document?.removeEventListener?.('pointerdown', closeMore, true));
-const demoOpen=ref(false), entryMessage=ref('');
-let entryTimer=/** @type {ReturnType<typeof setTimeout>|undefined} */(undefined);
-onBeforeUnmount(()=>clearTimeout(entryTimer));
-async function copyEntry(){clearTimeout(entryTimer);entryMessage.value='';try{const result=await (/** @type {any} */(globalThis).metaviewer?.operator)?.entry.copy();entryMessage.value=result?.ok?'Copied':'Copy unavailable';}catch{entryMessage.value='Copy unavailable';}entryTimer=setTimeout(()=>{entryMessage.value='';},2000);}
+const demoOpen=ref(false);
 const props = defineProps({
   rewindHost: {type:Object,default:null},
   rewindPanel: {type:[Object,Function],default:null},
@@ -1846,9 +1843,6 @@ onMounted(() => {
 
       </div>
       <div class="mv-navigation-foot">
-        <span class="mv-entry-copy"><UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
-        <span class="mv-entry-feedback" role="status" aria-live="polite" aria-atomic="true">{{ entryMessage }}</span></span>
-
         <HandoffNotice @activity="recordActivity" @take-control="takeHandoffControl" @pending="treeHandoffs = $event" />
         <ActivityStrip :entries="activityFeed" />
         <div class="mv-sidebar-status"><StatusBar :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]"><template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template><template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.filter(row => row.backendLifecycle !== 'lost').length} capsules${rows.some(row => row.backendLifecycle === 'lost') ? ` · ${rows.filter(row => row.backendLifecycle === 'lost').length} lost` : ''}` : 'Ready when you are' }}</span></template></StatusBar></div>
@@ -2020,16 +2014,6 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-nested-wall article { min-width:0; min-height:0; }
 </style>
 
-<style scoped>
-.mv-entry-copy { position: relative; display: inline-flex; }
-.mv-entry-feedback {
-  position: absolute; top: 100%; left: 0; white-space: nowrap;
-  background: var(--cuk-semantic-surface-elevated);
-  color: var(--cuk-semantic-text-primary);
-  z-index: var(--cuk-component-dialog-host-z-index);
-}
-</style>
-
 <style>
 .mv-more-menu { position:relative; }
 .mv-menu-popover { position:absolute; right:0; top:100%; z-index:10000; display:flex; flex-direction:column; min-width:220px; padding:6px; gap:4px; border:1px solid var(--cuk-semantic-border-subtle); border-radius:var(--cuk-semantic-radius-md); background:var(--cuk-semantic-surface-chrome); color:var(--cuk-semantic-text-primary); box-shadow:var(--cuk-semantic-shadow-md); }
@@ -2072,7 +2056,6 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-navigation-tools { display:flex; flex-direction:column; gap:6px; }
 .mv-navigation-tools button { justify-content:flex-start; width:100%; }
 .mv-navigation-foot { flex:none; min-width:0; border-top:1px solid var(--cuk-semantic-border-default); }
-.mv-navigation .mv-entry-copy { display:flex; flex-wrap:wrap; padding:6px; }
 .mv-navigation .mv-activity { border:0; }
 .mv-sidebar-status { height:auto; min-height:0; display:grid; gap:4px; padding:8px; font-size:11px; color:var(--cuk-semantic-text-muted); }
 .mv-navigation .mv-layout-notice { margin-top:12px; font-size:11px; }
@@ -2083,7 +2066,7 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-navigation--collapsed #view-agent::after { content:'A'; font-size:12px; }
 .mv-navigation--collapsed .mv-desktop-numbers { gap:2px; }
 .mv-navigation--collapsed .mv-desktop-numbers button { padding:2px 3px; }
-.mv-navigation--collapsed .mv-entry-copy,.mv-navigation--collapsed .mv-sidebar-status,.mv-navigation--collapsed .mv-layout-notice-reserve { display:none; }
+.mv-navigation--collapsed .mv-sidebar-status,.mv-navigation--collapsed .mv-layout-notice-reserve { display:none; }
 .mv-navigation--collapsed .mv-activity__bar { flex-wrap:wrap; padding:3px; gap:2px; }
 .mv-navigation--collapsed .mv-activity__bar .mv-activity__empty { display:none; }
 .mv-navigation--collapsed .mv-activity__bar button { font-size:0; }

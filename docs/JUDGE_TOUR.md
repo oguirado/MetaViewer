@@ -4,7 +4,7 @@ For refusal codes and source-backed next steps, see [Judge troubleshooting](JUDG
 
 Use this tour with your AI after completing [Judge Quickstart](JUDGE_QUICKSTART.md).
 Commands run from the MetaViewer checkout or the installed public operator tree
-supplied by **Use MetaViewer**; judge launcher commands run from the kit root.
+supplied in [AGENT_ENTRY.md](AGENT_ENTRY.md); judge launcher commands run from the kit root.
 Use a graphical Linux session (WSLg for the verified Windows/WSL2 setup).
 
 Verification status below is a snapshot for this tour. **Verified** means that specific live flow was

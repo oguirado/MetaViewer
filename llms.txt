@@ -1,6 +1,7 @@
 # MetaViewer
 Rust authority; Electron/Vue renders admitted snapshots and submits intents.
 Read first: AGENTS.md, then catalogue/protocol.json.
+Status: router unavailable.
 Release authority: VERSION; pending changes: changes/unreleased/.
 
 Task preparation: Create automation, Run automation, and Direct task end with "Task: ". Unpaired prompts copy to clipboard. Paired controls offer installed, host-owned agent CLI profiles; after a recognized input prompt, they paste with bracketed paste and never send Enter. Missing, exited, unready or authentication-waiting agents receive no prompt. Plain shells remain copy-only. These controls prepare text; they do not execute workflows. See docs/AGENT_ENTRY.md.

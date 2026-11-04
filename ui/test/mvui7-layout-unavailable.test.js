@@ -278,24 +278,18 @@ for (const displayOnly of [false, true]) test(`notice grid mode renders correctl
   } finally { app.close(); }
 });
 
-test('entry copy feedback expires, restarts on repeat, and unmount cancels its timer',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  const previous=globalThis.metaviewer;
-  globalThis.metaviewer={operator:{entry:{copy:async()=>({ok:true})}}};
+test('removed entry action is absent from the sidebar in both rail states',async()=>{
   const app=await mountApp({readRaw:async()=>null,writeAtomic:async()=>{}});
-  try{
-    const click=async()=>{byId(app.view.root,'shell-use-metaviewer').props.onClick();await tick();};
-    await click();
-    const feedback=()=>nodes(app.view.root).find(n=>n.props?.class==='mv-entry-feedback');
-    assert.equal(text(feedback()),'Copied');assert.equal(feedback().props.role,'status');assert.equal(feedback().props['aria-live'],'polite');
-    t.mock.timers.tick(1500);await tick();assert.equal(text(feedback()),'Copied');
-    await click();t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'Copied');
-    t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'');
-    await click();
-    const {descriptor}=parse(appSource);
-    assert.ok(descriptor.styles.some(s=>/\.mv-entry-feedback\s*\{[^}]*position:\s*absolute/s.test(s.content)),'feedback cannot reflow top-bar actions');
-  }finally{app.close();globalThis.metaviewer=previous;}
-  t.mock.timers.tick(2000);
+  try {
+    assert.equal(byId(app.view.root,'shell-use-metaviewer'),undefined);
+    assert.equal(nodes(app.view.root).some(n=>n.props?.class==='mv-entry-feedback'),false);
+    const toggle=byId(app.view.root,'shell/navigation/toggle');
+    assert.ok(toggle);assert.equal(toggle.props['aria-expanded'],true);
+    toggle.props.onClick();await tick();
+    assert.equal(byId(app.view.root,'shell/navigation/toggle').props['aria-expanded'],false);
+    assert.equal(byId(app.view.root,'shell-use-metaviewer'),undefined);
+    assert.doesNotMatch(appSource,/entryTimer|copyEntry/);
+  } finally {app.close();}
 });
 
 test('empty frame projection with an authority runtime waits for capsule frames',async()=>{
