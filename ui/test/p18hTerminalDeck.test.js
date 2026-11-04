@@ -1,3 +1,4 @@
+import * as agentPromptGate from '../src/terminal/agentPromptGate.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -728,7 +729,7 @@ async function compileSfc(relPath, deps = {}, mutateSource = null) {
   const { descriptor } = parse(source);
   let code = compileScript(descriptor, { id: `p18h-${++serial}`, inlineTemplate: true }).content;
   const key = `__p18hDeps_${serial}`;
-  globalThis[key] = { './pairedTerminals.js':{createPairedTerminals}, ...deps, vue };
+  globalThis[key] = { './pairedTerminals.js':{createPairedTerminals}, './agentPromptGate.js':agentPromptGate, ...deps, vue };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '');
   code = code.replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_line, binding, _q, spec) => {
     const normalized = binding
@@ -2892,4 +2893,31 @@ test('compact paired drawer never shows or dispatches the previous capsule while
   assert.deepEqual(deck.controller.state.screens.flatMap(s=>s.slots.map(t=>t.sessionId)),sessions);
   assert.equal(opens,2);assert.equal(disposed,0,'moving to full dock retains both terminal instances');
  } finally {mounted.app.unmount();}
+});
+
+
+test('paired workflow chooses a host agent then refuses authentication without writing input',async()=>{
+  const harness=createBrokerDouble({providers:new Map([['agent-codex',{argv:['/tools/codex']}]])});
+  class Terminal {loadAddon(){} attachCustomKeyEventHandler(){} onData(){return {dispose(){}};} open(){} write(){} focus(){} blur(){} dispose(){}}
+  const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{
+    '@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon:class {fit(){}}},
+    '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},
+    './terminalDeckModel.js':deckModel,
+  });
+  const mounted=mountTree(View,{open:true,pairedTarget:{surfaceId:'surface-a',profileId:'identity-a',title:'Alpha'},
+    hostProviders:[{id:'agent-codex',label:'Codex'}],terminalBroker:harness.broker,terminalBinding:harness.sessionFacade,storage:createMemoryStorage()});
+  try {
+    await tick();await tick();
+    const initial=mounted.vm.controller.state.focusedSlotId;
+    await mounted.findById('terminal-deck-no-automation').props.onClick();await tick();
+    assert.ok(mounted.findById('terminal-deck-agent-choice'));assert.equal(harness.openCalls.length,1);
+    const launch=mounted.findById('terminal-deck-launch-agent-codex').props.onClick();await tick();await tick();
+    assert.equal(harness.openCalls.at(-1).command,'agent-codex');
+    assert.equal(mounted.vm.controller.state.focusedSlotId,initial,'same capsule retains the paired slot');
+    const session=mounted.vm.controller.findSlot(initial).slot.sessionId;
+    harness.sessionFacade.emitData(session,'Sign in with ChatGPT');
+    await launch;await tick();
+    assert.match(mounted.textOf(mounted.root),/Nothing pasted/);assert.deepEqual(harness.writeCalls,[]);
+    assert.equal(mounted.findById('terminal-deck-agent-choice'),null);
+  } finally {mounted.app.unmount();}
 });

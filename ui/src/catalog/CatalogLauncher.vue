@@ -1,7 +1,7 @@
 <script setup>
 /**
  * MetaViewer New Capsule launcher (AC-03): catalog model over the kit
- * NewCapsuleDialog overlay. Valid kinds render as kit cards; unknown or
+ * host grouping of the pinned NewCapsuleDialog. Valid kinds render as kit cards; unknown or
  * malformed entries render as designed typed error rows in the dialog
  * `empty` slot (only provided while errors exist, so clean catalogs keep
  * exact kit behaviour). Keyboard flow is kit-native (search, grid arrows,
@@ -10,7 +10,7 @@
  */
 import { computed, ref, watch } from 'vue';
 import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
-import { NewCapsuleDialog } from '../../.kit/capsule-ui-kit/src/index-shell.js';
+import NewCapsuleDialog from './GroupedCapsuleDialog.vue';
 import {
   CATALOG_KIND_IDS,
   availableCatalogKindIds,
@@ -194,7 +194,7 @@ const normalized = computed(() => normalizeCatalogEntries(props.kinds));
 const disabledArmKinds=computed(()=>unavailableArmCapsules(props.arm64Capabilities));
 const dialogTypes = computed(() => {
   const appType = (/** @type {{id:string,name:string,binary:string,icon:string}} */ app, /** @type {boolean} */ recent) => ({id:`${recent?'recent':'app'}-${app.id}`,label:app.name,category:recent?'Recent':'Installed apps',description:'Host program — not isolated',opensAs:'tab',footprint:'',keywords:[app.name,app.binary],icon:'box'});
-  return [...recentApps.value.flatMap(id=>{const app=installedApps.value.find(a=>a.id===id);return app?[appType(app,true)]:[];}),...installedApps.value.map(app=>appType(app,false)),...normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable,props.headlessAvailable,props.arm64Capabilities).includes(type.id)).map(type=>type.id==='microvm'&&props.guestCommandAvailable?{...type,description:'Run commands inside an isolated ARM64 guest. No interactive terminal or desktop.'}:type)];
+  return [...normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable,props.headlessAvailable,props.arm64Capabilities).includes(type.id)).map(type=>type.id==='microvm'&&props.guestCommandAvailable?{...type,description:'Run commands inside an isolated ARM64 guest. No interactive terminal or desktop.'}:type),...recentApps.value.flatMap(id=>{const app=installedApps.value.find(a=>a.id===id);return app?[appType(app,true)]:[];}),...installedApps.value.map(app=>appType(app,false))];
 });
 const catalogErrors = computed(() => normalized.value.errors);
 

@@ -20,6 +20,7 @@ import {
 } from './terminalDeckModel.js';
 import './terminal.css';
 import {createPairedTerminals} from './pairedTerminals.js';
+import {AGENT_PROFILE_IDS} from './agentPromptGate.js';
 
 const props = defineProps({
   open: { type: Boolean, default: true },
@@ -48,6 +49,9 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const revision = ref(0);
 const pairBusy = ref(false), pairError = ref('');
+const agentChoice=ref(/** @type {any} */ (null));
+const agentPreparing=ref(false);
+let agentGeneration=0;
 const customCommand = ref('');
 const pastedBootstrapText = ref('');
 const lastBootstrapFocused = ref(false);
@@ -204,6 +208,7 @@ const controller = createTerminalDeckController({
 
 const pairedTerminals=createPairedTerminals(controller);
 watch(()=>[props.open,props.pairedTarget],async (_value,_old,onCleanup)=>{
+  agentGeneration++;agentChoice.value=null;agentPreparing.value=false;
   if (!props.open || !props.pairedTarget) {pairBusy.value=false;return;}
   let current=true;onCleanup(()=>{current=false;});pairBusy.value=true;pairError.value='';
   try {
@@ -242,6 +247,35 @@ const errorCode = computed(() => deckState.value.errorCode);
 const errorMessage = computed(() => deckState.value.errorMessage);
 const gridColumns = computed(() => props.compact ? '1' : String(deckState.value.gridColumns));
 const profiles = computed(() => deckState.value.profiles);
+/** @param {string} slotId */
+function pairedTerminalLabel(slotId) {
+  const slot=controller.findSlot(slotId)?.slot;
+  return slot?.profileId==='shell'?'Host shell':slot?.title ?? 'Terminal';
+}
+const agentProfiles=computed(()=>profiles.value.filter(profile=>AGENT_PROFILE_IDS.includes(profile.id)));
+/** @param {string} kind */
+async function chooseWorkflow(kind) {
+  if(!pairMatchesTarget.value || !focusedPair.value) return controller.useWorkflowPrompt(kind,workflowIdentity.value,null);
+  agentGeneration++;agentPreparing.value=false;agentChoice.value={kind,pair:{...focusedPair.value}};
+  await controller.refreshProviders();
+}
+function cancelAgentChoice() {agentGeneration++;agentChoice.value=null;agentPreparing.value=false;agentPreparing.value=false;}
+/** @param {string} profileId */
+async function launchWorkflowAgent(profileId) {
+  const choice=agentChoice.value;
+  if(!choice || agentPreparing.value) return;
+  const generation=++agentGeneration;
+  const current=()=>generation===agentGeneration && props.open && focusedPair.value?.surfaceId===choice.pair.surfaceId;
+  agentPreparing.value=true;pairError.value='';
+  try {
+    const pair=await pairedTerminals.open(choice.pair,profileId);
+    if(!current()) return;
+    controller.focusSlot(pair.slotId);revision.value++;
+    await controller.prepareAgentPrompt(choice.kind,pair.identityLine,pair.slotId,profileId,current);
+  } catch(error) {if(current())pairError.value=error instanceof Error?error.message:'Agent launch unavailable';}
+  finally {if(generation===agentGeneration){agentPreparing.value=false;agentChoice.value=null;}}
+}
+watch(focusedSlotId,()=>{if(agentChoice.value && focusedPair.value?.surfaceId!==agentChoice.value.pair.surfaceId)cancelAgentChoice();});
 const allScreenSlots = computed(() => {
   const list = [];
   const scrs = screens.value ?? [];
@@ -901,6 +935,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  agentGeneration++;
   viewportObserver?.disconnect();
   globalThis.document?.removeEventListener?.('focusin', containDialogFocus, true);
   syncOverlayAttr(false);
@@ -1001,11 +1036,11 @@ defineExpose({
             @click="onBootstrap"
           >🚀 Bootstrap</button>
           <label class="mv-terminal-deck__identity-pill"
-            :title="focusedPair ? `Paired with ${focusedPair.title} · Host shell. ${workflowIdentity}` : 'Paste Copy ID for AI here to select the capsule for workflow actions.'">
+            :title="focusedPair ? `Paired with ${focusedPair.title} · ${pairedTerminalLabel(focusedPair.slotId)}. ${workflowIdentity}` : 'Paste Copy ID for AI here to select the capsule for workflow actions.'">
             <span>Capsule ID: <span v-if="!workflowIdentity">None</span></span>
             <input id="terminal-deck-bootstrap-paste-target" data-semantic-anchor="terminal/bootstrap/identity"
               :value="focusedPair?.surfaceId ?? pastedBootstrapText" :readonly="!!focusedPair" placeholder="Paste AI ID…"
-              :aria-label="focusedPair ? 'Paired capsule identity · Host shell' : 'Capsule identity for workflow actions'"
+              :aria-label="focusedPair ? 'Paired capsule identity · ' + (pairedTerminalLabel(focusedPair.slotId)) : 'Capsule identity for workflow actions'"
               @input="onBootstrapInput" />
           </label>
           <button
@@ -1016,8 +1051,16 @@ defineExpose({
             :data-semantic-anchor="`terminal/${action.kind}`"
             class="mv-terminal-deck__action-btn"
             :title="action.hint"
-            @click="controller.useWorkflowPrompt(action.kind, workflowIdentity, pairMatchesTarget ? focusedPair?.slotId ?? null : null)"
+            @click="chooseWorkflow(action.kind)"
           >{{ action.label }}</button>
+          <span v-if="agentChoice" id="terminal-deck-agent-choice" data-semantic-anchor="terminal/agent-choice" class="mv-terminal-deck__agent-choice" role="group" aria-label="Launch an agent CLI">
+            <span>{{ agentPreparing ? 'Waiting for agent input prompt…' : 'Replace this paired process with an agent CLI:' }}</span>
+            <span v-if="!agentProfiles.length">No agent CLI available from this terminal host. Nothing pasted.</span>
+            <button v-for="profile in agentProfiles" :key="profile.id" type="button"
+              :id="`terminal-deck-launch-${profile.id}`" :data-semantic-anchor="`terminal/launch/${profile.id}`"
+              class="mv-terminal-deck__action-btn" :disabled="agentPreparing" @click="launchWorkflowAgent(profile.id)">Launch {{ profile.label }}</button>
+            <button type="button" id="terminal-deck-agent-cancel" data-semantic-anchor="terminal/agent-cancel" class="mv-terminal-deck__action-btn" @click="cancelAgentChoice">Cancel</button>
+          </span>
           <span
             v-if="toastMessage"
             id="terminal-deck-bootstrap-toast"
@@ -1161,7 +1204,7 @@ defineExpose({
         @keydown="onTileKeyDown(item.slot.id, $event)"
       >
         <header class="mv-terminal-deck__tile-header">
-          <span class="mv-terminal-deck__tile-title">{{ pairedTerminals.forSlot(item.slot.id)?.title ?? item.slot.title }}<template v-if="pairedTerminals.forSlot(item.slot.id)"> · Host shell</template></span>
+          <span class="mv-terminal-deck__tile-title">{{ pairedTerminals.forSlot(item.slot.id)?.title ?? item.slot.title }}<template v-if="pairedTerminals.forSlot(item.slot.id)"> · {{ pairedTerminalLabel(item.slot.id) }}</template></span>
           <span
             v-if="item.slot.status === 'exited' || item.slot.status === 'restored'"
             :id="`terminal-deck-status-${item.slot.id}`"

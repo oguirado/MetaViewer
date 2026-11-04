@@ -1,3 +1,4 @@
+import * as agentPromptGate from '../src/terminal/agentPromptGate.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createTerminalDeckController, deserializeDeckState, TERMINAL_DECK_SCHEMA, MAX_DECK_SCREENS, MAX_SLOTS_PER_SCREEN } from '../src/terminal/terminalDeckModel.js';
@@ -120,7 +121,7 @@ function loadView(mutate = source => source, model = deckModel) {
   let code = compileScript(descriptor, { id: `u5-${++viewSerial}`, inlineTemplate: true }).content;
   class MissingTerminal { constructor() { throw Error('headless terminal unavailable'); } }
   const key = `__u5deps${viewSerial}`;
-  globalThis[key] = { vue, '@xterm/xterm': { Terminal: MissingTerminal }, '@xterm/addon-fit': { FitAddon: class {} }, './terminalDeckModel.js': model, './pairedTerminals.js': {createPairedTerminals},
+  globalThis[key] = { vue, '@xterm/xterm': { Terminal: MissingTerminal }, '@xterm/addon-fit': { FitAddon: class {} }, './terminalDeckModel.js': model, './pairedTerminals.js': {createPairedTerminals}, './agentPromptGate.js': agentPromptGate,
     '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) } };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '')
     .replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_all, binding, _q, spec) => `const ${binding.replace(/\bas\b/g, ':')} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`)

@@ -62,6 +62,6 @@ test('host capability getter intersects custody and real profiles without action
 });
 test('mounted picker renders disabled ARM reasons and omits ARM entries on x64',async()=>{
  const Dialog=vue.defineComponent({props:['types'],setup:(p,c)=>()=>vue.h('div',{},[...p.types.map(k=>vue.h('button',{'data-kind':k.id},k.label)),c.slots.empty?.()])});
- const Catalog=await compileSfc('catalog/CatalogLauncher.vue',{'../../.kit/capsule-ui-kit/src/index-shell.js':{NewCapsuleDialog:Dialog},'./catalogModel.js':catalogModel,'../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue':SidebarIcon});
+ const Catalog=await compileSfc('catalog/CatalogLauncher.vue',{'./GroupedCapsuleDialog.vue':Dialog,'./catalogModel.js':catalogModel,'../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue':SidebarIcon});
  for(const arch of ['arm64','x64']){const cap=arm64CapsuleStatusSync({},arch),mounted=mountComponent(Catalog,{visible:true,arm64Capabilities:cap});await flush();const buttons=nodes(mounted.root).filter(n=>n.tag==='button');assert.equal(buttons.filter(n=>Object.hasOwn(n.props??{},'disabled')&&n.props.disabled!==false).length,arch==='arm64'?2:0);assert.ok(!buttons.some(n=>['vm','microvm'].includes(n.props?.['data-kind'])));if(arch==='arm64')assert.match(text(mounted.root),/Complete ARM64 capsule setup/);mounted.app.unmount();}
 });
