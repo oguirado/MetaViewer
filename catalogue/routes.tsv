@@ -166,6 +166,7 @@ cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
 ciporta-ba0238b657a7	changes/unreleased/ci-portable-arm-fixtures.md
 compact-9378a8397e9e	changes/unreleased/compact-capsule-chrome.md
 compile-238480708e01	changes/unreleased/compiled-browser-entries.md
+darkove-f333e714e4c3	changes/unreleased/dark-overlay-controls.md
 desktop-hidden.md	changes/unreleased/desktop-hidden.md
 desktop-05bc81c3745b	changes/unreleased/desktop-launcher-validation.md
 display-polish.md	changes/unreleased/display-polish.md
@@ -233,6 +234,7 @@ program-9c236b0bad7f	changes/unreleased/program-host-fresh-frames.md
 program-593ec53b328a	changes/unreleased/program-moves-in-a-row.md
 program-037135db5049	changes/unreleased/program-provider-kill-guard.md
 program-53a257f2b164	changes/unreleased/program-standard-dirs.md
+program-1cea63c18df4	changes/unreleased/program-workflow-guidance.md
 release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
 rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.md
 rewindr-f6d46b8b6090	changes/unreleased/rewind-recovery-package.md

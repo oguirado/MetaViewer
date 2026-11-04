@@ -57,7 +57,9 @@ test('V026 prompts share Bootstrap coordinates, are bounded and reject secret mu
     assert.ok(prompt.startsWith(AGENT_ENTRY_PROMPT.split('\n').slice(0,5).join('\n')));
     assert.ok(prompt.split('\n').length<40);
     assert.match(prompt,/Copy ID for AI line/);
-    assert.match(prompt,/Programs support clicks only/);
+    assert.match(prompt,/Programs support clicks and explicit text/);
+    assert.match(prompt,/Agent Host programs also allow focused-key with Up, Down, Left, Right or Enter/);
+    assert.doesNotMatch(prompt,/clicks only/);
     assert.match(prompt,/--planner rules needs no Muse account/);
     assert.match(prompt,/--planner muse needs authenticated Muse Code/);
     assert.match(prompt,/one goal per run/);
@@ -75,7 +77,7 @@ test('V026 prompts share Bootstrap coordinates, are bounded and reject secret mu
   const goal = workflowPrompt('no-automation');
   for (const phrase of ['tools/mw_run_browser_goal.md', '--surface-kind browser', "--goal 'Exact visible control name' --steps 1",
     "--text 'Synthetic value' --key Enter --steps 3", 'goals must name an exact visible control',
-    '--planner muse sends marks', 'login wall or CAPTCHA stops with rc 4', 'private RAM XDG_STATE_HOME']) {
+    '--planner muse sends marks', 'login wall or CAPTCHA stops with rc 4', 'private RAM XDG_STATE_HOME', 'Host-only focused-key with --planner rules, --steps 1 and no text']) {
     assert.ok(goal.includes(phrase), phrase);
   }
   assert.throws(()=>workflowPrompt('constructor'),/KIND/);
