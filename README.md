@@ -247,6 +247,7 @@ Answers: where is the reference logic; what decides if behaviour is right.
 
 ---
 
+<a id="status"></a>
 ## 5. Coverage and domain contracts
 
 Answers: which capsule kinds exist; what runs on x64; what runs on ARM64; what is in each start mode.
@@ -333,6 +334,7 @@ Answers: what has been measured; did rewind work; what numbers can I quote.
 
 <!-- IMAGE_SLOT: MicroVM Guest commands panel and Rewind timeline with Back and the observed restore time -->
 
+<a id="historical-live-evidence"></a>
 ### Live, on the 0.2.6 candidate [MEASURED live by the maintainer]
 
 | Check | Result |
@@ -379,6 +381,7 @@ Negative results: one site was unreachable in human mode on a browser and a huma
 
 ---
 
+<a id="isolation-and-evaluation-limits"></a>
 ## 9. Limitations
 
 Answers: what does not work; what are the open bugs; what are the platform limits.
