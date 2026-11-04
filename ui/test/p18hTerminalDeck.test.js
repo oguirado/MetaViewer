@@ -2829,11 +2829,11 @@ test('paired terminal keeps newest requested capsule focused and retains hidden 
     waiting[1]({session:'pair-b'});await tick();
     const b=deck.controller.state.focusedSlotId;assert.ok(b);assert.equal(focus.at(-1),'surface-b');
     assert.equal(deck.controller.state.focusedSlotId,b,'latest Beta retains focus');
-    const pairedInput=mounted.findById('terminal-deck-bootstrap-paste-target');
-    assert.equal(pairedInput.props.value,'surface-b','pill shows the actual capsule id, not its workflow prompt');
-    assert.equal(pairedInput.props.readonly,true);
-    pairedInput.props.onInput({target:{value:'wrong-capsule'}});await tick();
-    assert.equal(mounted.findById('terminal-deck-bootstrap-paste-target').props.value,'surface-b');
+    const pairedInput=mounted.findById('terminal-deck-copy-capsule-id');
+    assert.match(mounted.textOf(pairedInput),/surface-b/,'chip shows the actual capsule id, not its workflow prompt');
+    assert.equal(pairedInput.props['aria-label'],'Copy capsule ID');
+    assert.equal(pairedInput.props.onInput,undefined,'paired identity cannot be edited');await tick();
+    assert.match(mounted.textOf(mounted.findById('terminal-deck-copy-capsule-id')),/surface-b/);
 
     assert.match(mounted.textOf(mounted.root),/Beta.*Host shell/);
     open.value=false;await tick();open.value=true;await tick();
@@ -2944,5 +2944,17 @@ test('paired deck namespaces its controls and ignores shortcuts from another dec
   let consumed=false;
   root.props.onKeydown({key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>({})},preventDefault(){consumed=true;},stopPropagation(){},stopImmediatePropagation(){}});
   await tick();assert.equal(consumed,false);assert.equal(h.openCalls.length,0);
+ } finally {mounted.app.unmount();}
+});
+
+test('paired Capsule ID chip copies only its identifier',async()=>{
+ const h=createBrokerDouble();let copied='';
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,pairedTarget:{surfaceId:'surface-chip',title:'Chip fixture'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,clipboard:{async writeText(text){copied=text;}},storage:createMemoryStorage()});
+ try {
+  await tick();const chip=mounted.findById('terminal-deck-copy-capsule-id');assert.ok(chip,'paired identity is a copy button');
+  await chip.props.onClick();assert.equal(copied,'surface-chip');assert.deepEqual(h.writeCalls,[]);
  } finally {mounted.app.unmount();}
 });

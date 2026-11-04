@@ -480,3 +480,6 @@
 }
 .mv-terminal-deck__identity-pill input::placeholder { color: var(--cuk-semantic-text-secondary); opacity: 1; }
 .mv-terminal-deck__identity-pill:focus-within { outline: 2px solid var(--cuk-semantic-accent-primary); outline-offset: 2px; }
+
+.mv-terminal-deck__identity-copy { cursor: pointer; max-width: min(100%, 28ch); }
+.mv-terminal-deck__identity-copy .mv-terminal-deck__identity-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

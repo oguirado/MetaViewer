@@ -253,6 +253,10 @@ const errorCode = computed(() => deckState.value.errorCode);
 const errorMessage = computed(() => deckState.value.errorMessage);
 const gridColumns = computed(() => props.compact ? '1' : String(deckState.value.gridColumns));
 const profiles = computed(() => deckState.value.profiles);
+async function copyPairedId() {
+  if (!pairMatchesTarget.value || !focusedPair.value) return;
+  await controller.copySelection(focusedPair.value.surfaceId, focusedPair.value.slotId);
+}
 /** @param {string} slotId */
 function pairedTerminalLabel(slotId) {
   const slot=controller.findSlot(slotId)?.slot;
@@ -1051,7 +1055,12 @@ defineExpose({
             @keydown="onBootstrapKeyDown"
             @click="onBootstrap"
           >🚀 Bootstrap</button>
-          <label class="mv-terminal-deck__identity-pill"
+          <button v-if="focusedPair" type="button" :id="domId('terminal-deck-copy-capsule-id')"
+            class="mv-terminal-deck__identity-pill mv-terminal-deck__identity-copy"
+            :title="`Copy capsule ID: ${focusedPair.surfaceId}`" aria-label="Copy capsule ID" @click="copyPairedId">
+            <span>Capsule ID:</span><span class="mv-terminal-deck__identity-value">{{ focusedPair.surfaceId }}</span>
+          </button>
+          <label v-else class="mv-terminal-deck__identity-pill"
             :title="focusedPair ? `Paired with ${focusedPair.title} · ${pairedTerminalLabel(focusedPair.slotId)}. ${workflowIdentity}` : 'Paste Copy ID for AI here to select the capsule for workflow actions.'">
             <span>Capsule ID: <span v-if="!workflowIdentity">None</span></span>
             <input :id="domId('terminal-deck-bootstrap-paste-target')" data-semantic-anchor="terminal/bootstrap/identity"
