@@ -167,6 +167,7 @@ compile-238480708e01	changes/unreleased/compiled-browser-entries.md
 desktop-hidden.md	changes/unreleased/desktop-hidden.md
 display-polish.md	changes/unreleased/display-polish.md
 display-pool-slot.md	changes/unreleased/display-pool-slot.md
+docs-audit.md	changes/unreleased/docs-audit.md
 e1paste-5ee0ef75509c	changes/unreleased/e1-paste-verify-30s.md
 e1-refusal-trace.md	changes/unreleased/e1-refusal-trace.md
 e1-rehearsal.md	changes/unreleased/e1-rehearsal.md
@@ -2073,9 +2074,11 @@ DEMO_AGENT_SCRIPT.md	docs/DEMO_AGENT_SCRIPT.md
 DEMO_PROPOSALS.md	docs/DEMO_PROPOSALS.md
 DEMOREC-37656a7d648c	docs/DEMO_RECURSIVE_SCRIPT.md
 DEMO_RUNBOOK.md	docs/DEMO_RUNBOOK.md
+EVIDENCE.md	docs/EVIDENCE.md
 HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
 INSTALL.md	docs/INSTALL.md
 JUDGES.md	docs/JUDGES.md
+JUDGE_NO_DOCKER.md	docs/JUDGE_NO_DOCKER.md
 JUDGE_QUICKSTART.md	docs/JUDGE_QUICKSTART.md
 JUDGE_TOUR.md	docs/JUDGE_TOUR.md
 JUDGETR-feb338f4506f	docs/JUDGE_TROUBLESHOOTING.md
