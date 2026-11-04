@@ -130,18 +130,23 @@ function adapter(view,id) {
   adapters.set(key,value); return value;
 }
 /** @param {string} key */
-function revealAll(key,force = false) {
+function revealAll(key,force = false,sourceRows = props.rows) {
   if (!ready.has(key)) return;
   const entry = desktops.value.find(d => d.key === key);
   if (!entry) return;
   if (!revealed.has(key)) revealed.set(key,new Set());
   const seen = revealed.get(key);
   const wall = walls.get(key);
-  for (const row of desktopRows(state.value,props.rows,entry.view,entry.desktop.id)) {
+  const failed = [];
+  for (const row of desktopRows(state.value,sourceRows,entry.view,entry.desktop.id)) {
     if (!force && dismissed.get(key)?.has(row.id)) continue;
     if (!force && seen.has(row.id) && wall?.hasSurfacePanel?.(row.id) !== false) continue;
-    if (wall?.revealSurface(row.id,'split')?.ok) seen.add(row.id);
+    if (wall?.revealSurface(row.id,'split')?.ok) {
+      seen.add(row.id);
+      if(force)dismissed.get(key)?.delete(row.id);
+    } else failed.push(row.id);
   }
+  return failed;
 }
 /** @param {string} key @param {{capsuleId:string}} event */
 function panelClosed(key,event) {
@@ -155,14 +160,20 @@ async function refreshCurrentDesktop() {
   if (!loaded.value || !ready.has(key)) return {ok:false,code:'ERR_NOT_READY'};
   await nextTick();
   if (key !== activeKey()) return {ok:false,code:'DESKTOP_CHANGED'};
-  dismissed.delete(key);
-  revealAll(key,true);
+  const wall=walls.get(key);
   const entry = desktops.value.find(d=>d.key===key);
+  if(!ready.has(key) || !wall || !entry)return {ok:false,code:'ERR_NOT_READY'};
+  const snapshot=props.projectionView.getSnapshot?.();
+  const liveRows=snapshot?.envelope?.projection?.rows;
+  if(snapshot?.status!=='live' || snapshot.stale!==false || !Array.isArray(liveRows))return {ok:false,code:'PROJECTION_UNAVAILABLE'};
+  const failedCapsules=revealAll(key,true,liveRows.filter(row=>row.backendLifecycle!=='destroyed')) ?? [];
   for (const row of props.workloadTiles) {
     const home = homeOf(row.id);
-    if (home && keyOf(home.view,home.desktop)===key) walls.get(key)?.revealWorkload?.(row.id);
+    if (home && keyOf(home.view,home.desktop)===key && wall.revealWorkload?.(row.id)?.ok!==true)failedCapsules.push(row.id);
   }
-  return walls.get(key)?.setPreset(entry?.desktop.preset ?? null) ?? {ok:false,code:'ERR_NOT_READY'};
+  const layout=wall.setPreset(entry.desktop.preset ?? null);
+  if(layout?.ok!==true)return layout ?? {ok:false,code:'ERR_NOT_READY'};
+  return failedCapsules.length ? {ok:false,code:'SURFACE_UNAVAILABLE',failedCapsules} : layout;
 }
 /** @param {string} key */
 function wallReady(key) {

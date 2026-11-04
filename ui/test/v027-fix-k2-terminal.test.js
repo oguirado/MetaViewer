@@ -32,7 +32,12 @@ function mountView(component, props) {
     focus() { globalThis.document.activeElement=this; },
     contains(node) { return node===this || this.children.some(child=>child.contains(node)); },
     getBoundingClientRect() { return {width:144,height:80}; },
-    querySelector(selector) { return this.querySelectorAll().find(n=>'#'+n.props.id===selector); },
+    querySelector(selector) {
+      if(selector.startsWith('#'))return this.querySelectorAll().find(n=>'#'+n.props.id===selector);
+      const anchor=/^\[data-semantic-anchor="([^"]+)"\]$/.exec(selector);
+      assert.ok(anchor,'unsupported selector in the test renderer: '+selector);
+      return this.querySelectorAll().find(n=>n.props['data-semantic-anchor']===anchor[1]);
+    },
     querySelectorAll() { return this.children.flatMap(child=>child.tag==='button'?[child]:child.querySelectorAll()); },
   });
   const renderer = vue.createRenderer({ createElement: make, createComment: make, createText: text => ({ ...make('#text'), text }),

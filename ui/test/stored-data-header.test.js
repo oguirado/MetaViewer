@@ -13,7 +13,7 @@ test('stored-data capability requires a supported identity kind and excludes hos
   for(const profile_id of ['mv-live-1','srf-pg-private','../escape','',undefined]) assert.equal(storedDataCapability({kind:'browser',profile_id},false),null);
 });
 
-test('header shows only admitted Save/Load, labels the stopped constraint, and opens exactly that profile',async()=>{
+test('header and tile menu expose only admitted stored data and open exactly that profile',async()=>{
   const source=readFileSync(new URL('../src/surfaces/RoleSurface.vue',import.meta.url),'utf8');
   const compiled=compileScript(parse(source).descriptor,{id:'stored-header',inlineTemplate:true}).content;
   const code=compiled.replace(/from ["']vue["']/g,'from '+JSON.stringify(import.meta.resolve('vue')));
@@ -26,9 +26,9 @@ test('header shows only admitted Save/Load, labels the stopped constraint, and o
     remove(n){if(n.parent)n.parent.children.splice(n.parent.children.indexOf(n),1);},parentNode:n=>n.parent,nextSibling:()=>null,querySelector:()=>null});
   const all=n=>[n,...n.children.flatMap(all)];
   try {
-    for(const patch of [{}, {storedData:null}, {storedData:{available:false,profileId:'work-account'}},
+    for(const patch of [{}, {role:'human'}, {storedData:null}, {storedData:{available:false,profileId:'work-account'}},
       {storedData:{available:true,profileId:'other-account'}}, {hostXpra:true}, {hostWindow:{state:'active'}}]) {
-      const admitted=Object.keys(patch).length===0, opened=[];
+      const admitted=Object.keys(patch).length===0 || patch.role==='human', opened=[];
       globalThis.metaviewerRoles={status:async()=>({role:'agent',profileId:'work-account',storedData:{available:true,profileId:'work-account'},...patch}),visibility:async()=>({ok:true}),close:async()=>({ok:true})};
       const root=node('root'), app=renderer.createApp(Component,{surfaceId:'surface-one',onStoredData:id=>opened.push(id)});
       try {
@@ -39,7 +39,16 @@ test('header shows only admitted Save/Load, labels the stopped constraint, and o
           assert.match(button.props['aria-label'],/stopped only/);
           button.props.onClick({stopPropagation(){}});
         }
-        assert.deepEqual(opened,admitted?['work-account','work-account']:[]);
+        const menu=all(root).find(n=>n.props.id==='tile-menu-surface-one');
+        menu.props.onClick();await vue.nextTick();
+        const entry=all(root).find(n=>n.props.id==='tile-stored-data-surface-one');
+        assert.equal(Boolean(entry),admitted,'menu uses the same host capability as the header');
+        if(entry){
+          assert.equal(entry.props.role,'menuitem');
+          entry.props.onClick();await vue.nextTick();
+          assert.equal(all(root).some(n=>n.props.id==='tile-actions-surface-one'),false,'opening stored data closes the menu');
+        }
+        assert.deepEqual(opened,admitted?['work-account','work-account','work-account']:[]);
       } finally {app.unmount();}
     }
   } finally {globalThis.metaviewerRoles=old;}

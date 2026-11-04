@@ -1430,15 +1430,22 @@ function measureChrome() {
 onMounted(() => { measureChrome(); window.addEventListener('resize', measureChrome); });
 onBeforeUnmount(() => window.removeEventListener('resize', measureChrome));
 const presetError = ref('');
+const refreshError = ref('');
 const wallRefreshing = ref(false);
 async function refreshWall() {
   if (wallRefreshing.value) return;
   wallRefreshing.value = true;
   try {
     const result = await wall.value?.refreshCurrentDesktop();
-    presetError.value = result?.ok ? '' : 'Wall refresh is unavailable. Try again after the desktop is ready.';
+    const messages = /** @type {Record<string,string>} */ ({
+      DESKTOP_CHANGED:'The desktop changed during refresh. Refresh the current desktop again.',
+      PROJECTION_UNAVAILABLE:'Live capsule state is unavailable. Reconnect, then refresh.',
+      SURFACE_UNAVAILABLE:'Some capsule panels could not be restored. Try again after their state is ready.',
+      ERR_NOT_READY:'Wall refresh is unavailable. Try again after the desktop is ready.',
+    });
+    refreshError.value = result?.ok ? '' : messages[result?.code] ?? 'Wall refresh did not complete. Try again.';
   } catch {
-    presetError.value = 'Wall refresh is unavailable. Try again after the desktop is ready.';
+    refreshError.value = 'Wall refresh did not complete. Try again.';
   } finally { wallRefreshing.value = false; }
 }
 const activeDesktopPreset = computed(() => {
@@ -1920,6 +1927,7 @@ onMounted(() => {
         <UiButton id="wall-refresh" data-semantic-anchor="wall/refresh" label="Refresh" title="Rebuild the current desktop from live capsules" :disabled="!desktopStateLoaded || wallRefreshing" :aria-busy="wallRefreshing" @click="refreshWall" />
         <details id="shell-grid-tools" class="mv-grid-tools"><summary id="shell-grid-tools-toggle" data-semantic-anchor="wall/grid-tools" aria-label="Custom grid" title="Custom grid">⋯</summary></details>
         <span v-if="presetError" role="status">{{ presetError }}</span>
+        <span v-if="refreshError" role="status">{{ refreshError }}</span>
       </div>
       </template>
     </TopBar>

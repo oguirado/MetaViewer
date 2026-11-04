@@ -184,7 +184,7 @@ test('VM availability fails closed across absent, failed and malformed hosts', a
 
 test('App refreshes availability on opening and rejects stale replies; launcher defaults hidden', async () => {
   const {ref, watch, computed} = await import('vue');
-  const {availableCatalogKindIds, CATALOG_KIND_IDS, normalizeCatalogEntries} = await import('../src/catalog/catalogModel.js');
+  const {availableCatalogKindIds, CATALOG_KIND_IDS, normalizeCatalogEntries, unavailableArmCapsules} = await import('../src/catalog/catalogModel.js');
   const app = await readFile(new URL('../src/App.vue', import.meta.url), 'utf8');
   const start = app.indexOf('const vmAvailable = ref(false);');
   const end = app.indexOf("}, { immediate: true, flush: 'sync' });", start);
@@ -217,12 +217,16 @@ test('App refreshes availability on opening and rejects stale replies; launcher 
   const {parse,compileScript} = await import('@vue/compiler-sfc');
   const descriptor = parse(launcher).descriptor;
   const compiled = compileScript(descriptor,{id:'app-catalog'});
-  const declaration = compiled.scriptSetupAst.flatMap(n=>n.declarations || []).find(n=>n.id.name==='dialogTypes');
-  const arrow = declaration.init.arguments[0];
-  const expression = `(${descriptor.scriptSetup.content.slice(arrow.start,arrow.end)})()`;
+  const names=['normalized','disabledArmKinds','disabledReasons','disabledArmTypes','dialogTypes'];
+  const declarations=names.map(name=>{
+    const declaration=compiled.scriptSetupAst.find(node=>node.declarations?.some(value=>value.id.name===name));
+    assert.ok(declaration, `production computed dependency ${name} exists`);
+    return descriptor.scriptSetup.content.slice(declaration.start,declaration.end);
+  }).join('\n');
+  const expression=declarations+'\ndialogTypes.value;';
   for (const vmAvailable of [undefined, false, true]) {
     for (const kinds of [CATALOG_KIND_IDS, CATALOG_KIND_IDS.map(kind=>({kind}))]) {
-      const types = vm.runInNewContext(expression, {normalized:{value:normalizeCatalogEntries(kinds)},installedApps:{value:[]},recentApps:{value:[]},availableCatalogKindIds,props:{vmAvailable}});
+      const types = vm.runInNewContext(expression, {computed,normalizeCatalogEntries,unavailableArmCapsules,installedApps:{value:[]},recentApps:{value:[]},availableCatalogKindIds,props:{vmAvailable,kinds}});
       assert.deepEqual([...types].map(type=>type.id), [...availableCatalogKindIds(vmAvailable)]);
     }
   }
