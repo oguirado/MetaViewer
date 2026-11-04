@@ -1311,6 +1311,8 @@ def run_entry(args):
             uncertain = bool(getattr(backend, 'program_moves', [])) or result['rc'] == 5
             result.update(rc=5 if uncertain else 6,
                           verdict_code='INPUT_UNCERTAIN' if uncertain else 'MW_PRIVATE_OUTPUT', receipt=None)
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     print(json.dumps(result))
     return result['rc']
 

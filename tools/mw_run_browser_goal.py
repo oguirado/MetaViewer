@@ -403,5 +403,7 @@ def run_entry(args):
             else:
                 result.update(rc=5 if getattr(backend, 'moves', []) else 6,
                               verdict_code='MW_PRIVATE_OUTPUT', receipt=None)
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     print(json.dumps(result))
     return result['rc']

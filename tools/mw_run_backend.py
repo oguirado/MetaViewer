@@ -1045,5 +1045,7 @@ def run_entry(args):
             result['report'] = None
             if result['rc'] not in (4, 5):
                 result.update(rc=6, verdict_code='MW_PRIVATE_OUTPUT')
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     print(json.dumps(result, separators=(',', ':')))
     return result['rc']

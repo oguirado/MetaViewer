@@ -393,6 +393,7 @@ def main(argv=None, *, runner=None):
         runner = host.run_entry
     budget_s = resolve_wall_deadline_s(args)
     args.wall_deadline_mono_ns = time.monotonic_ns() + int(budget_s * 1e9)
+    args.finish_wall_deadline = _disarm_itimer
     with redirect_stdout(RefusalOutput(sys.stdout, sys.stderr)), wall_deadline(budget_s):
         try:
             return runner(args)
