@@ -491,7 +491,7 @@ it. The x64 observation is not permission to bypass the binding check
 | `UNCHANGED` | The frame request was refused by the declared DISPLAY_READER_REASONS guard. | No known remedy in this source; preserve the exact diagnostic for the operator. | [code](../ui/electron/displayReader.js) |
 | `UNPUBLISHED` | The frame request was refused by the declared FRAME_REASONS guard. | No known remedy in this source; preserve the exact diagnostic for the operator. | [code](../ui/electron/framePort.js) |
 
-`MW_RUN_ATTACH` / configuration: use the running app’s **Copy env path**, then follow the [tour attachment setup](JUDGE_TOUR.md#prepare-commands-for-your-ai). Never guess a configuration path.
+`MW_RUN_ATTACH` / configuration: resolve `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env` from the original terminal runtime, then follow [the attachment setup](AGENT_ENTRY.md#attachment-and-identity). Never guess a configuration path.
 
 ## Browser goals
 

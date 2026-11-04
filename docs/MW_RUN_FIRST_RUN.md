@@ -48,8 +48,8 @@ was started with, and `$MV_WENDER_ROOT` is the wender-agent checkout at its
 
 4. **Copy the prompt.** Copy the fenced text from [AGENT_ENTRY.md](AGENT_ENTRY.md)
    and paste it into the external AI. Give it `MV_OPERATOR_REPO` and `MV_WENDER_ROOT` when it asks.
-   Do not give it the app's own variables: `mw_run` attaches to the running app
-   by itself.
+   Source the live app attachment in a subshell as documented in
+   [AGENT_ENTRY.md](AGENT_ENTRY.md#attachment-and-identity); never guess app values.
 
 ## Before the first run on a site: check the anchors
 
