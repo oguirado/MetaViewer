@@ -124,7 +124,17 @@ impl Server {
             "data":{"surface_id":"session", "code":"JOURNAL_FULL",
                 "detail":"Session journal is full. New work is refused (POLICY). Capsules are stopping in order; the accepted journal remains replayable. Start a new session."}
         }))?));
-        self.send_at(now_ns, to, body)
+        self.journal_notice_at(now_ns, to, body)
+    }
+
+    fn journal_notice_at(&mut self, now_ns: u64, to: &Endpoint, body: Command) -> Result<()> {
+        let env = self.outbound_at(now_ns, to, body, "core")?;
+        // A diagnostic is best effort. enqueue/send_at would reserve a
+        // QUEUE_OVERFLOW terminal on saturation and retire the transport.
+        if let Some(connection) = self.connections.get(to) {
+            let _ = connection.queue.try_send(env);
+        }
+        Ok(())
     }
 
     pub(super) fn end_full_journal(&mut self, now_ns: u64, env: &Envelope) -> Result<()> {

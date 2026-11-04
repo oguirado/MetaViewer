@@ -748,3 +748,32 @@ fn journal_end_ui_and_agent_capacity_start_stops_with_one_notice() {
         }
     });
 }
+
+#[test]
+fn journal_end_full_notice_does_not_reset_a_saturated_peer() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 1);
+        let request = json!({"schema":"surface_request/v0.2","op":"list","params":{}});
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        // Fill the observer queue before it triggers capacity.
+        let peer = f.endpoint(Component::Ui);
+        f.server.send_at(0, &peer, Command::Hello(Box::new(f.server.config.core.hello.clone()))).unwrap();
+        f.route(Component::Ui, 2, request.clone()).await.expect("capacity notice must tolerate backpressure");
+        assert_eq!(serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["op"], "destroy");
+        // Both subsequent requests and reconnect notices have the same guarantee.
+        f.route(Component::Ui, 3, request.clone()).await.expect("ended reply must tolerate backpressure");
+        f.server.resume_journal_end(1, &peer).expect("reconnect notice must tolerate backpressure");
+        assert!(f.server.connections.contains_key(&peer));
+        assert!(f.server.connections[&peer].terminal.lock().unwrap().is_none(),
+            "a dropped notice must never reserve the terminal that resets transport");
+        assert!(matches!(ui.try_recv().unwrap().body, Command::Hello(_)));
+        f.route(Component::Ui, 4, request).await.unwrap();
+        assert_eq!(serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"], "JOURNAL_FULL");
+        assert!(ui.try_recv().is_err());
+        assert!(daemon.try_recv().is_err(), "backpressure never duplicates a stop");
+    });
+}
