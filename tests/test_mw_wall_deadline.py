@@ -91,7 +91,7 @@ class WallDeadlineTests(unittest.TestCase):
              contextlib.redirect_stderr(stderr), \
              test_level_watchdog(watchdog_s):
             rc = mw_run.main(
-                ['--identity', 'mv-live-1', '--site', 'meta-ai', '--workflow', 'ask'],
+                ['--identity', 'mv-live-1', '--site', 'sample-chat', '--workflow', 'ask'],
                 runner=host.run_entry,
             )
         elapsed = time.monotonic() - start
@@ -136,7 +136,7 @@ class WallDeadlineTests(unittest.TestCase):
              contextlib.redirect_stderr(bare_err), \
              test_level_watchdog(2.0):
             bare_rc = mw_run.main(
-                ['--identity', 'mv-live-1', '--site', 'meta-ai', '--workflow', 'ask'],
+                ['--identity', 'mv-live-1', '--site', 'sample-chat', '--workflow', 'ask'],
                 runner=lambda _args: time.sleep(3600),
             )
         self.assertEqual(bare_rc, 6)
@@ -166,7 +166,7 @@ class WallDeadlineTests(unittest.TestCase):
              patch.object(host, 'HostBackend', return_value=SimpleNamespace()), \
              patch.object(host, 'execute', return_value=(0, 'PASS', None)), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
-            rc = mw_run.main(['--identity', 'fixture', '--site', 'meta-ai', '--workflow', 'ask'],
+            rc = mw_run.main(['--identity', 'fixture', '--site', 'sample-chat', '--workflow', 'ask'],
                              runner=host.run_entry)
         self.assertEqual(rc, 0)
         self.assertEqual(len(output.getvalue().splitlines()), 1)
@@ -176,33 +176,33 @@ class WallDeadlineTests(unittest.TestCase):
 
     def test_budget_from_workflow(self):
         host = load_host()
-        shutil.copytree(ROOT / 'memoryweb-builtin/sites/meta-ai', self.home / 'sites/meta-ai')
+        shutil.copytree(ROOT / 'memoryweb-builtin/sites/sample-chat', self.home / 'sites/sample-chat')
         evidence = self.root / 'staged-evidence'
         evidence.mkdir(mode=0o700)
-        staged_root, basis = host.stage_corpus(self.home, 'meta-ai', evidence)
+        staged_root, basis = host.stage_corpus(self.home, 'sample-chat', evidence)
         self.assertEqual(basis, 'staged_builtin_schemas')
 
-        # meta-ai/ask: min_notice_s = max(0, 0) = 0;
+        # sample-chat/ask: min_notice_s = max(0, 0) = 0;
         # 3 steps * (5000 + 30000 + 30000) ms = 195.0 s; + 30.0 s margin = 225.0 s.
-        ask_budget = mw_run.budget_from_workflow(staged_root, 'meta-ai/ask')
+        ask_budget = mw_run.budget_from_workflow(staged_root, 'sample-chat/ask')
         self.assertEqual(ask_budget, 225.0)
 
-        # meta-ai/new-chat: min_notice_s = 0; 1 step * 65000 ms = 65.0 s; + 30.0 s margin = 95.0 s.
-        new_chat_budget = mw_run.budget_from_workflow(staged_root, 'meta-ai', 'new-chat')
+        # sample-chat/new-chat: min_notice_s = 0; 1 step * 65000 ms = 65.0 s; + 30.0 s margin = 95.0 s.
+        new_chat_budget = mw_run.budget_from_workflow(staged_root, 'sample-chat', 'new-chat')
         self.assertEqual(new_chat_budget, 95.0)
 
-        # perplexity/ask fixture: site min_notice_s = 10, workflow min_notice_s = 0 -> 10 s;
+        # sample-chat/ask fixture: site min_notice_s = 10, workflow min_notice_s = 0 -> 10 s;
         # steps: 50000 + 70000 + 190000 = 310000 ms (310.0 s); + 30.0 s margin + 10 s notice = 350.0 s.
-        perplexity_home = self.root / 'perplexity-home'
-        shutil.copytree(ROOT / 'tests/e2e/fixtures/mw_perplexity/site', perplexity_home / 'sites/perplexity')
-        perplexity_budget = mw_run.budget_from_workflow(perplexity_home, 'perplexity/ask')
-        self.assertEqual(perplexity_budget, 350.0)
+        sample_home = self.root / 'sample-home'
+        shutil.copytree(ROOT / 'tests/e2e/fixtures/mw_sample_chat/site', sample_home / 'sites/sample-chat')
+        sample_budget = mw_run.budget_from_workflow(sample_home, 'sample-chat/ask')
+        self.assertEqual(sample_budget, 350.0)
 
         args = mw_run.build_parser().parse_args(
-            ['--identity', 'mv-live-1', '--site', 'perplexity', '--workflow', 'ask']
+            ['--identity', 'mv-live-1', '--site', 'sample-chat', '--workflow', 'ask']
         )
         self.assertEqual(
-            mw_run.resolve_wall_deadline_s(args, env={}, home=perplexity_home, repo_root=ROOT),
+            mw_run.resolve_wall_deadline_s(args, env={}, home=sample_home, repo_root=ROOT),
             350.0,
         )
 
@@ -217,7 +217,7 @@ class WallDeadlineTests(unittest.TestCase):
 
     def test_override_cannot_raise_budget(self):
         args = mw_run.build_parser().parse_args(
-            ['--identity', 'mv-live-1', '--site', 'meta-ai', '--workflow', 'ask']
+            ['--identity', 'mv-live-1', '--site', 'sample-chat', '--workflow', 'ask']
         )
         base_budget = mw_run.resolve_wall_deadline_s(args, env={}, home=self.home, repo_root=ROOT)
         self.assertEqual(base_budget, 225.0)
@@ -259,7 +259,7 @@ class WallDeadlineTests(unittest.TestCase):
             env = dict(os.environ, MV_MW_WALL_DEADLINE_S='0.2')
             with patch.dict(os.environ, env, clear=False):
                 rc = mw_run.main(
-                    ['--identity', 'mv-live-1', '--site', 'meta-ai', '--workflow', 'ask'],
+                    ['--identity', 'mv-live-1', '--site', 'sample-chat', '--workflow', 'ask'],
                     runner=lambda _args: 0,
                 )
             self.assertEqual(rc, 0)
@@ -309,7 +309,7 @@ class WallDeadlineTests(unittest.TestCase):
              contextlib.redirect_stderr(stderr), \
              test_level_watchdog(3.0):
             rc = mw_run.main(
-                ['--identity', 'mv-live-1', '--site', 'meta-ai', '--workflow', 'ask'],
+                ['--identity', 'mv-live-1', '--site', 'sample-chat', '--workflow', 'ask'],
                 runner=host.run_entry,
             )
         self.assertEqual(rc, 6)

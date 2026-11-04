@@ -4,6 +4,19 @@ This document records the agreed direction and the current limits of VM capsules
 
 The [ARM64 general-command candidate](docs/ARM64_GUEST_COMMANDS.md) has independently reviewed backend, configured packaged UI and SDK command/stop episodes. The next integration connects graphical VM and the visible MicroVM command console to ordinary Add capsule with [verified local setup](docs/ARM64_CAPSULE_SETUP.md). The new setup, transport and package require fresh acceptance before release; historical configured episodes do not prove the new package. General image import, graphical MicroVM, interactive PTY/SSH and save slots remain outside this acceptance.
 
+## What runs today on the 0.2.6 base?
+
+Answers: does rewind work, which modes does --arm64 offer, is there an x64 VM, what does a plain start offer, why did my session end
+
+| Question | Answer |
+| --- | --- |
+| Which capsule kinds does each start offer? | A plain start offers browsers, Host program and Program; a start with `--arm64` offers VM and MicroVM only [MEASURED: maintainer live run, 2026-11-04] |
+| Does rewind work? | On an ARM64 MicroVM, yes: 3 files were deleted, Back restored all 3, and the app showed 387.5 ms; `mv-replay` returned rc=0 on that session journal [MEASURED: maintainer live run, 2026-11-04] |
+| Why does `mv-replay` say Invalid? | It needs the absolute real path of the session; a relative path, a symlinked path or a copied session directory gives Invalid [MEASURED: maintainer live run, 2026-11-04] |
+| Why did a long session stop? | A full journal ends the session; start a fresh session for each long run [MEASURED: maintainer live run, 2026-11-04] |
+| Is there an x64 VM or x64 rewind? | No. x64 VM and MicroVM rows below are unproved; rewind is measured on ARM64 MicroVM only |
+| Known open issue | After `mw_run`, the package can gain `__pycache__` and a later `--arm64` start then holds with "exhaustive manifest inventory"; remove the bytecode directories [MEASURED: maintainer live run, 2026-11-04] |
+
 ## Current implementation and evidence
 
 The current VM creation path uses the existing `createSurface({kind: 'vm'})` selector. The host chooses an eligible configured profile and owns its image, program and path configuration. The renderer cannot supply those values. The ordinary browser call remains `createSurface()` with no selector. VM creation reuses the existing `createSurface` method and channel. A separate read-only `authority.vmAvailable` boolean query uses `metaviewer:authority.vmAvailable`; it reports host capability without granting creation authority. See [authority admission](ui/electron/authorityWire.js), [preload validation](ui/electron/preload.js), [profile selection](ui/electron/profilePicker.js), and [creation regressions](ui/test/vm-capsule-open.test.js).

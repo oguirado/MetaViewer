@@ -72,6 +72,6 @@ test('demo first impression distinguishes empty identities from tool failure and
     }finally{view.close();}
   }
   const source=readFileSync(new URL('../src/demo/DemoDialog.vue',import.meta.url),'utf8');
-  for(const example of ['meta-ask-1','meta-ai'])assert.ok(source.includes(`placeholder="${example}"`));
+  for(const example of ['sample-ask-1','sample-chat'])assert.ok(source.includes(`placeholder="${example}"`));
   assert.match(source,/:deep\(#demo-dialog-back\)\s*\{\s*display: none;/,'duplicate kit back action is hidden from layout and accessibility');
 });

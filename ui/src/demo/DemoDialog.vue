@@ -65,8 +65,8 @@ async function invoke(verb) {
     <p><label>Identity
       <select id="demo-identity" data-semantic-anchor="demo/identity" v-model="identity" :disabled="busy || recording" aria-label="Identity"><option value="" disabled>Choose an identity</option><option v-for="row in rows" :key="row.id" :value="row.id">{{ row.label }} ({{ row.id }})</option></select>
     </label></p>
-    <p><label>Demo id<UiTextInput v-model="demo" label="Demo id" placeholder="meta-ask-1" :disabled="busy || recording" /></label></p>
-    <p><label>Site<UiTextInput v-model="site" label="Site name" placeholder="meta-ai" :disabled="busy || recording" /></label></p>
+    <p><label>Demo id<UiTextInput v-model="demo" label="Demo id" placeholder="sample-ask-1" :disabled="busy || recording" /></label></p>
+    <p><label>Site<UiTextInput v-model="site" label="Site name" placeholder="sample-chat" :disabled="busy || recording" /></label></p>
     <UiButton id="demo-start" data-semantic-anchor="demo/start" label="Start" :disabled="busy || recording || !identity || !demoOk || used.includes(demoId)" @click="invoke('start')" />
     <UiButton id="demo-stop" data-semantic-anchor="demo/stop" label="Stop" :disabled="busy || !recording" @click="invoke('stop')" />
     <p v-if="url">Viewer URL: <a :href="url" target="_blank" rel="noreferrer">{{ url }}</a></p>
