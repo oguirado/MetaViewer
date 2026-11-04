@@ -176,3 +176,53 @@ test('TD05 term-null output buffering is bounded and removed when its slot close
     assert.equal(view.exposed.pendingSessionOutput.has(slot.sessionId), false);
   } finally { view.app.unmount(); }
 });
+
+test('TD06 paired workflow buttons paste into both a freshly launched agent CLI and an already-idle running agent CLI without respawning', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let now = 0; t.mock.method(performance, 'now', () => now);
+  let output, seq = 0;
+  const writes = [], opened = [];
+  const facade = {
+    attach: async () => {},
+    write: req => writes.push(req),
+    ack() {},
+    close() {},
+    onData(fn) { output = fn; return () => {}; },
+    onExit() { return () => {}; },
+  };
+  const view = mountView(loadView(), {
+    open: true,
+    pairedTarget: { surfaceId: 'surface-a', profileId: 'identity-a', title: 'Alpha' },
+    hostProviders: [{ id: 'agent-codex', label: 'Codex' }],
+    terminalBroker: { open: async spec => { opened.push(spec); return { session: `session-${++seq}` }; }, close: async () => {} },
+    terminalBinding: facade,
+    storage: storage(null),
+  });
+  try {
+    await tick(); await tick();
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].command, 'shell');
+    await view.find('terminal-deck-use-automation').props.onClick();
+    await tick();
+    assert.ok(view.find('terminal-deck-launch-agent-codex'));
+    const launching = view.find('terminal-deck-launch-agent-codex').props.onClick();
+    await tick(); await tick();
+    assert.equal(opened.length, 2);
+    assert.equal(opened[1].command, 'agent-codex');
+    const text = '\x1b]10;?\x1b\\\x1b[1mOpenAI Codex\x1b[0m\n› Ask Codex to do anything\x1b]0;~/workspace\x07';
+    output({ session: 'session-2', seq: 1, bytes: [...new TextEncoder().encode(text)], byteLength: Buffer.byteLength(text) });
+    now = 350; t.mock.timers.tick(350);
+    await tick();
+    assert.equal(writes.length, 1);
+    await launching;
+    // Leave the running agent CLI idle for 1 minute with no fresh output, then click all three workflow buttons.
+    now = 60350;
+    for (const kind of ['use-automation', 'automate', 'no-automation']) {
+      await view.find(`terminal-deck-${kind}`).props.onClick();
+      await tick();
+      assert.equal(view.find('terminal-deck-agent-choice'), undefined, kind);
+    }
+    assert.equal(opened.length, 2, 'idle agent CLI is reused without respawning');
+    assert.equal(writes.length, 4);
+  } finally { view.app.unmount(); }
+});

@@ -73,3 +73,33 @@ test('readiness arriving at the deadline still refuses instead of pasting late',
   now=14500;f.emit(ready);now=15000;t.mock.timers.tick(15000);
   assert.equal((await pending).pasted,false);assert.deepEqual(f.writes,[]);
 });
+
+const capturedCodexFrames=[
+  '\x1b[?2004h\x1b[?1004h\x1b[>1u\x1b[?25l',
+  '\x1b[6n\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b[?u\x1b[c',
+  '\x1b[?1049h\x1b[H\x1b[2J\x1b[4;1H╭───────────────────────────────────────────────╮\x1b[5;1H│ >_ \x1b[1mOpenAI Codex\x1b[0m \x1b[2m(v0.162.1)\x1b[0m                    │\x1b[8;1H│ \x1b[2mdirectory: \x1b[0m~/workspace                        │\x1b[9;1H╰───────────────────────────────────────────────╯\x1b[15;1H\x1b[1m›\x1b[0m \x1b[2mAsk Codex to do anything\x1b[0m\x1b[17;3H\x1b[2m? for shortcuts\x1b[0m\x1b[15;3H\x1b[?25h',
+  '\x1b[?25l\x1b[5;6H\x1b[1mOpenAI Codex\x1b[0m\x1b[17;3H\x1b[2m/skills to list\x1b[0m\x1b[15;3H\x1b[?25h',
+  '\x1b]0;~/workspace\x07\x1b[11;1H│ ✨ \x1b[1mUpdate available!\x1b[0m 0.162.1 -> 0.166.0 │\x1b[12;1H│ Release notes: \x1b]8;;https://github.com/openai/codex/releases/latest\x07https://github.com/openai/codex/releases/latest\x1b]8;;\x07 │\x1b[19;1H\x1b[33m⚠ Heads up, you have less than 6% of your weekly limit left. Run /status for a breakdown.\x1b[0m\x1b[21;3H\x1b[33m⚠ weekly limit: only 6% left\x1b[0m \x1b[2m· /status\x1b[0m\x1b[21;86H\x1b[33m⚠ 2 warnings\x1b[0m\x1b[15;3H\x1b[?25h',
+];
+
+test('captured multi-chunk TUI stream with ST and BEL OSC sequences plus warning status lines reaches ready and pastes for fresh and 1-minute-idle sessions',async t=>{
+  assert.equal(agentPromptState('agent-codex',capturedCodexFrames.join('')),'ready');
+  t.mock.timers.enable({apis:['setTimeout']});let now=0;t.mock.method(performance,'now',()=>now);
+  for(const kind of ['use-automation','automate','no-automation']) {
+    const f=fixture();t.after(()=>f.controller.dispose());
+    const slot=await f.controller.launchProfile('agent-codex');
+    const pending=f.controller.prepareAgentPrompt(kind,'Capsule identity: surface-a',slot.id,'agent-codex');
+    for(const [idx,chunk] of capturedCodexFrames.entries()) {
+      now=idx*200;f.emit(chunk);t.mock.timers.tick(200);
+    }
+    now+=350;t.mock.timers.tick(350);
+    const fresh=await pending;
+    assert.equal(fresh.pasted,true,kind);assert.equal(f.writes.length,1,kind);
+    const freshText=new TextDecoder().decode(new Uint8Array(f.writes[0].bytes));
+    assert.equal(freshText,'\x1b[200~'+workflowPrompt(kind).replace('<operator-pasted capsule identity line>','Capsule identity: surface-a')+'\x1b[201~');
+    assert.equal(freshText.includes('\r'),false);
+    now+=60000;
+    const idle=await f.controller.prepareAgentPrompt(kind,'Capsule identity: surface-a',slot.id,'agent-codex');
+    assert.equal(idle.pasted,true,kind);assert.equal(f.writes.length,2,kind);
+  }
+});
