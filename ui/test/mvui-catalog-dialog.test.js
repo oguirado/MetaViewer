@@ -55,7 +55,7 @@ function assertNoColorLiterals(text) {
 }
 
 test('launcher composes the kit dialog with catalog bindings and events', () => {
-  assert.match(script, /from '\.\.\/\.\.\/\.kit\/capsule-ui-kit\/src\/index-shell\.js'/);
+  assert.match(script, /from '\.\/GroupedCapsuleDialog\.vue'/);
   assert.match(script, /NewCapsuleDialog/);
   for (const marker of ['<NewCapsuleDialog', ':visible="visible"', ':types="dialogTypes"',
     ':title="title"', ':subtitle="subtitle"', ':empty-text="emptyText"',

@@ -57,11 +57,14 @@ arm64 — Human and Agent browser flows verified.
 
 ## Views and desktops
 
-**Shows:** organization of running capsules. Click **Humans** or **Agents**;
-use **Ctrl+Tab** to switch views. Click the desktop **+** to create a desktop,
-then a desktop pill to select it. In a tile's **⋮ → Move to desktop**, choose
-**Move and go** for the destination. Click **2 side by side** in the layout
-preset bar to compare visible tiles, or **1 tile** to focus a tile.
+**Shows:** organization of running capsules. Use the left **Humans** / **Agents**
+tree, then select a desktop or capsule. Use desktop **+** to create a desktop.
+In a tile's **⋮ → Move to desktop**, choose **Move and go** for the destination.
+Preset **2** has the tooltip **2 side by side**; **1** has **1 tile**. Custom grid
+(**⋯**) sets Rows and Columns for Control-drag snapping. New floating tiles use
+the next free cell where possible. The shell has three columns [CITED:
+`../ui/src/App.vue`]: left tree, center wall and paired terminal dock. Dark is the
+default for new settings; a saved theme remains selected. Storyboard is not available.
 
 **Success:** the selected view/desktop and arrangement change; moving a tile
 does not start a new capsule. **If refused:** inspect the activity message and
@@ -85,6 +88,20 @@ planned action after taking control.
 
 **Architecture:** x64 and arm64 — available; independent live handoff verification
 is not documented here.
+
+## Identity data and release
+
+In **Identities**, **Stored data** offers Save, Overwrite, Load, Copy to a new
+capsule and Delete slot. Stop the capsule and close login before using these
+controls. Slots hold stored data, including signed-in sessions, rather than open
+tabs. Load preserves identity metadata and allowed sites; confirm the copy warning.
+**Release** requests cleanup of a previous-session hold. It preserves saved browser
+data, does not stop a live session, and refuses when ownership cannot be verified.
+[CITED: `../ui/src/identities/IdentitiesDialog.vue`, `../ui/src/identities/StoredDataSlots.vue`]
+
+The catalog lists installed host apps and recent apps; they launch Host program
+without isolation.
+[CITED: `../ui/src/catalog/CatalogLauncher.vue`]
 
 ## Program capsule
 
@@ -134,22 +151,25 @@ press **Stop** on that old tile before attaching again. arm64 — both verified.
 
 ## Terminal and the prompt buttons
 
-**Shows:** a terminal for your AI and prompts for distinct tasks. Open **More ▾ →
-Terminal**. Use **🚀 Bootstrap** or **Use MetaViewer** to copy the public entry
-prompt, then paste it into your chosen AI. Use the terminal's task buttons:
+**Shows:** the paired terminal dock and capsule drawer. Open **Terminal** on the
+right or the capsule's terminal control. Pairing opens a host shell for that capsule;
+it does not prove an agent is running. Choose **＋ New terminal**, an installed agent
+profile, or **Custom CLI → Launch**. Use the task buttons in the paired terminal:
 
 | Button | What to ask your AI to do | Success evidence |
 | --- | --- | --- |
-| Automate | Create a reviewed workflow from a demonstration | Reviewed workflow and its checks, before use |
-| Use automation | Select and run a stored workflow | Run report and verified outcome |
-| No automation | Operate an observed goal without storing a workflow | Fresh observation and bounded action receipts |
+| Create automation | Create a reviewed workflow from a demonstration | Reviewed workflow and its checks, before use |
+| Run automation | Select and run a stored workflow | Run report and verified outcome |
+| Direct task | Operate an observed goal without storing a workflow | Fresh observation and bounded action receipts |
 
-These buttons copy prompts; copying does not execute a goal. Use the capsule
+These buttons copy prompts ending in `Task: ` with the actual paired capsule identity.
+Paste into an agent CLI, add your task and submit it. Automatic insertion is withheld
+until the host can attest the foreground agent input target. Copying does not execute a goal. Use the capsule
 **ID** / **Copy ID for AI** and the app's **Copy env path** to identify the actual
 running capsule. Never put credentials in prompts.
 
 **If refused:** inspect clipboard/terminal feedback; `TERMINAL_UNAVAILABLE` means
-the terminal is unavailable in this build. Use an external terminal with the
+the paired terminal dock and drawer cannot open a session in this build. Use an external terminal with the
 same attachment. A copied prompt is not proof that an AI CLI is installed.
 
 **Architecture:** x64 and arm64 — available, no separate live result supplied.
@@ -307,6 +327,12 @@ it does not itself create a stored automation.
 
 **Architecture:** x64 and arm64 — available, not verified live separately.
 
+Settings has a **Recording** card for frame rate, recording and screenshot folders,
+and RAM or disk-on-stop storage. Recording folder changes apply at the next app
+start and host environment settings take priority; screenshot folder changes apply
+now. Automatic saving waits for an active folder; failed exports retain RAM capture.
+[CITED: `../ui/src/settings/MvSettingsPanel.vue`]
+
 ## Stop and clean up
 
 **Shows:** explicit lifecycle cleanup. Stop recording and inspect temporary
@@ -345,7 +371,10 @@ available, separate cleanup verification not documented here.
 | Stop | Verified | Available; separate cleanup verification absent |
 | Open network with firewall step | Public site HTTP 200 [MEASURED]; local network and Docker bridge blocked | Separate Open result absent |
 | Public internet without Open mode | Not available | Legacy policy grants no public destinations |
-| VM capsules | Not verified live | Not verified live |
+| VM, MicroVM and rewind | VM and MicroVM not in this release | Developer setup only; verified local assets required; not a judge install |
+
+Windows 10 WSL has no nested KVM. ARM64 VM, MicroVM and rewind require
+[developer setup](ARM64_CAPSULE_SETUP.md); this tour does not install them.
 
 Sources: the live checks above and the linked code.
 This tour's claims are limited to the supplied evaluation statements and this checkout.

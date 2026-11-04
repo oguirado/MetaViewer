@@ -6,6 +6,6 @@ const stub=defineComponent({render:()=>null});
 export function addOperatorStubs(deps) {
   // Use the real router introduced by the integrated workload branch.
   deps['./workloadPanelParams.js'] ??= workloadPanelParams;
-  for(const path of ['./demo/DemoDialog.vue','./identities/IdentitiesDialog.vue','./handoff/HandoffNotice.vue','../netmode/NetworkPanel.vue']) deps[path]??=stub;
+  for(const path of ['@openvue/icons/windowmaximize','../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue','./demo/DemoDialog.vue','./identities/IdentitiesDialog.vue','./handoff/HandoffNotice.vue','../netmode/NetworkPanel.vue']) deps[path]??=stub;
   return deps;
 }

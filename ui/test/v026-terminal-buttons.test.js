@@ -225,6 +225,8 @@ test('workflow copy guard rejects a shell-write mutant',async()=>{
 test('workflow copy and Identities use the requested plain labels',()=>{
   const deck=readFileSync(new URL('../src/terminal/TerminalDeckView.vue',import.meta.url),'utf8');
   for(const label of ['Create automation','Run automation','Direct task'])assert(deck.includes(`label:'${label}'`));
-  assert.match(deck,/controller\.useWorkflowPrompt\(action\.kind, workflowIdentity, pairMatchesTarget/);
+  assert.match(deck,/@click="chooseWorkflow\(action\.kind\)"/);
+  assert.match(deck,/if\(!pairMatchesTarget\.value \|\| !focusedPair\.value\) return controller\.useWorkflowPrompt\(kind,workflowIdentity\.value,null\)/);
+  assert.match(deck,/controller\.prepareAgentPrompt\(choice\.kind,pair\.identityLine,pair\.slotId,profileId,current\)/);
   assert.match(readFileSync(new URL('../src/identities/IdentitiesDialog.vue',import.meta.url),'utf8'),/description="Accounts and saved data for each capsule"/);
 });

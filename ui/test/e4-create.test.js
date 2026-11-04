@@ -128,6 +128,8 @@ async function compileApp(captured, transform = (s) => s, adaptersMod = hostAdap
     './agent/AgentLaneHost.vue': stub,
     './activity/ActivityStrip.vue': strip,
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
+    '@openvue/icons/windowmaximize': {render:()=>null},
+    '../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': {render:()=>null},
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     './wall/DesktopWorkspace.vue': wall,

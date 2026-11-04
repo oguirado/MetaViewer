@@ -87,6 +87,8 @@ async function loadApp(source) {
     './agent/AgentLaneHost.vue': stub,
     './activity/ActivityStrip.vue': stub,
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
+    '@openvue/icons/windowmaximize': {render:()=>null},
+    '../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': {render:()=>null},
     'capsule-ui-kit/ui': { UiButton: buttonStub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     './wall/DesktopWorkspace.vue': wallStub,

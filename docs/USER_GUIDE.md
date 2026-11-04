@@ -1,11 +1,12 @@
 # MetaViewer User Guide
 
-MetaViewer is a Linux desktop wall of isolated application capsules. The Rust core
+MetaViewer is a Linux desktop wall of application capsules; Host program and Desktop window are not isolated. The Rust core
 admits and journals actions; the Electron wall paints frames and sends typed intents.
+`wender-agent`, `vision-engine` and `OpenSuperficies` are fully private.
 Multiple capsules share host RAM admission; current live performance is not measured
 by this documentation update. Historical results are scoped in the [README](../README.md#historical-live-evidence).
 
-This guide covers the `0.2.0` candidate and subsequent unreleased features
+This guide covers the current checkout and changes intended for `0.2.6` [TARGET], while VERSION remains the release authority
 [CITED: `../VERSION`, `../CHANGELOG.md`]. See [INSTALL.md](INSTALL.md) for host
 setup and [TESTING.md](TESTING.md) for verification.
 
@@ -45,7 +46,7 @@ I run the full `11`-leg `[MEASURED: bash tools/gate.sh]` verification gate (`man
 
 ### Launch the stack
 
-1. **Start `metaviewer-core`:** requires `MV_CORE_CONFIG` pointing at a JSON configuration file (`session_id`, one `core` registration, and `peers` containing one `agent` and one `daemon` registration, each carrying a `hello/v0.2` matching component version `0.2.0` [CITED: `../VERSION`]) and `XDG_RUNTIME_DIR` for `$XDG_RUNTIME_DIR/metaviewer/core.sock`:
+1. **Start `metaviewer-core`:** requires `MV_CORE_CONFIG` pointing at a JSON configuration file (`session_id`, one `core` registration, and `peers` containing one `agent` and one `daemon` registration, each carrying a `hello/v0.2` with its declared component version [CITED: `../core/src/serve/mod.rs`]) and `XDG_RUNTIME_DIR` for `$XDG_RUNTIME_DIR/metaviewer/core.sock`:
 
    ```sh
    MV_CORE_CONFIG=/absolute/path/to/core-config.json \
@@ -87,13 +88,13 @@ I run the full `11`-leg `[MEASURED: bash tools/gate.sh]` verification gate (`man
 
 ## 2. Window layout
 
-The window is a kit shell with a top bar, a navigation rail, the capsule wall, a side terminal, an activity strip, and a status bar:
+The shell has three columns [CITED: `ui/src/App.vue`]: the left working tree, the center capsule wall, and the paired terminal dock. A top bar, activity strip and status bar provide controls and feedback:
 
-- **Navigation:** the left working tree groups Humans and Agents, then desktops and their capsules. Desktop cards show real capsule counts; selecting a capsule switches to its desktop and restores its tile. The collapsed rail retains view counts and a pending-handoff indicator. The center row offers Find a capsule, grid choices and Add capsule.
-- **Rail:** a collapsible overlay sidebar with one `Workspace` group (`Add capsule` plus one entry per connected surface).
+- **Navigation:** the left working tree groups Humans and Agents, then desktops and their capsules. Desktop cards show real capsule counts; selecting a capsule switches to its desktop and restores its tile. The collapsed rail retains view counts and a pending-handoff indicator. The center row offers Find a capsule, compact grid presets and Add capsule. Preset tooltips give full names; Custom grid (⋯) sets Rows and Columns for Control-drag snapping. New floating tiles take the next free cell where possible.
+- **Left tree:** expand or collapse navigation to select Humans, Agents, desktops and capsules.
 - **Wall:** a dockview tile workspace with one panel per capsule (`240x200` `[TARGET]` minimum tile size in `ui/src/wall/WallWorkspace.vue`), supporting tabs, splits, and floating panels.
-- **Side terminal:** a right-side resizable `xterm.js` overlay toggled with `Terminal`. A package built without native terminal support (no `node-pty` in the package) cannot open a session: the overlay and the launch controls report `TERMINAL_UNAVAILABLE: terminal support is not bundled in this package` (`ui/electron/terminalHost.js`, `ui/src/terminal/BrokerLaunchControls.vue`) instead of a blank terminal.
-- **Activity strip:** above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
+- **Paired terminal dock and drawer:** open Terminal on the right or the capsule terminal control. A paired terminal can appear in the capsule drawer. A package built without native terminal support (no `node-pty` in the package) cannot open a session: the terminal and the launch controls report `TERMINAL_UNAVAILABLE: terminal support is not bundled in this package` (`ui/electron/terminalHost.js`, `ui/src/terminal/BrokerLaunchControls.vue`) instead of a blank terminal.
+- **Activity strip:** in the left navigation above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
 - **Status bar:** shows the current view crumb (`Main wall`), `Core connected` / `Core not connected`, and the active capsule count.
 - **Settings:** switches the window between `Dark` (`mv-dark`, default) and `Light` themes live. An existing saved theme remains selected.
 
@@ -101,9 +102,14 @@ The window is a kit shell with a top bar, a navigation rail, the capsule wall, a
 
 ## 3. Opening a capsule surface and nested depth (`AC-17`)
 
-I launch a capsule from the `Add capsule` button in the top bar or workspace rail, which opens `CatalogLauncher.vue` with the catalog kinds (`identity-browser`, `program`, `host-program`, `desktop-window` in `ui/src/catalog/catalogModel.js`), or through a `surface_request/v0.2` (`action: "create"`) request. Host program and Desktop window run on the computer and are not isolated.
+I launch a capsule from the `Add capsule` button in the top bar or left tree, which opens `CatalogLauncher.vue` with the catalog kinds (`identity-browser`, `program`, `host-program`, `desktop-window` in `ui/src/catalog/catalogModel.js`), or through a `surface_request/v0.2` (`action: "create"`) request. Host program and Desktop window run on the computer and are not isolated.
 
-Each tile header displays the capsule's human label alongside its lifecycle state and control badge (`SurfacePanel.vue`).
+The compact capsule header displays the capsule's human label alongside its lifecycle state and control badge (`SurfacePanel.vue`).
+
+The catalog lists installed host apps and recent apps as well as capsule kinds. These app entries launch Host program and are not isolated.
+[CITED: `../ui/src/catalog/CatalogLauncher.vue`]
+
+ARM64 VM, MicroVM and rewind require [developer setup](ARM64_CAPSULE_SETUP.md) and local verified assets; this is not a judge install. VM and MicroVM are arm64 only; x64 VM and MicroVM are not in this release. Windows 10 WSL has no nested KVM. Availability is checked by the host; a missing capability hides the catalog entry.
 
 ### Nested MetaViewer capsules (`nested_depth`)
 
@@ -134,8 +140,8 @@ When a capsule is under agent control (`control === "agent-acting"` in `ui/src/w
 
 ## 5. Take control, release control, and local view toggles
 
-- **Take control (`take_control`):** clicking **Take over** sends `ui_intent/v0.2` `take_control` (or `control_request/v0.1` `takeover`) to the core, which immediately closes agent admission for that surface, drains or cancels any in-flight agent proposal (`SURFACE_NOT_AGENT_CONTROLLED` / `human_active`), and switches the tile to `human-control`.
-- **Release control (`release_control`):** hands ownership back so agent observation and proposals can resume on a fresh frame generation.
+- **Take control (`take_control`):** clicking **Take control (emergency)** sends `ui_intent/v0.2` `take_control` (or `control_request/v0.1` `takeover`) to the core, which immediately closes agent admission for that surface, drains or cancels any in-flight agent proposal (`SURFACE_NOT_AGENT_CONTROLLED` / `human_active`), and switches the tile to `human-control`.
+- **Release control (`release_control`):** **Release** in the input strip hands ownership back so agent observation and proposals can resume on a fresh frame generation.
 - **Fold / Unfold (`AC-03`):** folding collapses the tile presentation and drains in-flight frames with `FOLD_DRAIN` while the capsule container keeps running; unfolding resumes live frame presentation on a new generation.
 - **Local `read` / `write` and hide / show toggles:** switching a surface between `read` and `write` input modes or hiding/showing a tile updates local renderer state without mutating or resetting the capsule's authority state in `metaviewer-core`.
 
@@ -187,6 +193,9 @@ I open the multislot screen with **Open in multislot** and return with **Back to
 Capture is RAM-first (`AC-07`, `ui/src/recording/MvRecordingPanel.vue`, `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`): while `idle`, zero bytes are written to disk. `MvRecordingPanel.vue` drives the per-capsule in-RAM capture state machine (`idle` -> `starting` -> `recording` -> `stopping` -> `sealed`, bounded at `16` MiB `[TARGET]` and `4096` `[TARGET]` frames in RAM) and in-RAM PNG screenshots (**Take screenshot**). Exporting to disk (**Save recording**, which writes a `ustar` archive of PNG frames to `MV_RECORDING_DESTINATION`) is only enabled after a recording reaches `sealed` and `MV_RECORDING_DESTINATION` is configured; live surfaces render through `ui/src/surfaces/SurfaceCanvas.vue`.
 
 `MvRecordingPanel.vue` queries `captureState.refresh(capsuleId)` (`ui/src/capture/capturePort.js` and `ui/src/recording/recordingModel.js`, backed by `window.metaviewer.capture.list()`) on initial mount, whenever the selected `capsuleId` or `captureState` store changes, after a screenshot, after a stop, and when a `sealed` capture event arrives. The capture facade has exactly six members: `screenshot`, `recordStart`, `recordStop`, `export`, `list` and `subscribe` (`ui/electron/preload.js`); there is no `status` member, so calling `window.metaviewer.capture.status(...)` in the developer tools throws a `TypeError`.
+
+Settings has a **Recording** card for frame rate, recording and screenshot folders, and **Keep in RAM** or **Save to disk when recording stops**. Recording folder changes apply at the next app start; host environment settings take priority. Screenshot folder changes apply immediately. Automatic saving waits for an active recording folder; if export fails the RAM capture remains available.
+[CITED: `../ui/src/settings/MvSettingsPanel.vue`]
 
 #### Frame rate and what a recording holds
 
@@ -248,14 +257,22 @@ Storyboard is not available in release 0.2.6 because its creative service is una
 
 ### Identities and login
 
-Open **Identities** in the top bar to list accounts, create an identity with an id,
+Open **Identities** in the left navigation to list accounts, create an identity with an id,
 account label and comma-separated domains, or delete an identity after confirmation.
+For an identity held by a previous session, **Release** requests verified stale-session cleanup. A live session is not stopped and saved browser data is retained; missing ownership evidence refuses release.
 Several accounts may share a site's domains; choose a distinct id and label for each.
 **Log in** opens the operator's loopback login view. Type credentials only there,
 complete login yourself and close the view before automation. Native reservation
 refuses agent input while login is open. The menu reports authentication as unknown;
 login history is not proof that the session is currently authenticated.
 [CITED: `../ui/src/identities/IdentitiesDialog.vue`, `../tools/mv_identity.py`]
+
+### Stored-data slots
+
+Select **Stored data** for an identity. Stop its capsule and close its login view first; protected or foreign profiles cannot manage slots. **Save** creates a named slot, **Overwrite** replaces it, **Load** replaces that identity's stored data, **Copy to a new capsule** copies into a new identity, and **Delete slot** removes only the saved slot. Load preserves identity metadata and allowed sites. Slots store data, not open tabs; signed-in sessions travel with the copy, as the confirmation warns. Review that warning before continuing.
+
+Keep MetaViewer open while an operation finishes. If verification fails, saved data is retained for recovery; if recovery is required, close and reopen MetaViewer before retrying. **Refresh slots** reloads the list.
+[CITED: `../ui/src/identities/StoredDataSlots.vue`]
 
 ### Capsule Network
 
@@ -292,10 +309,14 @@ Use **Create automation** to teach by demonstrating steps, **Run automation** to
 
 The prompt is copied to the clipboard. When a terminal is paired with a capsule, its actual identity is filled in. Paste the text into your agent CLI, never at a shell prompt; add your task and submit it when ready. Pairing does not identify the foreground process, so these buttons do not insert text or send Enter into the terminal. Automatic insertion remains unavailable until the host can attest an agent input target.
 
+Open **＋ New terminal** to choose an installed CLI profile or **Custom CLI**, then **Launch**. The paired session starts as a host shell; pairing alone does not launch an agent. Review terminal errors rather than treating a copied prompt as proof of launch.
+[CITED: `../ui/src/terminal/TerminalDeckView.vue`, `../ui/src/terminal/pairedTerminals.js`]
+
 ### Automate from a demo
 
-Open **Automate from a demo**, choose an existing running identity, and enter a
-**Demo id** and **Site name**. Log in yourself before recording and use dummy data:
+The live navigation exposes no **Automate from a demo** menu action. The retained
+developer dialog and CLI are documented in [AUTOMATE_FROM_DEMO.md](AUTOMATE_FROM_DEMO.md).
+The dialog uses an existing running identity, a **Demo id** and **Site name**. Log in yourself before recording and use dummy data:
 frames can reveal field contents, although recorded text events retain lengths only.
 
 - **Start** runs the host `tools/mv_demo.py record` command and provides a loopback
@@ -401,4 +422,10 @@ roles from the same source as their visible text.
 
 Wide capsule headers keep Record, Screenshot and Copy ID available as icon buttons. Narrow tiles reveal them on header hover or focus. Recording state stays in the header; hover does not resize the capsule view.
 
-Add capsule lists locally installed desktop applications before capsule kinds. Search matches app names and binaries. Recent contains only successful Host program launches made by MetaViewer. Applications run as Host programs, not isolated; choose Human or Agent before starting. Desktop launch arguments and field codes are not forwarded. Hidden, unavailable and terminal-only entries are omitted. The Host program binary field remains available as a fallback; isolated Program requires the executable in its own image.
+Add capsule lists capsule kinds first, followed by Recent and locally installed desktop applications. Each app section shows its Host program isolation warning once. Search matches app names and binaries. Recent contains only successful Host program launches made by MetaViewer. Applications run as Host programs, not isolated; choose Human or Agent before starting. Desktop launch arguments and field codes are not forwarded. Hidden, unavailable and terminal-only entries are omitted. The Host program binary field remains available as a fallback; isolated Program requires the executable in its own image.
+
+Settings → Recording chooses the recordings and screenshot export folders through native folder dialogs. The recordings folder is applied on the next application start; an explicit `MV_RECORDING_DESTINATION` remains authoritative. The default is Keep in RAM until I export. Save to disk when recording stops exports the sealed recording through the existing host grant; a failed export leaves the RAM capture available. Folder free space and available RAM are shown only when the host can read them. In disk mode, screenshots export when captured. Screenshot exports remain PNG-frame `.tar` archives; when a separate screenshot folder is selected, main copies the verified archive there, preserving the original journaled export in the recording grant.
+
+### Working tree names
+
+Double-click a desktop or capsule name, or focus it and press F2, to edit its display name. Enter saves and Escape cancels. Names are stored with the host layout; capsule identity and Copy ID do not change. Program icons come from the installed-app inventory when known, browser identities use a browser symbol, and unknown programs keep a generic mark. Live Host program and Desktop window isolation warnings remain visible while editing.

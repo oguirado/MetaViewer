@@ -1661,7 +1661,7 @@ test('V024-WALL-FIXES: mounted CatalogLauncher shows role and identity dialog wi
       },
     });
     globalThis.__v024CatalogDeps = {
-      '../../.kit/capsule-ui-kit/src/index-shell.js': { NewCapsuleDialog: KitNewCapsuleDialog },
+      './GroupedCapsuleDialog.vue': KitNewCapsuleDialog,
       './catalogModel.js': catalogModel,
     };
     const { descriptor } = parse(sfcSource);

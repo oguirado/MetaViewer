@@ -23,6 +23,8 @@ import AgentLaneHost from './agent/AgentLaneHost.vue';
 import ActivityStrip from './activity/ActivityStrip.vue';
 import { resolveNestedMode, applyNestedWall } from './nested/nested.js';
 import { UiButton } from 'capsule-ui-kit/ui';
+import BrowserIcon from '@openvue/icons/windowmaximize';
+import SidebarIcon from '../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 import { setKitScheme } from 'capsule-ui-kit/theme';
 import WallWorkspace from './wall/WallWorkspace.vue';
 import DesktopWorkspace from './wall/DesktopWorkspace.vue';
@@ -1592,26 +1594,73 @@ const rows = computed(() => {
  * @param {any[]} sourceRows
  * @param {import('../electron/desktopLayout.js').DesktopState} state
  * @param {string[]} pendingIds
- * @param {string[]} minimizedIds */
-function buildWorkingTree(sourceRows, state, pendingIds, minimizedIds) {
+ * @param {string[]} minimizedIds
+ * @param {{apps:any[],programs:any[],browsers:any[]}} [metadata] */
+function buildWorkingTree(sourceRows, state, pendingIds, minimizedIds, metadata = {apps:[],programs:[],browsers:[]}) {
   const pending = new Set(pendingIds), minimized = new Set(minimizedIds);
   return ['human','agent'].map(view => {
-    const desktops = state.views[view].desktops.map(desktop => ({id:desktop.id,capsules:sourceRows.filter(row => state.assignments[row.id]?.view === view && state.assignments[row.id]?.desktop === desktop.id).map(row => {
+    const desktops = state.views[view].desktops.map(desktop => ({id:desktop.id,label:desktop.label || `Desktop ${desktop.id}`,capsules:sourceRows.filter(row => state.assignments[row.id]?.view === view && state.assignments[row.id]?.desktop === desktop.id).map(row => {
+      const workload=row.kind==='guest-command' && row.snapshot?.session;
+      const program=metadata.programs.find(item=>item.profileId===row.profile_id);
+      const binary=program?.binary || (typeof row.hostWindow?.program==='string'?row.hostWindow.program:'');
+      const candidates=binary && !binary.includes('/')?metadata.apps.filter(item=>item.binary.split('/').pop()===binary):[];
+      const app=binary ? metadata.apps.find(item=>item.binary===binary) || (candidates.length===1?candidates[0]:null) : null;
+      const kind=workload?'microvm':program?'program':metadata.browsers.some(item=>item.profileId===row.profile_id)?'browser':'unknown';
       const needsYou = pending.has(row.id);
       const lost = row.backendLifecycle === 'lost';
       const error = Boolean(row.refusal || row.readinessError);
       const connecting = row.attachmentState !== 'live';
       const acting = row.aiSessionActivity === 'busy' || ['admitting','accepted','executing'].includes(row.dispatchOutcome);
-      const status = needsYou ? 'Needs you' : lost ? 'Lost' : error ? 'Error' : connecting ? 'Connecting' : minimized.has(row.id) || row.visibility === 'folded' ? 'Minimized' : acting && view === 'agent' ? 'Acting' : view === 'human' ? 'Human' : 'Agent';
+      const status = workload ? String(workload.phase) : needsYou ? 'Needs you' : lost ? 'Lost' : error ? 'Error' : connecting ? 'Connecting' : minimized.has(row.id) || row.visibility === 'folded' ? 'Minimized' : acting && view === 'agent' ? 'Acting' : view === 'human' ? 'Human' : 'Agent';
       const tone = needsYou || error ? 'attention' : lost ? 'lost' : connecting ? 'pending' : acting && view === 'agent' ? 'active' : 'quiet';
-      return {id:row.id,title:surfaceLabel(row),status,tone,needsYou,notIsolated:Boolean(row.hostWindow || row.hostXpra || row.notIsolated),symbol:needsYou || error ? '▲' : row.hostWindow || row.hostXpra ? '⚠' : lost ? '○' : connecting ? '◐' : acting && view === 'agent' ? 'ϟ' : '●'};
+      return {id:row.id,title:(state.labels && Object.hasOwn(state.labels,row.profile_id || row.id)?state.labels[row.profile_id || row.id]:undefined) || surfaceLabel(row),kind,icon:app?.icon || '',status,tone,needsYou,notIsolated:Boolean(row.hostWindow || row.hostXpra || row.notIsolated),symbol:needsYou || error ? '▲' : row.hostWindow || row.hostXpra ? '⚠' : lost ? '○' : connecting ? '◐' : acting && view === 'agent' ? 'ϟ' : '●'};
     })}));
     return {id:view,label:view === 'human' ? 'Humans' : 'Agents',desktops,count:desktops.reduce((n,d)=>n+d.capsules.length,0),needsYou:desktops.some(d=>d.capsules.some(c=>c.needsYou))};
   });
 }
 const treeHandoffs = ref(/** @type {string[]} */ ([]));
 const treeCollapsed = ref(/** @type {Record<string,boolean>} */ ({}));
-const navigationTree = computed(() => buildWorkingTree(rows.value,desktopState.value,treeHandoffs.value,closedPanels.value));
+const treeMetadata=ref(/** @type {{apps:any[],programs:any[],browsers:any[]}} */ ({apps:[],programs:[],browsers:[]}));
+let treeMetadataGeneration=0;
+async function refreshTreeMetadata() {
+  if(!nativeApi)return;
+  const generation=++treeMetadataGeneration;
+  const results=await Promise.allSettled([nativeApi.listApps?.(),nativeApi.programs?.(),nativeApi.choices?.()]);
+  if(!hostActive || generation!==treeMetadataGeneration)return;
+  const values=results.map(result=>result.status==='fulfilled'?result.value:null);
+  treeMetadata.value={
+    apps:Array.isArray(values[0]?.apps)?values[0].apps.slice(0,256).filter((/** @type {any} */ item)=>item && typeof item.binary==='string' && typeof item.icon==='string' && /^data:image\/(?:png|svg\+xml);base64,/.test(item.icon)):[],
+    programs:Array.isArray(values[1])?values[1].filter(item=>item && typeof item.profileId==='string' && typeof item.binary==='string'):[],
+    browsers:Array.isArray(values[2])?values[2].filter(item=>item && typeof item.profileId==='string'):[],
+  };
+}
+watch([()=>rows.value.map(row=>row.profile_id || row.id).join('\n'),()=>launcherOpen.value],()=>{if(!launcherOpen.value)void refreshTreeMetadata();},{immediate:true});
+const navigationTree = computed(() => buildWorkingTree([...rows.value,...guestWorkloadTiles.value],desktopState.value,treeHandoffs.value,closedPanels.value,treeMetadata.value));
+const treeRename=ref(/** @type {any} */ (null));
+/** @param {string} kind @param {string} view @param {any} item */
+async function beginTreeRename(kind,view,item) {
+  const key=`${kind}:${view}:${item.id}`;
+  treeRename.value={key,kind,view,id:item.id,value:kind==='desktop'?item.label:item.title,busy:false,error:''};
+  await nextTick();document.getElementById(`tree-rename-${key}`)?.focus();
+  /** @type {HTMLInputElement|null} */ (document.getElementById(`tree-rename-${key}`))?.select();
+}
+async function saveTreeRename() {
+  const edit=treeRename.value;if(!edit || edit.busy)return;edit.busy=true;edit.error='';
+  try {
+    const saved=edit.kind==='desktop'?await wall.value?.renameDesktop?.(edit.view,edit.id,edit.value):await wall.value?.renameCapsule?.(edit.id,edit.value);
+    if(treeRename.value!==edit)return;
+    if(saved){treeRename.value=null;await restoreTreeNameFocus(edit);}else edit.error='Name could not be saved.';
+  } catch {if(treeRename.value===edit)edit.error='Name could not be saved.';}
+  finally {if(treeRename.value===edit)edit.busy=false;}
+}
+/** @param {any} edit */
+async function restoreTreeNameFocus(edit) {
+  await nextTick();if(treeRename.value!==null)return;
+  document.getElementById(edit.kind==='desktop'?`desktop-${edit.view}-${edit.id}`:`tree-capsule-${edit.id}`)?.focus();
+}
+async function cancelTreeRename() {const edit=treeRename.value;if(edit && !edit.busy){treeRename.value=null;await restoreTreeNameFocus(edit);}}
+
+
 /** @param {string} view @param {number} desktop */
 function treeDesktopExpanded(view,desktop) { return !treeCollapsed.value[`${view}/${desktop}`]; }
 /** @param {string} view @param {number} desktop */
@@ -1620,11 +1669,13 @@ function toggleTreeDesktop(view,desktop) { const key=`${view}/${desktop}`; treeC
 function selectTreeDesktop(view,desktop) { selectGlobalView(view); wall.value?.selectDesktop(desktop); treeCollapsed.value={...treeCollapsed.value,[`${view}/${desktop}`]:false}; }
 /** @param {string} id */
 async function selectTreeCapsule(id) {
-  if (!rows.value.some(row=>row.id === id)) return;
+  const workload=guestWorkloadTiles.value.find(row=>row.id===id);
+  if (!workload && !rows.value.some(row=>row.id === id)) return;
   const home=desktopState.value.assignments[id];
   if (!home) return;
   selectTreeDesktop(home.view,home.desktop);
   await nextTick();
+  if(workload){wall.value?.revealWorkload?.(id);selectedCapsuleId.value=id;return;}
   const result=wall.value?.revealSurface(id,'tab');
   if (result?.ok) { markPanelOpen(id); selectedCapsuleId.value=id; }
 }
@@ -1754,16 +1805,19 @@ onMounted(() => {
               </UiButton>
               <UiButton label="+" :id="desktopState.activeView === view.id ? 'desktop-add' : `desktop-add-${view.id}`" data-semantic-anchor="wall/desktop/add" class="mv-tree-add" :aria-label="`Add ${view.label.toLowerCase()} desktop`" :title="`Add ${view.label.toLowerCase()} desktop`" :disabled="!desktopStateLoaded || view.desktops.length >= MAX_DESKTOPS_PER_VIEW" @click="selectGlobalView(view.id); wall?.addDesktop()">+</UiButton>
             </div>
+            <p v-if="treeRename?.error && treeRename.view === view.id" class="mv-tree-rename-error" role="alert">{{ treeRename.error }}</p>
             <div class="mv-tree-desktops" :aria-label="`${view.label} desktops`">
               <section v-for="desktop in view.desktops" :key="desktop.id" class="mv-tree-desktop" :class="{ 'mv-tree-desktop--active': desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id }">
                 <div class="mv-tree-desktop-heading">
                   <UiButton :id="`tree-fold-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/tree/${view.id}/${desktop.id}/fold`" :label="treeDesktopExpanded(view.id,desktop.id) ? 'Collapse desktop' : 'Expand desktop'" class="mv-tree-fold" :aria-label="`${treeDesktopExpanded(view.id,desktop.id) ? 'Collapse' : 'Expand'} ${view.label} desktop ${desktop.id}`" :aria-expanded="treeDesktopExpanded(view.id,desktop.id)" @click="toggleTreeDesktop(view.id,desktop.id)">{{ treeDesktopExpanded(view.id,desktop.id) ? '▾' : '▸' }}</UiButton>
-                  <UiButton :label="`Desktop ${desktop.id}`" :id="`desktop-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view.id}/${desktop.id}`" class="mv-tree-desktop-button" :aria-pressed="desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id" @click="selectTreeDesktop(view.id,desktop.id)"><span class="mv-tree-desktop-content"><span>Desktop {{ desktop.id }}</span><span class="mv-tree-count">{{ desktop.capsules.length }}</span></span></UiButton>
+                  <input v-if="treeRename?.key === `desktop:${view.id}:${desktop.id}`" :id="`tree-rename-${treeRename.key}`" :data-semantic-anchor="`wall/tree/rename/${view.id}/${desktop.id}`" v-model="treeRename.value" class="mv-tree-rename" aria-label="Rename desktop" maxlength="80" :disabled="treeRename.busy" @keydown.enter.stop.prevent="saveTreeRename" @keydown.esc.stop.prevent="cancelTreeRename" />
+                  <UiButton v-else :label="desktop.label" :id="`desktop-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view.id}/${desktop.id}`" class="mv-tree-desktop-button" :aria-pressed="desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id" @click="selectTreeDesktop(view.id,desktop.id)" @dblclick.stop="beginTreeRename('desktop',view.id,desktop)" @keydown.f2.stop.prevent="beginTreeRename('desktop',view.id,desktop)"><span class="mv-tree-desktop-content"><span>{{ desktop.label }}</span><span class="mv-tree-count">{{ desktop.capsules.length }}</span></span></UiButton>
                 </div>
                 <ul v-if="treeDesktopExpanded(view.id,desktop.id)" class="mv-tree-capsules" :aria-label="`${view.label} desktop ${desktop.id} capsules`">
                   <li v-for="capsule in desktop.capsules" :key="capsule.id">
-                    <UiButton :label="capsule.title" :id="`tree-capsule-${capsule.id}`" :data-semantic-anchor="`wall/tree/${capsule.id}`" class="mv-tree-capsule" :class="{ 'mv-tree-capsule--selected': selectedCapsuleId === capsule.id }" :title="`${capsule.title} · ${capsule.status}${capsule.notIsolated ? ' · Not isolated' : ''}`" :aria-label="`${capsule.title}, ${capsule.status}${capsule.notIsolated ? ', Not isolated' : ''}`" @click="selectTreeCapsule(capsule.id)">
-                      <span class="mv-tree-capsule-content"><span class="mv-tree-signal" :data-tone="capsule.tone" aria-hidden="true">{{ capsule.symbol }}</span><span class="mv-tree-capsule-copy"><span class="mv-tree-capsule-name">{{ capsule.title }}</span><span class="mv-tree-capsule-meta"><span class="mv-tree-capsule-status" :data-tone="capsule.tone">{{ capsule.status }}</span><span v-if="capsule.notIsolated" class="mv-tree-isolation">Not isolated</span></span></span></span>
+                    <span v-if="treeRename?.key === `capsule:${view.id}:${capsule.id}`" class="mv-tree-name-edit"><input :id="`tree-rename-${treeRename.key}`" :data-semantic-anchor="`wall/tree/rename/${capsule.id}`" v-model="treeRename.value" class="mv-tree-rename" aria-label="Rename capsule" maxlength="80" :disabled="treeRename.busy" @keydown.enter.stop.prevent="saveTreeRename" @keydown.esc.stop.prevent="cancelTreeRename" /><span v-if="capsule.notIsolated" class="mv-tree-isolation">Not isolated</span></span>
+                    <UiButton v-else :label="capsule.title" :id="`tree-capsule-${capsule.id}`" :data-semantic-anchor="`wall/tree/${capsule.id}`" class="mv-tree-capsule" :class="{ 'mv-tree-capsule--selected': selectedCapsuleId === capsule.id }" :title="`${capsule.title} · ${capsule.status}${capsule.notIsolated ? ' · Not isolated' : ''}`" :aria-label="`${capsule.title}, ${capsule.status}${capsule.notIsolated ? ', Not isolated' : ''}`" @click="selectTreeCapsule(capsule.id)" @dblclick.stop="beginTreeRename('capsule',view.id,capsule)" @keydown.f2.stop.prevent="beginTreeRename('capsule',view.id,capsule)">
+                      <span class="mv-tree-capsule-content"><img v-if="capsule.icon" :src="capsule.icon" class="mv-tree-program-icon" alt="" width="18" height="18" /><BrowserIcon v-else-if="capsule.kind === 'browser'" class="mv-tree-program-icon" aria-hidden="true"/><SidebarIcon v-else-if="capsule.kind === 'microvm'" name="box" class="mv-tree-program-icon" /><span v-else class="mv-tree-program-icon" aria-hidden="true">◇</span><span class="mv-tree-signal" :data-tone="capsule.tone" aria-hidden="true">{{ capsule.symbol }}</span><span class="mv-tree-capsule-copy"><span class="mv-tree-capsule-name">{{ capsule.title }}</span><span class="mv-tree-capsule-meta"><span class="mv-tree-capsule-status" :data-tone="capsule.tone">{{ capsule.status }}</span><span v-if="capsule.notIsolated" class="mv-tree-isolation">Not isolated</span></span></span></span>
                     </UiButton>
                   </li>
                   <li v-if="!desktop.capsules.length" class="mv-tree-empty">No capsules</li>

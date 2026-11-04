@@ -1293,7 +1293,7 @@ try {
 const { app, protocol, BrowserWindow } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {}, removeAllListeners: () => {}, whenReady: async () => {} }, protocol: null }));
 const mainModule = await import('./main.js');
 const { mainDirectEntry, validateRetailLaunch } = mainModule;
-const { scrubChildEnv, validateKillTarget } = await import('./coreLauncher.js');
+const { scrubChildEnv, validateKillTarget, applySavedCapturePreferences } = await import('./coreLauncher.js');
 const retail = validateRetailLaunch(process.argv.slice(1), process.env);
 if (!retail.ok) {writeFdSync(2, retail.code + ': retail launch refused');app.exit(1);}
 else if (process.argv.includes('--nested-depth=1')) {
@@ -1479,6 +1479,11 @@ try {
     process.env.SRF_PROXY_REGISTRY = process.env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
     process.env.MV_ADAPTER_BIN = join(resourcesPath, 'bin/mv-daemon-adapter');
     delete process.env.MV_CORE_BOOTSTRAP;
+    if (typeof app.getPath === 'function') {
+      const captureEnv = applySavedCapturePreferences(process.env, join(app.getPath('userData'),'capture-preferences.json'));
+      if(captureEnv.MV_RECORDING_DESTINATION!==undefined) process.env.MV_RECORDING_DESTINATION=captureEnv.MV_RECORDING_DESTINATION;
+      if(captureEnv.MV_CAPTURE_PREFERENCES_ERROR) process.env.MV_CAPTURE_PREFERENCES_ERROR=captureEnv.MV_CAPTURE_PREFERENCES_ERROR;
+    }
     const coreEnv = {...scrubChildEnv(process.env, runtime), ...(rewindCoreEnabled && agentInstance ? {MV_REWIND_ENABLED:'1'} : {}), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
     core = spawn(join(resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
     let failure;

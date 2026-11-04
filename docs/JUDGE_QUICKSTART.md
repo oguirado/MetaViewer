@@ -10,8 +10,8 @@ capsules.
 
 - **Point your own AI at [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md)**: a single,
   self-contained guide that lets your AI install, configure, verify, and explain
-  every feature of MetaViewer (views, desktops, tile presets, browser/program/X11
-  capsules, human/agent hand-off, terminals, `Bootstrap`, identities, `Use MetaViewer`,
+  the supported judge flows (left tree, desktops, tile presets, browser/program/X11
+  capsules, human/agent hand-off, paired terminals, identities, `Use MetaViewer`,
   and MemoryWeb / `mw_run` automation).
 - Full build and environment reference: [INSTALL.md](INSTALL.md).
 - Operator walkthrough: [USER_GUIDE.md](USER_GUIDE.md).
@@ -208,10 +208,16 @@ command itself does not install npm packages.
 bash scripts/judge/metaviewer-judge.sh run
 ```
 
+The shell defaults to Dark unless a saved theme overrides it. Its three columns
+[CITED: `../ui/src/App.vue`, `../ui/src/settings/settingsModel.js`] hold the left tree,
+center wall and paired terminal dock. Storyboard is not available in live navigation.
+The launcher shows installed host apps. Custom grid (⋯) sets snapping rows and columns; newly
+floating tiles use the next free cell where possible.
+
 The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 `:101`, `mv-live-3` on `:102`, `mv-live-4` on `:103`):
 
-- Switch between **`Humans`** and **`Agents`** views (`Ctrl+Tab`), create virtual
+- Use the left **`Humans`** / **`Agents`** tree to select desktops and capsules, create virtual
   desktops (`+`, `Ctrl+1..9`), and test tile layouts (`1` — one tile, `2` — two side by side,
   `2×2`, `3×2`, `Focus` — focus + strip, `Float` — floating layout). The compact
   controls retain descriptive accessible names and tooltips.
@@ -222,11 +228,23 @@ The wall opens with a 4-capsule profile pool (`judge` on `:100`, `mv-live-2` on
 - Log into a site in human mode and click **`Mark as logged in`** to save its login
   status. Then choose **`Switch to agent mode`** separately to hand the capsule to
   the agent; watch live read-only, or click **`Take control (emergency)`**.
-- Click **`ID`** (**`Copy ID for AI`**), open **`More ▾ -> Terminal`**, click
-  **`🚀 Bootstrap`**, or click the top-bar **`Use MetaViewer`** button to connect an AI CLI.
+- Open the paired terminal dock or capsule drawer. Use **`＋ New terminal`** to select
+  an installed agent profile, or enter **`Custom CLI`** and **`Launch`**. Pairing starts a
+  host shell; it does not by itself launch an agent. **`Create automation`**,
+  **`Run automation`**, and **`Direct task`** prepare prompts ending in `Task: ` with
+  the paired identity. With an installed agent ready at its input prompt, the prompt is
+  pasted without Enter; type the task and submit it. Plain shells stay copy only.
+  These controls do not execute workflows.
 - Record a workflow and run `mw_run` from the terminal. There is no
   **`Automate from a demo`** menu action.
   Full step-by-step instructions: [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md).
+
+In **Identities**, **Stored data** manages saved slots (including signed-in sessions,
+not open tabs); stop the capsule and close login before using them. **Release**
+clears a verified previous-session hold without stopping a live session or deleting
+saved browser data. Settings has a **Recording** card for frame rate, storage mode
+and destination folders; review its next-start and host-override notices.
+See [USER_GUIDE.md](USER_GUIDE.md#stored-data-slots).
 
 ## 5. Stop
 
@@ -307,7 +325,7 @@ The kit never installs these optional host packages automatically.
 | `PKG_ARCH_MISMATCH` | Kit for the wrong architecture; download the other one |
 | `RAM_ADMISSION_REFUSED` | Free memory, or run `python3 tools/mv_ram_admission.py reclaim --dry-run` to review stale reservations |
 | `NET_OPEN_PREREQ` | Open network prerequisites are missing; the firewall step was declined or the build is not Open-ready; use legacy |
-| `TERMINAL_UNAVAILABLE` | The side terminal is not packaged in this build; the rest of the wall is unaffected |
+| `TERMINAL_UNAVAILABLE` | The paired terminal dock and drawer cannot open a session in this build; the rest of the wall is unaffected |
 
 Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_admission.go`,
 `daemon-adapter/internal/capsule/egress_policy.go`, `ui/electron/terminalHost.js`].
@@ -337,6 +355,6 @@ firewall witness is present, preflight requires `0.2.0` and refuses that image s
 The installer detects this before offering a new firewall. Retagging `0.1.1` would not establish Open support; the upstream source disables
 Open for its default image. Use a legacy-only kit without an active Open witness, or obtain a compatible Open kit.
 
-## ARM64 VM preview
+## ARM64 developer setup
 
-The ARM64 Linux VM capsule is a preview for ARM64 hosts with KVM and a configured template. It is not offered on x64; judges on x64 lose nothing from the supported judging flow. See [VM roadmap](../VM_MICROVM_ROADMAP.md) for the current scope and evidence limits.
+ARM64 VM, MicroVM and rewind require developer setup on arm64 with KVM and verified local assets; they are not a judge installation route. x64 VM and MicroVM are not in this release. Windows 10 WSL has no nested KVM. See [local ARM64 setup](ARM64_CAPSULE_SETUP.md) and the [VM roadmap](../VM_MICROVM_ROADMAP.md) for prerequisites and evidence limits.
