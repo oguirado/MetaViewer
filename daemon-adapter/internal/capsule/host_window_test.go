@@ -211,6 +211,22 @@ func TestHostWindowAttachDetachInputCaptureAndNoDisplaySlot(t *testing.T) {
 		t.Fatalf("key call = %v, want %v", got, wantKey)
 	}
 
+	// Host program input alone gets a dwell. The desktop-window call above
+	// is the negative control; the following type/click checks remain unchanged.
+	programBinding := m.bindings[sid1]
+	programBinding.NativeKind = "host-xpra"
+	m.bindings[sid1] = programBinding
+	holdParams, _ := jsonParams(sid1, "p-key-held", "agent", map[string]any{"type": "key", "keys": []string{"Return"}})
+	if _, err := m.Handle(context.Background(), req("input", holdParams)); err != nil {
+		t.Fatalf("held program key input failed: %v", err)
+	}
+	wantHeld := append(append([]string(nil), wantKey...), "--key-hold-ms", "80")
+	if got := runner.calls[len(runner.calls)-1]; !reflect.DeepEqual(got, wantHeld) {
+		t.Fatalf("held key call = %v, want %v", got, wantHeld)
+	}
+	programBinding.NativeKind = "host-window"
+	m.bindings[sid1] = programBinding
+
 	typeParams, _ := jsonParams(sid1, "p-type", "agent", map[string]any{"type": "type", "text": "hello world"})
 	if _, err := m.Handle(context.Background(), req("input", typeParams)); err != nil {
 		t.Fatalf("type input failed: %v", err)
