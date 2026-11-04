@@ -77,6 +77,26 @@ const scheme = ref(MV_PRIMARY_SCHEME);
 const density = ref(MV_DENSITY);
 const wallFps = ref(MV_DEFAULT_WALL_FPS);
 const recordingFps = ref(MV_DEFAULT_RECORDING_FPS);
+const captureHost = /** @type {any} */ (globalThis).metaviewerCapturePreferences;
+const captureOptions = ref(/** @type {any} */ (null)), captureOptionsError = ref(''), captureOptionsBusy = ref(false);
+/** @type {(()=>void)|null} */ let stopCapturePreferences = null;
+async function refreshCapturePreferences() {
+  if (!captureHost?.get) return;
+  try { const result=await captureHost.get(); if(!result?.ok)throw Error(result?.reason || 'Recording preferences are unavailable.');captureOptions.value=result; }
+  catch {captureOptionsError.value='Recording preferences are unavailable.';}
+}
+/** @param {string} action @param {string} value */
+async function changeCapturePreference(action,value) {
+  captureOptionsBusy.value=true;captureOptionsError.value='';
+  try {const result=await (action==='folder'?captureHost.chooseFolder(value):captureHost.setMode(value));
+    if(!result?.ok)throw Error(result?.reason || 'Recording preferences could not be saved.');captureOptions.value=result;
+  } catch(error){captureOptionsError.value=error instanceof Error?error.message:'Recording preferences could not be saved.';}
+  finally {captureOptionsBusy.value=false;}
+}
+/** @param {number|null} bytes */
+function freeSpaceText(bytes) {return typeof bytes==='number'&&Number.isFinite(bytes)?`${(bytes/(1024**3)).toFixed(1)} GiB free`:'Free space unavailable';}
+onMounted(()=>{void refreshCapturePreferences();if(captureHost?.subscribe)stopCapturePreferences=captureHost.subscribe(()=>{void refreshCapturePreferences();});});
+
 const refusal = ref(/** @type {{ code: string, reason: string }|null} */ (null));
 const ready = ref(false);
 const liveVerified = ref(false);
@@ -474,6 +494,7 @@ function onRecordingFpsChange(event) {
 
 onBeforeUnmount(() => {
   generation += 1;
+  stopCapturePreferences?.();
   persistRunner.cancel();
   clearFpsDecayTimer();
   if (stopFrames !== null) {
@@ -606,6 +627,19 @@ onBeforeUnmount(() => {
         />
       </label>
     </div>
+    <div v-if="captureOptions" class="mv4-capture-options">
+      <p>RAM: {{ freeSpaceText(captureOptions.ramFreeBytes) }}</p>
+      <p v-if="captureOptions.warning" role="alert">{{ captureOptions.warning }}</p>
+      <div class="mv4-capture-folder"><span><strong>Recordings</strong> · {{ captureOptions.recordings.label }}<small>{{ freeSpaceText(captureOptions.recordings.freeBytes) }}</small></span><button type="button" :disabled="captureOptionsBusy" id="settings/recordings-folder" data-semantic-anchor="settings/recordings-folder" aria-label="Choose recordings folder" @click="changeCapturePreference('folder','recordings')">Choose folder</button></div>
+      <div class="mv4-capture-folder"><span><strong>Screenshots</strong> · {{ captureOptions.screenshots.label }}<small>{{ freeSpaceText(captureOptions.screenshots.freeBytes) }}</small></span><button type="button" :disabled="captureOptionsBusy" id="settings/screenshots-folder" data-semantic-anchor="settings/screenshots-folder" aria-label="Choose screenshots folder" @click="changeCapturePreference('folder','screenshots')">Choose folder</button></div>
+      <label class="mv4-option"><input type="radio" id="settings/capture-mode-ram" data-semantic-anchor="settings/capture-mode-ram" aria-label="Keep in RAM until I export" name="capture-mode" :checked="captureOptions.mode==='ram'" :disabled="captureOptionsBusy" @change="changeCapturePreference('mode','ram')" />Keep in RAM until I export</label>
+      <label class="mv4-option"><input type="radio" id="settings/capture-mode-disk" data-semantic-anchor="settings/capture-mode-disk" aria-label="Save to disk when recording stops" name="capture-mode" :checked="captureOptions.mode==='disk-on-stop'" :disabled="captureOptionsBusy" @change="changeCapturePreference('mode','disk-on-stop')" />Save to disk when recording stops</label>
+      <p>Recording folder changes apply at the next app start. A host environment setting takes priority. Screenshot export folder changes apply now. In disk mode, screenshots export when captured.</p>
+      <p v-if="captureOptions.mode==='disk-on-stop'&&!captureOptions.active" role="status">Automatic saving is waiting for an active recording folder. Captures stay in RAM.</p>
+      <p v-if="captureOptions.lastSave" role="status">{{ captureOptions.lastSave.ok?'Capture saved.':'Export to the selected folder failed. The RAM capture is still available.' }}</p>
+    </div>
+    <p v-else>Recording folders are unavailable on this host.</p>
+    <p v-if="captureOptionsError" role="alert">{{ captureOptionsError }}</p>
     </section>
     </div>
     <p
@@ -623,3 +657,11 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped src="./settings.css"></style>
+
+<style scoped>
+.mv4-capture-options { display:grid; gap:12px; }
+.mv4-capture-options p { margin:0; color:var(--cuk-semantic-text-muted); }
+.mv4-capture-folder { display:flex; justify-content:space-between; align-items:center; gap:16px; }
+.mv4-capture-folder small { display:block; margin-top:4px; color:var(--cuk-semantic-text-muted); }
+.mv4-capture-folder button { padding:6px 10px; border:1px solid var(--cuk-semantic-border-subtle); border-radius:6px; color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-panel); }
+</style>

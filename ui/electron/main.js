@@ -2285,6 +2285,7 @@ export async function bootProductionMain(handles) {
   let displayBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let roleBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let operatorBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
+  let capturePreferences = /** @type {any} */ (null);
   let captureBridge = /** @type {{dispose:()=>Promise<void>} | null} */(null);
   let qaBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
   let frameDiagBridge = /** @type {{enabled:boolean, dispose:()=>Promise<void>} | null} */(null);
@@ -2348,6 +2349,8 @@ export async function bootProductionMain(handles) {
       }
       captureBridge = null;
     }
+    await capturePreferences?.dispose();
+    capturePreferences=null;
     if (roleBridge) {
       try { await roleBridge.dispose(); } catch { /* continue owned teardown */ }
       roleBridge = null;
@@ -2713,7 +2716,11 @@ export async function bootProductionMain(handles) {
       admit: (/** @type {unknown} */ event) => observeSender(event,contentsUnknown,PRIVILEGED_ORIGIN).verdict==='admit',
       openLogin: async (/** @type {string} */url) => { const {shell}=await import('electron'); await shell.openExternal(url); },
     });
-    if (!retail.nested) captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env});
+    if (!retail.nested) {
+      capturePreferences=(await import('./capturePreferencesBridge.js')).installCapturePreferencesBridge({ipcMain,contents:contentsUnknown,window:built,app:typed.app,dialog:typed.dialog,env:typed.env,
+        admit:(/** @type {unknown} */ event)=>observeSender(event,contentsUnknown,PRIVILEGED_ORIGIN).verdict==='admit'});
+      captureBridge = (await import('./captureBridge.js')).installCaptureBridge({ipcMain, contents:contentsUnknown, core, nested:retail.nested, env:typed.env,capturePreferences});
+    }
     if (!retail.nested) wireBridge = (await import('./authorityWire.js')).installAuthorityWire({ ...(typed.wire || {}), ipcMain,
       contents: contentsUnknown, core, env: typed.env, argv: typed.argv, capsuleStates,
       clipboard: (/** @type {any} */ (typed.wire))?.clipboard ?? {
