@@ -222,7 +222,8 @@ class SessionTests(Fixture):
     def test_ui_bus_policy_hides_manager_but_keeps_portal_services(self):
         policy = s.ui_bus_policy()
         self.assertIn('--filter', policy)
-        self.assertIn('--talk=org.freedesktop.portal.Desktop', policy)
+        self.assertIn('--talk=org.gtk.vfs.*', policy)
+        self.assertNotIn('--talk=org.freedesktop.portal.Desktop', policy)
         self.assertFalse(any('systemd' in x or x == '--talk=*' for x in policy))
         self.assertEqual(s.ui_bus_address(self.root), 'unix:path=' + str(self.root / 'host-runtime/ui-bus'))
 

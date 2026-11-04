@@ -564,10 +564,11 @@ def child_environment(value, root, agent, profile, transport, normal=None, hoste
 
 
 def ui_bus_policy():
-    # Keep desktop integration, but never expose the user manager to Chromium.
+    # Keep native desktop file/settings integration. Hide both the manager and
+    # the desktop portal: the latter can create dialogs on a different display.
+    # Electron falls back to the native GTK chooser on the admitted display.
     # Portal registration otherwise moves Electron out of its guardian scope.
-    return ['--filter', '--talk=org.freedesktop.portal.Desktop',
-            '--talk=org.freedesktop.portal.Documents', '--talk=org.freedesktop.Notifications',
+    return ['--filter', '--talk=org.freedesktop.portal.Documents', '--talk=org.freedesktop.Notifications',
             '--talk=org.a11y.Bus', '--talk=ca.desrt.dconf', '--talk=org.gtk.vfs.*']
 
 

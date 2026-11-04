@@ -1,1 +1,1 @@
-- Keep normal ARM64 sessions inside their guardian when Chromium registers desktop portals, preserving a filtered desktop bus and refusing an unavailable protected proxy.
+- Keep normal ARM64 sessions inside their guardian with a filtered desktop bus, native GTK folder dialogs on the admitted display and a protected proxy prerequisite.
