@@ -11,6 +11,9 @@ pub mod guest_command;
 pub mod headless;
 pub mod payload;
 pub mod rewind;
+pub mod role_switch;
+#[cfg(test)]
+mod role_switch_tests;
 mod schemas;
 pub use payload::Command;
 
@@ -254,6 +257,7 @@ fn preflight(raw: &str, limits: &WireLimits) -> Result<(), DecodeError> {
 /// Authentication, sequence and replay state remain shared on one connection.
 pub fn envelope_schema(body: &Command) -> &'static str {
     match body {
+        Command::RoleSwitchRequest(_) | Command::RoleSwitchResult(_) => "role_switch_envelope/v0.3",
         Command::GuestCommandObservation(_) => "guest_command_observation_envelope/v0.2",
         Command::RewindRequest(_) | Command::RewindEvent(_) => "rewind_envelope/v0.2",
         Command::HeadlessRequest(_)
@@ -289,6 +293,7 @@ pub fn decode_envelope_with_limits(
                 | "capsule_envelope/v0.2"
                 | "rewind_envelope/v0.2"
                 | "guest_command_observation_envelope/v0.2"
+                | "role_switch_envelope/v0.3"
         )
     }) || is_unknown_body_version(value["body"]["schema"].as_str())
         || value["body"]["schema"] == "hello/v0.2"
@@ -303,6 +308,7 @@ pub fn decode_envelope_with_limits(
         return Err(DecodeError::InvalidField);
     }
     let schema_name = match envelope.schema.as_str() {
+        "role_switch_envelope/v0.3" => "role_switch_envelope.schema.json",
         "guest_command_observation_envelope/v0.2" => {
             "guest_command_observation_envelope.schema.json"
         }

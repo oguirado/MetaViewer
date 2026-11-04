@@ -40,6 +40,7 @@ import { isDeepStrictEqual } from 'node:util';
 /** Exact capsule-family tag selection; hello, list and graphical traffic stay legacy.
  * @param {any} body */
 export function envelopeTagForBody(body) {
+ if(['metaviewer.role_switch/v0.3','metaviewer.role_switch_result/v0.3'].includes(body?.schema))return 'role_switch_envelope/v0.3';
  if(['rewind_request/v0.2','rewind_event/v0.2'].includes(body?.schema))return 'rewind_envelope/v0.2';
  if(body?.schema==='guest_command_observation/v0.2')return 'guest_command_observation_envelope/v0.2';
  return ['headless_request/v0.2','headless_event/v0.2','guest_command_request/v0.2','guest_command_event/v0.2'].includes(body?.schema)?'capsule_envelope/v0.2':'envelope/v0.2';
@@ -614,6 +615,23 @@ export async function createMainBindings({env = process.env, createMessageChanne
           || !id(layoutError.surface_id) || !id(layoutError.detail))) throw fail();
       for (const [key,item] of pending) {
         let result;
+        if (item.body.schema === 'metaviewer.role_switch/v0.3') {
+          if (body.schema === 'metaviewer.role_switch_result/v0.3' && body.request_id === key) {
+            const expected = item.body;
+            const keys = Object.keys(body).sort().join(',');
+            if (!['ok,request_id,role,schema,surface_id','code,ok,request_id,role,schema,surface_id'].includes(keys) ||
+                body.surface_id !== expected.surface_id || body.role !== expected.role || typeof body.ok !== 'boolean') throw fail();
+            const current = surfaces.get(expected.surface_id);
+            clearTimeout(item.timer);pending.delete(key);
+            if (!body.ok || current?.state !== 'active' || current.control !== expected.role) {
+              const code = typeof body.code === 'string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(body.code) ? body.code : 'CAPSULE_MODE_UNPROVEN';
+              item.reject(Object.assign(Error(code),{code}));
+            } else item.resolve(body);
+          } else if (body.schema === 'action_verdict/v0.2' && body.proposal_id === key && body.decision !== 'admitted') {
+            clearTimeout(item.timer);pending.delete(key);item.reject(Object.assign(Error('CAPSULE_MODE_REFUSED'),{code:'CAPSULE_MODE_REFUSED'}));
+          }
+          continue;
+        }
         // [TARGET, unit decision] Creates are serialized (SURFACE_CREATE_BUSY), so the single
         // in-flight create settles on: a created event of its profile; a contract-shaped error
         // whose surface_id is not a known surface (the adapter fills it with the request param or
@@ -1008,6 +1026,21 @@ export async function createMainBindings({env = process.env, createMessageChanne
         const key = randomUUID();
         return new Promise((resolve,reject) => {
           const timer = setTimeout(() => {pending.delete(key);reject(Object.assign(Error('CAPSULE_STOP_TIMEOUT'),{code:'CAPSULE_STOP_TIMEOUT'}));},90000);
+          pending.set(key,{body,resolve,reject,timer});
+          try {send(body,key);} catch {shutdown();}
+        });
+      },
+      /** Host-only explicit role transfer; no renderer-provided wire payload. */
+      async switchRole(/** @type {string} */ surfaceId, /** @type {string} */ role) {
+        if (!id(surfaceId) || !['human','agent'].includes(role) || surfaces.get(surfaceId)?.state !== 'active' ||
+            !live || disposed || journalEnded || nonInputPendingCount() >= MAX_ITEMS ||
+            [...pending.values()].some(item=>item.body.schema==='metaviewer.role_switch/v0.3' && item.body.surface_id===surfaceId)) {
+          throw Object.assign(Error('CAPSULE_MODE_REFUSED'),{code:'CAPSULE_MODE_REFUSED'});
+        }
+        const key=randomUUID();
+        const body={schema:'metaviewer.role_switch/v0.3',request_id:key,surface_id:surfaceId,role};
+        return new Promise((resolve,reject)=>{
+          const timer=setTimeout(()=>{pending.delete(key);reject(Object.assign(Error('CAPSULE_MODE_TIMEOUT'),{code:'CAPSULE_MODE_TIMEOUT'}));},30000);
           pending.set(key,{body,resolve,reject,timer});
           try {send(body,key);} catch {shutdown();}
         });

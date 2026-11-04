@@ -56,6 +56,7 @@ mod headless;
 mod journal_end;
 mod layout;
 mod rewind;
+mod role_switch;
 mod timings;
 mod tools;
 
@@ -216,6 +217,7 @@ pub struct Server {
     subscriptions: BTreeSet<(Endpoint, String)>,
     unsubscribed: BTreeSet<(Endpoint, String)>,
     human_inputs: BTreeMap<String, HumanInputPending>,
+    role_switch_surfaces: BTreeMap<String, crate::wire::payload::Surface>,
     headless_graphical_seen: bool,
     tool_state: tools::ToolState,
     capture: crate::record::capture::Host,
@@ -484,6 +486,7 @@ impl Server {
             subscriptions: BTreeSet::new(),
             unsubscribed: BTreeSet::new(),
             human_inputs,
+            role_switch_surfaces: BTreeMap::new(),
             headless_graphical_seen,
             journal_end: None,
             tool_state,
@@ -1423,6 +1426,15 @@ impl Server {
             (Component::Agent, Command::MvToolCall(call)) => {
                 return self.tool_call(peer, epoch, &env, call, boundary);
             }
+            (Component::Ui, Command::RoleSwitchRequest(request)) => {
+                return self.role_switch_request(now_ns, &env, request, boundary);
+            }
+            (Component::Daemon, Command::RoleSwitchResult(result)) => {
+                if epoch != self.authority.state().epoch {
+                    return Err(invalid("old executor"));
+                }
+                return self.role_switch_result(now_ns, &env, result, boundary);
+            }
             (Component::Ui | Component::Agent, Command::SurfaceRequest(request)) => {
                 if let crate::wire::payload::SurfaceRequest::Case5(input_req) = request.as_ref() {
                     if env.from.component == Component::Ui {
@@ -1539,6 +1551,23 @@ impl Server {
             (Component::Daemon, Command::SurfaceEvent(event)) => {
                 if epoch != self.authority.state().epoch {
                     return Err(invalid("old executor"));
+                }
+                if let SurfaceEvent::Case1(changed) = event.as_ref() {
+                    if changed.data.surface.state == SurfaceState::Active
+                        && self
+                            .authority
+                            .state()
+                            .role_switches
+                            .contains_key(&changed.data.surface.surface_id)
+                    {
+                        self.role_switch_surfaces.insert(
+                            changed.data.surface.surface_id.clone(),
+                            changed.data.surface.clone(),
+                        );
+                        self.authority
+                            .apply_with_witnesses(Input::SurfaceNotice, vec![boundary])?;
+                        return Ok(());
+                    }
                 }
                 if let SurfaceEvent::Case4(error) = event.as_ref() {
                     if error.data.code == "ADAPTER_SCHEMA" {

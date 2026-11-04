@@ -303,7 +303,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		_, sentFrame := frameIDs[body.ProposalID]
 		frameMu.Unlock()
 		isFrameRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "STALE_FRAME" && sentFrame
-		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" {
+		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "metaviewer.role_switch/v0.3" && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)
@@ -353,7 +353,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		_ = json.Unmarshal(in.Body, &op)
 		target := dataIn
 		item := queuedEnvelope{in: in, wait: ctrlGate}
-		if op.Op == "take_control" || op.Op == "release_control" {
+		if op.Op == "take_control" || op.Op == "release_control" || body.Schema == "metaviewer.role_switch/v0.3" {
 			done := make(chan struct{})
 			ctrlGate = done
 			item = queuedEnvelope{in: in, done: done}

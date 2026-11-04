@@ -100,7 +100,8 @@ impl Peer {
         write_frame(&mut self.socket, &env).await.unwrap();
     }
     fn envelope(&self, body: Value) -> Envelope {
-        decode_envelope(&json!({"schema":"envelope/v0.2","msg_id":format!("{}-{}", self.nonce_prefix,self.seq),"ts_ns":0,"from":self.registration.endpoint,"to":self.config.core.endpoint,"session_id":self.config.session_id,"seq":self.seq,"nonce":format!("{}-{}",self.nonce_prefix,self.seq),"body":body}).to_string()).unwrap()
+        let command: Command = serde_json::from_value(body.clone()).unwrap();
+        decode_envelope(&json!({"schema":crate::wire::envelope_schema(&command),"msg_id":format!("{}-{}", self.nonce_prefix,self.seq),"ts_ns":0,"from":self.registration.endpoint,"to":self.config.core.endpoint,"session_id":self.config.session_id,"seq":self.seq,"nonce":format!("{}-{}",self.nonce_prefix,self.seq),"body":body}).to_string()).unwrap()
     }
     async fn receive(&mut self) -> Envelope {
         // read_frame already enforces the transport's configured read deadline.
@@ -242,6 +243,75 @@ async fn created(daemon: &mut Peer, ui: &mut Peer) {
         .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":surface()}}))
         .await;
     ui.receive().await;
+}
+
+#[test]
+fn role_switch_correlates_daemon_ack_before_exposing_same_surface_authority() {
+    support::run(async {
+        let (_temp, server, task, mut daemon, mut agent, mut ui) = setup().await;
+        let mut s = surface();
+        s["kind"] = "browser".into();
+        s["control"] = "human".into();
+        daemon
+            .send(json!({"schema":"surface_event/v0.2","event":"created","data":{"surface":s}}))
+            .await;
+        ui.receive().await;
+        let hostile = json!({"schema":"metaviewer.role_switch/v0.3","request_id":"switch-1","surface_id":"surface-demo","role":"agent"});
+        agent.send(hostile).await;
+        agent.verdict("refused", Some("POLICY")).await;
+        let request_id = format!("{}-{}", ui.nonce_prefix, ui.seq + 1);
+        let request = json!({"schema":"metaviewer.role_switch/v0.3","request_id":request_id,"surface_id":"surface-demo","role":"agent"});
+        ui.send(request.clone()).await;
+        assert_eq!(
+            serde_json::to_value(daemon.receive().await.body).unwrap(),
+            request
+        );
+        assert!(
+            !server.lock().unwrap().authority.state().surfaces["surface-demo"].agent_controlled
+        );
+        let wrong = json!({"schema":"metaviewer.role_switch_result/v0.3","request_id":"wrong","surface_id":"surface-demo","role":"agent","ok":true});
+        daemon.send(wrong).await;
+        daemon.verdict("refused", Some("POLICY")).await;
+        assert!(server
+            .lock()
+            .unwrap()
+            .authority
+            .state()
+            .role_switches
+            .contains_key("surface-demo"));
+        s["control"] = "agent".into();
+        daemon
+            .send(
+                json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":s}}),
+            )
+            .await;
+        let result = json!({"schema":"metaviewer.role_switch_result/v0.3","request_id":request_id,"surface_id":"surface-demo","role":"agent","ok":true});
+        daemon.send(result.clone()).await;
+        let state = serde_json::to_value(ui.receive().await.body).unwrap();
+        assert_eq!(state["event"], "state_changed");
+        assert_eq!(state["data"]["surface"], s);
+        assert_eq!(
+            serde_json::to_value(ui.receive().await.body).unwrap(),
+            result
+        );
+        {
+            let mut lock = server.lock().unwrap();
+            let state = lock.authority.state();
+            assert!(state.surfaces["surface-demo"].agent_controlled);
+            assert!(state.surfaces["surface-demo"].refresh_after.is_some());
+            assert!(state.surfaces["surface-demo"].frame.is_none());
+            assert!(state.role_switches.is_empty());
+            assert!(lock
+                .authority
+                .apply(crate::admission::Input::TakeControl {
+                    surface_id: "surface-demo".into()
+                })
+                .unwrap()
+                .reason
+                .is_none());
+        }
+        close_server(server, task, daemon, agent, ui).await;
+    });
 }
 #[test]
 fn expired_publication_does_not_retire_daemon_or_admit_pixels() {

@@ -17,15 +17,17 @@ The adapter's profile reservation remains the identity exclusion boundary. Main
 also serializes opening and switching. A duplicate create retains
 `PROFILE_ALREADY_BOUND`. The UI's open operation instead reveals an existing tile
 in the same mode, or returns the existing surface and requested mode so the UI can
-offer “Close and reopen”. Hiding a tile is presentation only. “Stop capsule” is a
+offer “Switch mode”. Hiding a tile is presentation only. “Stop capsule” is a
 separate lifecycle action.
 
-A switch closes the native view and trace, awaits an acknowledged destroy, then
-opens the same identity in the other mode. The replacement receives a fresh native
-run and surface identity. Existing epoch and VERIFIED-frame admission checks remain
-in force. No previous frame is copied into the replacement. An uncertain stop
-blocks replacement and retains the adapter reservation; it cannot prove physical
-closure. A failed replacement leaves the acknowledged old lifetime destroyed.
+A switch closes the local native view and trace, then sends the additive
+`metaviewer.role_switch/v0.3` request in `role_switch_envelope/v0.3`. The core
+revokes input while the adapter changes the opening role of the same running
+surface. A correlated acknowledgement confirms the role; returning to agent mode
+requires a fresh frame before input is admitted. The browser process, tabs, page
+state, saved identity and session cookies stay in place. Legacy takeover/release
+still cannot change an opening role. Unsupported runtimes refuse explicitly and
+leave the capsule running. Stop remains an independently acknowledged destruction.
 
 Human openings do not take an initial agent capture, subscribe to frame polling,
 or start DISPLAY taps. The additive `role_surface` lifecycle read lets the renderer
@@ -165,8 +167,8 @@ empty-to-populated transition because the desktop host remains mounted.
 Role openings from the launcher and Identities select the requested global view
 before opening. A successful role reply assigns the returned lifetime to the
 matching view's active desktop and follows it. Revealing an existing capsule
-returns to its existing home. A mode switch assigns the replacement lifetime to
-the destination view's active desktop, then retires the acknowledged old panel.
+returns to its existing home. A mode switch moves the same lifetime to the
+destination view's active desktop without marking the running surface stopped.
 Stopped lifetimes cannot be re-admitted by a late projection delivery.
 
 The existing packaged layout load/save bridge stores a product presentation

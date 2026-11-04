@@ -33,6 +33,8 @@ use crate::wire::payload::{
 use crate::wire::Optional;
 use crate::{decode_envelope, Command, Component, Endpoint, Envelope, Refusal};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+mod role_switch_tests;
 use std::collections::{BTreeMap, BTreeSet};
 
 crate::wire::error_type!(AdmissionError {
@@ -228,6 +230,17 @@ pub enum Input {
     ReleaseControl {
         surface_id: String,
     },
+    BeginRoleSwitch {
+        sender: Endpoint,
+        request_id: String,
+        surface_id: String,
+        human: bool,
+    },
+    FinishRoleSwitch {
+        request_id: String,
+        surface_id: String,
+        success: bool,
+    },
     Drain {
         proposal_id: String,
         epoch: u64,
@@ -255,6 +268,14 @@ pub struct SlotOperation {
     pub sender: Endpoint,
     pub epoch: u64,
     pub event: CapsuleStateEvent,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleSwitchPending {
+    pub sender: Endpoint,
+    pub request_id: String,
+    pub human: bool,
+    pub prior_agent_controlled: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -287,9 +308,11 @@ pub struct CoreState {
     pub profile_create_extras: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     destroyed: BTreeSet<String>,
-    /// Immutable role inferred only from an authoritative human-owned creation.
+    /// Opening role inferred from creation, changed only by explicit correlated role transfer.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     human_roles: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub role_switches: BTreeMap<String, RoleSwitchPending>,
     seen: BTreeSet<String>,
     messages: BTreeSet<String>,
     lane_nonces: BTreeMap<String, BTreeSet<String>>,
@@ -327,6 +350,7 @@ impl CoreState {
             profile_create_extras: BTreeMap::new(),
             destroyed: BTreeSet::new(),
             human_roles: BTreeSet::new(),
+            role_switches: BTreeMap::new(),
             seen: BTreeSet::new(),
             messages: BTreeSet::new(),
             lane_nonces: BTreeMap::new(),
@@ -345,6 +369,10 @@ impl CoreState {
         let mut value = serde_json::json!({"surfaces":self.surfaces,"leases":self.leases,"pending":self.pending,"draining":self.draining,"destroyed":self.destroyed,"budget":self.remaining_budget,"epoch":self.epoch});
         if !self.human_roles.is_empty() {
             value["human_roles"] = serde_json::to_value(&self.human_roles)
+                .map_err(|_| AdmissionError::InvalidInput)?;
+        }
+        if !self.role_switches.is_empty() {
+            value["role_switches"] = serde_json::to_value(&self.role_switches)
                 .map_err(|_| AdmissionError::InvalidInput)?;
         }
         for (name, field) in [
@@ -784,6 +812,7 @@ impl CoreState {
                     }
                 }
                 if self.human_roles.contains(&p.surface_id)
+                    || self.role_switches.contains_key(&p.surface_id)
                     || self.is_destroyed(&p.surface_id)
                     || self.epoch == 0
                     || self.seen.contains(&p.proposal_id)
@@ -1105,7 +1134,9 @@ impl CoreState {
                 }
             }
             Input::TakeControl { surface_id } => {
-                if self.human_roles.contains(surface_id) {
+                if self.human_roles.contains(surface_id)
+                    || self.role_switches.contains_key(surface_id)
+                {
                     out.reason = Some(Refusal::Policy);
                     self.core_seq = next;
                     return Ok(out);
@@ -1127,6 +1158,7 @@ impl CoreState {
             }
             Input::ReleaseControl { surface_id } => {
                 if self.human_roles.contains(surface_id)
+                    || self.role_switches.contains_key(surface_id)
                     || self.draining.values().any(|sid| sid == surface_id)
                 {
                     out.reason = Some(Refusal::Policy);
@@ -1141,6 +1173,74 @@ impl CoreState {
                         s.agent_controlled = true;
                         s.refresh_after = Some(next);
                     }
+                }
+            }
+            Input::BeginRoleSwitch {
+                sender,
+                request_id,
+                surface_id,
+                human,
+            } => {
+                if sender.component != crate::wire::Component::Ui
+                    || request_id.is_empty()
+                    || request_id.len() > 128
+                    || self.role_switches.contains_key(surface_id)
+                    || self
+                        .role_switches
+                        .values()
+                        .any(|p| p.request_id == *request_id)
+                    || self.pending.values().any(|p| {
+                        p.request
+                            .proposal()
+                            .is_ok_and(|q| q.surface_id == *surface_id)
+                    })
+                    || self.draining.values().any(|sid| sid == surface_id)
+                    || self.leases.contains_key(surface_id)
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else if let Some(s) = self.surfaces.get_mut(surface_id).filter(|s| s.live) {
+                    self.role_switches.insert(
+                        surface_id.clone(),
+                        RoleSwitchPending {
+                            sender: sender.clone(),
+                            request_id: request_id.clone(),
+                            human: *human,
+                            prior_agent_controlled: s.agent_controlled,
+                        },
+                    );
+                    // No grant can precede the daemon's correlated acknowledgement.
+                    s.agent_controlled = false;
+                    s.refresh_after = Some(next);
+                } else {
+                    out.reason = Some(Refusal::Policy);
+                }
+            }
+            Input::FinishRoleSwitch {
+                request_id,
+                surface_id,
+                success,
+            } => {
+                let pending = self.role_switches.get(surface_id).cloned();
+                if let Some(p) = pending.filter(|p| p.request_id == *request_id) {
+                    if let Some(s) = self.surfaces.get_mut(surface_id).filter(|s| s.live) {
+                        if *success {
+                            s.agent_controlled = !p.human;
+                            if p.human {
+                                self.human_roles.insert(surface_id.clone());
+                            } else {
+                                self.human_roles.remove(surface_id);
+                            }
+                        } else {
+                            s.agent_controlled = p.prior_agent_controlled;
+                        }
+                        s.refresh_after = Some(next);
+                        s.frame = None;
+                        self.role_switches.remove(surface_id);
+                    } else {
+                        out.reason = Some(Refusal::Policy);
+                    }
+                } else {
+                    out.reason = Some(Refusal::Policy);
                 }
             }
             Input::Drain { proposal_id, epoch } => {

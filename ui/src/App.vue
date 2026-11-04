@@ -806,7 +806,7 @@ function onCapsuleLifecycle({surfaceId,completion}) {
   void submitHost(async () => {
     const result = await completion;
     if (!result.ok) throw Object.assign(Error(result.code),{code:result.code,...(typeof result.reason === 'string' && result.reason ? {reason:result.reason} : {})});
-    onCapsuleStopped(surfaceId);
+    if (!(result.reused === true && result.surfaceId === surfaceId)) onCapsuleStopped(surfaceId);
     if (result.surfaceId && !await revealOpenedIdentity(result.surfaceId,result.role)) throw Object.assign(Error('TILE_REVEAL_UNPROVEN'),{code:'TILE_REVEAL_UNPROVEN'});
     return true;
   });
@@ -839,7 +839,7 @@ async function confirmModeSwitch() {
       throw Object.assign(Error(result.code),{code:result.code,...(typeof result.reason === 'string' && result.reason ? {reason:result.reason} : {})});
     }
     await revealOpenedIdentity(result.surfaceId,result.role);
-    onCapsuleStopped(current.surfaceId);
+    if (!(result.reused === true && result.surfaceId === current.surfaceId)) onCapsuleStopped(current.surfaceId);
     return null;
   });
 }
@@ -2010,7 +2010,7 @@ onMounted(() => {
         <h3 class="s1-confirm-title">Switch capsule mode</h3>
         <p class="s1-confirm-body">This identity is open in {{ pendingModeSwitch.currentMode }} mode.</p>
         <div class="mv-mode-confirm__actions s1-confirm-footer">
-          <UiButton id="mode-switch-confirm" data-semantic-anchor="capsule/mode/confirm" :label="`Close and reopen in ${pendingModeSwitch.requestedMode} mode`" @click="confirmModeSwitch" />
+          <UiButton id="mode-switch-confirm" data-semantic-anchor="capsule/mode/confirm" :label="`Switch to ${pendingModeSwitch.requestedMode} mode`" @click="confirmModeSwitch" />
           <UiButton id="mode-switch-cancel" data-semantic-anchor="capsule/mode/cancel" label="Cancel" @click="pendingModeSwitch = null" />
         </div>
       </div>
