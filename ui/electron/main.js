@@ -3132,7 +3132,15 @@ async function mainDirectEntry() {
       if (error instanceof MainError) throw error;
       throw new MainError('PROTOCOL', 'privileged scheme registration refused');
     }
-    const bindings = await loadMainBindings();
+    const bindings = await loadMainBindings(process.env, {onSessionEnd: (/** @type {string} */ code) => {
+      const detail = code === 'JOURNAL_STOP_FAILED'
+        ? 'A capsule could not be stopped. Stop the remaining capsules before starting a new session.'
+        : 'New work is refused. Capsules are stopping in order. The accepted journal remains replayable. Start a new session.';
+      const readyApp = /** @type {{whenReady:()=>Promise<unknown>}} */ (electron.app);
+      const noticeDialog = /** @type {{showMessageBox:(options:object)=>Promise<unknown>}} */ (electron.dialog);
+      void readyApp.whenReady().then(() => noticeDialog.showMessageBox({type:'warning',title:'Session journal full',
+        message:'This session has reached its journal limit.',detail})).catch(() => {});
+    }});
     const boot = await bootProductionMain({ core:bindings.core, wire:bindings.wire, ...(bindings.adapter ? {adapter:bindings.adapter} : {}), electronVersion: running,
       app: electron.app, dialog: electron.dialog, BrowserWindow: electron.BrowserWindow, ipcMain: electron.ipcMain,
       protocol: electron.protocol, session: electron.session, argv, env: process.env,

@@ -1,0 +1,1 @@
+- End journal admission cleanly at capacity, flush accepted records, show a clear refusal, and stop capsules in order while keeping peers connected and the archive replayable.
