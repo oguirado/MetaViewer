@@ -198,6 +198,7 @@ fronten-42a09513c557	changes/unreleased/frontend-viewport-resize.md
 fronten-5717175eba13	changes/unreleased/frontend-working-tree.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 graphic-d6644d957c3e	changes/unreleased/graphical-qemu-session.md
+graphic-53c6d26a220b	changes/unreleased/graphical-rewind-custody.md
 graphic-7ebce61348e3	changes/unreleased/graphical-session-review-fixes.md
 graphic-194a2bad7a4f	changes/unreleased/graphical-vm-header.md
 graphic-7dd542f5cb3e	changes/unreleased/graphical-vm-projection.md

@@ -55,7 +55,30 @@ impl State {
         self.session.as_ref().filter(|s| s["ownership"] == "held").and_then(|s| s["surface_id"].as_str())
     }
     pub fn creator_can_stop(&self, surface_id: &str, caller: &crate::Endpoint) -> bool {
-        self.held_surface() == Some(surface_id) && self.creator.as_ref() == Some(caller)
+        caller.component == Component::Ui
+            && self.held_surface() == Some(surface_id)
+            && self.creator.as_ref() == Some(caller)
+    }
+    pub fn can_stop(
+        &self,
+        surface_id: &str,
+        caller: &crate::Endpoint,
+        registered_owner: Option<&crate::Endpoint>,
+    ) -> bool {
+        if self.creator_can_stop(surface_id, caller) {
+            return true;
+        }
+        if self.held_surface() != Some(surface_id)
+            || caller.component != Component::Agent
+            || registered_owner != Some(caller)
+        {
+            return false;
+        }
+        let owner_id = self.pending.as_ref()
+            .and_then(|pending| pending.request["owner_id"].as_str())
+            .or_else(|| self.session.as_ref().and_then(|session| session["owner_id"].as_str()));
+        let caller_id = crate::headless::actor_id(caller);
+        owner_id == Some(caller_id.as_str())
     }
     pub fn blocks_profile_create(&self, profile_id: &str, kind: &str, bindings: &BTreeMap<String, String>) -> bool {
         let Some(surface_id) = self.held_surface() else { return false; };
@@ -63,6 +86,21 @@ impl State {
             Some(held_profile) => held_profile == profile_id,
             None => kind == "vm",
         }
+    }
+    pub fn blocks_profile_registration(
+        &self,
+        profile_id: Option<&str>,
+        bindings: &BTreeMap<String, String>,
+        admitted_profile_creates: &BTreeSet<String>,
+    ) -> bool {
+        if self.held_surface().is_none() { return false; }
+        let Some(profile_id) = profile_id else { return true; };
+        if !admitted_profile_creates.contains(profile_id) {
+            return true;
+        }
+        // The admitted-profile set proves this profile passed its typed SurfaceRequest
+        // fence. Reuse that profile-scoping predicate for its later registration.
+        self.blocks_profile_create(profile_id, "browser", bindings)
     }
     pub fn saved_reply(&self, request_id: &str) -> Option<&Value> {
         self.history.get(request_id).map(|r| &r.reply)

@@ -104,6 +104,9 @@ impl Server {
         let Some(reply) = self.authority.state().graphical_session.saved_reply(
             pending.request["request_id"].as_str().unwrap_or(""),
         ).cloned() else { return Ok(()); };
+        if reply["event_id"] != format!("event-core-{}", self.authority.state().core_seq) {
+            return Ok(());
+        }
         let event: GraphicalSessionEvent = serde_json::from_value(reply)?;
         if self.connections.contains_key(&pending.caller) {
             let _ = self.send_at(now_ns, &pending.caller, Command::GraphicalSessionEvent(Box::new(event)));

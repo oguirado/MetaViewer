@@ -136,6 +136,80 @@ fn creator_can_stop_ready_graphical_session_after_human_takeover() {
 }
 
 #[test]
+fn registered_owner_agent_can_stop_held_vm_but_other_agents_cannot() {
+    let mut state = core();
+    let registered_owner = state.surfaces["surface-qemu"].owner.clone();
+    let attach_id = "request-owner-agent-stop";
+    assert!(submit(&mut state, ui(), request("attach", attach_id, None, None)).dispatch);
+
+    assert!(state.graphical_session.can_stop("surface-qemu", &agent(), Some(&registered_owner)));
+    assert!(!state.graphical_session.can_stop(
+        "surface-qemu", &ep(Component::Agent, "other-agent"), Some(&registered_owner)
+    ));
+    assert!(!state.graphical_session.can_stop(
+        "surface-qemu", &ep(Component::Ui, "other-ui"), Some(&registered_owner)
+    ));
+
+    let attached = event("attach", "completed", attach_id, 1, 1,
+        session("ready", 1, 1, vec![]), Value::Null, Value::Null);
+    assert_eq!(state.apply(&Input::GraphicalSessionEvent {
+        notice: attached, sender: daemon(), executor_epoch: 0,
+    }).unwrap().reason, None);
+    assert_eq!(state.apply(&Input::TakeControl { surface_id: "surface-qemu".into() }).unwrap().reason, None);
+    assert!(!state.surfaces["surface-qemu"].agent_controlled);
+    assert_eq!(state.apply(&Input::Lifecycle { surface_id: "surface-qemu".into(), update: LifecycleUpdate::Lost }).unwrap().reason, None);
+    assert!(state.graphical_session.can_stop("surface-qemu", &agent(), Some(&registered_owner)));
+    assert!(!state.graphical_session.can_stop("surface-qemu", &agent(), None));
+}
+
+#[test]
+fn scoped_create_registration_fence_allows_only_admitted_other_profiles() {
+    let mut state = core();
+    state.profile_surfaces.insert("surface-qemu".into(), "vm-profile".into());
+    assert!(submit(&mut state, ui(), request("attach", "request-attach", None, None)).dispatch);
+
+    let create: metaviewer_core::wire::payload::SurfaceRequest = serde_json::from_value(json!({
+        "schema":"surface_request/v0.2","op":"create","params":{
+            "kind":"browser","geometry":{"w":800,"h":600},"profile_id":"browser-profile"
+        }
+    })).unwrap();
+    assert_eq!(state.apply(&Input::SurfaceRequest { request: create }).unwrap().reason, None);
+    assert_eq!(state.apply(&Input::ProfileCreate { profile_id: "browser-profile".into() }).unwrap().reason, None);
+    let browser_surface = Surface {
+        display: "display-browser".into(), owner: agent(), agent_controlled: true,
+        live: true, frame: None, refresh_after: None, allowed_verbs: vec![],
+    };
+    let created = state.apply(&Input::ProfileLifecycle {
+        surface_id: "surface-browser".into(), profile_id: "browser-profile".into(),
+        update: LifecycleUpdate::Created(browser_surface.clone()),
+    }).unwrap();
+    assert_eq!(created.reason, None);
+    assert!(state.surfaces.contains_key("surface-browser"));
+    assert_eq!(state.profile_surfaces.get("surface-browser").map(String::as_str), Some("browser-profile"));
+
+    assert_eq!(state.apply(&Input::ProfileCreate { profile_id: "vm-profile".into() }).unwrap().reason, None);
+    let held_profile_created = state.apply(&Input::ProfileLifecycle {
+        surface_id: "surface-held-profile-extra".into(), profile_id: "vm-profile".into(),
+        update: LifecycleUpdate::Created(Surface {
+            display: "display-extra".into(), owner: agent(), agent_controlled: true,
+            live: true, frame: None, refresh_after: None, allowed_verbs: vec![],
+        }),
+    }).unwrap();
+    assert_eq!(held_profile_created.reason, Some(Refusal::Policy));
+    let unadmitted_created = state.apply(&Input::ProfileLifecycle {
+        surface_id: "surface-unadmitted".into(), profile_id: "unadmitted-profile".into(),
+        update: LifecycleUpdate::Created(Surface {
+            display: "display-unadmitted".into(), owner: agent(), agent_controlled: true,
+            live: true, frame: None, refresh_after: None, allowed_verbs: vec![],
+        }),
+    }).unwrap();
+    assert_eq!(unadmitted_created.reason, Some(Refusal::Policy));
+
+    let unscoped = state.apply(&Input::Surface { id: "surface-unscoped".into(), surface: browser_surface });
+    assert!(unscoped.is_err(), "an unscoped registration cannot prove it belongs outside the held session");
+}
+
+#[test]
 fn unrelated_browser_create_is_allowed_but_vm_fallback_and_bound_profile_are_fenced() {
     use metaviewer_core::wire::payload::SurfaceRequest;
     let mut state = core();
@@ -157,7 +231,22 @@ fn unrelated_browser_create_is_allowed_but_vm_fallback_and_bound_profile_are_fen
     let mut no_binding = core();
     assert!(submit(&mut no_binding, ui(), request("attach", "request-attach", None, None)).dispatch);
     assert_eq!(no_binding.apply(&Input::SurfaceRequest { request: create("browser", "browser-profile") }).unwrap().reason, None);
+    assert_eq!(no_binding.apply(&Input::ProfileCreate { profile_id: "browser-profile".into() }).unwrap().reason, None);
+    assert_eq!(no_binding.apply(&Input::ProfileLifecycle {
+        surface_id: "surface-browser".into(), profile_id: "browser-profile".into(),
+        update: LifecycleUpdate::Created(Surface {
+            display: "display-browser".into(), owner: agent(), agent_controlled: true,
+            live: true, frame: None, refresh_after: None, allowed_verbs: vec![],
+        }),
+    }).unwrap().reason, None, "an admitted non-VM create remains registrable without a held-profile binding");
     assert_eq!(no_binding.apply(&Input::SurfaceRequest { request: create("vm", "other-vm") }).unwrap().reason, Some(Refusal::Policy));
+    assert!(no_binding.apply(&Input::Surface {
+        id: "surface-unscoped-no-binding".into(),
+        surface: Surface {
+            display: "display-unscoped".into(), owner: agent(), agent_controlled: true,
+            live: true, frame: None, refresh_after: None, allowed_verbs: vec![],
+        },
+    }).is_err(), "unscoped registration stays refused when the held profile is unknown");
 }
 
 #[test]

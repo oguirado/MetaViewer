@@ -265,7 +265,6 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 	}
 	if g == nil {
 		g = &graphicalSessionState{surface: q.SurfaceID, run: b.RunID, requests: map[string]bool{}}
-		m.graphical = g
 	}
 	if g.busy || g.unknown || g.stopping || m.hasPending(q.SurfaceID) {
 		return refuse("BUSY")
@@ -310,6 +309,9 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 	}
 	work, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if m.graphical == nil {
+		m.graphical = g
+	}
 	g.cancel = cancel
 	g.busy = true
 	g.requests[q.RequestID] = true
@@ -334,6 +336,9 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 			m.mu.Lock()
 			g.busy = false
 			g.cancel = nil
+			if prior == nil && !g.unknown && m.graphical == g {
+				m.graphical = nil
+			}
 			m.mu.Unlock()
 			return encode(graphicalEvent(q, prior, "refused", "BUSY"))
 		}
@@ -490,9 +495,21 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 		}
 		m.mu.Lock()
 		current, live = m.bindings[q.SurfaceID]
-		if m.graphical != g || !live || current.Surface.State != "active" || g.stopping || m.destroying[q.SurfaceID] {
+		if m.graphical != g || g.stopping || m.destroying[q.SurfaceID] {
 			m.mu.Unlock()
 			return nil, nil
+		}
+		if !live || current.RunID != b.RunID || current.Surface.State != "active" {
+			g.busy = false
+			g.unknown = true
+			g.cancel = nil
+			if g.session != nil {
+				g.session.Phase = "outcome_unknown"
+				g.session.PendingRequestID = &q.RequestID
+			}
+			uncertain := graphicalEvent(q, g.session, "outcome_unknown", "OUTCOME_UNKNOWN")
+			m.mu.Unlock()
+			return encode(uncertain)
 		}
 		if captureErr != nil || !digest.MatchString(hash) || generation < 1 || generation > graphicalMaxInteger {
 			g.unknown = true

@@ -985,7 +985,11 @@ impl CoreState {
                     LifecycleUpdate::Created(surface) => {
                         if self.headless.held
                             || self.guest_command.held
-                            || self.graphical_session.pending.is_some()
+                            || self.graphical_session.blocks_profile_registration(
+                                profile.map(String::as_str),
+                                &self.profile_surfaces,
+                                &self.profile_creates,
+                            )
                             || surface_id.is_empty()
                             || surface.display.is_empty()
                             || surface.frame.is_some()
@@ -1072,7 +1076,11 @@ impl CoreState {
             }
             Input::Surface { id, surface } => {
                 if id.is_empty() || surface.display.is_empty() || self.surfaces.contains_key(id)
-                    || self.graphical_session.pending.is_some() {
+                    || self.graphical_session.blocks_profile_registration(
+                        None,
+                        &self.profile_surfaces,
+                        &self.profile_creates,
+                    ) {
                     return Err(AdmissionError::InvalidInput);
                 }
                 if let Some(f) = &surface.frame {

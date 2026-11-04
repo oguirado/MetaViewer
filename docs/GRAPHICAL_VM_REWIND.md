@@ -38,7 +38,8 @@ hash the VM's RAM or disk contents.
 An ambiguous native outcome, timeout or lost connection holds custody and fences
 further Mark and Back requests. Capture and input stay fenced while a native
 operation is pending or its outcome is unknown, so the tile may retain its last
-published image. Normal Stop remains available. Only physical
+published image. Normal Stop remains available to the creator UI and the exact
+registered owner agent. Other endpoints cannot release that custody. Only physical
 surface destruction releases the session; hiding a tile or losing a transport
 does not establish cleanup. Native process, container, lease and overlay closure
 must be verified independently.
@@ -47,3 +48,10 @@ Source tests and package checks establish only their stated boundaries. Live
 acceptance additionally requires visible guest mutation, Back to the marked
 state, a fresh bound frame, continued guest input, measured operation times and
 verified physical closure with the read-only base unchanged.
+
+This remains a developer opt-in and is not a release acceptance claim. Operation
+history stays bounded for the VM lifetime; reaching its ceiling requires Stop.
+Host and adapter timeouts may settle an operation as unknown before a late native
+result, so custody remains held rather than inferring success. An idle adapter
+epoch change still needs explicit recovery notification. Add capsule and native
+storage cleanup need their own live gates in addition to a successful Back test.

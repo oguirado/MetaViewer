@@ -101,6 +101,75 @@ func TestGraphicalNonLiveExitClearsBusyAndEmitsUnknown(t *testing.T) {
 	}
 }
 
+func TestGraphicalMarkWithoutSessionDoesNotClaimSingleton(t *testing.T) {
+	m, first := graphicalTestManager(t)
+	second := addGraphicalTestSurface(t, m)
+	mark := graphicalTestEvent(t, m, graphicalTestRequest(first, "mark", "before-attach", ""), nil)
+	if mark.Event != "refused" || m.graphical != nil {
+		t.Fatalf("sessionless mark claimed singleton: event=%+v state=%+v", mark, m.graphical)
+	}
+	m.runner = graphicalTestRunner(func(context.Context, []string, []byte) ([]byte, error) {
+		return graphicalTestNative("attach", "", "ready", 1), nil
+	})
+	attached := graphicalTestEvent(t, m, graphicalTestRequest(second, "attach", "second-after-mark", ""), nil)
+	if attached.Event != "completed" || m.graphical == nil || m.graphical.surface != second {
+		t.Fatalf("sessionless mark blocked second surface: event=%+v state=%+v", attached, m.graphical)
+	}
+}
+
+func TestGraphicalAttachDrainTimeoutReleasesSessionlessSingleton(t *testing.T) {
+	m, first := graphicalTestManager(t)
+	second := addGraphicalTestSurface(t, m)
+	m.graphicalCaptures = map[string]int{first: 1}
+	m.runner = graphicalTestRunner(func(context.Context, []string, []byte) ([]byte, error) {
+		t.Fatal("attach reached native before drain completed")
+		return nil, nil
+	})
+	refused := graphicalTestEvent(t, m, graphicalTestRequest(first, "attach", "drain-timeout", ""), nil)
+	if refused.Event != "refused" || refused.ReasonCode == nil || *refused.ReasonCode != "BUSY" || m.graphical != nil {
+		t.Fatalf("drain-timeout refusal retained singleton: event=%+v state=%+v", refused, m.graphical)
+	}
+	m.graphicalCaptures[first] = 0
+	m.runner = graphicalTestRunner(func(context.Context, []string, []byte) ([]byte, error) {
+		return graphicalTestNative("attach", "", "ready", 1), nil
+	})
+	attached := graphicalTestEvent(t, m, graphicalTestRequest(second, "attach", "second-after-drain", ""), nil)
+	if attached.Event != "completed" || m.graphical == nil || m.graphical.surface != second {
+		t.Fatalf("drain-timeout refusal blocked second surface: event=%+v state=%+v", attached, m.graphical)
+	}
+}
+
+func TestGraphicalRestoreLivenessLossAfterFreshCaptureEmitsUnknown(t *testing.T) {
+	m, id := graphicalTestManager(t)
+	graphicalTestAttach(t, m, id)
+	m.runner = graphicalTestRunner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		return graphicalTestNative("mark", args[len(args)-1], "ready", 1), nil
+	})
+	mark := graphicalTestEvent(t, m, graphicalTestRequest(id, "mark", "before-restore", ""), nil)
+	if mark.Event != "completed" || mark.PointID == nil {
+		t.Fatalf("mark %+v", mark)
+	}
+	m.CompleteGraphicalEmission(id, mark.RequestID, true)
+	b := m.bindings[id]
+	m.runner = graphicalTestRunner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		if args[1] == "frame" {
+			return json.Marshal(NativeFrame{Path: filepath.Join(b.FramesRoot, "fresh.png"), Seq: 1, Generation: b.Container, Width: 2, Height: 1, SHA256RGB24: strings.Repeat("c", 64), CaptureMonoNS: 200, Window: &Window{ID: b.Window, W: 2, H: 1}})
+		}
+		return graphicalTestNative("restore", *mark.PointID, "ready", 2), nil
+	})
+	e := graphicalTestEvent(t, m, graphicalTestRequest(id, "restore", "lost-after-capture", *mark.PointID), func(_ Binding, _ NativeFrame) (string, uint64, error) {
+		m.mu.Lock()
+		lost := m.bindings[id]
+		lost.Surface.State = "lost"
+		m.bindings[id] = lost
+		m.mu.Unlock()
+		return strings.Repeat("d", 64), 3, nil
+	})
+	if e.Event != "outcome_unknown" || e.ReasonCode == nil || *e.ReasonCode != "OUTCOME_UNKNOWN" || m.graphical == nil || m.graphical.busy || !m.graphical.unknown || m.graphical.session.Phase != "outcome_unknown" || m.graphical.session.PendingRequestID == nil || *m.graphical.session.PendingRequestID != e.RequestID {
+		t.Fatalf("lost restore did not settle unknown: event=%+v state=%+v", e, m.graphical)
+	}
+}
+
 func TestGraphicalAttachResetsRequestBudgetForLifetime(t *testing.T) {
 	m, id := graphicalTestManager(t)
 	b := m.bindings[id]

@@ -1441,8 +1441,11 @@ impl Server {
                     return self.unsupported_at(now_ns, &env, boundary);
                 }
                 let sid = value["params"]["surface_id"].as_str();
-                let graphical_stop = op == "destroy" && env.from.component == Component::Ui
-                    && sid.is_some_and(|id| self.authority.state().graphical_session.creator_can_stop(id, &env.from));
+                let graphical_stop = op == "destroy" && sid.is_some_and(|id| {
+                    let state = self.authority.state();
+                    let owner = state.surfaces.get(id).map(|surface| &surface.owner);
+                    state.graphical_session.can_stop(id, &env.from, owner)
+                });
                 if op == "destroy" && sid.is_some_and(|id| self.authority.state().graphical_session.held_surface() == Some(id)) && !graphical_stop {
                     return self.unsupported_at(now_ns, &env, boundary);
                 }
@@ -1458,8 +1461,9 @@ impl Server {
                     && !sid.is_some_and(|id| {
                         self.authority.state().surfaces.get(id).is_some_and(|s| {
                             s.live
-                                || (op == "destroy" && env.from.component == Component::Ui
-                                    && (!s.agent_controlled || graphical_stop))
+                                || (op == "destroy"
+                                    && ((env.from.component == Component::Ui && !s.agent_controlled)
+                                        || graphical_stop))
                         }) && !self.authority.state().is_destroyed(id)
                     })
                 {
@@ -5952,6 +5956,93 @@ mod nv_regressions {
                 && event["event"] == "outcome_unknown" && event["reason_code"] == "OUTCOME_UNKNOWN"));
             assert!(f.server.authority.state().graphical_session.pending.as_ref().unwrap().uncertain);
             drop(daemon_rx);
+        });
+    }
+
+    #[test]
+    fn registered_agent_can_forward_stop_for_its_held_graphical_vm() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            f.server.graphical_session_enabled = true;
+            let _ui_rx = f.attach(Component::Ui, 32);
+            let daemon_rx = f.attach(Component::Daemon, 32);
+            let _agent_rx = f.attach(Component::Agent, 32);
+            let owner = crate::headless::actor_id(&f.endpoint(Component::Agent));
+
+            f.route(Component::Ui, 2, json!({
+                "schema":"graphical_session_request/v0.2","request_id":"request-attach-stop",
+                "surface_id":"surface-demo","owner_id":owner,"op":"attach","params":{}
+            })).await.unwrap();
+            let _accepted = daemon_rx.try_recv().expect("attach request forwarded to daemon");
+            f.route(Component::Daemon, 2, json!({
+                "schema":"graphical_session_event/v0.2","event_id":"event-attach-stop-done",
+                "request_id":"request-attach-stop","owner_id":owner,"surface_id":"surface-demo",
+                "generation":1,"authority_epoch":1,"op":"attach","event":"completed","reason_code":null,
+                "point_id":null,"session":{"schema":"graphical_session/v0.2","surface_id":"surface-demo",
+                    "runtime_id":format!("runtime-{}", "a".repeat(64)),"owner_id":owner,"generation":1,
+                    "authority_epoch":1,"authority":"core","phase":"ready","ownership":"held",
+                    "pending_request_id":null,"points":[],"backend":"qemu","isa":"aarch64"},
+                "elapsed_ms":1,"frame_sha256":null,"frame_generation":null
+            })).await.unwrap();
+
+            let lost = json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":{
+                "schema":"surface/v0.2","surface_id":"surface-demo","kind":"vm","display":"display-nv",
+                "geometry":{"w":1280,"h":720},"state":"lost","visibility":"unfolded","control":"agent",
+                "profile_id":"profile-demo"}}});
+            f.route(Component::Daemon, 3, lost).await.unwrap();
+            let stop = json!({"schema":"surface_request/v0.2","op":"destroy","params":{"surface_id":"surface-demo"}});
+            f.route(Component::Agent, 2, stop.clone()).await.unwrap();
+            let forwarded = daemon_rx.try_recv().expect("registered owner Stop forwarded");
+            assert_eq!(serde_json::to_value(forwarded.body).unwrap(), stop);
+        });
+    }
+
+    #[test]
+    fn lost_after_deadline_does_not_republish_saved_unknown_event() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            f.server.graphical_session_enabled = true;
+            let ui_rx = f.attach(Component::Ui, 32);
+            let daemon_rx = f.attach(Component::Daemon, 32);
+            let owner = crate::headless::actor_id(&f.endpoint(Component::Agent));
+
+            f.route(Component::Ui, 2, json!({
+                "schema":"graphical_session_request/v0.2","request_id":"request-attach-deadline",
+                "surface_id":"surface-demo","owner_id":owner,"op":"attach","params":{}
+            })).await.unwrap();
+            let _accepted = daemon_rx.try_recv().expect("attach request forwarded to daemon");
+            f.route(Component::Daemon, 2, json!({
+                "schema":"graphical_session_event/v0.2","event_id":"event-attach-deadline-done",
+                "request_id":"request-attach-deadline","owner_id":owner,"surface_id":"surface-demo",
+                "generation":1,"authority_epoch":1,"op":"attach","event":"completed","reason_code":null,
+                "point_id":null,"session":{"schema":"graphical_session/v0.2","surface_id":"surface-demo",
+                    "runtime_id":format!("runtime-{}", "a".repeat(64)),"owner_id":owner,"generation":1,
+                    "authority_epoch":1,"authority":"core","phase":"ready","ownership":"held",
+                    "pending_request_id":null,"points":[],"backend":"qemu","isa":"aarch64"},
+                "elapsed_ms":1,"frame_sha256":null,"frame_generation":null
+            })).await.unwrap();
+            f.route(Component::Ui, 3, json!({
+                "schema":"graphical_session_request/v0.2","request_id":"request-mark-deadline",
+                "surface_id":"surface-demo","owner_id":owner,"generation":1,"authority_epoch":1,
+                "op":"mark","params":{"label":"deadline"}
+            })).await.unwrap();
+            let _accepted_mark = daemon_rx.try_recv().expect("mark request forwarded to daemon");
+
+            f.server.mark_graphical_session_unknown_at(4).unwrap();
+            let lost = json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":{
+                "schema":"surface/v0.2","surface_id":"surface-demo","kind":"vm","display":"display-nv",
+                "geometry":{"w":1280,"h":720},"state":"lost","visibility":"unfolded","control":"agent",
+                "profile_id":"profile-demo"}}});
+            f.route(Component::Daemon, 3, lost).await.unwrap();
+
+            let unknowns = ui_rx.try_iter().filter_map(|env| match env.body {
+                Command::GraphicalSessionEvent(event) if event.0["event"] == "outcome_unknown" => Some(event.0),
+                _ => None,
+            }).collect::<Vec<_>>();
+            assert_eq!(unknowns.len(), 1, "Lost must not replay an unknown event already sent at deadline");
+            assert_eq!(unknowns[0]["request_id"], "request-mark-deadline");
         });
     }
 }

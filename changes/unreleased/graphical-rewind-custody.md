@@ -1,0 +1,2 @@
+- Preserve Stop for the registered owner of a held graphical VM and keep create and registration scoped to the admitted profile.
+- Settle a lost restore explicitly, release proven pre-dispatch refusals and avoid duplicating an already delivered unknown result.
