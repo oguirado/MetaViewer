@@ -698,6 +698,7 @@ printf '{"schema":"srf.human-xpra/v1","container":"%s","kind":"program","ready":
   const st = await rolesBridge.status('surface_pg_1');
   assert.equal(st.role, 'human');
   assert.equal(st.profileId, 'gedit');
+  assert.deepEqual(st.storedData, {available:true,profileId:'gedit'});
   assert.equal(st.control, 'human');
   assert.equal(st.view.state, 'ready');
 

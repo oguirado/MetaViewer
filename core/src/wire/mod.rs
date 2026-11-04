@@ -369,6 +369,19 @@ fn pattern_ok(s: &str, pattern: &str) -> bool {
     if pattern == "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$" {
         return ramws_path_ok(s);
     }
+    if pattern == "^[a-z0-9][a-z0-9-]*$" {
+        return s
+            .as_bytes()
+            .first()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    }
+    if pattern == "^[A-Z][A-Z0-9_]*$" {
+        return s.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+            && s.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
+    }
     if pattern == "^[A-Za-z0-9][A-Za-z0-9._:-]*$" {
         return s.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
             && s.bytes()

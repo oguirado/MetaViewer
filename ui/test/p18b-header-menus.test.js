@@ -232,35 +232,32 @@ test('P18B mutant: hiding only the body leaves the agent shell visible',async()=
 
 async function headerOracle(source) {
   const calls=[];globalThis.__p18bHeaderCalls=calls;
-  const fragment=source.slice(source.indexOf('<template #actions>')+'<template #actions>'.length,source.indexOf('</template>',source.indexOf('<template #actions>')));
-  const Component=await compile(`<script setup>import {ref} from 'vue';const moreOpen=ref(false),moreMenu=ref(null),identitiesOpen=ref(false),demoOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),multislotOpen=ref(false),terminalOpen=ref(false),selectedSurface=ref({}),entryMessage=ref('');const copyEntry=()=>{},toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),openMultislot=()=>globalThis.__p18bHeaderCalls.push('Open in multislot'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
+  const navigation=source.match(/<nav aria-label="Workspace tools"[\s\S]*?<\/nav>/)?.[0];
+  const dock=source.match(/<UiButton label="Terminal" id="shell-terminal"[^\n]+/)?.[0];
+  assert.ok(navigation && dock, 'navigation and dock actions remain reachable');
+  const fragment=navigation+dock;
+  const dockToggle=source.match(/function toggleTerminalDock\(\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(dockToggle, 'drawer transition keeps the real dock handler');
+  const Component=await compile(`<script setup>import {ref} from 'vue';const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),terminalDockOpen=ref(false),terminalInDrawer=ref(false),terminalPreferDock=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');${dockToggle}</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
   const Button=vue.defineComponent({props:['label'],setup:(p,ctx)=>()=>vue.h('button',ctx.attrs,p.label)});
-  // UiButton is globally resolved in this extracted, otherwise byte-exact header.
   const Host=vue.defineComponent({setup(){vue.getCurrentInstance().appContext.components.UiButton=Button;return()=>vue.h(Component);}});
   const live=mount(Host);
   try {
-    const visible=node=>{for(let p=node;p;p=p.parent)if(p.props?.hidden===true)return false;return true;};
-    const buttons=()=>all(live.root).filter(n=>n.tag==='button'&&visible(n));
-    assert.deepEqual(buttons().map(text),['Use MetaViewer','Identities','More']);
-    buttons().find(n=>text(n)==='More').props.onClick();await tick();
-    assert.deepEqual(buttons().slice(3).map(text),['Storyboard','Settings','Terminal']);
+    const buttons=()=>all(live.root).filter(n=>n.tag==='button');
+    assert.deepEqual(buttons().map(text),['Add capsule','Identities','Settings','Storyboard','Terminal']);
     for(const label of ['Storyboard','Settings','Terminal']) {
-      if(!all(live.root).some(n=>n.props?.role==='menu'&&visible(n))) {
-        buttons().find(n=>text(n)==='More').props.onClick();await tick();
-      }
       buttons().find(n=>text(n)===label).props.onClick();await tick();
       assert.equal(calls.at(-1),label,`${label} calls its existing feature handler`);
-      assert.equal(all(live.root).some(n=>n.props?.role==='menu'&&visible(n)),false);
     }
   } finally {live.app.unmount();delete globalThis.__p18bHeaderCalls;}
 }
-test('P18B header keeps core actions and moves all secondary actions into More',()=>headerOracle(read('../src/App.vue')));
-test('P18B mutant: omitting a moved action fails the header oracle',async()=>{
-  const source=read('../src/App.vue'),mutant=source.replace(/<UiButton role="menuitem" id="shell-terminal"[^\n]+/,'');
+test('P18B navigation and dock retain existing feature actions',()=>headerOracle(read('../src/App.vue')));
+test('P18B mutant: omitting a moved action fails the navigation oracle',async()=>{
+  const source=read('../src/App.vue'),mutant=source.replace(/<UiButton label="Terminal" id="shell-terminal"[^\n]+/,'');
   assert.notEqual(source,mutant);await assert.rejects(()=>headerOracle(mutant),{code:'ERR_ASSERTION'});
 });
-test('P18B mutant: referencing a moved handler without calling it fails the header oracle',async()=>{
-  const source=read('../src/App.vue'),mutant=source.replace('moreOpen = false; toggleSettings()','moreOpen = false; toggleSettings');
+test('P18B mutant: referencing a moved handler without calling it fails the navigation oracle',async()=>{
+  const source=read('../src/App.vue'),mutant=source.replace('@click="toggleTerminalDock()"','@click="void toggleTerminalDock"');
   assert.notEqual(source,mutant);await assert.rejects(()=>headerOracle(mutant),{code:'ERR_ASSERTION'});
 });
 
@@ -376,4 +373,25 @@ test('P18B a connecting native view waits for current modal admission before sho
 test('P18B mutant: ignoring deferred visibility prevents the native view from returning',async()=>{
   const source=read('../src/surfaces/RoleSurface.vue'),mutant=source.replace('if (reply.visible === false)','if (false)');
   assert.notEqual(source,mutant);await assert.rejects(()=>deferredVisibilityOracle(mutant),{code:'ERR_ASSERTION'});
+});
+
+async function latePreviewOracle(source) {
+  await withRoles(async({add,calls,overlays})=>{
+    let finishPreview,entered=false;
+    globalThis.metaviewerRoles.preview=()=>{entered=true;return new Promise(resolve=>{finishPreview=resolve;});};
+    await add('preview-human','human');
+    const owner={};
+    overlays.setSurface(owner,'preview-human',true);await tick();
+    assert.equal(entered,true,'native preview is pending');
+    overlays.setSurface(owner,'preview-human',false);
+    finishPreview({ok:true,image:'data:image/png;base64,YQ=='});await tick();await tick();
+    assert.equal(calls.some(c=>c[0]==='visibility' && c[2]===false),false,'a closed overlay must not hide the restored live view');
+  },source);
+}
+test('late native preview cannot hide a view after its overlay closes',()=>latePreviewOracle(read('../src/surfaces/RoleSurface.vue')));
+test('removing the current-occlusion fence reproduces the stale hide',async()=>{
+  const source=read('../src/surfaces/RoleSurface.vue');
+  const mutant=source.replace(' || overlays?.isSurfaceOccluded(props.surfaceId) !== true','');
+  assert.notEqual(mutant,source);
+  await assert.rejects(()=>latePreviewOracle(mutant),{code:'ERR_ASSERTION'});
 });

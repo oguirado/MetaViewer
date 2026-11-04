@@ -1168,7 +1168,7 @@ export function createTerminalDeckController(options = {}) {
    * active screen (or into an existing slot on restart).
    *
    * @param {string} profileId
-   * @param {{ cols?: number, rows?: number, reuseSlotId?: string }} [launchOpts]
+   * @param {{ cols?: number, rows?: number, reuseSlotId?: string, focus?: boolean }} [launchOpts]
    * @returns {Promise<DeckSlot>}
    */
   async function launchProfile(profileId, launchOpts = {}) {
@@ -1239,14 +1239,19 @@ export function createTerminalDeckController(options = {}) {
       existing.slot.status = 'running';
       existing.slot.busy = true;
       existing.slot.sessionId = sessionId;
-      focusedSlotId = existing.slot.id;
+      if (launchOpts.focus !== false) focusedSlotId = existing.slot.id;
       launcherOpen = false;
       persist();
       notify();
       return existing.slot;
     }
 
+    const previousScreen = activeScreenIndex, previousClose = pendingCloseSlotId;
     const screen = claimNewSlotScreen(sessionId);
+    if (launchOpts.focus === false) {
+      activeScreenIndex = previousScreen;
+      pendingCloseSlotId = previousClose;
+    }
     const slotId = `slot-${nextSlotSeq++}`;
     /** @type {DeckSlot} */
     const slot = {
@@ -1260,7 +1265,7 @@ export function createTerminalDeckController(options = {}) {
       sessionId,
     };
     screen.slots.push(slot);
-    focusedSlotId = slot.id;
+    if (launchOpts.focus !== false) focusedSlotId = slot.id;
     launcherOpen = false;
     persist();
     notify();

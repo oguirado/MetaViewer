@@ -371,10 +371,13 @@ func TestDisplayDisabledAndRAMRefusal(t *testing.T) {
 				h.tap.mu.Lock()
 				task := h.tap.tasks["surface"]
 				h.tap.mu.Unlock()
-				select {
-				case <-task.done:
-				case <-time.After(time.Second):
-					t.Fatal("RAM refusal supervisor did not stop")
+				// A supervisor refused early may already have removed itself.
+				if task != nil {
+					select {
+					case <-task.done:
+					case <-time.After(time.Second):
+						t.Fatal("RAM refusal supervisor did not stop")
+					}
 				}
 			}
 			if e := h.tap.Close(context.Background()); e != nil {

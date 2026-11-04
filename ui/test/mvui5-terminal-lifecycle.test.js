@@ -197,7 +197,8 @@ test('lifecycle styles use kit tokens only: no colour literals, no new fonts', (
     assert.doesNotMatch(css, /#[0-9a-fA-F]{3,8}\b/, `${name} carries a colour literal`);
     assert.doesNotMatch(css, /\brgba?\(/, `${name} carries a colour function`);
     assert.doesNotMatch(css, /\bhsla?\(/, `${name} carries a colour function`);
-    assert.doesNotMatch(css, /@font-face|font-family\s*:/, `${name} adds a font`);
+    const withExistingFamily = css.replace(/font-family:\s*var\(--cuk-semantic-typography-font-family-mono\);/g, '');
+    assert.doesNotMatch(withExistingFamily, /@font-face|font-family\s*:/, `${name} adds a font`);
   }
   assert.ok(multiCss.includes('var(--cuk-semantic-'));
   assert.ok(termCss.includes('var(--cuk-semantic-'));
@@ -227,4 +228,10 @@ test('multislot host stays kit-first: kit shell, control bar and stream registry
   assert.ok(host.includes("from 'capsule-ui-kit/TerminalView'"));
   assert.ok(host.includes(':has-control-lease="hasLease"'));
   assert.ok(host.includes('createGatedTerminalWriter'));
+});
+
+test('Bootstrap font exception permits only the existing kit monospace token', () => {
+  const withoutKitFamily = css => css.replace(/font-family:\s*var\(--cuk-semantic-typography-font-family-mono\);/g, '');
+  assert.doesNotMatch(withoutKitFamily(termCss), /font-family\s*:/);
+  assert.match(withoutKitFamily(termCss.replace('var(--cuk-semantic-typography-font-family-mono)', 'monospace')), /font-family\s*:/);
 });

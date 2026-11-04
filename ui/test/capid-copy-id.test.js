@@ -1,3 +1,4 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 // CAPID-UI (FEEDBACK row 7, pillar P2): every wall tile shows its capsule id
 // (short, full id on hover) and a keyboard-reachable "Copy ID for AI" action
 // that copies one ready line: the id plus the documented mw_run attach usage.
@@ -508,7 +509,7 @@ describe('wall tile id chip and Copy ID for AI', () => {
   });
   test('the chip adds no lane control to SurfacePanel and no template v-if', () => {
     const template = PANEL_SOURCE.slice(PANEL_SOURCE.indexOf('<template>'));
-    assert.doesNotMatch(template, /v-if|<button|tabindex/);
+    assert.doesNotMatch(withoutPairedTerminalControl(template), /v-if|<button|tabindex/);
     assert.match(template, /:surface-id=/);
     assert.match(template, /:profile-id=/);
     assert.match(template, /:tile-state="tile\.tile"/);
