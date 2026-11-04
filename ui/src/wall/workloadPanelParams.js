@@ -34,6 +34,7 @@ export function createCapsulePanelRouter({defineComponent,h,markRaw,graphical,ro
   return markRaw(defineComponent({name:'CapsuleContentRouter',props:{params:{type:Object,required:true}},
     setup(/** @type {any} */ props){return()=>{
       const route=classifyCapsulePanelParams(props.params);
+      if(!route)return h('p',{role:'alert'},'Missing capsule id or invalid capsule presentation.');
       if(route?.kind==='graphical')return h(graphical,{params:route.nested?props.params:{params:props.params}});
       if(route?.kind==='workload'){
         const matches=rows().filter((/** @type {any} */ row)=>validate(row)&&row.id===route.id);

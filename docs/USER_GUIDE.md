@@ -89,7 +89,7 @@ I run the full `11`-leg `[MEASURED: bash tools/gate.sh]` verification gate (`man
 
 The window is a kit shell with a top bar, a navigation rail, the capsule wall, a side terminal, an activity strip, and a status bar:
 
-- **Top bar:** renders `MvTopbar` (`ui/src/App.vue`) with `MetaViewer`, an `Add capsule` button (`@new-capsule="launcherOpen = true"`), a `Find a capsule…` search field, and `4` `[MEASURED]` top-bar actions (`Storyboard`, `Settings`, `Open in multislot`, and `Terminal` in `topbarActions` at `ui/src/App.vue`).
+- **Navigation:** the left working tree groups Humans and Agents, then desktops and their capsules. Desktop cards show real capsule counts; selecting a capsule switches to its desktop and restores its tile. The collapsed rail retains view counts and a pending-handoff indicator. The center row offers Find a capsule, grid choices and Add capsule.
 - **Rail:** a collapsible overlay sidebar with one `Workspace` group (`Add capsule` plus one entry per connected surface).
 - **Wall:** a dockview tile workspace with one panel per capsule (`240x200` `[TARGET]` minimum tile size in `ui/src/wall/WallWorkspace.vue`), supporting tabs, splits, and floating panels.
 - **Side terminal:** a right-side resizable `xterm.js` overlay toggled with `Terminal`. A package built without native terminal support (no `node-pty` in the package) cannot open a session: the overlay and the launch controls report `TERMINAL_UNAVAILABLE: terminal support is not bundled in this package` (`ui/electron/terminalHost.js`, `ui/src/terminal/BrokerLaunchControls.vue`) instead of a blank terminal.
@@ -212,7 +212,7 @@ A refused **Record for AI**, stop or **Take screenshot** now shows one line unde
 
 The tile buttons on the wall do not show this line yet `[TARGET, owned by the wall unit]`; the panel does.
 
-The top-bar **Storyboard** button opens the Storyboard screen, where creative service operations are not wired yet and report `Creative service unavailable.` The Storyboard screen has no frames to show today and no status text of its own (`creativeFrames` is `[]` outside fixtures, `ui/src/App.vue`), so it opens as an empty page with only **Close** and **Request new frame**; the `Creative service unavailable.` toast appears only after **Request new frame**.
+Storyboard is not available in release 0.2.6 because its creative service is unavailable. Its implementation and diagnostic fixtures remain in the repository; the live sidebar and rail do not expose an entry.
 
 ---
 

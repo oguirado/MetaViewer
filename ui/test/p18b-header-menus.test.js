@@ -235,16 +235,18 @@ async function headerOracle(source) {
   const navigation=source.match(/<nav aria-label="Workspace tools"[\s\S]*?<\/nav>/)?.[0];
   const dock=source.match(/<UiButton label="Terminal" id="shell-terminal"[^\n]+/)?.[0];
   assert.ok(navigation && dock, 'navigation and dock actions remain reachable');
-  const fragment=navigation+dock;
+  const shortcut=source.match(/<div class="mv-tree-shortcuts">[\s\S]*?<\/div>/)?.[0];
+  assert.ok(shortcut);
+  const fragment=shortcut+navigation+dock;
   const dockToggle=source.match(/function toggleTerminalDock\(\) \{[\s\S]*?\n\}/)?.[0];
   assert.ok(dockToggle, 'drawer transition keeps the real dock handler');
-  const Component=await compile(`<script setup>import {ref} from 'vue';const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),terminalDockOpen=ref(false),terminalInDrawer=ref(false),terminalPreferDock=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');${dockToggle}</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
+  const Component=await compile(`<script setup>import {ref} from 'vue';const props={fixture:true};const railOpen=ref(true),launcherOpen=ref(false),identitiesOpen=ref(false),creativeOpen=ref(false),settingsOpen=ref(false),terminalOpen=ref(false),terminalDeckOpen=ref(false),terminalDockOpen=ref(false),terminalInDrawer=ref(false),terminalPreferDock=ref(false),selectedSurface=ref({});const toggleCreative=()=>globalThis.__p18bHeaderCalls.push('Storyboard'),toggleSettings=()=>globalThis.__p18bHeaderCalls.push('Settings'),toggleTerminal=()=>globalThis.__p18bHeaderCalls.push('Terminal');${dockToggle}</script><template>${fragment}</template>`,{'capsule-ui-kit/ui':{}});
   const Button=vue.defineComponent({props:['label'],setup:(p,ctx)=>()=>vue.h('button',ctx.attrs,p.label)});
   const Host=vue.defineComponent({setup(){vue.getCurrentInstance().appContext.components.UiButton=Button;return()=>vue.h(Component);}});
   const live=mount(Host);
   try {
     const buttons=()=>all(live.root).filter(n=>n.tag==='button');
-    assert.deepEqual(buttons().map(text),['Add capsule','Identities','Settings','Storyboard','Terminal']);
+    assert.deepEqual(buttons().map(text),['+ Add capsule','Identities','Settings','Storyboard','Terminal']);
     for(const label of ['Storyboard','Settings','Terminal']) {
       buttons().find(n=>text(n)===label).props.onClick();await tick();
       assert.equal(calls.at(-1),label,`${label} calls its existing feature handler`);

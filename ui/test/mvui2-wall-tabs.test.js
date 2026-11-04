@@ -1,3 +1,4 @@
+import * as workloadPanelParams from '../src/wall/workloadPanelParams.js';
 // Lane V2 dock tabs (MV-2): every capsule dock tab carries a stable id and a
 // capsule-scoped semantic anchor through the renderer's own tab component.
 import { test, describe, after } from 'node:test';
@@ -169,7 +170,7 @@ let serial = 0;
 
 /** Compile the WallWorkspace SFC with stubbed kit/sibling imports. */
 async function compileWall(deps) {
-  globalThis.__v2WallDeps = deps;
+  globalThis.__v2WallDeps = {...deps,'./workloadPanelParams.js':workloadPanelParams};
   const source = readFileSync(new URL('../src/wall/WallWorkspace.vue', import.meta.url), 'utf8');
   const { descriptor } = parse(source, { filename: 'WallWorkspace.vue' });
   const compiled = compileScript(descriptor, { id: `v2-wall-${++serial}`, inlineTemplate: true });
