@@ -51,9 +51,9 @@ test('B5-29: saved program completion is fenced after reopening and a fresh refr
  const env={isForeignIdentity:()=>false,identityErrorText:x=>x,invocationGeneration:1,busy:ref(false),error:ref(''),rows:ref([{id:'editor',browser:'program'}]),modeFor:()=>({available:true,binary:'/bin/editor'}),roleApi:{createProgram:()=>barrier.promise},props:{},emit:event=>emits.push(event)};
  const unit=functions('identities',['openIdentity'],env);const pending=unit.openIdentity('editor','human');env.invocationGeneration++;env.busy.value=true;
  barrier.resolve({ok:true});await pending;assert.deepEqual(emits,[]);assert.equal(env.busy.value,true);
- let listed=0;env.props={open:false};env.login=ref(false);env.invoke=()=>{listed++;};env.watch=(_get,callback)=>{env.busy.value=true;callback(true);};
+ let listed=0;env.props={open:false};env.login=ref(false);env.pendingRelease=ref({profileId:'account-a',holder:'srf-id-orphan'});env.invoke=()=>{listed++;};env.watch=(_get,callback)=>{env.busy.value=true;callback(true);};
  watchCode('identities','identity-refresh',env);
- assert.equal(listed,1);assert.equal(env.busy.value,false);
+ assert.equal(listed,1);assert.equal(env.busy.value,false);assert.equal(env.pendingRelease.value,null);
 });
 
 test('B5-30: a late valid identity clears only the obsolete NO_IDENTITY alert',async()=>{

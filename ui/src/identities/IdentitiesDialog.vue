@@ -162,7 +162,7 @@ function syncModal(/** @type {boolean} */ open){
 }
 watch(()=>props.open,open=>syncModal(open),{immediate:true,flush:'sync'});
 onBeforeUnmount(()=>syncModal(false));
-watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=false;if(open)void invoke('list');},{immediate:true,flush:'sync'});
+watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=false;pendingRelease.value=null;if(open)void invoke('list');},{immediate:true,flush:'sync'});
 // Open and selection props can arrive in either order; select after the props settle.
 watch(()=>[props.open,props.initialProfile],([open,profile])=>{if(open)selectedSlots.value=String(profile);},{immediate:true,flush:'post'});
 </script>
