@@ -2039,7 +2039,7 @@ impl Server {
     }
     fn poll_tool_waiters_at(&mut self, now_ns: u64) -> Result<()> {
         if self.journal_end.is_some() {
-            return Ok(());
+            return self.poll_journal_stop_failure(now_ns);
         }
         self.poll_headless_at(now_ns)?;
         self.poll_guest_command_at(now_ns)?;

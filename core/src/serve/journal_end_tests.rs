@@ -387,6 +387,8 @@ fn journal_review_terminal_destroy_refusal_advances_but_policy_failure_does_not(
         .await
         .unwrap();
         assert!(daemon.try_recv().is_err());
+        assert!(ui.try_recv().is_err(), "uncorrelated errors wait for terminal follow-up");
+        f.server.poll_tool_waiters_at(f.server.now().unwrap() + 2_000_000_000).unwrap();
         assert_eq!(
             serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
             "JOURNAL_STOP_FAILED"
@@ -708,6 +710,8 @@ fn journal_review_native_wire_terminal_refusal_advances_without_false_failure() 
         // The same code with a different detail is still a genuine failure.
         f.route(Component::Daemon,4,json!({"schema":"surface_event/v0.2","event":"error","data":{
             "surface_id":"surface-second","code":"ADAPTER_SURFACE","detail":"surface: not confirmed stopped"}})).await.unwrap();
+        assert!(ui.try_recv().is_err(), "uncorrelated errors wait for terminal follow-up");
+        f.server.poll_tool_waiters_at(f.server.now().unwrap() + 2_000_000_000).unwrap();
         assert_eq!(
             serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
             "JOURNAL_STOP_FAILED"
@@ -873,5 +877,81 @@ fn journal_end_in_progress_destroy_keeps_the_ordered_barrier() {
         assert_eq!(serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]["surface_id"], "surface-second");
         assert!(daemon.try_recv().is_err());
         assert!(ui.try_recv().is_err());
+    });
+}
+
+#[test]
+fn journal_end_destroyed_cancels_an_uncorrelated_error_without_a_failure_notice() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        f.route(Component::Daemon, 2, journal_review_notice()).await.unwrap();
+        ui.try_recv().unwrap();
+        daemon.try_recv().unwrap();
+        let snapshot = f.server.snapshot().unwrap();
+        f.route(Component::Daemon, 3, json!({"schema":"surface_event/v0.2","event":"error","data":{
+            "surface_id":"surface-demo","code":"ADAPTER_ERROR","detail":"late unrelated reply"}})).await.unwrap();
+        assert!(ui.try_recv().is_err(), "an uncorrelated error is not a proven stop failure");
+        f.route(Component::Daemon, 4, json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":{
+            "schema":"surface/v0.2","surface_id":"surface-demo","kind":"browser","display":":92",
+            "geometry":{"w":1,"h":1},"state":"destroyed","visibility":"unfolded","control":"agent","profile_id":"test"}}})).await.unwrap();
+        f.server.poll_tool_waiters_at(f.server.now().unwrap() + 2_000_000_000).unwrap();
+        assert!(ui.try_recv().is_err(), "destroyed cancels the deferred failure");
+        assert!(daemon.try_recv().is_err());
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+    });
+}
+
+#[test]
+fn journal_end_unconfirmed_stop_error_reports_once_after_grace() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        f.route(Component::Daemon, 2, journal_review_notice()).await.unwrap();
+        ui.try_recv().unwrap();
+        daemon.try_recv().unwrap();
+        let error = json!({"schema":"surface_event/v0.2","event":"error","data":{
+            "surface_id":"surface-demo","code":"ADAPTER_ERROR","detail":"native stop failed"}});
+        f.route(Component::Daemon, 3, error.clone()).await.unwrap();
+        assert!(ui.try_recv().is_err(), "wait for a terminal state before warning");
+        let later = f.server.now().unwrap() + 2_000_000_000;
+        f.server.poll_tool_waiters_at(later).unwrap();
+        assert_eq!(serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"], "JOURNAL_STOP_FAILED");
+        f.route(Component::Daemon, 4, error).await.unwrap();
+        f.server.poll_tool_waiters_at(later + 2_000_000_000).unwrap();
+        assert!(ui.try_recv().is_err(), "one failure notice per outstanding stop");
+        assert!(daemon.try_recv().is_err(), "uncertain failure never releases the barrier");
+    });
+}
+
+#[test]
+fn journal_end_failure_notice_never_reserves_a_saturated_peer_terminal() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 1);
+        let peer = f.endpoint(Component::Ui);
+        f.server.send_at(0, &peer, Command::Hello(Box::new(f.server.config.core.hello.clone()))).unwrap();
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        f.route(Component::Daemon, 2, journal_review_notice()).await.unwrap();
+        daemon.try_recv().unwrap();
+        f.route(Component::Daemon, 3, json!({"schema":"surface_event/v0.2","event":"error","data":{
+            "surface_id":"surface-demo","code":"ADAPTER_ERROR","detail":"stop failed"}})).await.unwrap();
+        f.server.poll_tool_waiters_at(f.server.now().unwrap() + 2_000_000_000).unwrap();
+        assert!(f.server.connections[&peer].terminal.lock().unwrap().is_none(),
+            "failure diagnostics cannot reserve a transport-closing terminal");
+        assert!(matches!(ui.try_recv().unwrap().body, Command::Hello(_)));
+        assert!(ui.try_recv().is_err());
+        assert!(daemon.try_recv().is_err());
     });
 }

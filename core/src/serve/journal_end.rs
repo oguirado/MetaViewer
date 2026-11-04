@@ -18,6 +18,8 @@ pub(super) struct SessionEnd {
     pending: VecDeque<String>,
     active: Option<String>,
     seen: BTreeSet<String>,
+    failure_deadline_ns: Option<u64>,
+    failure_reported: bool,
 }
 
 impl Server {
@@ -42,6 +44,8 @@ impl Server {
             pending: ids.iter().cloned().collect(),
             active: None,
             seen: ids,
+            failure_deadline_ns: None,
+            failure_reported: false,
         }
     }
 
@@ -196,6 +200,8 @@ impl Server {
         let end = self.journal_end.as_mut().unwrap();
         end.pending.pop_front();
         end.active = Some(sid);
+        end.failure_deadline_ns = None;
+        end.failure_reported = false;
         Ok(())
     }
 
@@ -228,6 +234,7 @@ impl Server {
                     || terminal_refusal)
             {
                 end.active = None;
+                end.failure_deadline_ns = None;
             } else if end.active.is_some()
                 && sid == end.active.as_deref()
                 && value["event"] == "error"
@@ -236,31 +243,47 @@ impl Server {
                     || (value["data"]["code"] == "surface"
                         && value["data"]["detail"] == "destroy already in progress"))
             {
-                // Stop failure is explicit; retain the active identity so we
-                // never claim completion or race a later capsule's stop.
-                let peers: Vec<_> = self
-                    .connections
-                    .keys()
-                    .filter(|p| p.component != Component::Daemon)
-                    .cloned()
-                    .collect();
-                for peer in peers {
-                    let body = Command::SurfaceEvent(Box::new(serde_json::from_value(
-                        serde_json::json!({
-                            "schema":"surface_event/v0.2", "event":"error", "data":{
-                                "surface_id":"session", "code":"JOURNAL_STOP_FAILED",
-                                "detail":"Session journal is full. A capsule could not be stopped. Stop the remaining capsules before starting a new session."
-                            }
-                        }),
-                    )?));
-                    if let Err(e) = self.send_at(now_ns, &peer, body) {
-                        if e.downcast_ref::<SendFailure>().is_none() {
-                            return Err(e);
-                        }
-                    }
-                }
+                // Error events have no request identity. A late reply to other
+                // work must allow a following destroyed event to settle this stop.
+                // [TARGET, unit decision] One second grace; it never advances
+                // the stop barrier or changes accepted journal state.
+                end.failure_deadline_ns
+                    .get_or_insert(now_ns.saturating_add(1_000_000_000));
             }
         }
         self.start_next_journal_stop(now_ns)
+    }
+
+    pub(super) fn poll_journal_stop_failure(&mut self, now_ns: u64) -> Result<()> {
+        let Some(end) = &mut self.journal_end else {
+            return Ok(());
+        };
+        if end.active.is_none()
+            || end.failure_reported
+            || !end
+                .failure_deadline_ns
+                .is_some_and(|deadline| now_ns >= deadline)
+        {
+            return Ok(());
+        }
+        end.failure_reported = true;
+        let peers: Vec<_> = self
+            .connections
+            .keys()
+            .filter(|p| p.component != Component::Daemon)
+            .cloned()
+            .collect();
+        for peer in peers {
+            let body = Command::SurfaceEvent(Box::new(serde_json::from_value(
+                serde_json::json!({
+                    "schema":"surface_event/v0.2", "event":"error", "data":{
+                        "surface_id":"session", "code":"JOURNAL_STOP_FAILED",
+                        "detail":"Session journal is full. A capsule stop remains unconfirmed. Close MetaViewer and use operating-system controls to stop remaining capsules before reopening."
+                    }
+                }),
+            )?));
+            self.journal_notice_at(now_ns, &peer, body)?;
+        }
+        Ok(())
     }
 }
