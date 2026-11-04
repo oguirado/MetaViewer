@@ -715,3 +715,36 @@ fn journal_review_native_wire_terminal_refusal_advances_without_false_failure() 
         assert!(daemon.try_recv().is_err());
     });
 }
+
+#[test]
+fn journal_end_ui_and_agent_capacity_start_stops_with_one_notice() {
+    run(async {
+        for caller in [Component::Ui, Component::Agent] {
+            let mut f = Fixture::new();
+            f.seed();
+            let daemon = f.attach(Component::Daemon, 64);
+            let ui = f.attach(Component::Ui, 64);
+            let agent = f.attach(Component::Agent, 64);
+            // A list is journaled, but does not itself request a destroy.
+            let request = json!({"schema":"surface_request/v0.2","op":"list","params":{}});
+            f.route(caller, 2, request.clone()).await.unwrap();
+            assert!(f.server.journal_end.is_none(), "accepted work keeps admission open");
+            daemon.try_recv().unwrap();
+            let limit = f.server.authority.state().core_seq;
+            crate::journal::set_record_limit_for_test(&f.server.root, limit);
+            let snapshot = f.server.snapshot().unwrap();
+            f.route(caller, 3, request).await.unwrap();
+            assert!(f.server.journal_end.is_some());
+            assert_eq!(f.server.snapshot().unwrap(), snapshot);
+            for rx in [&ui, &agent] {
+                let notice = serde_json::to_value(rx.try_recv().unwrap().body).unwrap();
+                assert_eq!(notice["data"]["code"], "JOURNAL_FULL");
+                assert!(rx.try_recv().is_err(), "one notice per peer at the end");
+            }
+            let stop = serde_json::to_value(daemon.try_recv().unwrap().body).unwrap();
+            assert_eq!(stop["op"], "destroy");
+            assert_eq!(stop["params"]["surface_id"], "surface-demo");
+            assert!(daemon.try_recv().is_err());
+        }
+    });
+}

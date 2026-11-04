@@ -154,7 +154,11 @@ impl Server {
         }
         // Inspect the capacity-triggering event before issuing the first stop:
         // a refused error is not an acknowledgment of a cleanup not yet sent.
-        self.route_ended_session(now_ns, env)
+        if env.from.component == Component::Daemon {
+            self.route_ended_session(now_ns, env)
+        } else {
+            self.start_next_journal_stop(now_ns)
+        }
     }
 
     fn start_next_journal_stop(&mut self, now_ns: u64) -> Result<()> {
