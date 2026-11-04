@@ -310,9 +310,10 @@ const allScreenSlots = computed(() => {
   return list;
 });
 const launcherWrap = ref(/** @type {any} */ (null));
-const overlayCoordinator = /** @type {{ set?: (owner: string, active: boolean) => void } | null} */ (inject('overlayCoordinator', null));
-const launcherOverlayOwner = 'terminal-deck-overlay';
-const overlayOpen = computed(() => Boolean(props.open && (launcherOpen.value || pendingCloseSlotId.value || contextMenu.value.open)));
+const overlayCoordinator = /** @type {{ set?: (owner: object, active: boolean) => void, setSurface?: (owner: object, surfaceId: string, active: boolean) => void } | null} */ (inject('overlayCoordinator', null));
+const launcherOverlayOwner = {};
+const contextOverlayOwner = {};
+const overlayOpen = computed(() => Boolean(props.open && (launcherOpen.value || pendingCloseSlotId.value)));
 
 /**
  * @param {boolean} [open]
@@ -334,6 +335,11 @@ function syncOverlayAttr(open = overlayOpen.value) {
 }
 
 watch(overlayOpen, (open) => { syncOverlayAttr(open); }, { immediate: true, flush: 'sync' });
+// A terminal context menu is local chrome, not a modal over every capsule.
+watch(() => [props.open, contextMenu.value.open, props.pairedTarget?.surfaceId], () => {
+  const surfaceId = props.pairedTarget?.surfaceId;
+  if (typeof surfaceId === 'string') overlayCoordinator?.setSurface?.(contextOverlayOwner, surfaceId, Boolean(props.open && contextMenu.value.open));
+}, {immediate:true, flush:'sync'});
 
 /**
  * @param {string} slotId
@@ -958,6 +964,7 @@ onBeforeUnmount(() => {
   viewportObserver?.disconnect();
   globalThis.document?.removeEventListener?.('focusin', containDialogFocus, true);
   syncOverlayAttr(false);
+  if (typeof props.pairedTarget?.surfaceId === 'string') overlayCoordinator?.setSurface?.(contextOverlayOwner, props.pairedTarget.surfaceId, false);
   globalThis.window?.removeEventListener?.('keydown', onWindowKeyDown, true);
   globalThis.document?.removeEventListener?.('keydown', onWindowKeyDown, true);
   globalThis.document?.removeEventListener?.('pointerdown', onDocumentPointerDown, true);
@@ -1280,6 +1287,7 @@ defineExpose({
       ref="contextMenuWrap"
       :id="domId('terminal-deck-context-menu')"
       data-semantic-anchor="terminal/context-menu"
+      data-mv-overlay-scope="terminal"
       class="mv-terminal-deck__context-menu"
       role="menu"
       aria-label="Terminal context menu"

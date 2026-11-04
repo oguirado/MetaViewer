@@ -45,6 +45,7 @@ export function observeOverlays(coordinator, doc = globalThis.document) {
       // The sidebar's permanent navigation inventory also uses role=menu.
       // It is not a popup and must not occlude every native view at idle.
       if (el.getAttribute('role') === 'menu' && el.closest('aside,nav,[role="navigation"]')) return false;
+      if (el.getAttribute('data-mv-overlay-scope') === 'terminal' && el.closest('.mv-terminal-deck')) return false;
       if (el.hasAttribute('popover') && !el.matches(':popover-open')) return false;
       return el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
     }));

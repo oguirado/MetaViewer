@@ -2958,3 +2958,20 @@ test('paired Capsule ID chip copies only its identifier',async()=>{
   await chip.props.onClick();assert.equal(copied,'surface-chip');assert.deepEqual(h.writeCalls,[]);
  } finally {mounted.app.unmount();}
 });
+
+test('terminal context menu keeps focus without claiming global modal ownership',async()=>{
+ const h=createBrokerDouble(),globalClaims=[],surfaceClaims=[];let deck;
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const Root={setup(){vue.provide('overlayCoordinator',{set:(owner,open)=>globalClaims.push(open),setSurface:(owner,id,open)=>surfaceClaims.push({id,open})});return()=>vue.h(View,{ref:v=>{deck=v;},open:true,compact:true,pairedTarget:{surfaceId:'surface-context',title:'Context'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});}};
+ const mounted=mountTree(Root);
+ try {
+  await tick();const id=deck.controller.state.focusedSlotId;assert.ok(id);globalClaims.length=0;
+  deck.onTileContextMenu(id,{clientX:40,clientY:50,preventDefault(){},stopPropagation(){}});await tick();
+  assert.equal(deck.controller.state.focusedSlotId,id);assert.equal(deck.contextMenu.open,true);
+  assert.equal(globalClaims.includes(true),false,'local context menu must not deactivate all capsule views');
+  assert.deepEqual(surfaceClaims.at(-1),{id:'surface-context',open:true});
+ } finally {mounted.app.unmount();}
+ assert.equal(surfaceClaims.at(-1).open,false,'unmount releases only this menu owner');
+});
