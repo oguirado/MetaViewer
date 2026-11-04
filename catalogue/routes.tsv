@@ -232,6 +232,7 @@ mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
 normala-0123b49a7983	changes/unreleased/normal-arm64-rewind-setup.md
+normalr-4af8538e0165	changes/unreleased/normal-rewind-runtime-path.md
 opfix-arm-cards.md	changes/unreleased/opfix-arm-cards.md
 opfixco-cf56b9a29339	changes/unreleased/opfix-copy-identifier.md
 opfixde-af5b2743aa57	changes/unreleased/opfix-desktop-recovery.md
@@ -2050,6 +2051,7 @@ manager-0d5c0c892aec	daemon-adapter/internal/guestcommand/manager.go
 manager-381efae1eecb	daemon-adapter/internal/guestcommand/manager_regression_test.go
 manager-b598573013e3	daemon-adapter/internal/guestcommand/manager_test.go
 prepare.go	daemon-adapter/internal/guestcommand/prepare.go
+prepare_test.go	daemon-adapter/internal/guestcommand/prepare_test.go
 process-509aebce38b5	daemon-adapter/internal/guestcommand/process.go
 profile.go	daemon-adapter/internal/guestcommand/profile.go
 profile_test.go	daemon-adapter/internal/guestcommand/profile_test.go
