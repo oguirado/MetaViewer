@@ -35,6 +35,14 @@ import { createHumanTraceFile, pruneHumanTraces } from './humanTrace.js';
 /** @param {any} s */
 const rendererSurface = s => Object.fromEntries(['schema','surface_id','profile_id','state','control','visibility','display','geometry'].filter(k => s[k] !== undefined).map(k => [k,s[k]]));
 
+/** Navigation is available for identity capsules even when their data is read-only.
+ * @param {any} surface @param {boolean} hostProgram */
+export function storedDataMenuTarget(surface, hostProgram) {
+  const profileId=surface?.profile_id;
+  return hostProgram===false && ['browser','program'].includes(surface?.kind)
+    && typeof profileId==='string' && /^[a-z0-9][a-z0-9-]{1,39}$/.test(profileId) ? profileId : null;
+}
+
 /** Stored data is a stopped-identity capability, never a live VM snapshot.
  * @param {any} surface @param {boolean} hostProgram @param {string} [liveProfile] */
 export function storedDataCapability(surface, hostProgram, liveProfile) {
@@ -481,7 +489,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
     }
     const s = authoritative(surfaceId);
     const hostXpra = programProfiles.get(s.profile_id)?.hostXpra === true;
-    const storedData = storedDataCapability(programProfiles.has(s.profile_id) ? {...s,kind:'program'} : s,hostXpra,env.MV_SRF_LIVE_PROFILE);
+    const dataSurface=programProfiles.has(s.profile_id) ? {...s,kind:'program'} : s;
+    const menuTarget=storedDataMenuTarget(dataSurface,hostXpra);
+    const storedData = storedDataCapability(dataSurface,hostXpra,env.MV_SRF_LIVE_PROFILE)
+      ?? (menuTarget ? {available:false,profileId:menuTarget} : null);
     return {role:roleFor(s), profileId:s.profile_id, control:s.control, hostXpra,
       ...(storedData ? {storedData} : {}),
       view:viewStates.get(surfaceId) || {state:'closed'}, transition:transitions.get(s.profile_id) || null};

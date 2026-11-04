@@ -3,7 +3,16 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {parse,compileScript} from '@vue/compiler-sfc';
 import * as vue from 'vue';
-import {storedDataCapability} from '../electron/roleHost.js';
+import {storedDataCapability,storedDataMenuTarget} from '../electron/roleHost.js';
+
+test('every identity capsule has a menu target without changing protected storage permissions',()=>{
+  for(const kind of ['browser','program'])for(const profile_id of ['work-account','mv-live-1']){
+    assert.equal(storedDataMenuTarget({kind,profile_id},false),profile_id);
+  }
+  for(const kind of ['vm','desktop-window',undefined])assert.equal(storedDataMenuTarget({kind,profile_id:'work-account'},false),null);
+  assert.equal(storedDataMenuTarget({kind:'program',profile_id:'work-account'},true),null);
+  assert.equal(storedDataCapability({kind:'browser',profile_id:'mv-live-1'},false),null);
+});
 
 test('stored-data capability requires a supported identity kind and excludes host or protected profiles',()=>{
   for(const kind of ['browser','program']) assert.deepEqual(storedDataCapability({kind,profile_id:'work-account'},false),{available:true,profileId:'work-account'});
@@ -28,7 +37,7 @@ test('header and tile menu expose only admitted stored data and open exactly tha
   try {
     for(const patch of [{}, {role:'human'}, {storedData:null}, {storedData:{available:false,profileId:'work-account'}},
       {storedData:{available:true,profileId:'other-account'}}, {hostXpra:true}, {hostWindow:{state:'active'}}]) {
-      const admitted=Object.keys(patch).length===0 || patch.role==='human', opened=[];
+      const admitted=Object.keys(patch).length===0 || patch.role==='human', menuAllowed=admitted || patch.storedData?.available===false, opened=[];
       globalThis.metaviewerRoles={status:async()=>({role:'agent',profileId:'work-account',storedData:{available:true,profileId:'work-account'},...patch}),visibility:async()=>({ok:true}),close:async()=>({ok:true})};
       const root=node('root'), app=renderer.createApp(Component,{surfaceId:'surface-one',onStoredData:id=>opened.push(id)});
       try {
@@ -42,13 +51,13 @@ test('header and tile menu expose only admitted stored data and open exactly tha
         const menu=all(root).find(n=>n.props.id==='tile-menu-surface-one');
         menu.props.onClick();await vue.nextTick();
         const entry=all(root).find(n=>n.props.id==='tile-stored-data-surface-one');
-        assert.equal(Boolean(entry),admitted,'menu uses the same host capability as the header');
+        assert.equal(Boolean(entry),menuAllowed,'identity navigation remains available when stored-data writes are not admitted');
         if(entry){
           assert.equal(entry.props.role,'menuitem');
           entry.props.onClick();await vue.nextTick();
           assert.equal(all(root).some(n=>n.props.id==='tile-actions-surface-one'),false,'opening stored data closes the menu');
         }
-        assert.deepEqual(opened,admitted?['work-account','work-account','work-account']:[]);
+        assert.deepEqual(opened,[...(admitted?['work-account','work-account']:[]),...(menuAllowed?['work-account']:[])]);
       } finally {app.unmount();}
     }
   } finally {globalThis.metaviewerRoles=old;}
