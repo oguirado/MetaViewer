@@ -9,6 +9,7 @@ Start judging here:
 5. docs/EVIDENCE.md — public tests, external reports and missing receipts.
 AGENTS.md and catalogue/protocol.json describe contributor editing and routing.
 Status: router unavailable.
+Code map that works today, see route/README.md: python3 route/route_query.py ask "<question>"; also locate, error, find, where, file. It reports FRESH or STALE per file.
 Release authority: VERSION; pending changes: changes/unreleased/.
 
 Task preparation: Create automation, Run automation, and Direct task end with "Task: ". Unpaired prompts copy to clipboard. Paired controls offer installed, host-owned agent CLI profiles; after a recognized input prompt, they paste with bracketed paste and never send Enter. Missing, exited, unready or authentication-waiting agents receive no prompt. Plain shells remain copy-only. These controls prepare text; they do not execute workflows. See docs/AGENT_ENTRY.md.
