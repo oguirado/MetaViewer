@@ -125,7 +125,7 @@ async function chromeWith(edits, clock) {
   return Chrome;
 }
 
-test('wall hook: TileCaptureChrome with the hook ticks between host events; the unhooked chrome is static', async () => {
+test('wall hook and production chrome tick between host events; bypassing the clock freezes the badge', async () => {
   const clock = fakeClock();
   const hooked = await chromeWith(WALL_HOOK, clock);
   const store = storeWith(CAP, { phase: 'recording', recordingId: 'rec-1', elapsedMs: 7000 });
@@ -136,13 +136,19 @@ test('wall hook: TileCaptureChrome with the hook ticks between host events; the 
     assert.equal(textOf(byId(mounted, BADGE)).trim(), 'Recording 00:10');
     assert.equal(byId(mounted, BADGE).props['data-variant'], 'recording');
   } finally { mounted.close(); }
-  // negative control: without the hook the badge only repaints on events
   const plain = await chromeWith([], clock);
-  const frozenStore = storeWith(CAP, { phase: 'recording', recordingId: 'rec-1', elapsedMs: 7000 });
-  const frozen = mount(plain, { capsuleId: CAP, capsuleLabel: 'Cap', captureState: frozenStore });
+  const live = mount(plain, { capsuleId: CAP, capsuleLabel: 'Cap', captureState: storeWith(CAP, {phase:'recording',recordingId:'rec-live',elapsedMs:7000}), clock });
   try {
     clock.advance(3000); await flush();
-    assert.equal(textOf(byId(frozen, BADGE)).trim(), 'Recording 00:07', 'unhooked badge is frozen between events');
+    assert.equal(textOf(byId(live, BADGE)).trim(), 'Recording 00:10', 'the production chrome also ticks');
+  } finally { live.close(); }
+  // Negative control: bypass the interpolated elapsed value.
+  const frozenChrome = await chromeWith([['elapsedMs: elapsed.value,','elapsedMs: entry.value?.elapsedMs,']], clock);
+  const frozenStore = storeWith(CAP, { phase: 'recording', recordingId: 'rec-1', elapsedMs: 7000 });
+  const frozen = mount(frozenChrome, { capsuleId: CAP, capsuleLabel: 'Cap', captureState: frozenStore, clock });
+  try {
+    clock.advance(3000); await flush();
+    assert.equal(textOf(byId(frozen, BADGE)).trim(), 'Recording 00:07', 'bypassing the clock freezes the badge between events');
   } finally { frozen.close(); }
 });
 

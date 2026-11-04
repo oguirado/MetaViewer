@@ -56,7 +56,7 @@ func programSubscriptionFixture(t *testing.T, role string) (*capsule.Manager, ma
 	if err = os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	profiles := map[string]capsule.Profile{"static-browser": {Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":111", Width: 1280, Height: 900}}
+	profiles := map[string]capsule.Profile{"static-browser": {Role: role, Kind: "browser", NativeKind: "browser", RAMRoot: root, Display: ":111", Width: 1280, Height: 900}}
 	runner := &programSubscriptionRunner{binary: binary, role: role}
 	m, err := capsule.NewManager(capsule.Config{BinDir: t.TempDir(), Profiles: profiles, MaxSurfaces: 2, MaxOutputBytes: 8192, Timeout: time.Second, OriginNS: 100}, runner, func() uint64 { return 200 })
 	if err != nil {
@@ -147,14 +147,47 @@ func TestProgramSubscriptionMissingSurfacePublisherAndHumanMode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mode == "human" {
-				if len(events) != 0 {
-					t.Fatalf("human opening attempted polling: %s", events)
-				}
-				return
-			}
 			if len(events) != 1 || !strings.Contains(string(events[0]), `"event":"error"`) {
 				t.Fatalf("missing evidence did not refuse: %s", events)
+			}
+		})
+	}
+}
+
+// Human view transport and verified recording have separate consumers. An
+// explicit verified subscription must still reach the admitted publisher.
+func TestHumanSubscriptionsProvideVerifiedRecordingFrames(t *testing.T) {
+	for _, kind := range []string{"desktop_capsule", "browser"} {
+		t.Run(kind, func(t *testing.T) {
+			m, profiles, root := programSubscriptionFixture(t, "human")
+			id := "prog-dynamic"
+			if kind == "browser" {
+				id = "static-browser"
+			}
+			sid := subscriptionSurface(t, m, kind, id)
+			pub, err := frames.NewPublisher(frames.PublishConfig{RAMRoot: root, MaxFrameBytes: 1280 * 900 * 4, MaxPixels: 1280 * 900, MaxSurfaces: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pub.Close()
+			source := &programSubscriptionSource{entered: make(chan string, 1)}
+			sub, err := frames.NewSubscriptions(context.Background(), frames.SubscriptionConfig{MaxSubscriptions: 2, PollInterval: time.Millisecond, CaptureTimeout: time.Second, ShutdownTimeout: time.Second}, source, pub, func(context.Context, json.RawMessage) error { return nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer sub.Close(context.Background())
+			h := subscriptionHandler(m, profiles, map[string]*frames.Subscriptions{root: sub}, nil)
+			events, err := subscribeProgramTest(h, sid)
+			if err != nil || len(events) != 0 {
+				t.Fatalf("subscription failed: %s %v", events, err)
+			}
+			select {
+			case got := <-source.entered:
+				if got != sid {
+					t.Fatal("wrong surface")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("human recording received no verified capture")
 			}
 		})
 	}

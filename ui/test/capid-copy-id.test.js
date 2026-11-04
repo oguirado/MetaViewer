@@ -19,6 +19,7 @@ import { addOperatorStubs } from './operator-stubs.mjs';
 import * as capsuleId from '../src/wall/capsuleId.js';
 import * as tileStates from '../src/wall/tileStates.js';
 import * as tileCapture from '../src/wall/tileCapture.js';
+import * as recordingElapsed from '../src/recording/useRecordingElapsed.js';
 
 const SRC = (rel) => fileURLToPath(new URL(`../src/${rel}`, import.meta.url));
 const PANEL_SOURCE = readFileSync(SRC('wall/SurfacePanel.vue'), 'utf8');
@@ -64,6 +65,7 @@ const KIT_RECORD_BUTTON = await compileSfc('../.kit/capsule-ui-kit/src/saas/Saas
 
 function compileChrome(chromeSource, idModule) {
   return compileSource(chromeSource, {
+    '../recording/useRecordingElapsed.js': recordingElapsed,
     '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': KIT_SIDEBAR_ICON,
     '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue': KIT_RECORD_BUTTON,
     './tileCapture.js': { ...tileCapture, ...idModule },

@@ -8,6 +8,7 @@ import (
 	"metaviewer/daemon-adapter/internal/frames"
 	"metaviewer/daemon-adapter/internal/ipc"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -25,7 +26,7 @@ func (r *humanOpeningRunner) Run(_ context.Context, args []string, _ []byte) ([]
 	return []byte(`{"container":"srf-id-demo","run_id":"run-human","windows":[{"id":"w1","x":0,"y":0,"w":1280,"h":900,"title":"","url":""}]}`), nil
 }
 
-func TestHumanOpeningHasNoInitialCaptureOrFrameSubscription(t *testing.T) {
+func TestHumanOpeningHasNoInitialCaptureAndExplicitSubscriptionRequiresPublisher(t *testing.T) {
 	root, err := os.MkdirTemp("/dev/shm", "p18-no-poll-")
 	if err != nil {
 		t.Fatal(err)
@@ -59,15 +60,16 @@ func TestHumanOpeningHasNoInitialCaptureOrFrameSubscription(t *testing.T) {
 	if created.Data.Surface.Control != "human" {
 		t.Fatal("wrong opening mode")
 	}
-	// No publisher/subscription is configured: a poll attempt must fail this gate.
+	// Opening stays capture-free. An explicit recording subscription must report
+	// a missing publisher rather than silently pretending that it subscribed.
 	subscribe := subscriptionHandler(m, profiles, map[string]*frames.Subscriptions{}, func(context.Context, ipc.Envelope) ([]json.RawMessage, error) {
 		t.Fatal("subscription fell through")
 		return nil, nil
 	})
 	body, _ := json.Marshal(map[string]any{"schema": "surface_request/v0.2", "op": "frame_subscribe", "params": map[string]string{"surface_id": created.Data.Surface.SurfaceID}})
 	reply, err := subscribe(context.Background(), ipc.Envelope{Body: body})
-	if err != nil || len(reply) != 0 {
-		t.Fatalf("human subscription started polling: %s %v", reply, err)
+	if err != nil || len(reply) != 1 || !strings.Contains(string(reply[0]), `"code":"ADAPTER_CONFIGURATION"`) {
+		t.Fatalf("human subscription did not report missing publisher: %s %v", reply, err)
 	}
 	if len(runner.calls) != 1 || runner.calls[0] != "start" {
 		t.Fatalf("human frame consumer ran: %v", runner.calls)

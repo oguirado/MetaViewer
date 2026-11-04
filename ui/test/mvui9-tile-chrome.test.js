@@ -358,6 +358,7 @@ describe('TileCaptureChrome static contract (pinned compiler)', async () => {
     assert.deepEqual([...new Set(specifiers)].sort(), [
       '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue',
       '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue',
+      '../recording/useRecordingElapsed.js',
       './tileCapture.js',
       'vue',
     ]);
