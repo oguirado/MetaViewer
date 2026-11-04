@@ -1546,7 +1546,7 @@ test('V023-T1: deck hide and show keeps the same session id, preserves scrollbac
   );
   assert.ok(
     appSource.includes('v-if="!nestedMode.displayOnly"') &&
-      appSource.includes(':hidden="!terminalDeckOpen || terminalInDrawer"') &&
+      appSource.includes(':hidden="!terminalDeckOpen"') &&
       appSource.includes(':inert="!terminalDeckOpen ? true : undefined"'),
     'App.vue must keep the terminal deck mounted and hidden/inert when closed',
   );

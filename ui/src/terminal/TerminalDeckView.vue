@@ -979,7 +979,7 @@ defineExpose({
     @keydown="onWindowKeyDown"
   >
     <header class="mv-terminal-deck__bar" aria-label="Terminal operator bar">
-      <button v-if="compact" id="terminal-deck-open-full" data-semantic-anchor="terminal/open-dock" type="button" class="mv-terminal-deck__action-btn" @click="emit('request-dock')">Open full dock</button>
+      <button v-if="compact" id="terminal-deck-open-full" data-semantic-anchor="terminal/open-dock" type="button" class="mv-terminal-deck__action-btn" @click="emit('update:open', false)">Hide terminal</button>
       <div class="mv-terminal-deck__screens" role="tablist" aria-label="Terminal screens">
         <div
           v-for="(screen, sIdx) in screens"
