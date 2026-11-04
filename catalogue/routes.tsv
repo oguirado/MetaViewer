@@ -148,6 +148,7 @@ changes-README.md	changes/README.md
 adapter-cbafcbab0a3b	changes/unreleased/adapter-epoch-handoff.md
 agentpr-f8d684f8c4df	changes/unreleased/agent-program-starts-agent-controlled.md
 arm64ci-bd58bfab8e71	changes/unreleased/arm64-ci-inventory-regressions.md
+arm64de-5a63379f257d	changes/unreleased/arm64-desktop-bus-guardian.md
 arm64ex-9eff3edc9918	changes/unreleased/arm64-explicit-recovery.md
 arm64gu-8f9d6dc80ac1	changes/unreleased/arm64-guest-commands.md
 arm64mi-da546ca53e79	changes/unreleased/arm64-microvm-rewind.md
@@ -251,6 +252,10 @@ opfix2t-07c2e902ca62	changes/unreleased/opfix2-terminal-geometry.md
 opfix2t-c6e5a419b2e9	changes/unreleased/opfix2-terminal-verification.md
 opfix2r-1e567714e07c	changes/unreleased/opfix2r2-terminal-launcher.md
 opfix2r-65e5534583a3	changes/unreleased/opfix2r2-terminal-selection.md
+opfix3a-5c75c58f8804	changes/unreleased/opfix3-attachment-context.md
+opfix3c-d71328c1ea51	changes/unreleased/opfix3-compact-prompts.md
+opfix3p-67f89ad507b0	changes/unreleased/opfix3-package-guidance.md
+opfix3p-d03fe5aff476	changes/unreleased/opfix3-prompt-safety.md
 opfix3r-e1e3cbacc34a	changes/unreleased/opfix3-remove-bootstrap.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
@@ -3162,6 +3167,9 @@ opfixst-a1cd99638ddf	ui/test/opfix-stored-menu.html
 opfix-stored-menu.js	ui/test/opfix-stored-menu.js
 opfix2g-d55bf7b8e845	ui/test/opfix2-geometry-nonce.test.js
 opfix2s-4a2285d09741	ui/test/opfix2-separation.test.js
+opfix3p-0e73da55f5ce	ui/test/opfix3-package-docs.test.js
+opfix3p-17563ab7a69c	ui/test/opfix3-prompt-safety.test.js
+opfix3w-08aa8b6f7b82	ui/test/opfix3-workflow-prompts.test.js
 originc-568d530772a3	ui/test/origin-contract.test.js
 overlay-e9a006de4470	ui/test/overlay-surface-scope.test.js
 p18mode-a22a0f963a40	ui/test/p18-modes-tiles.test.js
