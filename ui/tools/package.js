@@ -1000,6 +1000,7 @@ export async function createPackagedBootLifecycle(options = {}) {
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       await fs.chmod(dir, 0o700);
     }
+    const rewindCoreEnabled = env.MV_REWIND_ENABLED === '1';
     const agentInstance = await headlessAgentInstance(env);
     const registration = (component) => ({
       endpoint: { component, instance: component === 'agent' && agentInstance ? agentInstance : `${component}-${randomUUID()}` },
@@ -1036,6 +1037,7 @@ export async function createPackagedBootLifecycle(options = {}) {
     delete env.MV_CORE_BOOTSTRAP;
     const coreEnv = {
       ...scrubFn(env, runtime),
+      ...(rewindCoreEnabled && agentInstance ? { MV_REWIND_ENABLED: '1' } : {}),
       XDG_STATE_HOME: stateHome,
       MV_CORE_CONFIG: configPath,
     };
@@ -1451,6 +1453,7 @@ try {
     }
     // [TARGET, unit decision] mv-daemon-adapter pins hello/v0.2 component_version
     // to 0.1.1 in daemon/environment.go; core pins pin.version from VERSION.
+    const rewindCoreEnabled = process.env.MV_REWIND_ENABLED === '1';
     const agentInstance = await headlessAgentInstance(process.env);
     const registration = component => ({endpoint:{component,instance:component==='agent'&&agentInstance?agentInstance:component+'-'+randomUUID()},hello:{
       schema:'hello/v0.2',contract_version:'v0.2',component,component_version:component==='daemon'?'0.1.1':pin.version,
@@ -1476,7 +1479,7 @@ try {
     process.env.SRF_PROXY_REGISTRY = process.env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
     process.env.MV_ADAPTER_BIN = join(resourcesPath, 'bin/mv-daemon-adapter');
     delete process.env.MV_CORE_BOOTSTRAP;
-    const coreEnv = {...scrubChildEnv(process.env, runtime), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
+    const coreEnv = {...scrubChildEnv(process.env, runtime), ...(rewindCoreEnabled && agentInstance ? {MV_REWIND_ENABLED:'1'} : {}), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
     core = spawn(join(resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
     let failure;
     core.on('error', error => {failure=error;});

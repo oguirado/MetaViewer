@@ -43,7 +43,7 @@ test('wall creates one local console panel from validated workload, never sends 
  const tile=guestWorkloadTile(snapshot),panels=new Map(),added=[];const api={panels:[],groups:[],getPanel:id=>panels.get(id),addPanel:p=>{added.push(p);const panel={id:p.id,api:{setActive(){}}};panels.set(p.id,panel);return panel;}};
  const controller=createWallWorkspaceController({projectionView:{getProjection:()=>({rows:[]})},workloadTiles:()=>[tile],validateWorkloadTile:validGuestWorkloadTile});
  assert.equal(controller.revealWorkload(tile.id).ok,false);assert.equal(controller.handleReady({api,windows:{state:()=>({hidden:false}),show(){},hide(){},float(){},dock(){}},revision:1}).ok,true);
- assert.equal(controller.revealWorkload('forged').ok,false);assert.equal(controller.revealWorkload(tile.id).ok,true);assert.equal(controller.revealWorkload(tile.id).ok,true);assert.equal(added.length,1);assert.equal(added[0].component,'GuestWorkloadPanel');assert.deepEqual(added[0].params,{workloadId:tile.id});assert.equal(added[0].params.capsuleId,undefined);controller.dispose();
+ assert.equal(controller.revealWorkload('forged').ok,false);assert.equal(controller.revealWorkload(tile.id).ok,true);assert.equal(controller.revealWorkload(tile.id).ok,true);assert.equal(added.length,1);assert.equal(added[0].component,'CapsulePanel');assert.deepEqual(added[0].params,{sessionId:tile.id});assert.equal(added[0].params.capsuleId,undefined);controller.dispose();
  const unverified=createWallWorkspaceController({workloadTiles:()=>[tile]});assert.equal(unverified.revealWorkload(tile.id).ok,false);
 });
 

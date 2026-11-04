@@ -1,5 +1,6 @@
 """Keep canonical tool results aligned with the effective agent wire contract."""
 import copy
+import importlib.util
 import json
 from pathlib import Path
 import sys
@@ -11,6 +12,12 @@ sys.path.insert(0, str(ROOT / "agents"))
 
 from metaviewer_agents import envelope
 from tools.check_contracts import Validator, ValidationError
+
+_normalizer_spec = importlib.util.spec_from_file_location(
+    "canonical_pin_mirror_normalizer", ROOT / "tests/test_python_contract_mirror.py")
+_normalizer_module = importlib.util.module_from_spec(_normalizer_spec)
+_normalizer_spec.loader.exec_module(_normalizer_module)
+normalized = _normalizer_module.normalized
 
 
 def inline_local_refs(value, root):
@@ -45,10 +52,32 @@ class CanonicalPinTests(unittest.TestCase):
 
     def test_embedded_tool_result_equals_canonical(self):
         canonical = self.validator.load("mv_tool_result.schema.json")
+        self.assert_projection_equal(
+            canonical, envelope._FILES["v0.2/mv_tool_result.schema.json"])
+
+    def assert_projection_equal(self, canonical, mirror):
+        filename = "mv_tool_result.schema.json"
         self.assertEqual(
-            envelope._FILES["v0.2/mv_tool_result.schema.json"]["oneOf"],
-            inline_local_refs(canonical["oneOf"], canonical),
+            normalized(canonical, canonical, filename, True),
+            normalized(mirror, mirror, filename, True),
         )
+
+    def test_projection_oracle_rejects_nested_constraint_mutations(self):
+        canonical = self.validator.load("mv_tool_result.schema.json")
+        original = envelope._FILES["v0.2/mv_tool_result.schema.json"]
+        for mutation in ("enum", "type", "bound", "reference"):
+            with self.subTest(mutation=mutation):
+                changed = copy.deepcopy(original)
+                if mutation == "enum":
+                    changed["$defs"]["surface"]["properties"]["kind"]["enum"].append("foreign-kind")
+                elif mutation == "type":
+                    changed["$defs"]["bbox"]["properties"]["x"]["type"] = "string"
+                elif mutation == "bound":
+                    changed["$defs"]["frame"]["properties"]["width"]["maximum"] -= 1
+                else:
+                    changed["oneOf"][0]["properties"]["observation"]["$ref"] = "v0.2/mv_tool_result.schema.json#/$defs/surface"
+                with self.assertRaises(AssertionError):
+                    self.assert_projection_equal(canonical, changed)
 
     def test_versioned_json_contains_no_legacy_pins(self):
         for directory in (ROOT / "contracts/v0.2", ROOT / "contracts/examples/v0.2"):

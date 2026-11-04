@@ -3052,6 +3052,7 @@ renderer-asar.test.js	ui/test/renderer-asar.test.js
 rendere-0907683c0d40	ui/test/renderer-ready.test.js
 reopena-3e5702fcbea8	ui/test/reopen-app-create.test.js
 reopenh-952d4999527b	ui/test/reopen-host-create.test.js
+rewindc-8f1ae7f269b8	ui/test/rewind-core-optin.test.js
 rewind-header.test.js	ui/test/rewind-header.test.js
 rewind-host.test.js	ui/test/rewind-host.test.js
 rewindp-f5b4490f0ad8	ui/test/rewind-profile.test.js

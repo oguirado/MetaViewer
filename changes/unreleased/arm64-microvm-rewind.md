@@ -4,3 +4,6 @@
 - Treat a protected rewind-only launch as a dedicated guest mode: require its live adapter, reject invalid configuration and prevent automatic graphical capsule creation.
 - Route MicroVM consoles through the pinned kit’s admitted panel type, retaining workload identity across float/hide/show and layout persistence. Add the agreed capability-driven Back header, timed point menu and cleanup controls without changing the shared native header or kit pin.
 - Require authenticated hello before Rewind dispatch even when the optional core-commit pin is absent.
+
+- Keep the packaged Rewind core opt-in bound to a validated local profile and actor; preserve the closed core environment.
+- Align test harness imports and canonical-family oracles without weakening malformed-message or codec rejection checks.
