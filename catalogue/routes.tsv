@@ -231,6 +231,9 @@ mwtermi-843dba820964	changes/unreleased/mw-terminal-deadline.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
+opfixco-cf56b9a29339	changes/unreleased/opfix-copy-identifier.md
+opfixme-5263d410786d	changes/unreleased/opfix-meta-site-examples.md
+opfixre-fb43387edf6d	changes/unreleased/opfix-recording-clock.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
 p18-opening-modes.md	changes/unreleased/p18-opening-modes.md
@@ -3116,6 +3119,14 @@ nesting.test.js	ui/test/nesting.test.js
 nesting-c224ecae31d5	ui/test/nestingStartup.test.js
 netcopy-panel.test.js	ui/test/netcopy-panel.test.js
 operator-stubs.mjs	ui/test/operator-stubs.mjs
+opfix-copy.cjs	ui/test/opfix-copy.cjs
+opfix-examples.cjs	ui/test/opfix-examples.cjs
+opfix-examples.html	ui/test/opfix-examples.html
+opfix-examples.js	ui/test/opfix-examples.js
+opfixme-9fed732a954c	ui/test/opfix-meta-examples.test.js
+opfix-recording.cjs	ui/test/opfix-recording.cjs
+opfix-recording.html	ui/test/opfix-recording.html
+opfix-recording.js	ui/test/opfix-recording.js
 originc-568d530772a3	ui/test/origin-contract.test.js
 overlay-e9a006de4470	ui/test/overlay-surface-scope.test.js
 p18mode-a22a0f963a40	ui/test/p18-modes-tiles.test.js
