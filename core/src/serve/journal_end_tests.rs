@@ -777,3 +777,71 @@ fn journal_end_full_notice_does_not_reset_a_saturated_peer() {
         assert!(daemon.try_recv().is_err(), "backpressure never duplicates a stop");
     });
 }
+
+#[test]
+fn journal_end_retire_never_appends_with_cleanup_headroom() {
+    run(async {
+        for retiring in [Component::Daemon, Component::Ui] {
+            let mut f = Fixture::new();
+            f.seed();
+            let _daemon = f.attach(Component::Daemon, 64);
+            let ui = f.attach(Component::Ui, 64);
+            let human = HumanInputPending {
+                seq: 1, ui: f.endpoint(Component::Ui), surface_id: "surface-demo".into(),
+                ui_proposal_id: "human-pending".into(), case4_expired: false,
+            };
+            f.server.human_inputs.insert("human-control".into(), human.clone());
+            // Negative control: normal disconnect cleanup still journals.
+            let seq = f.server.authority.state().core_seq;
+            f.server.retire(&f.endpoint(retiring), 1);
+            assert!(f.server.authority.state().core_seq > seq);
+            assert!(f.server.human_inputs.is_empty());
+            let _reconnected = f.attach(retiring, 64);
+            f.server.human_inputs.insert("human-ended".into(), human);
+            // Model the spare capacity for a smaller cleanup record after a
+            // larger record was refused. No production or test limit is raised.
+            let env = f.envelope(Component::Daemon, 2, journal_review_notice());
+            f.server.end_full_journal(0, &env).unwrap();
+            let snapshot = f.server.snapshot().unwrap();
+            let journal = fs::read(f.server.root.join("journal.jsonl")).unwrap();
+            let marker = fs::read(f.server.root.join("journal-ended.json")).unwrap();
+            f.server.retire(&f.endpoint(retiring), 1);
+            assert!(f.server.snapshot().unwrap() == snapshot, "ended disconnect cannot journal");
+            assert_eq!(fs::read(f.server.root.join("journal.jsonl")).unwrap(), journal);
+            assert_eq!(fs::read(f.server.root.join("journal-ended.json")).unwrap(), marker);
+            assert!(f.server.human_inputs.is_empty(), "local waiters are settled");
+            f.server.authority.flush_sync().unwrap();
+            let config = f.server.config.clone();
+            f.server.shutdown().unwrap();
+            let replacement = Server::open(config.clone(), &f.root.join("unused"), effective_uid().unwrap()).unwrap();
+            drop(std::mem::replace(&mut f.server, replacement));
+            let recovered = Server::open(config, &f.root, effective_uid().unwrap()).unwrap();
+            assert!(recovered.journal_end.is_some(), "restart cannot reopen ended admission");
+            assert_eq!(recovered.snapshot().unwrap(), snapshot);
+            drop(ui);
+        }
+    });
+}
+
+#[test]
+fn journal_end_daemon_retire_keeps_held_headless_state_replay_bound() {
+    run(async {
+        let mut f = Fixture::new();
+        f.server.authority.apply(Input::Connect).unwrap();
+        let agent = f.endpoint(Component::Agent);
+        f.server.authority.apply(Input::HeadlessRequest {
+            request: serde_json::from_value(json!({"schema":"headless_request/v0.2","request_id":"request-headless-end","op":"create","params":{"template":"headless-sumsq"}})).unwrap(),
+            caller: agent.clone(), agent, graphical_seen: false, received_ns: 0,
+        }).unwrap();
+        assert!(f.server.authority.state().headless.held);
+        let _daemon = f.attach(Component::Daemon, 64);
+        let _agent = f.attach(Component::Agent, 64);
+        let env = f.envelope(Component::Daemon, 2, journal_review_notice());
+        f.server.end_full_journal(0, &env).unwrap();
+        let snapshot = f.server.snapshot().unwrap();
+        f.server.retire(&f.endpoint(Component::Daemon), 1);
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+        f.server.load_journal_end().unwrap();
+        assert!(f.server.journal_end.is_some());
+    });
+}

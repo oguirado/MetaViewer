@@ -508,6 +508,14 @@ impl Server {
             self.observers.remove(peer);
             self.subscriptions.retain(|(p, _)| p != peer);
             self.unsubscribed.retain(|(p, _)| p != peer);
+            if self.journal_end.is_some() {
+                // JOURNAL_FULL already settled connected UI waiters. Cleanup
+                // after the end must not invalidate the replay-bound marker,
+                // even when a smaller cleanup record would still fit.
+                self.human_inputs
+                    .retain(|_, h| peer.component != Component::Daemon && &h.ui != peer);
+                return;
+            }
             if peer.component == Component::Daemon {
                 if let Ok(now_ns) = self.now() {
                     let _ = self.mark_headless_unknown(now_ns);
