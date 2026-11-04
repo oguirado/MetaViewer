@@ -12,6 +12,7 @@ const {parse}=await import(pathToFileURL(require.resolve('@vue/compiler-sfc')));
 const {compileSfc,rendererElement,nodes,text,flush}=await import(pathToFileURL(base+'test/mvui2-terminal-mount.mjs'));
 const values=await import(pathToFileURL(base+'electron/guestCommandValues.js'));
 const controls=await import(pathToFileURL(base+'src/wall/rewindStateControls.js'));
+const restoreDuration=await import(pathToFileURL(base+'src/wall/restoreDuration.js'));
 const {createCapsulePanelRouter}=await import(pathToFileURL(base+'src/wall/capsulePanelRouter.js'));
 const src=readFileSync(base+'src/wall/WallWorkspace.vue','utf8');
 const code=parse(src).descriptor.script.content.replace("from 'vue'",`from ${JSON.stringify(pathToFileURL(require.resolve('vue')).href)}`);
@@ -31,7 +32,7 @@ test('actual wall keeps one owned workload panel across three generation advance
 });
 test('mounted real command panel retains edits and dispatches current generation; foreign owner fences old route',async()=>{
  const state=vue.reactive({rows:[guestWorkloadTile(snapshot(1))]});const first=state.rows[0].id,actions=[];
- const Panel=await compileSfc('components/GuestCommandPanel.vue',{'../../electron/guestCommandValues.js':values,'../wall/rewindStateControls.js':controls});
+ const Panel=await compileSfc('components/GuestCommandPanel.vue',{'../../electron/guestCommandValues.js':values,'../wall/rewindStateControls.js':controls,'../wall/restoreDuration.js':restoreDuration});
  const Router=createCapsulePanelRouter({...vue,graphical:vue.defineComponent({render(){throw Error('graphical');}}),rows:()=>state.rows,validate:validGuestWorkloadTile,slot:({workload})=>vue.h(Panel,{snapshot:workload.snapshot,onAction:a=>actions.push(a)})});
  const m=mountComponent(Router,{params:{params:{sessionId:first}}});
  const byId=id=>nodes(m.root).find(n=>n.props?.id===id);

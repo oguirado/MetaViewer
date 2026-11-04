@@ -31,7 +31,7 @@ function storageFor(facade) {
   });
 }
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await vue.nextTick(); };
-async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runtime) {
+async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runtime, extraProps = {}) {
   const oldWindow = globalThis.window, oldDocument = globalThis.document;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
@@ -66,7 +66,7 @@ async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runti
     const fixture = resolveFixture('one').fixture;
     const layout = createWallLayout(SCOPE, [...fixture.capsules]);
     const view = mount(App, { fixture: { ...fixture, scheme }, layout, scope: SCOPE, storage,
-      runtime: runtime ?? createFixtureRuntime(fixture).mount.runtime,
+      runtime: runtime ?? createFixtureRuntime(fixture).mount.runtime, ...extraProps,
       nestedHost: { getNestedDepth: () => displayOnly ? 1 : 0, getSelfCapsuleId: () => null } });
     await captured.ready; await tick();
     return { ...captured, view, layout, close() { view.close(); globalThis.window = oldWindow; globalThis.document = oldDocument; } };
@@ -302,4 +302,18 @@ test('empty frame projection with an authority runtime waits for capsule frames'
     assert.doesNotMatch(status,/Core not connected/);
     assert.doesNotMatch(status,/Core connected/);
   }finally{app.close();runtime.dispose();}
+});
+
+
+test('ready owned MicroVM reports no frames needed without inventing a frame connection',async()=>{
+ const runtime=adapters.createAuthorityRuntime({subscribeFrames:()=>()=>{}});
+ const snapshot={available:true,busy:false,canCancel:false,uncertain:false,code:null,revision:1,session:{schema:'guest_command_session/v0.2',workload_id:'workload-one',generation:1,owner_id:'actor-one',profile_id:'guest-command-arm64-v1',backend:'firecracker',isa:'aarch64',phase:'ready',ownership:'held',jobs_started:0,job:null,controls:{cancel:null,stop:null}},stdout:'',stderr:''};
+ let publish;
+ const app=await mountApp({readRaw:async()=>null,writeAtomic:async()=>{}},'mv-dark',false,runtime,{guestCommandHost:{status:async()=>snapshot,subscribe:callback=>{publish=callback;return()=>{};}}});
+ try{
+  assert.match(text(byId(app.view.root,'shell-feed-status')),/MicroVM ready · No frames needed/);
+  assert.doesNotMatch(text(byId(app.view.root,'shell-feed-status')),/Waiting for capsule frames|Core connected/);
+  publish({...snapshot,revision:2,uncertain:true});await tick();
+  assert.doesNotMatch(text(byId(app.view.root,'shell-feed-status')),/MicroVM ready|No frames needed/);
+ }finally{app.close();runtime.dispose();}
 });

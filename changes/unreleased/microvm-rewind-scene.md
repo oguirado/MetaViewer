@@ -1,0 +1,2 @@
+- Add a scripted SDK demonstration that deletes and restores guest files.
+- Show measured Back-to-Ready response time and style MicroVM controls with semantic tokens.

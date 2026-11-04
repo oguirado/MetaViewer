@@ -117,7 +117,7 @@ func validProgramProfile(id string) bool {
 }
 func (c Config) allowsProfile(kind, id string) bool {
 	if kind == "program" {
-		return validProgramProfile(id)
+		return id != c.profile("vm") && id != c.profile("browser") && validProgramProfile(id)
 	}
 	return c.profile(kind) != "" && id == c.profile(kind)
 }

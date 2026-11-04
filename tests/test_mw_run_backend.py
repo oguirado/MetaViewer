@@ -228,6 +228,58 @@ class BackendTests(unittest.TestCase):
         with self.assertRaisesRegex(host.OwnerRefused, 'MW_RUN_OPERATION'):
             b.call('input')
 
+    def test_report_write_failure_preserves_terminal_execution_outcome(self):
+        args = SimpleNamespace(identity='alice', site='example', workflow='read', slot=[])
+        for original_rc, code in ((5, 'INPUT_UNCERTAIN'), (4, 'HUMAN_HANDOFF'),
+                                  (6, 'MW_RUN_CONFIG')):
+            with self.subTest(rc=original_rc):
+                output = io.StringIO()
+                with patch.dict(os.environ, XDG_STATE_HOME=str(self.root)), \
+                     patch.object(host, 'admit_home', return_value=self.root / 'home'), \
+                     patch.object(host, 'connect'), \
+                     patch.object(host, 'HostBackend', return_value=SimpleNamespace()), \
+                     patch.object(host, 'execute', return_value=(original_rc, code, None)), \
+                     patch.object(host.ReplayOwner, 'write', side_effect=OSError('synthetic full disk')), \
+                     contextlib.redirect_stdout(output):
+                    rc = host.run_entry(args)
+                result = json.loads(output.getvalue())
+                self.assertEqual(rc, original_rc)
+                self.assertEqual(result['rc'], original_rc)
+                self.assertEqual(result['verdict_code'], code if original_rc in (4, 5) else 'MW_PRIVATE_OUTPUT')
+                self.assertIsNone(result['report'])
+
+    def test_stored_run_creates_private_parents_for_subsequent_goal_runs(self):
+        program = host.module('private_parent_program_test', ROOT / 'tools/mw_run_program.py')
+        browser = host.module('private_parent_browser_test', ROOT / 'tools/mw_run_browser_goal.py')
+        stored = SimpleNamespace(identity='alice', site='example', workflow='read', slot=[])
+        goal_args = SimpleNamespace(identity='alice', goal='Synthetic', steps=1, timeout_ms=1000,
+                                   planner='rules', model_timeout_ms=1000, text=None, key=None)
+        for mask in (0o022, 0o002):
+            with self.subTest(umask=mask), tempfile.TemporaryDirectory(dir='/dev/shm') as temp:
+                state = Path(temp) / 'state'
+                old_mask = os.umask(mask)
+                try:
+                    with patch.dict(os.environ, XDG_STATE_HOME=str(state)), \
+                         patch.object(host, 'admit_home', return_value=self.root / 'home'), \
+                         patch.object(host, 'connect', side_effect=host.OwnerRefused('SYNTHETIC_ATTACH')), \
+                         contextlib.redirect_stdout(io.StringIO()) as output, \
+                         contextlib.redirect_stderr(io.StringIO()):
+                        self.assertEqual(host.run_entry(stored), 6)
+                    result = json.loads(output.getvalue())
+                    evidence = Path(result['report']).parent
+                    for path in (state, evidence.parent.parent, evidence.parent, evidence):
+                        self.assertEqual(path.stat().st_mode & 0o777, 0o700, str(path))
+                    for lane in (program, browser):
+                        with patch.dict(os.environ, XDG_STATE_HOME=str(state)), \
+                             patch.object(lane.host, 'connect', side_effect=lane.host.OwnerRefused('SYNTHETIC_ATTACH')) as connect, \
+                             contextlib.redirect_stdout(io.StringIO()) as output, \
+                             contextlib.redirect_stderr(io.StringIO()):
+                            self.assertEqual(lane.run_entry(goal_args), 6)
+                        connect.assert_called_once()
+                        self.assertEqual(json.loads(output.getvalue())['verdict_code'], 'SYNTHETIC_ATTACH')
+                finally:
+                    os.umask(old_mask)
+
     def test_entry_json_and_missing_receipt_is_nonzero(self):
         args = SimpleNamespace(identity='alice', site='example', workflow='read', slot=[])
         env = {'XDG_STATE_HOME': str(self.root)}

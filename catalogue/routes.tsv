@@ -203,8 +203,11 @@ guestco-6106b5a4ceef	changes/unreleased/guest-command-cancel-state.md
 guestco-e65e1dc50fac	changes/unreleased/guest-command-observation.md
 handoff-state-home.md	changes/unreleased/handoff-state-home.md
 identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
+judgein-6d7ef63592c7	changes/unreleased/judge-install-diagnostics.md
 judgeki-2abc0a3eae20	changes/unreleased/judge-kit-capsule-net.md
 judgeki-16dad1d0cde7	changes/unreleased/judge-kit-package-tool-deps.md
+judge-root-refusal.md	changes/unreleased/judge-root-refusal.md
+judgesc-91a8a932898f	changes/unreleased/judge-script-comments.md
 judgest-1257a8a92a8d	changes/unreleased/judge-stop-capsule-ram.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 judge-tour.md	changes/unreleased/judge-tour.md
@@ -212,9 +215,18 @@ launcher-role-step.md	changes/unreleased/launcher-role-step.md
 launcher-two-kinds.md	changes/unreleased/launcher-two-kinds.md
 main-rss-headroom.md	changes/unreleased/main-rss-headroom.md
 mdisp-fix.md	changes/unreleased/mdisp-fix.md
+microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
+microvm-2ad050142531	changes/unreleased/microvm-rewind-theme.md
+microvm-f937fea84c3b	changes/unreleased/microvm-workspace-presentation.md
+mutatio-9bd8e2d9afd9	changes/unreleased/mutation-regression-tests.md
 mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
+mwparti-1980adad520e	changes/unreleased/mw-partial-text-refusal.md
+mwpriva-76f7c208b48f	changes/unreleased/mw-private-run-parents.md
 mw-readback-textof.md	changes/unreleased/mw-readback-textof.md
+mw-report-deadline.md	changes/unreleased/mw-report-deadline.md
+mw-report-outcome.md	changes/unreleased/mw-report-outcome.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
+mwtermi-843dba820964	changes/unreleased/mw-terminal-deadline.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
@@ -327,6 +339,12 @@ v028-fit.md	changes/unreleased/v028-fit.md
 v028-grid6.md	changes/unreleased/v028-grid6.md
 v028-orphan-2.md	changes/unreleased/v028-orphan-2.md
 v028-orphan.md	changes/unreleased/v028-orphan.md
+v028qui-b5369b94aa59	changes/unreleased/v028-quick-crash-c5.md
+v028-quick-perf4.md	changes/unreleased/v028-quick-perf4.md
+v028-quick-sec2-t3.md	changes/unreleased/v028-quick-sec2-t3.md
+v028-quick-sec2-t5.md	changes/unreleased/v028-quick-sec2-t5.md
+v028-quick-sec2-t6.md	changes/unreleased/v028-quick-sec2-t6.md
+v028-quick-sec2-t8.md	changes/unreleased/v028-quick-sec2-t8.md
 v028-ref.md	changes/unreleased/v028-ref.md
 v028-slots-core.md	changes/unreleased/v028-slots-core.md
 v028-slots-store.md	changes/unreleased/v028-slots-store.md
@@ -1865,6 +1883,7 @@ retention_test.go	daemon-adapter/internal/capsule/slots/retention_test.go
 store.go	daemon-adapter/internal/capsule/slots/store.go
 store_test.go	daemon-adapter/internal/capsule/slots/store_test.go
 slots_bridge.go	daemon-adapter/internal/capsule/slots_bridge.go
+slotsbr-3b3755bdcd95	daemon-adapter/internal/capsule/slots_bridge_arch_test.go
 slots_bridge_test.go	daemon-adapter/internal/capsule/slots_bridge_test.go
 statedir.go	daemon-adapter/internal/capsule/statedir.go
 statedir_test.go	daemon-adapter/internal/capsule/statedir_test.go
@@ -2395,8 +2414,10 @@ judge_scenarios.py	tests/judge/judge_scenarios.py
 test_capsule_net.py	tests/judge/test_capsule_net.py
 test_first_run.py	tests/judge/test_first_run.py
 test_flow.py	tests/judge/test_flow.py
+testins-73c30e3697d8	tests/judge/test_install_diagnostics.py
 test_mutants.py	tests/judge/test_mutants.py
 test_preflight.py	tests/judge/test_preflight.py
+test_root_refusal.py	tests/judge/test_root_refusal.py
 test_static.py	tests/judge/test_static.py
 test_v027_fix_j1.py	tests/judge/test_v027_fix_j1.py
 test_v027_fix_l1.py	tests/judge/test_v027_fix_l1.py
@@ -2473,6 +2494,7 @@ test_kit_source.py	tests/test_kit_source.py
 testlay-30db08e8ee29	tests/test_layout_intents.py
 test_live_teardown.py	tests/test_live_teardown.py
 test_meta_site.py	tests/test_meta_site.py
+testmic-3835fbfca5c2	tests/test_microvm_scripted_scene.py
 test_multi_capsule.py	tests/test_multi_capsule.py
 test_mv_demo.py	tests/test_mv_demo.py
 test_mv_demo_flow.py	tests/test_mv_demo_flow.py
@@ -2541,6 +2563,7 @@ generat-f7334b59521f	tools/generate_guest_command_sdk.py
 generat-4f785fccb627	tools/generate_headless_contracts.py
 generat-d976ac2a00ac	tools/generate_rewind_bindings.py
 generat-59ec76fa9902	tools/generate_rewind_sdk.py
+microvm-759c305ea218	tools/microvm_scripted_scene.py
 mv_demo.py	tools/mv_demo.py
 mv_identity.py	tools/mv_identity.py
 mv_ram_admission.py	tools/mv_ram_admission.py
@@ -2733,12 +2756,14 @@ capsuleId.js	ui/src/wall/capsuleId.js
 capsulePanelRouter.js	ui/src/wall/capsulePanelRouter.js
 guestWorkloadTile.js	ui/src/wall/guestWorkloadTile.js
 layout.js	ui/src/wall/layout.js
+restoreDuration.js	ui/src/wall/restoreDuration.js
 rewindS-318a0fc2e8fa	ui/src/wall/rewindStateControls.js
 tileCapture.js	ui/src/wall/tileCapture.js
 tileStates.js	ui/src/wall/tileStates.js
 wall.css	ui/src/wall/wall.css
 workloa-18ac85fe36ae	ui/src/wall/workloadPanelParams.js
 ac02pre-71a807ab974c	ui/test/ac02-present-budget.test.js
+agentpr-39ab73f201da	ui/test/agent-prompts-other-clis.test.js
 agent-prompts.test.js	ui/test/agent-prompts.test.js
 argfram-b088a4e11407	ui/test/arg-frames-regression.test.js
 argshel-6ecedb311e55	ui/test/arg-shell-regressions.test.js
@@ -2820,6 +2845,7 @@ inputu3-c2420a5d6d39	ui/test/inputu3-canvas-echo.test.js
 inputu3-harness.mjs	ui/test/inputu3-harness.mjs
 inputu3-9651b47c7e57	ui/test/inputu3-pointer-echo.test.js
 intents.test.js	ui/test/intents.test.js
+launche-aca9e07890ae	ui/test/launcher-recent-launch.test.js
 layout-load.test.js	ui/test/layout-load.test.js
 live-host-xpra.mjs	ui/test/live-host-xpra.mjs
 mainsta-a4716a4c64fe	ui/test/main-startup-order.test.js
@@ -3130,6 +3156,7 @@ renderer-asar.test.js	ui/test/renderer-asar.test.js
 rendere-0907683c0d40	ui/test/renderer-ready.test.js
 reopena-3e5702fcbea8	ui/test/reopen-app-create.test.js
 reopenh-952d4999527b	ui/test/reopen-host-create.test.js
+restore-6e46f0e3e85f	ui/test/restore-duration.test.js
 rewindc-8f1ae7f269b8	ui/test/rewind-core-optin.test.js
 rewind-header.test.js	ui/test/rewind-header.test.js
 rewind-host.test.js	ui/test/rewind-host.test.js
@@ -3190,6 +3217,7 @@ v026hos-3d9275d42730	ui/test/v026-host-polish-visual.js
 v026-host-polish.html	ui/test/v026-host-polish.html
 v026hos-e5825ac19a7e	ui/test/v026-host-polish.test.js
 v026hos-0989adc7fb8b	ui/test/v026-host-xpra.test.js
+v026ide-df8369be24ef	ui/test/v026-identity-cells-labels.test.js
 v026kit-ed2db276dbdb	ui/test/v026-kit-sidecars.test.js
 v026ter-80d324689702	ui/test/v026-terminal-buttons.test.js
 v027bro-d687bba928a4	ui/test/v027-browser-handoff.test.js
@@ -3218,6 +3246,7 @@ v027til-aec2d0c0bc3c	ui/test/v027-tile-chrome.test.js
 v027-u3c.test.js	ui/test/v027-u3c.test.js
 v027win-4af1694b2e2c	ui/test/v027-window-close-live-order.test.js
 v027win-4508650304ef	ui/test/v027-window-resize.test.js
+v028dis-327661b55429	ui/test/v028-display-conversion.test.js
 v028-fit-render.cjs	ui/test/v028-fit-render.cjs
 v028fit-1d677c28111c	ui/test/v028-fit-render.test.js
 v028-fit.test.js	ui/test/v028-fit.test.js
@@ -3227,6 +3256,7 @@ v028orp-8bfbd9efdd7e	ui/test/v028-orphan-release-live.cjs
 v028orp-960ca38225fe	ui/test/v028-orphan-release-live.html
 v028orp-b574bd667de3	ui/test/v028-orphan-release-live.js
 v028orp-a675e6c6ca58	ui/test/v028-orphan-release.test.js
+v028pro-c087ddecf946	ui/test/v028-program-sidecar.test.js
 v028-tiles-visual.js	ui/test/v028-tiles-visual.js
 v028-tiles.html	ui/test/v028-tiles.html
 v028-tiles.test.js	ui/test/v028-tiles.test.js

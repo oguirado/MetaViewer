@@ -589,9 +589,13 @@ class ToolClient:
         data = str(self.active.next_seq + 1).encode("ascii")
         tmp_fd = None
         try:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
             tmp_fd = os.open(
                 tmp_path,
-                os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                 0o600,
             )
             info = os.fstat(tmp_fd)

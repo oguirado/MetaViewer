@@ -193,6 +193,7 @@ async function requestRewind(/** @type {any} */action){try{const value=await pro
 
 const arm64Capabilities=ref(/** @type {any} */ (null));
 const guestWorkloadTiles=computed(()=>{const tile=guestWorkloadTile(guestCommandSnapshot.value);return tile?[tile]:[];});
+const readyMicroVm=computed(()=>guestCommandSnapshot.value.available && !guestCommandSnapshot.value.busy && !guestCommandSnapshot.value.uncertain && guestWorkloadTiles.value.some(tile=>tile.snapshot.session.phase==='ready' && tile.snapshot.session.ownership==='held'));
 watch(()=>props.guestCommandHost,(host,_,cleanup)=>{
  let active=true;
  const accept=(/** @type {any} */ value)=>{if(active&&value&&Number.isSafeInteger(value.revision)&&value.revision>=guestCommandSnapshot.value.revision){guestCommandSnapshot.value=value;if(value.session||value.uncertain)guestCommandOpen.value=true;}};
@@ -1859,7 +1860,7 @@ onMounted(() => {
       <div class="mv-navigation-foot">
         <HandoffNotice @activity="recordActivity" @take-control="takeHandoffControl" @pending="treeHandoffs = $event" />
         <ActivityStrip :entries="activityFeed" />
-        <div class="mv-sidebar-status"><StatusBar :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]"><template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template><template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.filter(row => row.backendLifecycle !== 'lost').length} capsules${rows.some(row => row.backendLifecycle === 'lost') ? ` · ${rows.filter(row => row.backendLifecycle === 'lost').length} lost` : ''}` : 'Ready when you are' }}</span></template></StatusBar></div>
+        <div class="mv-sidebar-status"><StatusBar :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]"><template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : readyMicroVm ? 'MicroVM ready · No frames needed' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template><template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.filter(row => row.backendLifecycle !== 'lost').length} capsules${rows.some(row => row.backendLifecycle === 'lost') ? ` · ${rows.filter(row => row.backendLifecycle === 'lost').length} lost` : ''}` : 'Ready when you are' }}</span></template></StatusBar></div>
       </div>
     </aside>
     <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"

@@ -394,3 +394,20 @@ func TestInventoryPythonRowParityFixture(t *testing.T) {
 		t.Fatal(e)
 	}
 }
+
+func TestProgramRejectsReservedProfiles(t *testing.T) {
+	c := Config{RunID: strings.Repeat("a", 24)}
+	for _, id := range []string{c.profile("vm"), c.profile("browser")} {
+		if c.allowsProfile("program", id) {
+			t.Errorf("reserved profile admitted as program: %s", id)
+		}
+	}
+	for _, kind := range []string{"vm", "browser", "program"} {
+		if !c.allowsProfile(kind, c.profile(kind)) {
+			t.Errorf("own profile refused: %s", kind)
+		}
+	}
+	if !c.allowsProfile("program", "xterm-2") {
+		t.Fatal("ordinary program refused")
+	}
+}

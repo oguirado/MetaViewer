@@ -230,6 +230,34 @@ class InventoryTests(ReconcileTests):
         def unit(self,unit):return {'LoadState':'not-found','ActiveState':'inactive','ControlGroup':'','InvocationID':'','MainPID':'0'}
         def cgroup(self,group):return None
 
+    def test_setup_native_pair_preserves_descriptor_custody(self):
+        self.descriptor['native'].pop('srf-holdings-capsule')
+
+        def bind():
+            self.write(self.root / 'setup.json', self.descriptor)
+            digest = hashlib.sha256((self.root / 'setup.json').read_bytes()).hexdigest()
+            self.plan['registry_sha256'] = digest
+            self.config['registry_sha256'] = digest
+
+        bind()
+        self.assertEqual(r.descriptor_context(self.root, self.plan, self.config),
+                         (self.root / 'setup.json').read_bytes())
+        self.plan['registry_sha256'] = '0' * 64
+        with self.assertRaises(r.Refused):
+            r.descriptor_context(self.root, self.plan, self.config)
+        for keys in (('srf-identity-admin',),
+                     ('srf-identity-admin', 'srf-identity-surface', 'foreign')):
+            self.descriptor['native'] = {key: self.descriptor['artifacts']['engine'] for key in keys}
+            bind()
+            with self.assertRaises(r.Refused):
+                r.descriptor_context(self.root, self.plan, self.config)
+        self.descriptor['native'] = {key: dict(self.descriptor['artifacts']['engine'])
+                                     for key in ('srf-identity-admin', 'srf-identity-surface')}
+        self.descriptor['native']['srf-identity-admin']['sha256'] = '0' * 64
+        bind()
+        with self.assertRaises(r.Refused):
+            r.descriptor_context(self.root, self.plan, self.config)
+
     def test_new_contract_clean_proof_releases_only_exact_marker(self):
         self.seal()
         before=(self.root/'allocations.jsonl').read_bytes()

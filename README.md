@@ -37,8 +37,10 @@ After installation, follow the [Judge tour](docs/JUDGE_TOUR.md). Use
 The [documentation index](docs/README.md) and [pre-existing work declaration](docs/PREEXISTING.md)
 provide the wider reading path.
 
-Legacy networking reaches no public site today; public browsing requires a
-compatible Open image and firewall. Keep `--capsules` consistent across fetch,
+The `v0.2.5` x64 judge kit includes the Open browser image for public browsing
+with LAN access blocked, after the launcher installs the matching firewall
+[CITED: maintainer evaluation; raw receipt absent]. Legacy networking reaches no
+public site today. Keep `--capsules` consistent across fetch,
 doctor and install for the capsule tier; omit it for the app-only tier.
 
 For the capsule tier, fetch the verified release assets first, then run:

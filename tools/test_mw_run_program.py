@@ -12,6 +12,7 @@ import os
 import stat
 import time
 import socket
+import signal
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -1988,6 +1989,80 @@ finally:s.close()
             self.assertEqual(program.run_entry(args), 0)
         custody.assert_not_called()
         muse.assert_not_called()
+
+    def test_verified_focus_click_then_clean_type_refusal_stays_rc5(self):
+        for reason in ('changed', 'stale'):
+            with self.subTest(reason=reason):
+                planner, submit, settle, order, submitted = self.text_fixture()
+                self.b.wender = self.root
+                real_propose = self.b.propose
+
+                def refuse_type(sensed, plan, max_ms):
+                    if plan['action']['type'] == 'type':
+                        if reason == 'changed':
+                            raise program.ProgramObservationChanged(frame(), frame(2), {})
+                        raise host.tools.ToolRefusal('STALE_FRAME', None)
+                    return real_propose(sensed, plan, max_ms)
+
+                args = SimpleNamespace(identity='alice', goal='Message', text='hello', steps=1,
+                                       timeout_ms=1000, planner='rules', model_timeout_ms=120000)
+                with patch.dict(os.environ, XDG_STATE_HOME=str(self.root)), \
+                     patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+                     patch.object(program, 'ProgramBackend', return_value=self.b), \
+                     patch.object(program, 'VCorePerceptionAdapter', return_value=self.b.vision), \
+                     patch.object(program, 'WenderSubprocessAdapter', return_value=planner), \
+                     patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(self.b, 'propose', side_effect=refuse_type), \
+                     patch.object(host.tools, 'propose', side_effect=submit) as propose, \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle) as verify, \
+                     contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+                    rc = program.run_entry(args)
+                self.assertEqual(rc, 5)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN')
+                report = json.loads(Path(result['report']).read_text())
+                self.assertEqual(report['status'], 'input_uncertain')
+                self.assertEqual(len(report['moves']), 1)
+                self.assertEqual(report['moves'][0]['action']['type'], 'click')
+                self.assertEqual(report['attempts'][-1]['status'], 'refused_before_dispatch')
+                self.assertTrue(self.b.program_clean_refusal)
+                propose.assert_called_once()
+                verify.assert_called_once()
+                self.assertEqual(order, ['click', 'publish'])
+
+    def test_report_deadline_after_uncertain_move_keeps_rc5(self):
+        self.b.observe = Mock(return_value=dict(frame_ref=frame()))
+        self.b.wender = self.root
+        real_write = host.ReplayOwner.write
+        report_timers = []
+
+        def uncertain(*args, **kwargs):
+            self.b.program_moves = [dict(status='verified_move')]
+            self.b.program_attempts = [dict(status='input_uncertain')]
+            raise host.OwnerRefused('MW_PROGRAM_DEADLINE')
+
+        def write(path, raw):
+            if path.name == 'report.json':
+                remaining = signal.getitimer(signal.ITIMER_REAL)[0]
+                report_timers.append(remaining)
+                if remaining > 0:
+                    signal.raise_signal(signal.SIGALRM)
+            return real_write(path, raw)
+
+        with patch.dict(os.environ, XDG_STATE_HOME=str(self.root)), \
+             patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+             patch.object(program, 'ProgramBackend', return_value=self.b), \
+             patch.object(program, 'VCorePerceptionAdapter'), patch.object(program, 'WenderSubprocessAdapter'), \
+             patch.object(program, 'run_moves', side_effect=uncertain), \
+             patch.object(host.ReplayOwner, 'write', side_effect=write), \
+             contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+            rc = mw_run.main(['--identity', 'alice', '--surface-kind', 'program',
+                              '--goal', 'Covered square'], runner=program.run_entry)
+        self.assertEqual(rc, 5)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN')
+        self.assertEqual(json.loads(Path(result['report']).read_text())['rc'], 5)
+        self.assertEqual(report_timers, [0])
 
     def test_text_entry_uncertified_verdict_is_explicit_and_mismatch_nonzero(self):
         for readback,rc,code in (('exact',0,'PROGRAM_BOUNDED_ACTIONS_VERIFIED'),

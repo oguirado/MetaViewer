@@ -52,3 +52,17 @@ test('actual kit float/hide/show preserves both identities; parser refuses mixed
  for(const p of [accessor,Object.create({params:{sessionId:row.id}}),{params:{capsuleId:'cap',sessionId:row.id}},{params:{sessionId:row.id,extra:1}},{params:{sessionId:row.id,slotFolded:'yes'}}])assert.equal(classifyCapsulePanelParams(p),null);
  assert.equal(reads,0);
 });
+
+
+test('a new workload removes the empty restore group instead of sharing half the wall with it',()=>{
+ const empty={id:'wall-empty',size:0},workload={id:'workload-group',size:1};
+ let panel=null;
+ const api={panels:[],groups:[empty],getPanel:()=>panel,addPanel:options=>{api.panels.push(options);api.groups.push(workload);panel={id:options.id,api:{setActive(){}}};return panel;},removeGroup:group=>{api.groups.splice(api.groups.indexOf(group),1);}};
+ const controller=createWallWorkspaceController({projectionView:{getProjection:()=>({rows:[]})},workloadTiles:()=>[row],validateWorkloadTile:valid});
+ try{
+  controller.handleReady({api,windows:{state:()=>({hidden:false}),show(){},hide(){},float(){},dock(){}},revision:1});
+  assert.equal(controller.revealWorkload(row.id).ok,true);assert.deepEqual(api.groups,[workload]);
+  assert.deepEqual(api.panels[0].params,{sessionId:row.id});
+  api.groups.push(empty);assert.equal(controller.revealWorkload(row.id).ok,true);assert.ok(api.groups.includes(empty),'reactivation preserves an existing floating-layout home');
+ }finally{controller.dispose();}
+});
