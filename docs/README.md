@@ -29,8 +29,7 @@ graphical session; Host program and Desktop window are not isolated.
 
 [Roadmap](ROADMAP.md) is the pre-event plan, not a completion record.
 [Research](research/), [research log](RESEARCH_LOG.md), [router bootstrap](ROUTER_BOOTSTRAP.md),
-[Holdings lessons](HOLDINGS_LESSONS_UI_ORCHESTRATOR.md), the P18 and Xpra design
-notes, rehearsal notes and recursive demo script preserve planning context.
+the Xpra design notes and the recursive demo script preserve planning context.
 They do not establish current APIs or live acceptance results.
 
 The [generated code map](../route/README.md) supplies source coordinates that

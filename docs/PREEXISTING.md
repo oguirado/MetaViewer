@@ -48,7 +48,6 @@ Committed as `e06d627` on **2026-10-25** [CITED: git log], **13 files**
 | `docs/ROUTER_BOOTSTRAP.md` | Context-router bootstrap notes for the shared UI |
 | `docs/RESEARCH_LOG.md` | Visual-layer research ledger |
 | `docs/DEMO_RECURSIVE_SCRIPT.md` | Draft hackathon video concept script |
-| `docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md` | Design notes from Holdings for the UI layer and capsule orchestrator |
 | `docs/research/` | **8** supporting files [CITED: tree]: acceptance review, terminal-workspace synthesis, UI seal decisions, research handoff, npm pins evidence, UI architecture report, **2** query logs |
 
 ## Historical external private components

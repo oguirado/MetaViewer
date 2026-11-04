@@ -32,9 +32,8 @@ This repository holds no scrubbed raw copies. Their run
 commands, complete commit identities and raw timing records cannot be reconstructed
 from the summaries. No replacement receipt is manufactured here.
 
-The public [rehearsal record](e1-rehearsal.md) and [demo runbook](DEMO_RUNBOOK.md)
-provide their own scoped context; neither stands in for those missing notes or
-proves current release-wide acceptance. Static checks do not establish live frame
+The [demo runbook](DEMO_RUNBOOK.md) provides its own scoped context; it does not stand in for those missing notes or
+prove current release-wide acceptance. Static checks do not establish live frame
 rate, semantic task success, guest behavior or private isolation internals.
 
 ## Private boundary
