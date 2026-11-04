@@ -9,7 +9,7 @@ Rust core as the single authority over lifecycle, admission, budgets, locks and
 durable session order. Electron renders state and submits intents. It never
 injects input.
 
-The current candidate **0.2.5** [CITED: `../VERSION`] carries the v0.2 contracts (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] schemas in `contracts/v0.2/` alongside `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] closed v0.1 schemas) and the
+The current candidate **0.2.5** [CITED: `../VERSION`] carries the v0.2 contracts (`41` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] schemas in `contracts/v0.2/` alongside `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] closed v0.1 schemas) and the
 integration laws. This document mixes implemented behavior with historical plans. Labels such as
 "planned for v0.2.0" are uncompleted design notes, not release promises; use the
 [README status and limits](../README.md#status) for the current assembly. Features I have not integrated end
@@ -20,7 +20,7 @@ OS installers) are marked that way and never described as done.
 flowchart LR
     UI[Electron wall] <-->|envelopes / ui_intent / snapshots| CORE[Rust authority core]
     CORE <-->|surface_request / surface_event| ADAPTER[Go daemon adapter]
-    ADAPTER <-->|srf capsule CLIs| CAPS[Isolated Linux displays / capsules]
+    ADAPTER <-->|srf capsule CLIs, Xpra, guest runners| CAPS[Capsules: containers, guests, host routes]
     CAPS --> RAM[RAM capture /dev/shm ramws]
     RAM --> PUB[adapter publisher: frame_ref v0.2]
     PUB --> CORE
@@ -41,6 +41,11 @@ I describe the UI kit shell, wall layout and terminal in
 [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md). Pre-existing components are declared
 in [PREEXISTING.md](PREEXISTING.md), and the delivery plan in
 [ROADMAP.md](ROADMAP.md).
+
+Why the product is built from capsules, what each capsule kind isolates and
+what it does not, and how this compares with a plain desktop, tabs, containers,
+VMs and remote desktops is in [WHY_CAPSULES.md](WHY_CAPSULES.md). Host program
+and Desktop window run on the operator's computer and are not isolated.
 
 ## Process and transport model
 
@@ -107,8 +112,8 @@ Durable core state lives under `$XDG_STATE_HOME/metaviewer`, or
 I follow law L3 ([LAWS.md](../LAWS.md)): a schema and its positive/negative
 examples land before any producer or consumer, a breaking change opens a new
 contract directory, and old versions stay until no pin uses them.
-`contracts/v0.1/` is untouched; v0.2 is the integrated set (`21` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] v0.2 schemas
-against `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] v0.1 schemas, validated against `489` [MEASURED: `ls -1 contracts/examples/v0.2/*.json | wc -l`] v0.2 fixtures and `20` [MEASURED: `ls -1 contracts/examples/*.json | wc -l`] v0.1 fixtures).
+`contracts/v0.1/` is untouched; v0.2 is the integrated set (`41` [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] v0.2 schemas
+against `10` [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] v0.1 schemas, validated against `1196` [MEASURED: `ls -1 contracts/examples/v0.2/*.json | wc -l`] v0.2 fixtures and `20` [MEASURED: `ls -1 contracts/examples/*.json | wc -l`] v0.1 fixtures).
 Draft **2020-12**
 is the schema dialect, every object sets `additionalProperties: false`, every
 message value carries a `<name>/v0.2` discriminator const, and `$ref` names a
@@ -163,7 +168,7 @@ I use persistent `vadapt.vserve` when available, accepting the hello only with `
 | Component or seam | Verified fact [CITED] | Adapter behavior |
 | --- | --- | --- |
 | Capsule CLIs | `srf-identity-surface` and `srf-holdings-capsule` under `MV_SRF_BIN_DIR`; allowlisted env; single-line bounded closed JSON replies; exit map 2 usage, 3 setup, 4 unavailable, 5 malformed, 6 refused, 7 cli_failed (`daemon-adapter/internal/cli/runner.go`, `daemon-adapter/internal/capsule/process.go`) | Run CLIs only from the pinned bin dir with the allowlisted environment; parse with `cli.ParseLine`; map exits to typed faults |
-| Capsule kinds | `browser`, `desktop_capsule`, `vm`, `game_capsule` (`daemon-adapter/internal/capsule/manager.go`); profiles from `MV_SRF_PROFILES` or one live profile (`:100`, 1280x900 browser); max 16 surfaces | Refuse unadmitted profile, kind or geometry before spawning |
+| Capsule kinds | Public kinds `browser`, `desktop_capsule`, `vm`, `game_capsule` (`daemon-adapter/internal/capsule/manager.go:395-413`); native kinds `browser`, `program`, `host-xpra` (Host program, not isolated), `host-window` (Desktop window, not isolated), `vm` (`daemon-adapter/internal/capsule/manager.go:805-854`); MicroVM uses the separate guest-command lifecycle (`core/src/serve/guest_command.rs`); profiles from `MV_SRF_PROFILES` or one live profile (`:100`, 1280x900 browser); max 16 surfaces | Refuse unadmitted profile, kind or geometry before spawning (`daemon-adapter/internal/capsule/manager.go:818-819`) |
 | RAM capture | Publisher requires a `/dev/shm/` RAM root on tmpfs owned by the current uid, writes `0600` files with `O_NOFOLLOW`/`O_EXCL`, and verifies sha256 before publishing (`daemon-adapter/internal/frames/publisher.go`) | Publish complete immutable generations with dimensions, digest and capture duration; read only after publication |
 | Core frame witness | `/dev/shm` prefix, no `..`, per-component symlink walk, `O_NOFOLLOW`, regular file up to 64 MiB, digest match (`core/src/serve/mod.rs`) | A path-shaped string is not authorization; mismatches are refused, never journaled as frames |
 | Electron frame reader | `/dev/shm/` prefix, no `..`, generation ≥ 1, `^[0-9a-f]{64}$` digest, per-surface generation lease, null-digest fail-closed (`ui/electron/frameReader.js`) | Verify before handing bytes to tiles through the frame port (`34/34` [MEASURED] live deliveries verified with `isTrusted=true` and `utilityVerified=true`); paths never cross IPC |
@@ -281,7 +286,7 @@ a stdio bridge that never opens sockets
 
 ## Fold, unfold, pin and take control
 
-`fold`, `unfold`, `hide`, `show`, `move`, `tab`, and `float` (`7` [MEASURED] operations) are admitted layout intents: the core validates placement transitions (`placement_change` in `core/src/serve/layout.rs:36-41`), journals them, and fans out the updated surface view (`layout_intent` in `core/src/serve/layout.rs`, addressed by `slot_id`, refusing illegal transitions such as folding or moving a hidden surface with `LAYOUT_ILLEGAL_TRANSITION` and refusing unknown surfaces with `POLICY`). `pin` and `layout_save`/`layout_load` stay UI-local presentation state (`ui/src/core/intents.js`, `ui/src/core/projection.js`), answered by the core with a journalled `POLICY` verdict (`core/src/serve/mod.rs:1148-1156`). Capture and agent loops continue regardless of folding.
+`fold`, `unfold`, `hide`, `show`, `move`, `tab`, and `float` (`7` [MEASURED] operations) are admitted layout intents: the core validates placement transitions (`placement_change` in `core/src/serve/layout.rs:29-45`), journals them, and fans out the updated surface view (`layout_intent` in `core/src/serve/layout.rs`, addressed by `slot_id`, refusing illegal transitions such as folding or moving a hidden surface with `LAYOUT_ILLEGAL_TRANSITION` and refusing unknown surfaces with `POLICY`). `pin` and `layout_save`/`layout_load` stay UI-local presentation state (`ui/src/core/intents.js`, `ui/src/core/projection.js`), answered by the core with a journalled `POLICY` verdict (`core/src/serve/mod.rs:1791-1802`). Capture and agent loops continue regardless of folding.
 
 ```mermaid
 sequenceDiagram
@@ -312,7 +317,7 @@ sequenceDiagram
 Layout intents travel on the dedicated versioned contract `ui_intent/v0.2`
 (`contracts/v0.2/ui_intent.schema.json`); `fold`, `unfold`, `hide`, `show`,
 `move`, `tab`, `float`, `take_control`, and `release_control` are admitted by
-the core today (`core/src/serve/layout.rs:36-41`, `core/src/serve/mod.rs:1148-1204`).
+the core today (`core/src/serve/layout.rs:29-45`, `core/src/serve/mod.rs:1791-1830`).
 
 Control uses explicit operations. `Input::TakeControl` clears agent control,
 cancels every in-flight proposal for the surface with the typed takeover

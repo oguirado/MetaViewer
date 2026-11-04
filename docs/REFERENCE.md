@@ -22,9 +22,9 @@
 
 Judge summary:
 
-- Admission binds actions to fresh frames before dispatch (`core/src/admission/mod.rs:1219`) [MEASURED: inspected source].
-- Durable authority journals outcomes before publishing state (`core/src/admission/mod.rs:1422`) [MEASURED: inspected source].
-- Slot custody requires human confirmation before credential copying (`daemon-adapter/internal/capsule/slots/store.go:275`) [MEASURED: inspected source].
+- Admission binds actions to fresh frames before dispatch (`core/src/admission/mod.rs:1316`) [MEASURED: inspected source].
+- Durable authority journals outcomes before publishing state (`core/src/admission/mod.rs:1523`) [MEASURED: inspected source].
+- Slot custody requires human confirmation before credential copying (`daemon-adapter/internal/capsule/slots/store.go:278`) [MEASURED: inspected source].
 - Transport input has explicit ceilings (`daemon-adapter/internal/ipc/config.go:20`) [MEASURED: inspected source].
 
 See the [worked refusal](#epistemic-contract), [public evidence guide](EVIDENCE.md), and [Judge Quickstart](JUDGE_QUICKSTART.md).
@@ -75,15 +75,15 @@ Numeric section labels, schema/version identifiers, architecture names and sourc
 <a id="result-contract"></a>
 ## 1. Abstract and result contract [TARGET]
 
-MetaViewer is a Linux wall for viewing and controlling capsule surfaces. Electron hosts a Vue interface; the Rust authority admits intents and action proposals; the Go adapter invokes native capsule executors and publishes observations. Human and agent control are explicit states. A tile, a frame and an execution receipt are different evidence objects. `ui/src/App.vue:148`, `core/src/admission/mod.rs:1`, `daemon-adapter/internal/capsule/manager.go:434` [MEASURED: implementation boundaries].
+MetaViewer is a Linux wall for viewing and controlling capsule surfaces. Electron hosts a Vue interface; the Rust authority admits intents and action proposals; the Go adapter invokes native capsule executors and publishes observations. Human and agent control are explicit states. A tile, a frame and an execution receipt are different evidence objects. `ui/src/App.vue:148`, `core/src/admission/mod.rs:1`, `daemon-adapter/internal/capsule/manager.go:845` [MEASURED: implementation boundaries].
 
 | Contract | Definition | Evidence |
 |---|---|---|
 | Inputs | Closed versioned envelopes, authenticated component identity, configured capsule profiles, frames, UI intents and proposals | `core/src/admission/mod.rs:52` [MEASURED] |
 | Outputs | Admitted/refused outcomes, executor dispatch, surface events, observations and journal records; UI projections of admitted state | `core/src/serve/mod.rs:223` [MEASURED] |
-| Guarantee within the public authority | Validate peer/session binding and admission state before dispatch; enforce freshness, control, leases and budget; preserve explicit unknown outcomes | `core/src/admission/mod.rs:52`, `core/src/admission/mod.rs:1207` [MEASURED] |
+| Guarantee within the public authority | Validate peer/session binding and admission state before dispatch; enforce freshness, control, leases and budget; preserve explicit unknown outcomes | `core/src/admission/mod.rs:52`, `core/src/admission/mod.rs:1159` [MEASURED] |
 | No guaranteed task success | A settled input is not proof that a semantic goal succeeded | `core/src/admission/mod.rs:16` [MEASURED] |
-| No universal sandbox claim | Host-backed programs and attached desktop windows retain host access | `ui/src/surfaces/RoleSurface.vue:517` [MEASURED] |
+| No universal sandbox claim | Host-backed programs and attached desktop windows retain host access | `ui/src/surfaces/RoleSurface.vue:532` [MEASURED] |
 | No public private-source proof | wender-agent, vision-engine and OpenSuperficies are private; their algorithms cannot be audited from this checkout | [CITED: operator disclosure]; `deps.lock:1` [MEASURED: pin boundary] |
 
 The inspected checkout identifies itself as `0.2.5` [MEASURED: `VERSION:1`]. The [published pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5) has its own assets and reported results [CITED: release notes]. Current source inspection does not certify that package or unpublished changes.
@@ -94,12 +94,12 @@ The inspected checkout identifies itself as `0.2.5` [MEASURED: `VERSION:1`]. The
 <a id="capsule-kinds"></a>
 ### Capsule kinds
 
-The frozen graphical catalog accepts Browser, Program, VM, Game capsule and Desktop capsule, with kind-specific launch targets. Host program and Desktop window are UI/native routes whose names must not imply container isolation. MicroVM commands have a separate guest-command lifecycle rather than a graphical frame contract. `core/src/catalog/mod.rs:15`, `core/src/catalog/launch.rs:4`, `ui/src/catalog/catalogModel.js:118`, `ui/electron/guestCommandProfile.js:47` [MEASURED]. The [domain table](#domain-contracts) distinguishes these routes.
+The frozen graphical catalog accepts Browser, Program, VM, Game capsule and Desktop capsule, with kind-specific launch targets. Host program and Desktop window are UI/native routes whose names must not imply container isolation. MicroVM commands have a separate guest-command lifecycle rather than a graphical frame contract. `core/src/catalog/mod.rs:15`, `core/src/catalog/launch.rs:4`, `ui/src/catalog/catalogModel.js:118`, `ui/electron/guestCommandProfile.js:47` [MEASURED]. The [domain table](#domain-contracts) distinguishes these routes. Why capsules exist and what each kind gains or loses against plain desktops, tabs, containers, VMs and remote desktops: [WHY_CAPSULES.md](WHY_CAPSULES.md).
 
 <a id="authority"></a>
 ### Authority core and roles
 
-An action proposal is valid only after closed decoding, peer/session binding and current authority checks. The authority stores live surface ownership, frame identity, injection leases, pending work, remaining budget and executor epoch. Human input and agent proposals have separate admission paths. Taking control cancels pending agent work; ceding control requires fresh observation before reuse. Refused, unknown and verified are not interchangeable outcomes. `core/src/admission/mod.rs:25`, `core/src/admission/mod.rs:52`, `core/src/admission/mod.rs:99`, `core/src/admission/mod.rs:1124`, `core/src/admission/mod.rs:1207` [MEASURED].
+An action proposal is valid only after closed decoding, peer/session binding and current authority checks. The authority stores live surface ownership, frame identity, injection leases, pending work, remaining budget and executor epoch. Human input and agent proposals have separate admission paths. Taking control cancels pending agent work; ceding control requires fresh observation before reuse. Refused, unknown and verified are not interchangeable outcomes. `core/src/admission/mod.rs:25`, `core/src/admission/mod.rs:52`, `core/src/admission/mod.rs:99`, `core/src/admission/mod.rs:1136`, `core/src/admission/mod.rs:1159` [MEASURED].
 
 <a id="handoff"></a>
 ### Handoff
@@ -109,17 +109,17 @@ A login wall or bot check stops the workflow for the operator. Take control, sol
 <a id="identity"></a>
 ### Identity
 
-A profile is persistent data and native custody, not a tile label. A surface is a live addressable target; a role determines how control is held; a wall desktop groups presentation. A profile cannot be treated as free merely because a frame disappeared. Configuration resolves private binaries from `MV_SRF_BIN_DIR` and profiles from explicit environment metadata. `daemon-adapter/internal/daemon/environment.go:115`, `daemon-adapter/internal/capsule/slots/store.go:271` [MEASURED].
+A profile is persistent data and native custody, not a tile label. A surface is a live addressable target; a role determines how control is held; a wall desktop groups presentation. A profile cannot be treated as free merely because a frame disappeared. Configuration resolves private binaries from `MV_SRF_BIN_DIR` and profiles from explicit environment metadata. `daemon-adapter/internal/daemon/environment.go:115`, `daemon-adapter/internal/capsule/slots/store.go:274` [MEASURED].
 
 <a id="stored-data-slots"></a>
 ### Stored data slots
 
-Slots save stopped Browser/Program profile data, including credentials and signed-in sessions. They do not save running processes, open tabs or general machine state. Save, overwrite, load, list, delete and copy are explicit operations; credential copying requires human confirmation and source/destination custody. Protected or foreign identities and live bindings are refused. Load checks kind, architecture and image compatibility. The store records payload hashes and generations; retained generations and orphans count toward quota. Power-loss qualification for btrfs and WSL is ABSENT — do not invent. `contracts/v0.2/capsule_state_request.schema.json:1`, `daemon-adapter/internal/capsule/slots/store.go:1`, `daemon-adapter/internal/capsule/slots/store.go:271`, `daemon-adapter/internal/capsule/slots/store.go:638` [MEASURED].
+Slots save stopped Browser/Program profile data, including credentials and signed-in sessions. They do not save running processes, open tabs or general machine state. Save, overwrite, load, list, delete and copy are explicit operations; credential copying requires human confirmation and source/destination custody. Protected or foreign identities and live bindings are refused. Load checks kind, architecture and image compatibility. The store records payload hashes and generations; retained generations and orphans count toward quota. Power-loss qualification for btrfs and WSL is ABSENT — do not invent. `contracts/v0.2/capsule_state_request.schema.json:1`, `daemon-adapter/internal/capsule/slots/store.go:1`, `daemon-adapter/internal/capsule/slots/store.go:274`, `daemon-adapter/internal/capsule/slots/store.go:647` [MEASURED].
 
 <a id="rewind"></a>
 ### Rewind
 
-Rewind is a guest-state operation with owner, generation and authority-epoch binding. Unknown, stopping or pending rewind states gate further commands. Physical reset evidence belongs to the registered daemon. It does not restore external services, host state, authority history or effects already sent outside the guest. Native rewind requires ARM Linux and explicitly admitted protected artifacts; it is developer setup, not a portable turnkey feature. `core/src/rewind_flow.rs:1`, `core/src/rewind_flow.rs:59`, `daemon-adapter/rewind_runtime/native.py:122`, `daemon-adapter/rewind_runtime/config.py:15` [MEASURED].
+Rewind is a guest-state operation with owner, generation and authority-epoch binding. Unknown, stopping or pending rewind states gate further commands. Physical reset evidence belongs to the registered daemon. It does not restore external services, host state, authority history or effects already sent outside the guest. Native rewind requires ARM Linux and explicitly admitted protected artifacts; it is developer setup, not a portable turnkey feature. `core/src/rewind_flow.rs:1`, `core/src/rewind_flow.rs:60`, `daemon-adapter/rewind_runtime/native.py:122`, `daemon-adapter/rewind_runtime/config.py:15` [MEASURED].
 
 <a id="grid"></a>
 ### Grid
@@ -189,11 +189,11 @@ The Rust leg checks the whole crate with formatter `1.92.0` [MEASURED: `tools/ga
 | Layout | `ui/src/wall/WallWorkspace.vue:164` [MEASURED] | Presets and floating/grid arrangement |
 | Host adapter | `ui/electron/hostBindings.js:309` [MEASURED] | Binds guest-command owner and host capability checks |
 | Go entry | `daemon-adapter/cmd/mv-daemon-adapter/main.go:24` [MEASURED] | Loads runtime environment and starts adapter |
-| Native executor | `daemon-adapter/internal/capsule/manager.go:434` [MEASURED] | Routes native CLI operations; private binary implementation stays outside source |
+| Native executor | `daemon-adapter/internal/capsule/manager.go:845` [MEASURED] | Routes native CLI operations; private binary implementation stays outside source |
 | Rust admission | `core/src/admission/mod.rs:52` [MEASURED] | Closed proposals, identity binding and state transition authority |
 | Rust server/journal | `core/src/serve/mod.rs:223` [MEASURED] | Opens session authority with replayable journal storage |
 | Wire contracts | `contracts/v0.2/envelope.schema.json:1` [MEASURED] | Versioned component boundary; contract version is not app version |
-| Slots | `daemon-adapter/internal/capsule/slots/store.go:271` [MEASURED] | Native custody, credentials confirmation and profile compatibility |
+| Slots | `daemon-adapter/internal/capsule/slots/store.go:274` [MEASURED] | Native custody, credentials confirmation and profile compatibility |
 | Private pins | `deps.lock:1` [MEASURED] | Identifies private component revisions; no private source is reproduced |
 
 <a id="private-boundary"></a>
@@ -207,9 +207,9 @@ The Rust leg checks the whole crate with formatter `1.92.0` [MEASURED: `tools/ga
 <a id="epistemic-contract"></a>
 ### Panel A — epistemic contract
 
-Worked example: an agent proposes an action against an older frame generation or digest. Admission returns `STALE_FRAME` before dispatch (`core/src/admission/mod.rs:1219`) [MEASURED: source inspection].
+Worked example: an agent proposes an action against an older frame generation or digest. Admission returns `STALE_FRAME` before dispatch (`core/src/admission/mod.rs:1316`) [MEASURED: source inspection].
 
-`Authority::apply_with_witnesses` appends the input, outcome and next state to the journal before replacing current state (`core/src/admission/mod.rs:1422`). `mv-replay` scans that journal and prints the reconstructed state digest (`core/src/bin/mv-replay.rs:25`) [MEASURED: source inspection].
+`Authority::apply_with_witnesses` appends the input, outcome and next state to the journal before replacing current state (`core/src/admission/mod.rs:1523`). `mv-replay` scans that journal and prints the reconstructed state digest (`core/src/bin/mv-replay.rs:25`) [MEASURED: source inspection].
 
 This is an inspected code path; a live stale-frame demo at this checkout is not established. The existing [admission journal tests](../core/tests/admission_journal.rs) exercise durable replay and refusal histories.
 
@@ -221,7 +221,7 @@ This is an inspected code path; a live stale-frame demo at this checkout is not 
 | Capsule is isolated | Route-specific executor boundary and live evidence | Host program or attached Desktop window |
 | Platform is qualified | Actual receipt from that platform and route | Cross-compilation, parser test or another architecture's receipt alone |
 
-The first claim is implemented in `core/src/admission/mod.rs:1207`; execution-only receipt semantics in `core/src/admission/mod.rs:16`; slot custody in `daemon-adapter/internal/capsule/slots/store.go:271` [MEASURED]. Raw platform qualification receipts in this repository are ABSENT — do not invent; reported historical results are attributed in [the evidence guide](EVIDENCE.md).
+The first claim is implemented in `core/src/admission/mod.rs:1159`; execution-only receipt semantics in `core/src/admission/mod.rs:16`; slot custody in `daemon-adapter/internal/capsule/slots/store.go:274` [MEASURED]. Raw platform qualification receipts in this repository are ABSENT — do not invent; reported historical results are attributed in [the evidence guide](EVIDENCE.md).
 
 <a id="negative-knowledge"></a>
 ### Panel B — negative knowledge
@@ -262,27 +262,27 @@ Legend: **configured** means code admits a route only with its dependencies; it 
 | Identity browser | Private container executor boundary | Human control or admitted agent actions | Published surface frames | Stopped profile slots; credentials travel | Not browser rollback | Configured; live receipt ABSENT | Configured; live receipt ABSENT | Requires graphical Linux/display/container prerequisites; live receipt ABSENT |
 | Program | Private program-container boundary | Role-specific native input | Published surface frames | Compatible stopped profile slots | Not process rollback | Configured; live receipt ABSENT | Configured; live receipt ABSENT | Host GUI/image compatibility required; live receipt ABSENT |
 | Graphical VM | Guest boundary with private native VM executor | Guest GUI input | Guest display | Profile-slot API does not cover VM | Not interchangeable with MicroVM rewind | Protected setup; live receipt ABSENT | Unavailable | Unavailable on x64 guest path |
-| MicroVM | Protected guest runtime | Bounded guest commands | Command outputs, no graphical tile promise | Guest lifecycle, not profile slots | Guest state only; developer setup | Protected setup; live receipt ABSENT | Unavailable | Unavailable on x64 guest path |
+| MicroVM | Protected guest runtime | Bounded guest commands | Command outputs, no graphical tile promise | Guest lifecycle, not profile slots | Guest state only; developer setup | Protected setup; Rewind episode observed [MEASURED: operator live run, see [WHY_CAPSULES.md#rewind](WHY_CAPSULES.md#rewind)]; raw receipt not in repository | Unavailable | Unavailable on x64 guest path |
 | Game capsule | Private holdings executor boundary | Native game input | Native frames | Profile slots unsupported | No generic rewind claim | Configured; live receipt ABSENT | Live receipt ABSENT | Live receipt ABSENT |
 | Desktop capsule | Private desktop executor boundary; distinct from window attachment | Native desktop input | Native frames | Profile slots unsupported | No generic rewind claim | Configured; live receipt ABSENT | Live receipt ABSENT | Live receipt ABSENT |
 | Host program | **Not isolated**; runs on operator computer | Host Xpra route / role checks | Host-backed stream | No isolated-profile save claim | No host rollback | Runtime prerequisites; receipt ABSENT | Runtime prerequisites; receipt ABSENT | Requires Linux GUI plumbing; receipt ABSENT |
 | Desktop window | **Not isolated**; existing real desktop window | Real window/pointer effects | Attached window frames | No profile slot | No desktop rollback | X11 prerequisites; receipt ABSENT | X11 prerequisites; receipt ABSENT | Reachable X window required; receipt ABSENT |
 
-Evidence for the table: launch targets `core/src/catalog/launch.rs:4`; native routing `daemon-adapter/internal/capsule/manager.go:434`; ARM capability refusal `ui/electron/guestCommandProfile.js:47`; slot kind/compatibility `daemon-adapter/internal/capsule/slots/store.go:278`; host warnings `ui/src/surfaces/RoleSurface.vue:517`; display/runtime checks `scripts/judge/preflight.sh:250` [MEASURED]. Private executor isolation is a boundary contract, not a public-source proof [TARGET].
+Evidence for the table: launch targets `core/src/catalog/launch.rs:4`; native routing `daemon-adapter/internal/capsule/manager.go:845`; ARM capability refusal `ui/electron/guestCommandProfile.js:47`; slot kind/compatibility `daemon-adapter/internal/capsule/slots/store.go:281`; host warnings `ui/src/surfaces/RoleSurface.vue:532`; display/runtime checks `scripts/judge/preflight.sh:250` [MEASURED]. Private executor isolation is a boundary contract, not a public-source proof [TARGET].
 
 <a id="limits"></a>
 ## 6. Applicability limits [TARGET]
 
 | Limit | Plain statement | Evidence |
 |---|---|---|
-| Guest display | The configured guest display is fixed at `1280x900`; tile resizing does not change the guest display | `tools/arm64_capsule_session.py:431` [MEASURED] |
+| Guest display | The configured guest display is fixed at `1280x900`; tile resizing does not change the guest display | `tools/arm64_capsule_session.py:544` [MEASURED] |
 | Rewind scope | Rewind restores guest state only; host, journal and external effects remain outside its mandate | `core/src/rewind_flow.rs:1`, `daemon-adapter/rewind_runtime/native.py:122` [MEASURED: runtime boundary] |
 | Rewind setup | ARM rewind requires developer setup, protected configuration and reviewed artifacts | `daemon-adapter/rewind_runtime/config.py:15` [MEASURED] |
 | Release platform boundary | No x64 VM or MicroVM in this release; current code disables the ARM guest routes on non-ARM hosts | `ui/electron/guestCommandProfile.js:47` [MEASURED] |
-| Host program | Host program is not isolated | `ui/src/catalog/CatalogLauncher.vue:317` [MEASURED] |
-| Desktop window | Desktop window is not isolated and can affect the real pointer/window | `ui/src/surfaces/RoleSurface.vue:518` [MEASURED: host attachment] |
-| Stored credentials | Slots carry credentials and signed-in sessions; copy requires human confirmation | `daemon-adapter/internal/capsule/slots/store.go:1`, `daemon-adapter/internal/capsule/slots/store.go:275` [MEASURED] |
-| Slot portability | Matching kind, image and architecture are required; no arbitrary cross-platform restore | `daemon-adapter/internal/capsule/slots/store.go:638` [MEASURED] |
+| Host program | Host program is not isolated | `ui/src/catalog/CatalogLauncher.vue:319` [MEASURED] |
+| Desktop window | Desktop window is not isolated and can affect the real pointer/window | `ui/src/surfaces/RoleSurface.vue:533` [MEASURED: host attachment] |
+| Stored credentials | Slots carry credentials and signed-in sessions; copy requires human confirmation | `daemon-adapter/internal/capsule/slots/store.go:1`, `daemon-adapter/internal/capsule/slots/store.go:278` [MEASURED] |
+| Slot portability | Matching kind, image and architecture are required; no arbitrary cross-platform restore | `daemon-adapter/internal/capsule/slots/store.go:647` [MEASURED] |
 | Power loss | Slot power-loss qualification on btrfs/WSL is ABSENT — do not invent | `daemon-adapter/internal/capsule/slots/store.go:7` [MEASURED: declared qualification limit] |
 | Windows | Native Windows execution is not established; WSL requires an actual graphical Linux session and compatible dependencies | `scripts/judge/preflight.sh:177`, `scripts/judge/preflight.sh:250` [MEASURED] |
 | Untested scope | Source inspection and deterministic checks do not establish live desktop, guest, network, power-loss or private-runtime qualification | Live evidence ABSENT — do not invent |
@@ -334,4 +334,4 @@ Stop targets the launcher's scoped capsules and resources. The shared proxy rema
 | Recordings | `$XDG_STATE_HOME/metaviewer/recordings` with home fallback | Private recorded evidence; never publish unsanitized sessions |
 | Slots | `$SRF_IDENTITY_STORE_ROOT/slots` | Credential-bearing manifests/payload generations; keep private |
 
-Path rules are implemented at `core/src/serve/mod.rs:237`, `core/src/journal/mod.rs:3988`, `scripts/judge/metaviewer-judge.sh:84`, `scripts/judge/metaviewer-judge.sh:671`, `daemon-adapter/internal/capsule/slots/store.go:224` [MEASURED]. Runtime roots are variable templates, not developer machine paths. Runtime evidence is private until reviewed and scrubbed. This reference is limited to the public source and explicitly attributed external reports identified above.
+Path rules are implemented at `core/src/serve/mod.rs:237`, `core/src/journal/mod.rs:4009`, `scripts/judge/metaviewer-judge.sh:84`, `scripts/judge/metaviewer-judge.sh:671`, `daemon-adapter/internal/capsule/slots/store.go:227` [MEASURED]. Runtime roots are variable templates, not developer machine paths. Runtime evidence is private until reviewed and scrubbed. This reference is limited to the public source and explicitly attributed external reports identified above.

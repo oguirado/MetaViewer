@@ -1,5 +1,11 @@
 # ARM64 MicroVM capsule
 
+## Current status
+
+Answers: which MicroVM document is current; can the MicroVM run shell commands; does it have Rewind.
+
+This page describes the original fixed-job (`headless_*`) mode, which remains as its own mode. The MicroVM offered by **Add capsule** after `--arm64` start runs sequential shell commands ([ARM64_GUEST_COMMANDS.md](ARM64_GUEST_COMMANDS.md)) and, with `--rewind`, Mark and Back ([ARM64_MICROVM_REWIND.md](ARM64_MICROVM_REWIND.md)). Plain start offers no MicroVM; there is no x64 MicroVM. Setup: [ARM64_CAPSULE_SETUP.md](ARM64_CAPSULE_SETUP.md). Why a MicroVM capsule and what it isolates: [WHY_CAPSULES.md#microvm](WHY_CAPSULES.md#microvm).
+
 The initial implementation is an opt-in Firecracker backend for Linux ARM64. The product flow is Add capsule → ARM64 MicroVM → Create → Run fixed command → Stop capsule. The panel displays the state returned through the authenticated core connection and the checked result received from the guest.
 
 ## Current boundary
