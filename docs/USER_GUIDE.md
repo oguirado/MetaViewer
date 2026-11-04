@@ -95,7 +95,7 @@ The window is a kit shell with a top bar, a navigation rail, the capsule wall, a
 - **Side terminal:** a right-side resizable `xterm.js` overlay toggled with `Terminal`. A package built without native terminal support (no `node-pty` in the package) cannot open a session: the overlay and the launch controls report `TERMINAL_UNAVAILABLE: terminal support is not bundled in this package` (`ui/electron/terminalHost.js`, `ui/src/terminal/BrokerLaunchControls.vue`) instead of a blank terminal.
 - **Activity strip:** above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
 - **Status bar:** shows the current view crumb (`Main wall`), `Core connected` / `Core not connected`, and the active capsule count.
-- **Settings:** switches the window between `Light` (`mv-light`, default) and `Dark` themes live.
+- **Settings:** switches the window between `Dark` (`mv-dark`, default) and `Light` themes live. An existing saved theme remains selected.
 
 ---
 

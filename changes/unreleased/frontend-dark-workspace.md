@@ -1,0 +1,3 @@
+- Start new workspaces in the existing dark theme while preserving saved theme choices.
+- Clarify desktop and capsule hierarchy, with separate operational state and persistent isolation warnings.
+- Group Settings in cards and refine Identities, saved slots, capsule creation, command search and empty views using existing theme tokens.

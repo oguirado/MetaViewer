@@ -151,7 +151,7 @@ provide('capsuleChromeStyle', 'openvue');
 const preferences = props.preferences;
 // MVUI29S: the entry resolves the stored scheme before mount so first paint
 // already carries it; direct mounts keep the fixture-or-light default.
-const bootScheme = props.initialScheme ?? props.fixture?.scheme ?? 'mv-light';
+const bootScheme = props.initialScheme ?? props.fixture?.scheme ?? 'mv-dark';
 const scheme = ref(bootScheme === 'mv-dark' ? 'mv-dark' : 'mv-light');
 const applyScheme = /** @type {(scheme:string)=>void} */ (setKitScheme);
 applyScheme(scheme.value);
@@ -1684,10 +1684,10 @@ onMounted(() => {
       <div class="mv-navigation-scroll">
         <div class="mv-tree-shortcuts"><UiButton id="sidebar-add-capsule" data-semantic-anchor="sidebar/add-capsule" :label="railOpen ? '+ Add capsule' : '+'" aria-label="Add capsule" title="Add capsule" @click="launcherOpen = true" /></div>
         <div class="mv-views mv-working-tree" role="group" aria-label="Capsule views">
-          <section v-for="view in navigationTree" :key="view.id" class="mv-tree-view">
+          <section v-for="view in navigationTree" :key="view.id" class="mv-tree-view" :data-view="view.id">
             <div class="mv-tree-heading">
               <UiButton :label="view.label" :id="`view-${view.id}`" :data-semantic-anchor="`wall/view/${view.id}`" class="mv-view-button" :aria-pressed="desktopState.activeView === view.id" :title="`${view.label}: ${view.count} capsules`" @click="selectGlobalView(view.id)">
-                <span class="mv-tree-view-name">{{ view.label }}</span><span class="mv-tree-view-short" aria-hidden="true">{{ view.id === 'human' ? 'H' : 'A' }}</span><span class="mv-tree-count">{{ view.count }}</span><span v-if="view.needsYou" class="mv-tree-needs-dot" role="img" aria-label="Needs you" title="Needs you">●</span>
+                <span class="mv-tree-heading-content"><span class="mv-tree-view-name">{{ view.label }}</span><span class="mv-tree-view-short" aria-hidden="true">{{ view.id === 'human' ? 'H' : 'A' }}</span><span class="mv-tree-count">{{ view.count }}</span><span v-if="view.needsYou" class="mv-tree-needs-dot" role="img" aria-label="Needs you" title="Needs you">●</span></span>
               </UiButton>
               <UiButton label="+" :id="desktopState.activeView === view.id ? 'desktop-add' : `desktop-add-${view.id}`" data-semantic-anchor="wall/desktop/add" class="mv-tree-add" :aria-label="`Add ${view.label.toLowerCase()} desktop`" :title="`Add ${view.label.toLowerCase()} desktop`" :disabled="!desktopStateLoaded || view.desktops.length >= MAX_DESKTOPS_PER_VIEW" @click="selectGlobalView(view.id); wall?.addDesktop()">+</UiButton>
             </div>
@@ -1695,12 +1695,12 @@ onMounted(() => {
               <section v-for="desktop in view.desktops" :key="desktop.id" class="mv-tree-desktop" :class="{ 'mv-tree-desktop--active': desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id }">
                 <div class="mv-tree-desktop-heading">
                   <UiButton :id="`tree-fold-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/tree/${view.id}/${desktop.id}/fold`" :label="treeDesktopExpanded(view.id,desktop.id) ? 'Collapse desktop' : 'Expand desktop'" class="mv-tree-fold" :aria-label="`${treeDesktopExpanded(view.id,desktop.id) ? 'Collapse' : 'Expand'} ${view.label} desktop ${desktop.id}`" :aria-expanded="treeDesktopExpanded(view.id,desktop.id)" @click="toggleTreeDesktop(view.id,desktop.id)">{{ treeDesktopExpanded(view.id,desktop.id) ? '▾' : '▸' }}</UiButton>
-                  <UiButton :label="`Desktop ${desktop.id}`" :id="`desktop-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view.id}/${desktop.id}`" class="mv-tree-desktop-button" :aria-pressed="desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id" @click="selectTreeDesktop(view.id,desktop.id)"><span>Desktop {{ desktop.id }}</span><span class="mv-tree-count">{{ desktop.capsules.length }}</span></UiButton>
+                  <UiButton :label="`Desktop ${desktop.id}`" :id="`desktop-${view.id}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view.id}/${desktop.id}`" class="mv-tree-desktop-button" :aria-pressed="desktopState.activeView === view.id && desktopState.views[view.id].active === desktop.id" @click="selectTreeDesktop(view.id,desktop.id)"><span class="mv-tree-desktop-content"><span>Desktop {{ desktop.id }}</span><span class="mv-tree-count">{{ desktop.capsules.length }}</span></span></UiButton>
                 </div>
                 <ul v-if="treeDesktopExpanded(view.id,desktop.id)" class="mv-tree-capsules" :aria-label="`${view.label} desktop ${desktop.id} capsules`">
                   <li v-for="capsule in desktop.capsules" :key="capsule.id">
                     <UiButton :label="capsule.title" :id="`tree-capsule-${capsule.id}`" :data-semantic-anchor="`wall/tree/${capsule.id}`" class="mv-tree-capsule" :class="{ 'mv-tree-capsule--selected': selectedCapsuleId === capsule.id }" :title="`${capsule.title} · ${capsule.status}${capsule.notIsolated ? ' · Not isolated' : ''}`" :aria-label="`${capsule.title}, ${capsule.status}${capsule.notIsolated ? ', Not isolated' : ''}`" @click="selectTreeCapsule(capsule.id)">
-                      <span class="mv-tree-signal" :data-tone="capsule.tone" aria-hidden="true">{{ capsule.symbol }}</span><span class="mv-tree-capsule-name">{{ capsule.title }}</span><span class="mv-tree-capsule-status" :data-tone="capsule.tone">{{ capsule.notIsolated ? 'Not isolated' : capsule.status }}</span>
+                      <span class="mv-tree-capsule-content"><span class="mv-tree-signal" :data-tone="capsule.tone" aria-hidden="true">{{ capsule.symbol }}</span><span class="mv-tree-capsule-copy"><span class="mv-tree-capsule-name">{{ capsule.title }}</span><span class="mv-tree-capsule-meta"><span class="mv-tree-capsule-status" :data-tone="capsule.tone">{{ capsule.status }}</span><span v-if="capsule.notIsolated" class="mv-tree-isolation">Not isolated</span></span></span></span>
                     </UiButton>
                   </li>
                   <li v-if="!desktop.capsules.length" class="mv-tree-empty">No capsules</li>
@@ -2033,3 +2033,5 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-navigation--collapsed .mv-working-tree #view-human::after,.mv-navigation--collapsed .mv-working-tree #view-agent::after { content:none; }
 .mv-navigation--collapsed .mv-tree-needs-dot { flex-basis:100%; font-size:8px; }
 </style>
+
+<style src="./design/premium.css"></style>
