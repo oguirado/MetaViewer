@@ -1013,8 +1013,14 @@ def run_entry(args):
         need(base.is_absolute(), 'MW_PRIVATE_OUTPUT')
         evidence = base / 'metaviewer/runs' / uuid.uuid4().hex
         need(not evidence.is_relative_to(ROOT) and not evidence.is_relative_to(home), 'MW_PRIVATE_OUTPUT')
-        evidence.mkdir(mode=0o700, parents=True)
         need(not any(p.is_symlink() for p in (evidence, *evidence.parents)), 'MW_PRIVATE_OUTPUT')
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for path in (evidence.parent.parent, evidence.parent, evidence):
+            path.mkdir(mode=0o700, exist_ok=True)
+            metadata = path.lstat()
+            need(not path.is_symlink() and stat.S_ISDIR(metadata.st_mode) and
+                 metadata.st_uid == os.getuid() and stat.S_IMODE(metadata.st_mode) == 0o700,
+                 'MW_PRIVATE_OUTPUT')
         report = str(evidence / 'report.json')
         with connect(os.environ, trace) as client:
             backend = HostBackend(client, args.identity, evidence, os.environ)
