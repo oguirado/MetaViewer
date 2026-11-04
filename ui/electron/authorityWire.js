@@ -11,7 +11,7 @@ import { stateRequest, stateEvent } from './preload.js';
  * [TARGET, unit decision] Bound per-surface input rate/sequence maps to
  * MAX_ITEMS = 64 and evict unknown/unadmitted surface IDs on SURFACE_UNKNOWN refusal.
  * [TARGET, unit decision] Closed settings schema {scheme, density, wallFps, recordingFps}
- * with defaults (mv-light, compact, 30, 3); settings.save emits {wallFps} cadence
+ * with defaults (mv-dark, compact, 30, 3); settings.save emits {wallFps} cadence
  * requests and updates default recordingFps.
  * [TARGET, unit decision] Frozen settings/v0.2 is decoded separately, then
  * projected to host preferences; its limits do not change UI preference caps.
@@ -354,7 +354,7 @@ export function verdictReply(value) {
   return value;
 }
 export const DEFAULT_SETTINGS = Object.freeze({
-  scheme: 'mv-light',
+  scheme: 'mv-dark',
   density: 'compact',
   wallFps: 30,
   recordingFps: 3,
