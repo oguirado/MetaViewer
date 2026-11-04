@@ -57,6 +57,18 @@ class SessionTests(Fixture):
             'vm': {'available': True, 'reason': ''}, 'microvm': {'available': True, 'reason': ''}})
         self.assertEqual(json.loads(env['MV_SRF_PROFILES'])['fresh-vm']['Kind'], 'vm')
 
+    def test_recording_sandbox_override_forwards_only_exact_host_opt_in(self):
+        transport = {'display': ':9', 'xauthority': None,
+                     'dbus_session_bus_address': 'unix:path=/explicit/bus'}
+        for value in (None, '0', 'true', '1 ', '1'):
+            with patch.dict(os.environ, {}, clear=True):
+                if value is not None:
+                    os.environ['MV_MUSE_RECORDING_UNSANDBOXED'] = value
+                os.environ['MUSE_AUTH_PATH'] = '/never-forward'
+                env = s.child_environment(self.value, self.root, 'agent', 'vm', transport)
+            self.assertEqual(env.get('MV_MUSE_RECORDING_UNSANDBOXED'), '1' if value == '1' else None)
+            self.assertNotIn('MUSE_AUTH_PATH', env)
+
     def rewind_fixture(self):
         names = ['guest_command_runtime/' + n + '.py' for n in
                  ('__init__', '_schemas', 'wire', 'schema', 'config', 'image', 'native_checks', 'protocol')]
