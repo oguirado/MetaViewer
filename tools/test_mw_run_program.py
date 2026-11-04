@@ -1990,6 +1990,46 @@ finally:s.close()
         custody.assert_not_called()
         muse.assert_not_called()
 
+    def test_verified_focus_click_then_clean_type_refusal_stays_rc5(self):
+        for reason in ('changed', 'stale'):
+            with self.subTest(reason=reason):
+                planner, submit, settle, order, submitted = self.text_fixture()
+                self.b.wender = self.root
+                real_propose = self.b.propose
+
+                def refuse_type(sensed, plan, max_ms):
+                    if plan['action']['type'] == 'type':
+                        if reason == 'changed':
+                            raise program.ProgramObservationChanged(frame(), frame(2), {})
+                        raise host.tools.ToolRefusal('STALE_FRAME', None)
+                    return real_propose(sensed, plan, max_ms)
+
+                args = SimpleNamespace(identity='alice', goal='Message', text='hello', steps=1,
+                                       timeout_ms=1000, planner='rules', model_timeout_ms=120000)
+                with patch.dict(os.environ, XDG_STATE_HOME=str(self.root)), \
+                     patch.object(host, 'connect', return_value=contextlib.nullcontext(self.b.client)), \
+                     patch.object(program, 'ProgramBackend', return_value=self.b), \
+                     patch.object(program, 'VCorePerceptionAdapter', return_value=self.b.vision), \
+                     patch.object(program, 'WenderSubprocessAdapter', return_value=planner), \
+                     patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(self.b, 'propose', side_effect=refuse_type), \
+                     patch.object(host.tools, 'propose', side_effect=submit) as propose, \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle) as verify, \
+                     contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+                    rc = program.run_entry(args)
+                self.assertEqual(rc, 5)
+                result = json.loads(output.getvalue())
+                self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN')
+                report = json.loads(Path(result['report']).read_text())
+                self.assertEqual(report['status'], 'input_uncertain')
+                self.assertEqual(len(report['moves']), 1)
+                self.assertEqual(report['moves'][0]['action']['type'], 'click')
+                self.assertEqual(report['attempts'][-1]['status'], 'refused_before_dispatch')
+                self.assertTrue(self.b.program_clean_refusal)
+                propose.assert_called_once()
+                verify.assert_called_once()
+                self.assertEqual(order, ['click', 'publish'])
+
     def test_report_deadline_after_uncertain_move_keeps_rc5(self):
         self.b.observe = Mock(return_value=dict(frame_ref=frame()))
         self.b.wender = self.root

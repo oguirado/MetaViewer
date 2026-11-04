@@ -1280,7 +1280,9 @@ def run_entry(args):
         clean_refusal = (clean_model_stop or
                          isinstance(error, ProgramObservationChanged) and
                          getattr(backend, 'program_clean_refusal', False))
-        if ((getattr(backend, 'program_moves', []) and not clean_refusal) or any(a.get('status') in
+        # Focus-click plus type is one requested step. A clean type refusal
+        # cannot erase the delivered click or invite replay of that whole step.
+        if ((getattr(backend, 'program_moves', []) and (text is not None or not clean_refusal)) or any(a.get('status') in
                 ('input_uncertain','dispatch_or_settlement_pending','settlement_pending')
                 for a in attempts)):
             result.update(rc=5, verdict_code='INPUT_UNCERTAIN')
