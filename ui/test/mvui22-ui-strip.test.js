@@ -187,6 +187,8 @@ async function mountStrip(entries) {
   handle.mount(root);
   await tick();
   await vue.nextTick();
+  allNodes(root).find(n => n.props?.['aria-expanded'] === false).props.onClick();
+  await tick();
   const nodes = allNodes(root);
   const rows = nodes.filter(node => node.props?.class === 'mv-activity__row');
   const empty = nodes.filter(node => node.props?.class === 'mv-activity__empty');

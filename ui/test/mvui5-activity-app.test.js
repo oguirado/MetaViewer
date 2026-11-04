@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // Lane V App wiring: strip mount, bounded feed, authority-only receipts.
 import { test, describe } from 'node:test';
@@ -15,22 +19,29 @@ import { MV_ACTIVITY_LIMIT } from '../src/activity/activityModel.js';
 const APP_URL = new URL('../src/App.vue', import.meta.url);
 const app = readFileSync(APP_URL, 'utf8');
 
+function assertActivityPlacement(text) {
+  const ast = parse(text).descriptor.template.ast;
+  const walk = n => [n, ...(n.children ?? []).flatMap(walk)];
+  const nodes = walk(ast);
+  const navigation = nodes.find(n => n.tag === 'aside' && n.props?.some(p => p.name === 'class' && p.value?.content === 'mv-navigation'));
+  assert.ok(navigation, 'activity owns a navigation column');
+  const members = walk(navigation);
+  assert.ok(members.some(n => n.tag === 'ActivityStrip'));
+  assert.ok(members.some(n => n.tag === 'StatusBar'));
+  assert.ok(!nodes.filter(n => n.tag === 'main').some(n => walk(n).some(x => x.tag === 'ActivityStrip')), 'never cover wall tiles');
+  assert.ok(text.indexOf('<ActivityStrip') < text.indexOf('<StatusBar'), 'activity above sidebar status');
+}
+
 describe('activity mount in App', () => {
-  test('strip is imported, fed and docked between the wall body and the status bar', () => {
-    assert.ok(app.includes("import ActivityStrip from './activity/ActivityStrip.vue';"),
-      'default strip import keeps stub harnesses degrading to an empty slot');
-    assert.ok(app.includes('<ActivityStrip v-if="!nestedMode.displayOnly" :entries="activityFeed" />'),
-      'strip mounts with the feed and hides in nested display-only mode');
-    const mainClose = app.indexOf('</main>');
-    const stripAt = app.indexOf('<ActivityStrip');
-    const barAt = app.indexOf('<StatusBar');
-    assert.ok(mainClose > 0 && stripAt > mainClose, 'strip mounts outside the wall main');
-    assert.ok(barAt > stripAt, 'strip docks above the status bar, never over tiles');
+  test('strip is imported, fed and docked in navigation outside the wall', () => {
+    assert.ok(app.includes("import ActivityStrip from './activity/ActivityStrip.vue'"));
+    assert.ok(app.includes('<ActivityStrip :entries="activityFeed" />'));
+    assertActivityPlacement(app);
   });
 
-  test('shell grid reserves a docked strip row', () => {
-    assert.ok(app.includes('minmax(0,1fr) auto var(--cuk-component-app-shell-status-height)'),
-      'strip row sits between the wall body and the status bar');
+  test('shell reserves navigation and wall columns with a flexible body', () => {
+    assert.ok(app.includes('grid-template-columns:48px minmax(0,1fr) 48px'));
+    assert.ok(app.includes('grid-template-rows:var(--cuk-component-app-shell-topbar-height) minmax(0,1fr)'));
   });
 
   test('submitHost records authority receipts and dispatch stays untouched', () => {
@@ -52,13 +63,9 @@ describe('activity mount in App', () => {
   });
 
   test('negative control: misplaced mount and divergent bounds fail', () => {
-    const ordered = (text) => {
-      const stripAt = text.indexOf('<ActivityStrip');
-      const barAt = text.indexOf('<StatusBar');
-      assert.ok(stripAt > text.indexOf('</main>') && barAt > stripAt, 'docked order');
-    };
+    const ordered = assertActivityPlacement;
     ordered(app);
-    assert.throws(() => ordered('<main><ActivityStrip /></main><StatusBar />'), assert.AssertionError);
+    assert.throws(() => ordered('<template><main><ActivityStrip /></main><StatusBar /></template>'), assert.AssertionError);
     assert.equal(Number(app.match(/const ACTIVITY_LIMIT = (\d+);/)?.[1]), 8);
     assert.throws(() => assert.equal(7, MV_ACTIVITY_LIMIT), assert.AssertionError);
   });
@@ -84,14 +91,14 @@ async function loadApp(captured) {
     './terminal/SideTerminalOverlay.vue': stub, './multislot/MultislotHost.vue': stub,
     './recording/MvRecordingPanel.vue': stub, './settings/MvSettingsPanel.vue': stub,
     './agent/AgentLaneHost.vue': stub, './surfaces/SurfaceCanvas.vue': stub,
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `v-app-${++serial}`, inlineTemplate: true });
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__vdeps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__vdeps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#v-${serial}`)).default;
 }

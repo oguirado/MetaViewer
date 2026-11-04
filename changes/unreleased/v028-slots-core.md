@@ -1,0 +1,1 @@
+- Add additive capsule state contracts and core authority for save slots.

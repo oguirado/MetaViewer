@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI32 lane L: lost surface end-to-end on the real renderer path.
 //
@@ -189,7 +193,7 @@ function rewriteTileImports(code) {
   return out.replace(/import\s+([\s\S]*?)\s+from\s+(['"])(.*?)\2;?/g, (all, bindings, _q, spec) => {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, vueUrl);
     assert.equal(spec, './tileScheduler.js', `Unmapped tile dependency: ${spec}`);
-    return `const ${bindings.trim()} = await import(${schedulerUrl});`;
+    return `const ${sfcImportBinding(bindings)} = await import(${schedulerUrl});`;
   });
 }
 
@@ -211,6 +215,8 @@ const App = await (async () => {
     './activity/ActivityStrip.vue': stub,
     'capsule-ui-kit/DockWorkspace': stub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
+    '@openvue/icons/windowmaximize': {render:()=>null},
+    '../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': {render:()=>null},
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     './wall/DesktopWorkspace.vue': stub,
@@ -226,7 +232,7 @@ const App = await (async () => {
     './creative/CreativeCapsule.vue': stub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js':rewindValues,
   };
   try {
     const compiled = compileScript(parse(appSource).descriptor, { id: 'mvui32l-app', inlineTemplate: true });
@@ -237,7 +243,7 @@ const App = await (async () => {
           return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
         }
         assert.ok(specifier in globalThis.__mvui32Ldeps, `Unmapped App dependency: ${specifier}`);
-        return `const ${binding.trim()} = globalThis.__mvui32Ldeps[${JSON.stringify(specifier)}];`;
+        return `const ${sfcImportBinding(binding)} = globalThis.__mvui32Ldeps[${JSON.stringify(specifier)}];`;
       });
     return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#mvui32l-app`)).default;
   } finally {

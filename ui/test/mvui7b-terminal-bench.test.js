@@ -47,11 +47,11 @@ test('negative control: live and other fixture openers never opt into a broker',
 
 function raceBench(importFacade) {
   const state = { terminalOpen: { value: false }, creativeOpen: { value: false },
-    multislotOpen: { value: false }, settingsOpen: { value: false }, hostOutcome: { value: null } };
+    multislotOpen: { value: false }, capturePanelOnly: { value: false }, settingsOpen: { value: false }, hostOutcome: { value: null } };
   const code = source.slice(source.indexOf('let terminalGeneration ='), source.indexOf('\nconst terminalTop'))
     .replace("await import('./terminal/sideTerminalFacade.js')", 'await importFacade()');
   const actions = new Function('state', 'importFacade', `
-    const { terminalOpen, creativeOpen, multislotOpen, settingsOpen, hostOutcome } = state;
+    const { terminalOpen, creativeOpen, multislotOpen, capturePanelOnly, settingsOpen, hostOutcome } = state;
     const props = { fixture: { key: 'live-replay' }, terminalBroker: {} };
     const hostActive = true, selectedSurface = { value: {} };
     ${code}; return { toggleTerminal, toggleCreative, toggleSettings, openMultislot };

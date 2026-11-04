@@ -1,3 +1,4 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -225,9 +226,12 @@ test('component declares the required props, optionals, and exact emit set', () 
   }
   assert.match(setup, /hasKeyboardOwnership:\s*\{[^}]*default:\s*false/);
   assert.match(setup, /title:\s*\{[^}]*default:\s*''/);
+  assert.match(setup, /stateControls:\s*\{[^}]*default:\s*null/);
+  assert.match(template, /name="state-controls" :capabilities="props.stateControls"/);
+  assert.match(setup, /props\.stateControls\?\.\[action\]\?\.available === true/);
   const emits = setup.match(/\bdefineEmits\(\[([\s\S]*?)\]\)/)[1]
     .split(',').map((entry) => entry.trim().replace(/^['"]|['"]$/g, ''));
-  assert.deepEqual(emits, ['submit-intent', 'presentation-intent', 'activate-surface']);
+  assert.deepEqual(emits, ['submit-intent', 'presentation-intent', 'activate-surface', 'state-action']);
 });
 
 test('kit panel is wired for one gesture one intent, without the generic emit', () => {
@@ -261,7 +265,7 @@ test('surface slot forwards exact identity; host never unmounts', () => {
   assert.match(template, /:drawable="drawable"/);
   // The hidden attribute preserves mounting without CSP-blocked inline styles.
   assert.match(template, /:hidden="!surfaceHostVisible"/);
-  assert.doesNotMatch(template, /v-if/);
+  assert.doesNotMatch(withoutPairedTerminalControl(template), /v-if/);
 });
 
 test('dependencies reach children through provides; no imperative API escapes', () => {

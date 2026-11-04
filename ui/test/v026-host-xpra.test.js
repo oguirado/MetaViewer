@@ -27,6 +27,7 @@ test('Host program preserves roles, avoids the identity store, and stops on app 
   const first=await call('create-program',{choice:{binary,role:'human',hostXpra:true}});assert.equal(first.ok,true);
   assert.equal(staged[0].host_xpra,true);assert.equal(staged[0].mode,'human');
   assert.equal((await call('status',{surfaceId:first.surfaceId})).hostXpra,true);
+  assert.equal((await call('status',{surfaceId:first.surfaceId})).storedData,undefined);
   const agent=await call('switch',{surfaceId:first.surfaceId});assert.equal(agent.ok,true);assert.equal(agent.role,'agent');
   const human=await call('switch',{surfaceId:agent.surfaceId});assert.equal(human.ok,true);assert.equal(human.role,'human');
   assert.deepEqual(staged.map(x=>[x.mode,x.host_xpra]),[['human',true],['agent',true],['human',true]]);

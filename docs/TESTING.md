@@ -17,7 +17,7 @@ SQLite database and WAL magic are refused at any depth. Browser profile director
 including their CURRENT, LOCK, LOG, LOG.old, MANIFEST-*, *.ldb and *.log files;
 workflow files are capped at 65536 bytes and other files at 1 MiB [CITED:
 MemoryWeb ARCHITECTURE.md, byte caps/publication lint]. Traversal caps are
-10000 entries and 32 directory levels [TARGET, unit decision]. Hosted checks:
+10000 entries and 32 directory levels [TARGET]. Hosted checks:
 `(cd agents && python3 -m unittest tests.test_mw_home tests.test_tg_hygiene)` and
 `python3 -m unittest discover -s tests -p test_mw_home_cli.py`, each foreground under
 `systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0`.
@@ -356,7 +356,7 @@ The transport translates click, key, type and point-free scroll through the
 existing core admission and AdmittedExecutor path, checks the exact proposal,
 surface and input-clock receipt binding, and never retries a send. Drag, double
 click, point scroll, pixel-template targets, masked visual verifiers and
-shadow/promoted/repair modes refuse. [TARGET, unit decision] Trusted Python callers
+shadow/promoted/repair modes refuse. [TARGET] Trusted Python callers
 supply `ReplayOwner(..., slot_values={slot_id: value})` in process; corpus JSON,
 argv and environment never provision values. Wender `paste` requires a declared
 slot and focused precondition, then `private_pipe` maps it to one admitted `type`
@@ -374,13 +374,13 @@ state_signal/truth predicates. The public runner CLI has no secret provisioning
 flag; production callers must compose the in-process owner.
 The hosted workflow exercises click, click, focused key, then point-free scroll,
 asserting the exact proposal sequence and validating the emitted run schema.
-[TARGET, unit decision] Text entry uses the existing schemas without extension.
+[TARGET] Text entry uses the existing schemas without extension.
 
 `memoryweb-run.json` (MemoryWeb `mw.run.v1`), the private offline operator notice,
 and an authenticated metadata event journal are retained beside the runner's
 receipts in its private evidence directory. Uncertain input keeps the intent
 journal and produces no successful run summary, following Wender's fence.
-[TARGET, unit decision] Delivery budgets must be in 1–60000 ms and policy pacing
+[TARGET] Delivery budgets must be in 1–60000 ms and policy pacing
 must be in 0–5000 ms; larger values refuse at admission. Chord parts are checked
 individually against Escape/Esc and both forbidden-key policies; empty parts
 refuse. Pacing never sleeps to or beyond the run deadline. Static target, action,
@@ -400,7 +400,7 @@ MV_LIVE_WEB=1 MV_E2E_LIVE=1 MV_SRF_LIVE_PROFILE=mv-live-1 \
 Fixture replay requires offline proof before startup and every input. Real-site
 owners require a declared capsule network mode (open, allowlisted/proxied, or
 legacy); open network is the default operator policy and proxy/allowlist use is
-optional per capsule. [TARGET, unit decision] The read-only backend seam is
+optional per capsule. [TARGET] The read-only backend seam is
 `network_context` returning `{mode: "open" | "allowlisted/proxied" | "legacy"}`.
 Missing, unknown or changed declarations refuse with `MW_NETWORK`; the operator
 notice must match the declaration and verified owner receipts retain it. The
@@ -451,7 +451,7 @@ exercise the real navigation loop against a preselected omnibox and kill
 This pixel focus cue still requires confirmation in the operator's live run.
 Typing is deterministic against the focused field; table reading admits no
 input. Runtime blob links bind the flow fixtures without network access
-`[TARGET, unit decision]`. Stdout reports task budgets, measured stage latencies,
+`[TARGET]`. Stdout reports task budgets, measured stage latencies,
 frame/state digests, AX proofs, receipts, replay and cleanup. Evidence files
 (frames, journal/archive, wire and report JSON) remain in the printed private
 temporary evidence directory outside the repository. Failure retains available
@@ -470,7 +470,7 @@ egress isolation. The conservative script token scan applies only to built-in pa
 
 Offline automation packs use the closed tooling schema
 `tests/e2e/packs/automation.schema.json` (`metaviewer.automation/v1`), outside the
-frozen wire contracts. `[TARGET, unit decision]` Each pack is one task:
+frozen wire contracts. `[TARGET]` Each pack is one task:
 `automation.json` plus pinned `pages/<id>.html`. The built-in collection at
 `tests/e2e/packs/builtin-fixtures/{T1,T2,T3}/` copies the original fixture bytes;
 its proposal budgets remain 8/12/0 [TARGET], with the same goals and AX proofs.
@@ -540,7 +540,7 @@ Steps are named `click:`, nonempty `type:`, `key:` chords separated by `+`,
 `scroll:up|down|left|right`, and `read:` checkpoints. Admitted keys are Return,
 Enter, Tab, shift+Tab, Escape, Space, Backspace, Left/Right/Up/Down, Home, End,
 PageUp and PageDown; other modifiers and function keys are refused at admission. Typing requires a prior
-verified named click. `[TARGET, unit decision]` A read region is an exact marker
+verified named click. `[TARGET]` A read region is an exact marker
 in `expect`, or `table`. A sole read names the first expected marker (or
 `table`) and proves all expected markers in AX document
 order and reports `reported_values`; multiple checkpoints prove their respective
@@ -566,7 +566,7 @@ CAPTCHA-HANDOFF: the offline owner invokes the pinned Wender STOP detector
 immediately before returning authorization. The transport consumes that observation
 without another STOP check after intent. `HUMAN_HANDOFF` uses the pinned MemoryWeb protocol's human
 handoff return code (`docs/spec/MEMORYWEB_PROTOCOL.md:555`).
-[TARGET, unit decision] The minimal observed-wall seam is an observation
+[TARGET] The minimal observed-wall seam is an observation
 `observed_wall: {kind: "login_wall" | "captcha_wall", observed: true}`; login
 controls alone remain negative. Extra marker metadata is allowed. Marker walls
 report evidence kind `ax_role_name` synthetically, without claiming an AX cue. STOP is absorbing for that owner: no input,

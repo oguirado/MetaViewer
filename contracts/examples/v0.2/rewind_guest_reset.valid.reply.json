@@ -1,0 +1,11 @@
+{
+  "schema": "rewind_guest_reset/v0.2",
+  "op": "reseeded",
+  "session_id": "session-first",
+  "authority_epoch": 1,
+  "command_generation": 1,
+  "challenge": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "guest_nonce": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "counter": 0,
+  "commands_fenced": true
+}
