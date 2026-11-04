@@ -853,17 +853,21 @@ test('P18H TerminalDeckView component renders screen bar, popover profiles, Cust
 
   try {
     await tick();
-    // Initial state: Screen 1 tab, Bootstrap button, New terminal button.
+    // Initial state: workflow controls and Capsule ID stay; Bootstrap is removed.
     assert.equal(mounted.textOf(mounted.findById('terminal-deck-screen-1')), 'Screen 1');
     assert.equal(mounted.findById('terminal-deck-screen-remove-1'), null);
-    assert.equal(mounted.textOf(mounted.findById('terminal-deck-bootstrap')), '🚀 Bootstrap');
+    assert.ok(mounted.findById('terminal-deck-bootstrap') === null, 'Bootstrap button must be absent');
+    for (const [id,label] of [['automate','Create automation'],['use-automation','Run automation'],['no-automation','Direct task']]) {
+      assert.equal(mounted.textOf(mounted.findById('terminal-deck-'+id)),label);
+    }
+    assert.ok(mounted.findById('terminal-deck-bootstrap-paste-target'));
     assert.equal(mounted.textOf(mounted.findById('terminal-deck-new')), '＋ New terminal');
 
-    // Click Bootstrap -> copies entry prompt and renders toast.
-    await mounted.findById('terminal-deck-bootstrap').props.onClick();
+    // Run automation prepares a workflow prompt and renders the copy toast.
+    await mounted.findById('terminal-deck-use-automation').props.onClick();
     await tick();
-    assert.equal(copied, deckModel.AGENT_ENTRY_PROMPT);
-    assert.equal(mounted.textOf(mounted.findById('terminal-deck-bootstrap-toast')), 'Copied');
+    assert.ok(copied.endsWith('Task: '));
+    assert.equal(mounted.textOf(mounted.findById('terminal-deck-bootstrap-toast')), 'Copied — paste into your agent CLI, not a shell.');
 
     // Open New terminal popover -> shows Shell, Claude (TUI), Agy, and Custom CLI.
     mounted.findById('terminal-deck-new').props.onClick();
@@ -2105,9 +2109,9 @@ test('V023-T2: right-click context menu renders Copy/Paste above deck, disables 
     // 7. Paste in the Bootstrap panel preserves slot identifier byte-exact (including leading/trailing whitespace or exact bytes)
     const exactSlotId = '  slot-42:exact-id_00\t';
     clipboardText = exactSlotId;
-    const bootstrapBtn = mounted.findById('terminal-deck-bootstrap');
-    bootstrapBtn.props.onFocus?.();
-    await bootstrapBtn.props.onPaste({
+    const bootstrapPanelBefore = mounted.findById('terminal-deck-bootstrap-panel');
+    bootstrapPanelBefore.props.onFocusin?.();
+    await bootstrapPanelBefore.props.onPaste({
       clipboardData: { getData: () => exactSlotId },
       preventDefault() {},
       stopPropagation() {},
@@ -2414,13 +2418,13 @@ test('V023-REVIEW-FIX-9: switching screens closes context menu and Bootstrap foc
       await tick();
 
       // 2. Focus Bootstrap button, then blur / move focus elsewhere -> subsequent paste must go to terminal, not Bootstrap.
-      const bootstrapBtn = mounted.findById('terminal-deck-bootstrap');
-      bootstrapBtn.props.onFocus?.();
+      const bootstrapPanelBefore = mounted.findById('terminal-deck-bootstrap-panel');
+      bootstrapPanelBefore.props.onFocusin?.();
       await tick();
       // Blur Bootstrap (focus moves to another control such as New terminal button)
       const newBtn = mounted.findById('terminal-deck-new');
       globalThis.document.activeElement = newBtn;
-      bootstrapBtn.props.onBlur?.({ relatedTarget: newBtn });
+      bootstrapPanelBefore.props.onFocusout?.({ relatedTarget: newBtn });
       await tick();
 
       clipboardText = 'paste-into-terminal-after-blur';

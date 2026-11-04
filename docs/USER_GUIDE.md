@@ -291,18 +291,6 @@ is never retried or downgraded. See [Capsule network](INSTALL.md#capsule-network
 for installation prerequisites and allowlist rules.
 [CITED: `../ui/src/netmode/NetworkPanel.vue`, `INSTALL.md`]
 
-### Bootstrap prompt
-
-**🚀 Bootstrap** in the terminal deck copies the fenced prompt from
-[AGENT_ENTRY.md](AGENT_ENTRY.md), including its final newline. You can also copy
-it from the document. Give it
-to your chosen agent with the operator present. It selects a stored workflow and
-runs `python3 -m metaviewer_agents.mw_run` from the agents directory against an
-already running browser identity. It neither starts a browser nor types credentials.
-Read the JSON result and its private receipt/report before accepting success;
-slot values must not contain secrets because process arguments expose them.
-[CITED: `../ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]
-
 ### Prepare a task for your agent CLI
 
 Use **Create automation** to teach by demonstrating steps, **Run automation** to use a saved workflow, or **Direct task** to work without a saved workflow. Each prepares a prompt whose final line is `Task: `; type your task there.

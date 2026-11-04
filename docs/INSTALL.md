@@ -589,13 +589,10 @@ Packaged demo operations additionally require `MV_OPERATOR_REPO` pointing to an
 operator-owned MetaViewer checkout with the host tools and Git admission.
 [CITED: `tools/mw_home_check.py`, `tools/mv_demo.py`, `ui/tools/package.js`]
 
-Use **🚀 Bootstrap** in the terminal deck to copy the fenced prompt in
-[AGENT_ENTRY.md](AGENT_ENTRY.md), including its final newline, or copy it from
-the document. The sidebar entry button is not available in this release. Copying
-launches no workflow. Give that prompt to an agent with an already running,
-logged-in identity and the configured core connection. The entry stops on
-refusal or `HUMAN_HANDOFF`; credentials must never be passed as text slots.
-[CITED: `ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]
+Use **Create automation**, **Run automation**, or **Direct task** in the terminal
+controls to prepare instructions for an agent. The Capsule ID chip remains next
+to these controls. Add your task to the final `Task: ` line and submit it yourself;
+the app never sends Enter. See [AGENT_ENTRY.md](AGENT_ENTRY.md).
 
 The demo recording dialog has no menu entry in this release. Run
 `tools/mv_demo.py record`, `prompt` and `check` directly from an operator-owned
