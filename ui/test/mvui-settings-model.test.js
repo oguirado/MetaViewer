@@ -40,9 +40,9 @@ import {
   settingsRefusalFor,
 } from '../src/settings/settingsModel.js';
 
-test('scheme vocabulary is the closed mv-light/mv-dark set, light primary', () => {
+test('scheme vocabulary is the closed mv-light/mv-dark set, dark primary', () => {
   assert.deepEqual([...MV_SCHEMES], ['mv-light', 'mv-dark']);
-  assert.equal(MV_PRIMARY_SCHEME, 'mv-light');
+  assert.equal(MV_PRIMARY_SCHEME, 'mv-dark');
   assert.equal(MV_DENSITY, 'compact');
   assert.equal(isMvScheme('mv-light'), true);
   assert.equal(isMvScheme('mv-dark'), true);
@@ -50,9 +50,9 @@ test('scheme vocabulary is the closed mv-light/mv-dark set, light primary', () =
     assert.equal(isMvScheme(bad), false);
   }
   assert.equal(normalizeScheme('mv-dark'), 'mv-dark');
-  assert.equal(normalizeScheme('dark'), 'mv-light');
+  assert.equal(normalizeScheme('dark'), 'mv-dark');
   assert.equal(normalizeScheme('dark', 'mv-dark'), 'mv-dark');
-  assert.equal(normalizeScheme('dark', 'bogus'), 'mv-light');
+  assert.equal(normalizeScheme('dark', 'bogus'), 'mv-dark');
 });
 
 test('density vocabulary is the closed compact/comfortable set, compact default', () => {
@@ -96,26 +96,26 @@ test('the closed key set is exactly scheme, density, wallFps and recordingFps', 
   assert.deepEqual([...MV_SETTINGS_KEYS], ['scheme', 'density', 'wallFps', 'recordingFps']);
 });
 
-test('default settings are frozen light/compact/30/3', () => {
+test('default settings are frozen dark/compact/30/3', () => {
   assert.deepEqual(
     { ...defaultMvSettings() },
-    { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
+    { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
   );
   assert.equal(Object.isFrozen(defaultMvSettings()), true);
 });
 
 test('closed decode accepts objects, JSON text and partial values', () => {
-  assert.deepEqual(decodeMvSettings({ scheme: 'mv-dark', density: 'comfortable', wallFps: 60, recordingFps: 12 }), {
+  assert.deepEqual(decodeMvSettings({ scheme: 'mv-light', density: 'comfortable', wallFps: 60, recordingFps: 12 }), {
     ok: true,
-    settings: { scheme: 'mv-dark', density: 'comfortable', wallFps: 60, recordingFps: 12 },
+    settings: { scheme: 'mv-light', density: 'comfortable', wallFps: 60, recordingFps: 12 },
   });
-  assert.deepEqual(decodeMvSettings('{"scheme":"mv-dark"}'), {
+  assert.deepEqual(decodeMvSettings('{"scheme":"mv-light"}'), {
     ok: true,
-    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
+    settings: { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
   assert.deepEqual(decodeMvSettings({}), {
     ok: true,
-    settings: { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
+    settings: { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
   });
 });
 
@@ -165,12 +165,12 @@ test('store loads defaults when absent and decodes stored text', async () => {
   const empty = createHostSettingsStore(createMemorySettingsHost());
   assert.deepEqual(
     { ...(await empty.load()) },
-    { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
+    { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
   );
-  const stored = createHostSettingsStore(createMemorySettingsHost('{"scheme":"mv-dark"}'));
+  const stored = createHostSettingsStore(createMemorySettingsHost('{"scheme":"mv-light"}'));
   assert.deepEqual(
     { ...(await stored.load()) },
-    { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 },
+    { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 },
   );
   const broken = createHostSettingsStore(createMemorySettingsHost('{nope'));
   await assert.rejects(broken.load(), /ERR_SETTINGS_MALFORMED/);

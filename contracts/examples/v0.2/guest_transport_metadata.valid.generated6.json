@@ -1,0 +1,9 @@
+{
+  "kind": "cancel",
+  "workload_id": "workload-fixture",
+  "generation": 1,
+  "reservation_id": "reservation-fixture",
+  "request_id": "request-fixture",
+  "run_request_id": "request-fixture",
+  "job_id": "job-fixture"
+}

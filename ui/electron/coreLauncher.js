@@ -18,8 +18,9 @@
  * @module coreLauncher
  */
 
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { realpathSync, statSync } from 'node:fs';
+import {guestCommandProfileOwnerSync} from './guestCommandProfile.js';
+import { isAbsolute, normalize, join, relative, resolve, sep } from 'node:path';
+import { constants, realpathSync, statSync, lstatSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { execFile, spawn as defaultSpawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -125,6 +126,21 @@ export const ALLOWED_ADAPTER_ENV = Object.freeze([
   'SRF_IDENTITY_STORE_ROOT',
   'SRF_PROXY_REGISTRY',
   'SRF_EGRESS_PROXY',
+  'MV_GUEST_COMMAND_AGENT_INSTANCE',
+  'MV_GUEST_COMMAND_ONLY',
+  'MV_ARM64_CAPSULES',
+  'MV_ARM64_CAPSULE_STATUS',
+  'MV_ARM64_INVENTORY_CONFIG',
+  'MV_GUEST_COMMAND_PROFILE',
+  'MV_REWIND_ENABLED',
+  'MV_REWIND_AGENT_INSTANCE',
+  'MV_REWIND_ONLY',
+  'MV_REWIND_PROFILE',
+  'MV_REWIND_GUARDIAN_UNIT',
+  'MV_HEADLESS_AGENT_INSTANCE',
+  'MV_HEADLESS_ONLY',
+  'MV_HEADLESS_PROFILE',
+  'MV_HEADLESS_GUARDIAN_UNIT',
   'MV_SRF_PROFILES',
   'MV_SRF_LIVE_PROFILE',
   'MV_SRF_LIVE_TEXT_INPUT',
@@ -1229,6 +1245,7 @@ function defaultAdapterPreflight(command, env) {
   } catch {
     return { ok: false, code: 'ADAPTER_ABSENT', reason: 'bundled adapter binary is absent on disk' };
   }
+  if (guestCommandProfileOwnerSync(env) !== null || headlessProfileOwnerSync(env) !== null) return {ok:true};
   const srfBinDir = env.MV_SRF_BIN_DIR;
   if (
     typeof srfBinDir !== 'string' || srfBinDir.length < 1 || srfBinDir.length > CORE_MAX_PATH_CHARS ||
@@ -1810,4 +1827,39 @@ export function createAdapterLauncher(options) {
   }
 
   return Object.freeze({ start, dispose, getStatus });
+}
+
+/** Read only the protected host profile metadata; daemon validates executable pins.
+ * @param {NodeJS.ProcessEnv} env @param {string} [arch] @returns {string|null} */
+export function headlessProfileOwnerSync(env,arch=process.arch) {
+  const path=env.MV_HEADLESS_PROFILE;
+  if(env.MV_HEADLESS_ONLY!=='1' || arch!=='arm64' || !path || !isAbsolute(path) || normalize(path)!==path || path.startsWith('//'))return null;
+  let fd;
+  try {
+    if(realpathSync(path)!==path)return null;
+    const before=lstatSync(path,{bigint:true});
+    if(!before.isFile())return null;
+    fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
+    const st=fstatSync(fd,{bigint:true});
+    const fields=['dev','ino','mode','uid','gid','nlink','size','mtimeNs','ctimeNs'];
+    const same=(/** @type {any} */ x,/** @type {any} */ y)=>fields.every(k=>x[k]===y[k]);
+    if(!same(before,st) || !st.isFile() || st.uid!==BigInt(process.getuid?.() ?? -1) || (st.mode&0o077n)!==0n || st.nlink!==1n || st.size>65536n)return null;
+    const bytes=Buffer.alloc(65537),length=readSync(fd,bytes,0,bytes.length,0);
+    if(length!==Number(st.size) || !same(st,fstatSync(fd,{bigint:true})) || !same(st,lstatSync(path,{bigint:true})) || realpathSync(path)!==path)return null;
+    const p=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes.subarray(0,length)));
+    if(!p || Object.keys(p).sort().join(',')!=='config_template,controller_relative,files,guardian_unit,owner_id,python,python_prefix,runner,runtime_root,schema,state_root'
+      || typeof p.python_prefix!=='string' || !isAbsolute(p.python_prefix) || realpathSync(p.python_prefix)!==p.python_prefix || !statSync(p.python_prefix).isDirectory()
+      || p.schema!=='mv-headless-host/v1' || !/^actor-[0-9a-f]{64}$/.test(p.owner_id)
+      || p.config_template?.schema!=='mc06-host-config/v1' || p.config_template?.runtime_admitted!==true
+      || p.config_template?.owner_id!==p.owner_id)return null;
+    return p.owner_id;
+  } catch {return null;} finally {if(fd!==undefined)closeSync(fd);}
+}
+
+/** Explicit headless mode never falls back to graphical startup on a bad profile.
+ * @param {NodeJS.ProcessEnv} env @param {string} [arch] */
+export function requireHeadlessMode(env,arch=process.arch) {
+  if(env.MV_HEADLESS_ONLY!=='1')return false;
+  if(headlessProfileOwnerSync(env,arch)===null)throw Error('HEADLESS_PROFILE_INVALID');
+  return true;
 }

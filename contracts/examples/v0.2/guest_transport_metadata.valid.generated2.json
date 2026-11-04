@@ -1,0 +1,8 @@
+{
+  "kind": "error",
+  "workload_id": "workload-fixture",
+  "generation": 1,
+  "reservation_id": "reservation-fixture",
+  "request_id": "request-fixture",
+  "code": "AUTH"
+}

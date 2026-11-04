@@ -89,13 +89,13 @@ I run the full `11`-leg `[MEASURED: bash tools/gate.sh]` verification gate (`man
 
 The window is a kit shell with a top bar, a navigation rail, the capsule wall, a side terminal, an activity strip, and a status bar:
 
-- **Top bar:** renders `MvTopbar` (`ui/src/App.vue`) with `MetaViewer`, an `Add capsule` button (`@new-capsule="launcherOpen = true"`), a `Find a capsule…` search field, and `4` `[MEASURED]` top-bar actions (`Storyboard`, `Settings`, `Open in multislot`, and `Terminal` in `topbarActions` at `ui/src/App.vue`).
+- **Navigation:** the left working tree groups Humans and Agents, then desktops and their capsules. Desktop cards show real capsule counts; selecting a capsule switches to its desktop and restores its tile. The collapsed rail retains view counts and a pending-handoff indicator. The center row offers Find a capsule, grid choices and Add capsule.
 - **Rail:** a collapsible overlay sidebar with one `Workspace` group (`Add capsule` plus one entry per connected surface).
 - **Wall:** a dockview tile workspace with one panel per capsule (`240x200` `[TARGET]` minimum tile size in `ui/src/wall/WallWorkspace.vue`), supporting tabs, splits, and floating panels.
 - **Side terminal:** a right-side resizable `xterm.js` overlay toggled with `Terminal`. A package built without native terminal support (no `node-pty` in the package) cannot open a session: the overlay and the launch controls report `TERMINAL_UNAVAILABLE: terminal support is not bundled in this package` (`ui/electron/terminalHost.js`, `ui/src/terminal/BrokerLaunchControls.vue`) instead of a blank terminal.
 - **Activity strip:** above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
 - **Status bar:** shows the current view crumb (`Main wall`), `Core connected` / `Core not connected`, and the active capsule count.
-- **Settings:** switches the window between `Light` (`mv-light`, default) and `Dark` themes live.
+- **Settings:** switches the window between `Dark` (`mv-dark`, default) and `Light` themes live. An existing saved theme remains selected.
 
 ---
 
@@ -212,7 +212,7 @@ A refused **Record for AI**, stop or **Take screenshot** now shows one line unde
 
 The tile buttons on the wall do not show this line yet `[TARGET, owned by the wall unit]`; the panel does.
 
-The top-bar **Storyboard** button opens the Storyboard screen, where creative service operations are not wired yet and report `Creative service unavailable.` The Storyboard screen has no frames to show today and no status text of its own (`creativeFrames` is `[]` outside fixtures, `ui/src/App.vue`), so it opens as an empty page with only **Close** and **Request new frame**; the `Creative service unavailable.` toast appears only after **Request new frame**.
+Storyboard is not available in release 0.2.6 because its creative service is unavailable. Its implementation and diagnostic fixtures remain in the repository; the live sidebar and rail do not expose an entry.
 
 ---
 
@@ -285,6 +285,12 @@ already running browser identity. It neither starts a browser nor types credenti
 Read the JSON result and its private receipt/report before accepting success;
 slot values must not contain secrets because process arguments expose them.
 [CITED: `../ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]
+
+### Prepare a task for your agent CLI
+
+Use **Create automation** to teach by demonstrating steps, **Run automation** to use a saved workflow, or **Direct task** to work without a saved workflow. Each prepares a prompt whose final line is `Task: `; type your task there.
+
+The prompt is copied to the clipboard. When a terminal is paired with a capsule, its actual identity is filled in. Paste the text into your agent CLI, never at a shell prompt; add your task and submit it when ready. Pairing does not identify the foreground process, so these buttons do not insert text or send Enter into the terminal. Automatic insertion remains unavailable until the host can attest an agent input target.
 
 ### Automate from a demo
 
@@ -392,3 +398,5 @@ roles from the same source as their visible text.
 - [Electron shell notes](../ui/README.md)
 - [Python adapters](../agents/README.md)
 - [License](../LICENSE)
+
+Wide capsule headers keep Record, Screenshot and Copy ID available as icon buttons. Narrow tiles reveal them on header hover or focus. Recording state stays in the header; hover does not resize the capsule view.

@@ -1,0 +1,17 @@
+{
+  "schema": "rewind_point/v0.2",
+  "point_id": "point-one",
+  "label": "Before edit",
+  "created_order": 1,
+  "created_mono_ns": 123,
+  "source_generation": 1,
+  "source_authority_epoch": 1,
+  "compatibility_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "state_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "memory_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "state_bytes": 4096,
+  "memory_bytes": 268435456,
+  "counter_value": 73,
+  "status": "usable",
+  "active_references": 2
+}

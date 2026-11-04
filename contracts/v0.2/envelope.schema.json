@@ -147,6 +147,12 @@
         },
         {
           "$ref": "session_record.schema.json"
+        },
+        {
+          "$ref": "capsule_state_request.schema.json"
+        },
+        {
+          "$ref": "capsule_state_event.schema.json"
         }
       ]
     }

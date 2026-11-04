@@ -1,3 +1,4 @@
+import { stateRequest, stateEvent } from './preload.js';
 // @ts-check
 /** [TARGET, unit decision] Host binding for the authority lane. Core requests use
  * {op:'propose'|'intent',json}; the core remains the admission authority. A trusted
@@ -10,11 +11,15 @@
  * [TARGET, unit decision] Bound per-surface input rate/sequence maps to
  * MAX_ITEMS = 64 and evict unknown/unadmitted surface IDs on SURFACE_UNKNOWN refusal.
  * [TARGET, unit decision] Closed settings schema {scheme, density, wallFps, recordingFps}
- * with defaults (mv-light, compact, 30, 3); settings.save emits {wallFps} cadence
+ * with defaults (mv-dark, compact, 30, 3); settings.save emits {wallFps} cadence
  * requests and updates default recordingFps.
  * [TARGET, unit decision] Frozen settings/v0.2 is decoded separately, then
  * projected to host preferences; its limits do not change UI preference caps.
  */
+import {rewindAction} from './rewindValues.js';
+import {gcAction} from './guestCommandValues.js';
+import {arm64CapsuleStatusSync} from './guestCommandProfile.js';
+import {validAction} from './headlessValues.js';
 import { acquireCapsuleCreation } from './profilePicker.js';
 import { open, mkdir, rename, unlink, lstat, realpath } from 'node:fs/promises';
 import { constants, readFileSync, realpathSync, statSync } from 'node:fs';
@@ -32,7 +37,7 @@ import { createTerminalFacade, validateProviderArgv } from './ptyBroker.js';
 let profilePickerModulePromise = null;
 
 export const WIRE_CHANNELS = Object.freeze({
-  loadSettings:'metaviewer:settings.load', saveSettings:'metaviewer:settings.save',
+  slotRequest:'metaviewer:capsule-state.request', loadSettings:'metaviewer:settings.load', saveSettings:'metaviewer:settings.save',
   recordingDestination:'metaviewer:recording.destination', nestedDepth:'metaviewer:nested.depth',
   selfCapsuleId:'metaviewer:nested.self', propose:'metaviewer:authority.propose',
   intent:'metaviewer:authority.intent',
@@ -42,6 +47,7 @@ export const WIRE_CHANNELS = Object.freeze({
   unsubscribeFrames:'metaviewer:authority.unsubscribe',
   terminalOpen:'metaviewer:side-terminal.open', terminalEnabled:'metaviewer:side-terminal.enabled',
 });
+export const HEADLESS_CHANNELS = Object.freeze({headlessStatus:'metaviewer:headless.status',headlessRequest:'metaviewer:headless.request'});
 export const SIDE_TERMINAL_CHANNELS = Object.freeze({
   terminalAttach:'metaviewer:side-terminal.attach',
   terminalResize:'metaviewer:side-terminal.resize',
@@ -53,7 +59,9 @@ const CLIPBOARD_CHANNELS = Object.freeze({
   clipboardWrite:'metaviewer:clipboard.writeText',
   clipboardRead:'metaviewer:clipboard.readText',
 });
-const ALL_WIRE_CHANNELS = Object.freeze({...WIRE_CHANNELS, ...SIDE_TERMINAL_CHANNELS, ...CLIPBOARD_CHANNELS});
+export const GUEST_COMMAND_CHANNELS=Object.freeze({guestCommandCapabilities:'metaviewer:guest-command.capabilities',guestCommandStatus:'metaviewer:guest-command.status',guestCommandRequest:'metaviewer:guest-command.request'});
+export const REWIND_CHANNELS=Object.freeze({rewindStatus:'metaviewer:rewind.status',rewindRequest:'metaviewer:rewind.request'});
+const ALL_WIRE_CHANNELS = Object.freeze({...REWIND_CHANNELS,...GUEST_COMMAND_CHANNELS,...WIRE_CHANNELS, ...HEADLESS_CHANNELS, ...SIDE_TERMINAL_CHANNELS, ...CLIPBOARD_CHANNELS});
 export const SURFACE_INPUT_CHANNEL = WIRE_CHANNELS.intent;
 export const WIRE_MAX_BYTES = 256 * 1024;
 export const INTENT_OPS = Object.freeze({
@@ -353,7 +361,7 @@ export function verdictReply(value) {
   return value;
 }
 export const DEFAULT_SETTINGS = Object.freeze({
-  scheme: 'mv-light',
+  scheme: 'mv-dark',
   density: 'compact',
   wallFps: 30,
   recordingFps: 3,
@@ -721,6 +729,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   let creatingCapsule = false;
   const createVM = async () => {
     if (identity.depth !== null || disposed) return refuse('DISPLAY_ONLY');
+    if(env.MV_ARM64_CAPSULES==='1'&&!(await capsuleCapabilities()).vm.available)return refuse('VM_UNAVAILABLE');
     if (creatingCapsule) return refuse('SURFACE_CREATE_BUSY');
     const releaseCreation = acquireCapsuleCreation(capsuleStates);
     if (!releaseCreation) return refuse('SURFACE_CREATE_BUSY');
@@ -865,7 +874,42 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     }
     return {ok:false,code:wireCode};
   };
+  const stopRewind=core.rewind?.status?.().available===true?core.rewind.subscribe((/** @type {any} */ snapshot)=>{if(identity.depth===null)contents.postMessage('metaviewer:rewind.state',snapshot);}):()=>{};
+  const stopGuestCommand=core.guestCommand?.status?.().available===true?core.guestCommand.subscribe((/** @type {any} */ snapshot)=>{if(identity.depth===null)contents.postMessage('metaviewer:guest-command.state',snapshot);}):()=>{};
+  const stopHeadless = (core.headless?.status?.().available === true ? core.headless.subscribe((/** @type {any} */ snapshot) => {
+    if (identity.depth === null) contents.postMessage('metaviewer:headless.state',snapshot);
+  }) : null) ?? (()=>{});
+  const capsuleCapabilities = async () => {
+    const result=arm64CapsuleStatusSync(env,hostArch);
+    if(!result.supported_host)return result;
+    const disable=(/** @type {'vm'|'microvm'} */ kind,/** @type {string} */ reason)=>{result[kind]={available:false,reason};};
+    if(identity.depth!==null){disable('vm','Nested walls cannot create capsules.');disable('microvm','Nested walls cannot create capsules.');return result;}
+    const {configuredVMProfiles}=await (profilePickerModulePromise??=import('./profilePicker.js'));
+    if(result.vm.available&&configuredVMProfiles(env,hostArch).length===0)disable('vm','The graphical VM profile is unavailable.');
+    const guest=core.guestCommand?.status?.();
+    if(result.microvm.available&&guest?.available!==true)disable('microvm','The MicroVM runtime or protected profile is unavailable.');
+    if(guest?.uncertain||guest?.session?.ownership==='held')disable('vm','Stop and reconcile the current MicroVM before creating a graphical VM.');
+    if([...capsuleStates.values()].some(/** @param {any} value */ value=>!['destroyed','stopped'].includes(value?.state)))disable('microvm','Close and confirm existing graphical capsules before creating a MicroVM.');
+    if(guest?.session){disable('microvm',guest.session.ownership==='released'?'MicroVM was already used in this app session.':'The current MicroVM already owns this session.');}
+    if(guest?.uncertain)disable('microvm','MicroVM ownership is uncertain. Stop it to reconcile resources.');
+    return result;
+  };
   const handlers = {
+    slotRequest: async (/** @type {any} */ request) => {
+      if (identity.depth !== null || disposed) throw new Error('DISPLAY_ONLY');
+      const body=stateRequest(request);
+      return stateEvent(await core.request({op:'capsule-state',request:body}));
+    },
+    rewindStatus:async()=>identity.depth===null&&core.rewind?core.rewind.status():{available:false,busy:false,code:'UNAVAILABLE',revision:0,session:null,uncertain:false,point_ages_ms:{},stop_target:null},
+    rewindRequest:async(/** @type {any} */action)=>{if(identity.depth!==null||!core.rewind||!rewindAction(action))throw Error('BAD_REQUEST');return core.rewind.request(action);},
+    guestCommandCapabilities: capsuleCapabilities,
+    guestCommandStatus: async()=>identity.depth===null&&core.guestCommand?core.guestCommand.status():{available:false,busy:false,canCancel:false,code:'UNAVAILABLE',revision:0,session:null,uncertain:false,stdout:'',stderr:''},
+    guestCommandRequest: async(/** @type {any} */ action)=>{if(identity.depth!==null||!core.guestCommand||!gcAction(action))throw Error('BAD_REQUEST');return core.guestCommand.request(action);},
+    headlessStatus: async () => identity.depth === null && core.headless ? core.headless.status() : {available:false,busy:false,code:'UNAVAILABLE',revision:0,session:null,uncertain:false},
+    headlessRequest: async (/** @type {any} */ action) => {
+      if (identity.depth !== null || !core.headless || !validAction(action)) throw Error('BAD_REQUEST');
+      return core.headless.request(action);
+    },
     loadSettings: async () => {
       const loaded = await store.load();
       const parsed = typeof loaded === 'string' ? validateHostSettings(loaded) : DEFAULT_SETTINGS;
@@ -1230,7 +1274,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
         continue;
       }
       const channel=ALL_WIRE_CHANNELS[/** @type {keyof typeof ALL_WIRE_CHANNELS} */(name)];
-      const arity=['saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
+      const arity=['slotRequest','rewindRequest','guestCommandRequest','headlessRequest','saveSettings','propose','intent','terminalOpen','terminalEnabled','terminalAttach','terminalResize','terminalClose','terminalCopy','clipboardWrite'].includes(name) ? 1 : 0;
       ipcMain.handle(channel,/** @param {unknown} event @param {...any} args */ async (event,...args) => {
         if (disposed || observeSender(event,contents,PRIVILEGED_ORIGIN).verdict !== 'admit') throw new Error('SENDER');
         const vmCreate = name === 'createSurface' && args.length === 1 && exactDataKeys(args[0],'kind') && args[0].kind === 'vm';
@@ -1379,7 +1423,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     inputPartialSeq,
     inputPartialApplied,
     notifyCreateRefusal: (/** @type {any} */ failure) => refuse(resolveCreateFailureCode(failure)),
-    async dispose() { disposed=true; subscribed=false; stopFrames(); stopCadence();
+    async dispose() { stopRewind(); stopGuestCommand(); stopHeadless(); disposed=true; subscribed=false; stopFrames(); stopCadence();
       knownSurfaces.clear();
       inputRateWindow.clear();
       inputLastSeq.clear();

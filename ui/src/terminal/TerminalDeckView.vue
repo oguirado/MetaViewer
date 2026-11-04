@@ -19,9 +19,12 @@ import {
   matchDeckShortcut,
 } from './terminalDeckModel.js';
 import './terminal.css';
+import {createPairedTerminals} from './pairedTerminals.js';
 
 const props = defineProps({
   open: { type: Boolean, default: true },
+  compact: { type: Boolean, default: false },
+  pairedTarget: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalBinding: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
   terminalSessionPort: { type: /** @type {import('vue').PropType<any>} */ (Object), default: null },
@@ -32,7 +35,7 @@ const props = defineProps({
   closeGraceMs: { type: Number, default: undefined },
 });
 
-const emit = defineEmits(['update:open']);
+const emit = defineEmits(['update:open','pair-focus','request-dock']);
 
 class MvDeckTerminal extends Terminal {
   /** @param {any} options */
@@ -44,6 +47,7 @@ class MvDeckTerminal extends Terminal {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const revision = ref(0);
+const pairBusy = ref(false), pairError = ref('');
 const customCommand = ref('');
 const pastedBootstrapText = ref('');
 const lastBootstrapFocused = ref(false);
@@ -72,6 +76,27 @@ const viewportElements = new Map();
 const mountedTerminals = new Map();
 /** @type {Map<string, string[]>} */
 const pendingSessionOutput = new Map();
+const fittedSizes = new Map();
+const viewportObserver = typeof globalThis.ResizeObserver === 'function' ? new ResizeObserver(entries => {
+  if (!props.open) return;
+  for (const entry of entries) {
+    if (entry.contentRect.width < 1 || entry.contentRect.height < 1) continue;
+    const slotId = [...viewportElements].find(([,element]) => element === entry.target)?.[0];
+    if (!slotId) continue;
+    const slot = controller.findSlot(slotId);
+    const current = mountedTerminals.get(slotId);
+    if (!slot || slot.screenIndex !== activeScreenIndex.value || !current?.term) continue;
+    try {
+      current.fit?.fit();
+      const {cols,rows}=current.term;
+      const size=`${cols}x${rows}`;
+      if (cols > 0 && rows > 0 && fittedSizes.get(slotId) !== size) {
+        fittedSizes.set(slotId,size);
+        controller.resizeSession(current.sessionId,cols,rows);
+      }
+    } catch { /* A detached or hidden viewport is fitted on its next observation. */ }
+  }
+}) : null;
 // [TARGET, unit decision] Retain at most 64 Ki UTF-16 code units per unmounted session.
 const MAX_PENDING_OUTPUT_CHARS = 64 * 1024;
 
@@ -177,6 +202,17 @@ const controller = createTerminalDeckController({
   },
 });
 
+const pairedTerminals=createPairedTerminals(controller);
+watch(()=>[props.open,props.pairedTarget],async (_value,_old,onCleanup)=>{
+  if (!props.open || !props.pairedTarget) {pairBusy.value=false;return;}
+  let current=true;onCleanup(()=>{current=false;});pairBusy.value=true;pairError.value='';
+  try {
+    const pair=await pairedTerminals.open(props.pairedTarget);
+    if (current) {controller.focusSlot(pair.slotId);revision.value++;}
+  } catch (error) {if(current)pairError.value=error instanceof Error?error.message:'Paired terminal unavailable';}
+  finally {if(current)pairBusy.value=false;}
+},{immediate:true});
+
 const deckState = computed(() => {
   void revision.value;
   const st = controller.state;
@@ -195,12 +231,16 @@ const screens = computed(() => deckState.value.screens);
 const activeScreenIndex = computed(() => deckState.value.activeScreenIndex);
 const activeScreen = computed(() => deckState.value.activeScreen);
 const focusedSlotId = computed(() => deckState.value.focusedSlotId);
+const focusedPair=computed(()=>{revision.value;return pairedTerminals.forSlot(focusedSlotId.value);});
+const pairMatchesTarget=computed(()=>!props.compact || focusedPair.value?.surfaceId === props.pairedTarget?.surfaceId);
+const workflowIdentity=computed(()=>pairMatchesTarget.value ? focusedPair.value?.identityLine ?? pastedBootstrapText.value : '');
+watch(focusedPair,pair=>emit('pair-focus',pair?.surfaceId ?? null),{immediate:true});
 const pendingCloseSlotId = computed(() => deckState.value.pendingCloseSlotId);
 const launcherOpen = computed(() => deckState.value.launcherOpen);
 const toastMessage = computed(() => deckState.value.toastMessage);
 const errorCode = computed(() => deckState.value.errorCode);
 const errorMessage = computed(() => deckState.value.errorMessage);
-const gridColumns = computed(() => String(deckState.value.gridColumns));
+const gridColumns = computed(() => props.compact ? '1' : String(deckState.value.gridColumns));
 const profiles = computed(() => deckState.value.profiles);
 const allScreenSlots = computed(() => {
   const list = [];
@@ -212,7 +252,7 @@ const allScreenSlots = computed(() => {
       list.push({
         slot,
         screenIndex: sIdx,
-        onActiveScreen: sIdx === activeIdx,
+        onActiveScreen: sIdx === activeIdx && (!props.compact || (slot.id === focusedSlotId.value && pairMatchesTarget.value)),
       });
     }
   }
@@ -252,8 +292,12 @@ function setViewportRef(slotId, el) {
   const isElement = typeof HTMLElement !== 'undefined'
     ? el instanceof HTMLElement
     : Boolean(el && typeof el === 'object');
+  const previous=viewportElements.get(slotId);
+  if (previous === el) return;
+  if (previous) viewportObserver?.unobserve(previous);
   if (isElement) {
     viewportElements.set(slotId, /** @type {HTMLElement} */ (el));
+    viewportObserver?.observe(/** @type {HTMLElement} */ (el));
   } else {
     viewportElements.delete(slotId);
   }
@@ -263,6 +307,7 @@ function setViewportRef(slotId, el) {
  * @param {string} slotId
  */
 function destroySlotTerminal(slotId) {
+  fittedSizes.delete(slotId);
   controller.unregisterTerminal(slotId);
   const existing = mountedTerminals.get(slotId);
   if (!existing) return;
@@ -396,6 +441,7 @@ function syncTerminals() {
  */
 function onWindowKeyDown(event) {
   if (!props.open) return;
+  if (props.compact && ['new-shell','next-screen','prev-screen'].includes(matchDeckShortcut(event) ?? '')) emit('request-dock');
   if (pendingCloseSlotId.value) {
     if (event.key === 'Escape') controller.cancelPendingClose();
     else if (event.key === 'Tab') {
@@ -612,6 +658,11 @@ async function onContextMenuPaste() {
   const { slotId } = contextMenu.value;
   closeContextMenu();
   await controller.pasteClipboard(undefined, slotId);
+}
+
+/** @param {Event} event */
+function onBootstrapInput(event) {
+  if (!focusedPair.value) pastedBootstrapText.value = /** @type {HTMLInputElement} */ (event.target).value;
 }
 
 /**
@@ -850,6 +901,7 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  viewportObserver?.disconnect();
   globalThis.document?.removeEventListener?.('focusin', containDialogFocus, true);
   syncOverlayAttr(false);
   globalThis.window?.removeEventListener?.('keydown', onWindowKeyDown, true);
@@ -879,11 +931,13 @@ defineExpose({
   <div
     id="mv-terminal-deck"
     class="mv-terminal-deck"
+    :data-compact="String(compact)"
     data-semantic-anchor="terminal/deck/root"
     aria-label="Terminal workspace"
     @keydown="onWindowKeyDown"
   >
     <header class="mv-terminal-deck__bar" aria-label="Terminal operator bar">
+      <button v-if="compact" id="terminal-deck-open-full" data-semantic-anchor="terminal/open-dock" type="button" class="mv-terminal-deck__action-btn" @click="emit('request-dock')">Open full dock</button>
       <div class="mv-terminal-deck__screens" role="tablist" aria-label="Terminal screens">
         <div
           v-for="(screen, sIdx) in screens"
@@ -922,6 +976,7 @@ defineExpose({
 
       <div class="mv-terminal-deck__actions">
         <span
+          v-if="pairMatchesTarget"
           ref="bootstrapWrap"
           id="terminal-deck-bootstrap-panel"
           data-semantic-anchor="terminal/bootstrap/panel"
@@ -945,19 +1000,23 @@ defineExpose({
             @keydown="onBootstrapKeyDown"
             @click="onBootstrap"
           >🚀 Bootstrap</button>
-          <span role="status" aria-live="polite">
-            Paste Copy ID for AI here to select the capsule for workflow actions.
-            <template v-if="pastedBootstrapText">Selected capsule identity: <code>{{ pastedBootstrapText }}</code></template>
-            <template v-else>No capsule identity selected.</template>
-          </span>
+          <label class="mv-terminal-deck__identity-pill"
+            :title="focusedPair ? `Paired with ${focusedPair.title} · Host shell. ${workflowIdentity}` : 'Paste Copy ID for AI here to select the capsule for workflow actions.'">
+            <span>Capsule ID: <span v-if="!workflowIdentity">None</span></span>
+            <input id="terminal-deck-bootstrap-paste-target" data-semantic-anchor="terminal/bootstrap/identity"
+              :value="focusedPair?.surfaceId ?? pastedBootstrapText" :readonly="!!focusedPair" placeholder="Paste AI ID…"
+              :aria-label="focusedPair ? 'Paired capsule identity · Host shell' : 'Capsule identity for workflow actions'"
+              @input="onBootstrapInput" />
+          </label>
           <button
-            v-for="action in [{kind:'automate',label:'Automate'}, {kind:'use-automation',label:'Use automation'}, {kind:'no-automation',label:'No automation'}]"
+            v-for="action in [{kind:'automate',label:'Create automation',hint:'Teach an automation by showing the steps.'}, {kind:'use-automation',label:'Run automation',hint:'Prepare a task using a saved automation.'}, {kind:'no-automation',label:'Direct task',hint:'Prepare a task without a saved automation.'}]"
             :key="action.kind"
             type="button"
             :id="`terminal-deck-${action.kind}`"
             :data-semantic-anchor="`terminal/${action.kind}`"
             class="mv-terminal-deck__action-btn"
-            @click="controller.copyWorkflowPrompt(action.kind, pastedBootstrapText)"
+            :title="action.hint"
+            @click="controller.useWorkflowPrompt(action.kind, workflowIdentity, pairMatchesTarget ? focusedPair?.slotId ?? null : null)"
           >{{ action.label }}</button>
           <span
             v-if="toastMessage"
@@ -1040,6 +1099,8 @@ defineExpose({
       </div>
     </header>
 
+    <p v-if="pairBusy" role="status">Opening paired terminal…</p>
+    <p v-if="pairError" role="alert">{{ pairError }}</p>
     <p
       v-if="errorMessage"
       id="terminal-deck-error"
@@ -1090,6 +1151,7 @@ defineExpose({
         :data-slot-status="item.slot.status"
         :data-slot-kind="item.slot.kind"
         :data-slot-screen="item.screenIndex + 1"
+        :data-paired-capsule="pairedTerminals.forSlot(item.slot.id)?.surfaceId"
         tabindex="0"
         :aria-label="item.slot.title"
         aria-description="Press Ctrl+Shift+F6 to leave terminal input and focus the deck controls."
@@ -1099,7 +1161,7 @@ defineExpose({
         @keydown="onTileKeyDown(item.slot.id, $event)"
       >
         <header class="mv-terminal-deck__tile-header">
-          <span class="mv-terminal-deck__tile-title">{{ item.slot.title }}</span>
+          <span class="mv-terminal-deck__tile-title">{{ pairedTerminals.forSlot(item.slot.id)?.title ?? item.slot.title }}<template v-if="pairedTerminals.forSlot(item.slot.id)"> · Host shell</template></span>
           <span
             v-if="item.slot.status === 'exited' || item.slot.status === 'restored'"
             :id="`terminal-deck-status-${item.slot.id}`"

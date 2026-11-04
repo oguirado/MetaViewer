@@ -23,6 +23,8 @@ import socket
 import stat
 import struct
 import time
+import threading
+from functools import wraps
 import uuid
 
 from .envelope import (
@@ -92,6 +94,9 @@ class CoreClient:
         self._rx = bytearray()
         self._pinned: tuple | None = None
         self._hello_complete = False
+        self._io_owner = None
+        self._last_received_seq = None
+        self._rx_started = None
 
     @property
     def connected(self) -> bool:
@@ -233,6 +238,10 @@ class CoreClient:
             raise ClientError("socket", "connection failed") from None
         self._sock = sock
 
+    def _check_io_owner(self):
+        if self._io_owner is not None and self._io_owner != threading.get_ident():
+            raise ClientError("busy", "channel has an exclusive IO owner")
+
     def send(self, envelope: dict) -> int:
         """Validate and emit one frame; returns the sequence sent.
 
@@ -240,6 +249,7 @@ class CoreClient:
         consume nothing and leave a connected socket usable, while a
         transport failure closes it and leaves the instance terminal.
         """
+        self._check_io_owner()
         sock = self._sock
         if self._terminal or sock is None:
             raise ClientError("socket", "client is not connected")
@@ -273,6 +283,50 @@ class CoreClient:
         self._next_seq += 1
         return sent
 
+    def recv_nowait(self):
+        """Exclusive-pump bounded read; None means no complete frame yet."""
+        self._check_io_owner()
+        if self._terminal or self._sock is None:
+            raise ClientError("socket", "client is not connected")
+        cap = self._max_reply_bytes
+        now = time.monotonic()
+        if self._rx and self._rx_started is None:
+            self._rx_started = now
+        if self._rx_started is not None and now - self._rx_started >= self._timeout_s:
+            self._terminate()
+            raise ClientError("timeout", "partial frame timed out")
+        if b"\n" not in self._rx:
+            try:
+                self._sock.setblocking(False)
+                data = self._sock.recv(cap + 1 - len(self._rx))
+            except BlockingIOError:
+                return None
+            except OSError:
+                self._terminate()
+                raise ClientError("socket", "receive failed") from None
+            if not data:
+                self._terminate()
+                raise ClientError("socket", "peer closed the connection")
+            if self._rx_started is None:
+                self._rx_started = now
+            self._rx.extend(data)
+        mark = self._rx.find(b"\n")
+        if len(self._rx) > cap and mark < 0 or mark + 1 > cap:
+            self._terminate()
+            raise ClientError("length", "reply exceeds byte limit")
+        if mark < 0:
+            return None
+        line = bytes(self._rx[:mark+1]); del self._rx[:mark+1]
+        if not self._rx:
+            self._rx_started = None
+        try:
+            result = loads_envelope(line, max_bytes=cap)
+        except EnvelopeError as exc:
+            self._terminate()
+            raise _map_envelope_error(exc) from None
+        self._last_received_seq = result["seq"]
+        return result
+
     def recv(self) -> dict:
         """Return the next validated inbound frame in FIFO order.
 
@@ -284,6 +338,7 @@ class CoreClient:
         sock = self._sock
         if self._terminal or sock is None:
             raise ClientError("socket", "client is not connected")
+        self._check_io_owner()
         cap = self._max_reply_bytes
         buf = self._rx
         deadline = time.monotonic() + self._timeout_s
@@ -296,7 +351,9 @@ class CoreClient:
                     self._terminate()
                     raise ClientError("length", "reply exceeds byte limit")
                 try:
-                    return loads_envelope(line, max_bytes=cap)
+                    result = loads_envelope(line, max_bytes=cap)
+                    self._last_received_seq = result["seq"]
+                    return result
                 except EnvelopeError as exc:
                     self._terminate()
                     raise _map_envelope_error(exc) from None
@@ -354,6 +411,16 @@ _RECORD_OP_EVENTS = {
 }
 
 
+def _exclusive_tool_io(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._io_lock:
+            if self._guest_claim is not None:
+                raise ClientError("busy", "tool client is claimed by a guest command session")
+            return method(self, *args, **kwargs)
+    return guarded
+
+
 class ToolClient:
     """Production tool mailbox, usable by tools and the MCP bridge.
 
@@ -363,9 +430,16 @@ class ToolClient:
     this file while reusing a core session. Use as a context manager.
     """
 
+    # Legacy isolated test doubles construct with __new__; they remain unclaimed
+    # and serialize through this fallback. Real clients receive per-instance locks.
+    _io_lock = threading.RLock()
+    _guest_claim = None
+
     def __init__(self, socket_path, *, session_id, local, core,
                  dependency_pins, sequence_path, timeout_s,
                  max_line_bytes, max_reply_bytes):
+        self._io_lock = threading.RLock()
+        self._guest_claim = None
         self.active = CoreClient(socket_path, timeout_s=timeout_s,
                                  max_line_bytes=max_line_bytes,
                                  max_reply_bytes=max_reply_bytes)
@@ -380,6 +454,21 @@ class ToolClient:
         self._frame_surfaces = set()
         self._frame_subscriptions = set()
         self._frames = {}
+
+    @property
+    def guest_commands(self):
+        """Claim the existing entered agent channel; never create a native guest."""
+        from .guest_command import GuestCommandSession
+        if self._guest_claim is None:
+            return GuestCommandSession.claim(self, observe_owned=True)
+        if not isinstance(self._guest_claim, GuestCommandSession):
+            raise ClientError('busy', 'another IO owner holds the channel')
+        return self._guest_claim
+
+    @property
+    def rewind(self):
+        """REWIND helper on the same guest-command IO pump."""
+        return self.guest_commands.rewind
 
     def _accept_frame_event(self, body):
         """Retain only validated frames/lifecycle notices for registered surfaces."""
@@ -421,6 +510,7 @@ class ToolClient:
     def unsubscribe_frames(self, surface_id, *, timeout_ms):
         return self._frame_subscription(surface_id, False, timeout_ms)
 
+    @_exclusive_tool_io
     def drain_frames(self, *, timeout_ms):
         """Consume at most one ready authenticated frame, with no pending tool call.
 
@@ -449,6 +539,7 @@ class ToolClient:
         finally:
             self.active._timeout_s = previous
 
+    @_exclusive_tool_io
     def _frame_subscription(self, surface_id, subscribe, timeout_ms):
         from .tools import _check_id, _check_timeout, ToolValidationError
         _check_id(surface_id, 'surface_id')
@@ -532,6 +623,7 @@ class ToolClient:
             except OSError:
                 pass
 
+    @_exclusive_tool_io
     def __enter__(self):
         import fcntl
         import secrets
@@ -581,6 +673,7 @@ class ToolClient:
             self.close()
             raise
 
+    @_exclusive_tool_io
     def request(self, body, expect, *, timeout_ms):
         from .tools import ToolValidationError
         if not self._ready:
@@ -602,6 +695,7 @@ class ToolClient:
             self._reserve()
             self.active.send(envelope)
             async_count = 0
+            headless_accepted = None
             while True:
                 left = deadline - time.monotonic()
                 if left <= 0:
@@ -641,6 +735,38 @@ class ToolClient:
                         and result.get("recording_id") == want_recording
                         and result.get("event") in allowed
                     )
+                elif expect == "headless_event/v0.2":
+                    correlated = (result.get("schema") == expect
+                                  and result.get("request_id") == body["request_id"])
+                    if not correlated:
+                        raise ToolValidationError("uncorrelated headless event")
+                    kind = result.get("event")
+                    data = result.get("data", {})
+                    if kind == "accepted":
+                        if headless_accepted is not None or data.get("op") != body.get("op"):
+                            raise ToolValidationError("duplicate or wrong headless acceptance")
+                        headless_accepted = copy.deepcopy(data["session"])
+                        continue
+                    if kind == "refused":
+                        if headless_accepted is not None:
+                            raise ToolValidationError("headless refusal after acceptance")
+                    elif kind == "outcome_unknown":
+                        if data.get("op") != body.get("op"):
+                            raise ToolValidationError("wrong headless unknown operation")
+                        if headless_accepted is not None and any(
+                                data.get("session", {}).get(key) != headless_accepted.get(key)
+                                for key in ("workload_id", "generation", "owner_id")):
+                            raise ToolValidationError("uncorrelated headless unknown session")
+                    else:
+                        expected = {"create": ("state_changed", "ready"),
+                                    "run": ("completed", "completed"),
+                                    "stop": ("state_changed", "stopped")}.get(body.get("op"))
+                        session = data.get("session", {})
+                        if (headless_accepted is None
+                                or expected != (kind, session.get("phase"))
+                                or any(session.get(key) != headless_accepted.get(key)
+                                       for key in ("workload_id", "generation", "owner_id"))):
+                            raise ToolValidationError("invalid headless terminal event")
                 elif expect == "mv_tool_result/v0.2":
                     correlated = (
                         result.get("schema") == "mv_tool_result/v0.2"
@@ -664,6 +790,12 @@ class ToolClient:
         return copy.deepcopy(self._receipts.get(proposal_id))
 
     def close(self):
+        claim = self._guest_claim
+        if claim is not None:
+            claim.close()
+        self._close_transport()
+
+    def _close_transport(self):
         self._ready = False
         self.active.close()
         if self._sequence_fd is not None:

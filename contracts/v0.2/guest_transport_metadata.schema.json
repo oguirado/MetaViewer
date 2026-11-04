@@ -1,0 +1,560 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/guest_transport_metadata.schema.json",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "hello"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 70
+        },
+        "profile_id": {
+          "const": "guest-command-arm64-v1"
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "nonce",
+        "owner_id",
+        "profile_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "exec"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        },
+        "job_id": {
+          "type": "string",
+          "pattern": "^job-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 68
+        },
+        "cwd": {
+          "type": "string",
+          "maxLength": 1024,
+          "pattern": "^[^\\x00-\\x1f\\x7f]*$"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000
+        },
+        "command_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "stdin_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 49152
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id",
+        "job_id",
+        "cwd",
+        "timeout_ms",
+        "command_bytes",
+        "stdin_bytes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "cancel"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        },
+        "run_request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        },
+        "job_id": {
+          "type": "string",
+          "pattern": "^job-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 68
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id",
+        "run_request_id",
+        "job_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "stop"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "ready"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "accepted"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        },
+        "op": {
+          "enum": [
+            "exec",
+            "cancel",
+            "stop"
+          ]
+        },
+        "job_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^job-[a-z0-9][a-z0-9._-]{0,63}$",
+              "maxLength": 68
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id",
+        "op",
+        "job_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "output"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        },
+        "job_id": {
+          "type": "string",
+          "pattern": "^job-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 68
+        },
+        "stream": {
+          "enum": [
+            "stdout",
+            "stderr"
+          ]
+        },
+        "chunk_index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id",
+        "job_id",
+        "stream",
+        "chunk_index"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "job_finished"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        },
+        "job_id": {
+          "type": "string",
+          "pattern": "^job-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 68
+        },
+        "cancel_request_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+              "maxLength": 72
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cause": {
+          "enum": [
+            "exit",
+            "cancel",
+            "timeout",
+            "output_limit",
+            "stop"
+          ]
+        },
+        "exit_code": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "signal": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "output_complete": {
+          "type": "boolean"
+        },
+        "job_empty": {
+          "const": true
+        },
+        "stop_request_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+              "maxLength": 72
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "stdout_sent_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        },
+        "stderr_sent_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65536
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id",
+        "job_id",
+        "cancel_request_id",
+        "cause",
+        "exit_code",
+        "signal",
+        "output_complete",
+        "job_empty",
+        "stop_request_id",
+        "stdout_sent_bytes",
+        "stderr_sent_bytes"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "stopping"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "type": "string",
+          "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 72
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "const": "error"
+        },
+        "workload_id": {
+          "type": "string",
+          "pattern": "^workload-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 73
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "reservation_id": {
+          "type": "string",
+          "pattern": "^reservation-[a-z0-9][a-z0-9._-]{0,63}$",
+          "maxLength": 76
+        },
+        "request_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^request-[a-z0-9][a-z0-9._-]{0,63}$",
+              "maxLength": 72
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "enum": [
+            "AUTH",
+            "PROTOCOL",
+            "BUSY",
+            "INVALID",
+            "DEADLINE",
+            "OUTPUT_LIMIT",
+            "RESOURCE",
+            "CLEANUP"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "workload_id",
+        "generation",
+        "reservation_id",
+        "request_id",
+        "code"
+      ],
+      "additionalProperties": false
+    }
+  ],
+  "title": "guest_transport_metadata"
+}

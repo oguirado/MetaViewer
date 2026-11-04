@@ -31,7 +31,7 @@ import {
 } from './settingsModel.js';
 
 /**
- * MetaViewer settings panel (mvui33): mv-light (primary) / mv-dark scheme
+ * MetaViewer settings panel (mvui33): mv-dark (primary) / mv-light scheme
  * with live switch, density control (compact/comfortable), live wall fps
  * presets (3/30/60) with a measured actual-fps readout, and recording fps
  * (1..60). Persisted as one closed four-key object through the injected
@@ -491,12 +491,16 @@ onBeforeUnmount(() => {
     aria-label="Settings"
     :data-semantic-anchor="MV_SETTINGS_ANCHORS.panel"
   >
-    <h2 class="mv4-set-title">Settings</h2>
+    <header class="mv4-set-heading"><h2 class="mv4-set-title">Settings</h2><p>Make this workspace your own.</p></header>
+    <div class="mv4-settings-grid">
+    <section class="mv4-card"><h3>Live sessions</h3>
     <label v-if="hiddenSessionSettings" class="mv4-density">Hidden live sessions
       <input id="settings-hidden-live-sessions" data-semantic-anchor="settings/hidden-live-sessions" aria-label="Hidden live sessions" type="number" min="0" step="1" :value="hiddenSessionLimit" @change="changeHiddenSessionLimit" />
       <span>Older hidden views disconnect beyond this limit. Shown tiles stay connected.</span>
     </label>
     <p v-if="hiddenSessionError" role="alert">{{ hiddenSessionError }}</p>
+    </section>
+    <section class="mv4-card"><h3>Appearance</h3><p>Color scheme</p>
     <div
       :id="MV_SETTINGS_IDS.schemeGroup"
       class="mv4-scheme"
@@ -544,6 +548,8 @@ onBeforeUnmount(() => {
         <span class="mv4-option-label">{{ option.label }}</span>
       </label>
     </div>
+    </section>
+    <section class="mv4-card"><h3>Live view</h3><p>Frames per second</p>
     <div
       :id="MV_SETTINGS_IDS.wallFpsGroup"
       class="mv4-group"
@@ -575,6 +581,8 @@ onBeforeUnmount(() => {
     >
       {{ wallFpsLine }}
     </p>
+    </section>
+    <section class="mv4-card"><h3>Recording</h3>
     <div
       :id="MV_SETTINGS_IDS.recordingFpsGroup"
       class="mv4-group"
@@ -597,6 +605,8 @@ onBeforeUnmount(() => {
           @change="onRecordingFpsChange"
         />
       </label>
+    </div>
+    </section>
     </div>
     <p
       v-if="refusal !== null"
