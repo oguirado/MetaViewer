@@ -12,17 +12,17 @@ const profile = {Kind:'vm',NativeKind:'vm',Program:'notepad-vm',Width:1280,Heigh
 const surface = {schema:'surface/v0.2',surface_id:'surface-owned',profile_id:'guest',
   kind:'vm',state:'active',control:'agent',visibility:'unfolded',display:':100',geometry:{w:1280,h:900}};
 
-async function fixture(t, {profiles={guest:profile}, current=surface, lookup=true}={}) {
+async function fixture(t, {profiles={guest:profile}, current=surface, lookup=true, extraEnv={}, hostArch='arm64'}={}) {
   // VM roles exist only on arm64: pin the host architecture so x64 CI runs the same path.
   const arch=Object.getOwnPropertyDescriptor(process,'arch');
-  Object.defineProperty(process,'arch',{...arch,value:'arm64'});
+  Object.defineProperty(process,'arch',{...arch,value:hostArch});
   t.after(()=>Object.defineProperty(process,'arch',arch));
   const root = await mkdtemp(join(tmpdir(),'vm-role-'));
   let handler, nativeCalls=0, mutations=0;
   const window = new EventEmitter();
   window.webContents = new EventEmitter();
   window.webContents.session = {registerPreloadScript(){return 'fixture';},unregisterPreloadScript(){}};
-  const env = {MV_SRF_PROFILES:JSON.stringify(profiles),MV_SRF_STATE_DIR:root};
+  const env = {MV_SRF_PROFILES:JSON.stringify(profiles),MV_SRF_STATE_DIR:root,...extraEnv};
   const states = new Map([['surface-owned',current]]);
   const core = {
     getHumanSurface:id=>lookup && id==='surface-owned' ? current : undefined,
@@ -119,4 +119,28 @@ test('VM role admission uses the actual nullish resolution without coercion',asy
       });
     }
   }
+});
+
+const graphicalPins={MV_GRAPHICAL_SESSION_ENABLED:'1',SRF_GRAPHICAL_VM_ENTRY:'/opt/srf-vm-entry',SRF_GRAPHICAL_VM_ENTRY_SHA256:'a'.repeat(64),SRF_GRAPHICAL_QEMU_IMG:'/usr/bin/qemu-img',SRF_GRAPHICAL_QEMU_IMG_SHA256:'b'.repeat(64)};
+test('graphical VM actual role lookup requires trusted arm64 pins and keeps ordinary VM admission',async t=>{
+ const rewind={...profile,Program:'notepad-rw-vm'};
+ await t.test('enabled valid pins admit the real role lookup',async t=>{
+  const f=await fixture(t,{profiles:{guest:rewind},extraEnv:graphicalPins});
+  assert.equal((await f.call()).role,'agent');
+  assert.equal((await f.call()).profileId,'guest');
+ });
+ for(const [name,extraEnv,hostArch] of [
+  ['missing pins',{},'arm64'],
+  ['invalid digest',{...graphicalPins,SRF_GRAPHICAL_QEMU_IMG_SHA256:'bad'},'arm64'],
+  ['invalid path',{...graphicalPins,SRF_GRAPHICAL_VM_ENTRY:'relative'},'arm64'],
+  ['disabled',{...graphicalPins,MV_GRAPHICAL_SESSION_ENABLED:'0'},'arm64'],
+  ['x64',graphicalPins,'x64'],
+ ])await t.test(name,async t=>{
+  const f=await fixture(t,{profiles:{guest:rewind},extraEnv,hostArch});
+  assert.deepEqual(await f.call(),{ok:false,code:'SURFACE_UNKNOWN'});
+ });
+ await t.test('ordinary VM survives stray invalid graphical pins',async t=>{
+  const f=await fixture(t,{extraEnv:{...graphicalPins,SRF_GRAPHICAL_QEMU_IMG_SHA256:'bad'}});
+  assert.equal((await f.call()).profileId,'guest');
+ });
 });

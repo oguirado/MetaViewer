@@ -1,0 +1,2 @@
+- Admit graphical rewind VM profiles in the privileged role host only after validating their executable pins, preserving normal view, input and lifecycle controls.
+- Retain legacy VM selection and refuse invalid, disabled or unsupported graphical profile settings.

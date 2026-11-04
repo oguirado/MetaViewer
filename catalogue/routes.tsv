@@ -201,6 +201,7 @@ graphic-d6644d957c3e	changes/unreleased/graphical-qemu-session.md
 graphic-7ebce61348e3	changes/unreleased/graphical-session-review-fixes.md
 graphic-194a2bad7a4f	changes/unreleased/graphical-vm-header.md
 graphic-7dd542f5cb3e	changes/unreleased/graphical-vm-projection.md
+graphic-67a54ebcbc8e	changes/unreleased/graphical-vm-role-admission.md
 grouped-43ef97876a82	changes/unreleased/grouped-app-launcher.md
 guestco-2c2745fc03e0	changes/unreleased/guest-command-adapter-transport.md
 guestco-6106b5a4ceef	changes/unreleased/guest-command-cancel-state.md

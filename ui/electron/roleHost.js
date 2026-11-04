@@ -1,4 +1,5 @@
 import { acquireCapsuleCreation } from './profilePicker.js';
+import { graphicalSessionPinsReady } from './coreLauncher.js';
 import { programBinaries } from './programBinaries.js';
 import { desktopApplications } from './desktopApplications.js';
 import { isForeignIdentity, isProtectedIdentity } from './identityProtection.js';
@@ -412,7 +413,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
   };
   const allProfiles = () => {
     pruneProgramProfiles();
-    return [...profiles, ...configuredVMProfiles(env, process.arch), ...dynamicProfiles.values(), ...programProfiles.values(), ...windowProfiles.values()];
+    return [...profiles, ...configuredVMProfiles(env, process.arch, graphicalSessionPinsReady(env, process.arch)), ...dynamicProfiles.values(), ...programProfiles.values(), ...windowProfiles.values()];
   };
   const roleFor = (/** @type {any} */ surface) => openingRoles.get(surface.surface_id) ?? roleOf(surface.profile_id);
   const installedApps = desktopApplications({env:{...process.env,...env},stateDir:join(electron.app?.getPath('userData') || env.MV_SRF_STATE_DIR,'app-launcher'),resolve:binary=>resolveHostBinary(binary,{...process.env,...env}),nativeImage:electron.nativeImage});
