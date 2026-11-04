@@ -316,6 +316,7 @@ v028-fit.md	changes/unreleased/v028-fit.md
 v028-grid6.md	changes/unreleased/v028-grid6.md
 v028-orphan-2.md	changes/unreleased/v028-orphan-2.md
 v028-orphan.md	changes/unreleased/v028-orphan.md
+v028-ref.md	changes/unreleased/v028-ref.md
 v028-slots-core.md	changes/unreleased/v028-slots-core.md
 v028-slots-store.md	changes/unreleased/v028-slots-store.md
 v028-slots-ui.md	changes/unreleased/v028-slots-ui.md
@@ -2075,6 +2076,7 @@ P18B-HEADER-MENUS.md	docs/P18B-HEADER-MENUS.md
 P18MODE-a4b084fb483c	docs/P18_MODES_TILES_DESIGN.md
 PREEXISTING.md	docs/PREEXISTING.md
 docs-README.md	docs/README.md
+REFERENCE.md	docs/REFERENCE.md
 RESEARCH_LOG.md	docs/RESEARCH_LOG.md
 ROADMAP.md	docs/ROADMAP.md
 ROUTER_BOOTSTRAP.md	docs/ROUTER_BOOTSTRAP.md
@@ -2476,6 +2478,7 @@ test_p18e_identity.py	tests/test_p18e_identity.py
 test_p18g_identity.py	tests/test_p18g_identity.py
 testpac-f8254faf9cfe	tests/test_package_receipt_binding.py
 testpyt-2879eeaf233d	tests/test_python_contract_mirror.py
+testref-a49f742cb78b	tests/test_reference_docs.py
 testrel-8763567d3ddc	tests/test_release_notices.py
 test_route_map.py	tests/test_route_map.py
 test_router_docs.py	tests/test_router_docs.py
