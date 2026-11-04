@@ -373,6 +373,7 @@ defineExpose({forgetIdentity,renameDesktop,renameCapsule,revealWorkload,moveTile
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
         @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">
         <template #surface="slotProps"><slot name="surface" v-bind="slotProps" :desktop-active="isActive(view,desktop.id)" /></template>
+        <template #state-controls="slotProps"><slot name="state-controls" v-bind="slotProps" /></template>
         <template #workload="slotProps"><slot name="workload" v-bind="slotProps" /></template>
       </WallWorkspace>
     </template>

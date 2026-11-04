@@ -1320,6 +1320,7 @@ import SurfacePanel from './SurfacePanel.vue';
 import {createCapsulePanelRouter} from './workloadPanelParams.js';
 
 const props = defineProps({
+  stateControlsFor:{type:Function,default:null},
   workloadTiles:{type:/** @type {import('vue').PropType<Array<any>>} */ (Array),default:()=>[]},
   validateWorkloadTile:{type:Function,default:null},
   identityCells: {type:Object,default:()=>({})},
@@ -1392,6 +1393,7 @@ function changeGrid(/** @type {'cols'|'rows'} */ axis, /** @type {Event} */ even
 }
 const slots = useSlots();
 const surfaceSlot = slots.surface ?? null;
+const stateControlsSlot=slots['state-controls'] ?? null;
 const workloadSlot=slots.workload??null;
 const validWorkload=(/** @type {any} */ row)=>typeof props.validateWorkloadTile==='function'&&props.validateWorkloadTile(row);
 const revealedWorkloads=new Set();
@@ -1474,6 +1476,7 @@ const WallSurfaceRouter = markRaw(defineComponent({
         scheduler: props.scheduler,
         tileScheduler: props.tileScheduler,
         captureState: props.captureState,
+        stateControls: props.stateControlsFor?.(capsuleId) ?? null,
         displayOnly: props.displayOnly,
         clipboard: props.clipboard,
         presentationInstance: instance,
@@ -1482,6 +1485,7 @@ const WallSurfaceRouter = markRaw(defineComponent({
         onActivateSurface: callbacks.onActivateSurface,
       }, {
         surface: (/** @type {unknown} */ slotProps) => (surfaceSlot ? surfaceSlot(slotProps) : []),
+        ...(stateControlsSlot?{'state-controls':(/** @type {any} */ slotProps)=>stateControlsSlot({...slotProps,capsuleId})}:{}),
       });
     };
   },

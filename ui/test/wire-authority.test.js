@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {installAuthorityWire,REWIND_CHANNELS,GUEST_COMMAND_CHANNELS,HEADLESS_CHANNELS,WIRE_CHANNELS,INTENT_OPS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity,validateIntentBody} from '../electron/authorityWire.js';
+import {installAuthorityWire,GRAPHICAL_SESSION_CHANNELS,REWIND_CHANNELS,GUEST_COMMAND_CHANNELS,HEADLESS_CHANNELS,WIRE_CHANNELS,INTENT_OPS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity,validateIntentBody} from '../electron/authorityWire.js';
 import {createPreloadFacade,installPreload} from '../electron/preload.js';
 
 const surface={schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'human',profile_id:'test'};
@@ -985,8 +985,12 @@ test('R3-T4-011 (T20): installAuthorityWire unwinds all registered ipcMain handl
   });
   const rewindChannels=['metaviewer:rewind.request','metaviewer:rewind.status'];
   assert.deepEqual(Object.values(REWIND_CHANNELS).sort(),[...rewindChannels].sort());
-  assert.equal(handlers.size, Object.keys(WIRE_CHANNELS).length + Object.keys(HEADLESS_CHANNELS).length + Object.keys(GUEST_COMMAND_CHANNELS).length + rewindChannels.length);
-  assert.deepEqual(new Set(handlers.keys()),new Set([...Object.values(WIRE_CHANNELS),...Object.values(HEADLESS_CHANNELS),...Object.values(GUEST_COMMAND_CHANNELS),...rewindChannels]));
+  const graphicalChannels=['metaviewer:graphical-session.request','metaviewer:graphical-session.status'];
+  assert.deepEqual(Object.values(GRAPHICAL_SESSION_CHANNELS).sort(),[...graphicalChannels].sort());
+  const legacyChannels=[...Object.values(WIRE_CHANNELS),...Object.values(HEADLESS_CHANNELS),...Object.values(GUEST_COMMAND_CHANNELS),...rewindChannels];
+  assert.equal(legacyChannels.length,22,'the existing channel inventory must remain intact');
+  assert.equal(handlers.size,legacyChannels.length+graphicalChannels.length);
+  assert.deepEqual(new Set(handlers.keys()),new Set([...legacyChannels,...graphicalChannels]));
   await binding.dispose();
   assert.equal(handlers.size, 0);
 });
@@ -1168,3 +1172,17 @@ test('POLISH-2 terminal missing support crosses preload as a typed reply',async 
   assert.deepEqual(reply,{ok:false,code:'TERMINAL_UNAVAILABLE'});
   assert.deepEqual(await facade(reply).sideTerminal.open(spec),reply);
 });
+
+
+for (const retained of ['metaviewer:graphical-session.request','metaviewer:graphical-session.status']) {
+ test(`graphical rollback negative control rejects a retained ${retained} handler`,async t=>{
+  const root=await mkdtemp(join(tmpdir(),'wire-graphical-rollback-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const handlers=new Map(),frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
+  const contents={id:199,mainFrame:frame,isDestroyed:()=>false,postMessage(){}};
+  const ipcMain={handle:(channel,fn)=>handlers.set(channel,fn),removeHandler:channel=>{if(channel!==retained)handlers.delete(channel);}};
+  assert.throws(()=>installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root},argv:[],core:{request:async()=>verdict},frames:{subscribe(){throw Error('FRAME_SOURCE');}}}),/FRAME_SOURCE/);
+  assert.deepEqual([...handlers.keys()],[retained]);
+  assert.throws(()=>assert.equal(handlers.size,0),assert.AssertionError);
+ });
+}

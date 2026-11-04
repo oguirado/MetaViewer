@@ -38,6 +38,7 @@ import { createPublicProjectionCoordinator } from '../../.kit/capsule-ui-kit/src
  *   title?: string,
  *   display?: string,
  *   profile_id?: string,
+ *   kind?: 'desktop_capsule' | 'browser' | 'game_capsule' | 'vm',
  *   aiSessionActivity?: KitActivity,
  *   attachmentState?: KitAttachment,
  *   dispatchOutcome?: KitOutcome,

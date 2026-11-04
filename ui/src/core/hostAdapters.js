@@ -155,7 +155,7 @@ export function createAuthorityRuntime(port) {
       const profileId = typeof s.profile_id === 'string' && s.profile_id.length > 0 ? s.profile_id : '';
       rows.set(s.surface_id, Object.freeze({ id: s.surface_id, surfaceId: s.surface_id,
         title: profileId.length > 0 ? profileId : s.surface_id,
-        display: s.display, profile_id: profileId,
+        display: s.display, profile_id: profileId, kind: s.kind,
         generation: f.generation, backendLifecycle: s.state,
         visibility: s.visibility, control: s.control,
         // surface/v0.2 has no exclusive owner for shared control and no lease.

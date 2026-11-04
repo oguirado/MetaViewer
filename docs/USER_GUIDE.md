@@ -429,3 +429,8 @@ Settings → Recording chooses the recordings and screenshot export folders thro
 ### Working tree names
 
 Double-click a desktop or capsule name, or focus it and press F2, to edit its display name. Enter saves and Escape cancels. Names are stored with the host layout; capsule identity and Copy ID do not change. Program icons come from the installed-app inventory when known, browser identities use a browser symbol, and unknown programs keep a generic mark. Live Host program and Desktop window isolation warnings remain visible while editing.
+
+
+### Graphical VM checkpoints
+
+When the graphical VM host supports checkpoints, its tile header shows **Mark** and **Back**. Mark saves the current VM state. Back lists available restore points and their host-reported ages; an unavailable age is shown explicitly. External effects are not rewound. The controls wait for the host to confirm completion and remain blocked after an unknown outcome; normal Stop remains available. Taking human control keeps the graphical checkpoint controls available.

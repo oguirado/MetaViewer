@@ -21,6 +21,13 @@ through Add capsule. Its graphical-session controls attach to the live surface
 and submit Mark or Back using the current generation and authority epoch.
 Human input control does not transfer the creator UI's checkpoint authority.
 
+For this variant, set the explicit `MV_SRF_STATE_DIR` to an `identity-state`
+child of that private RAM root. Both directories must already exist on tmpfs,
+belong to the current user, and have mode `0700`. Native state pins their
+device and inode identities. Capture output must remain under the bound private
+root; an absent, replaced or malformed pin refuses capture and checkpoint
+operations while retaining normal Stop.
+
 The new `graphical_session` contracts carry this state separately. Core journals
 the admitted request before native dispatch. The host only projects correlated
 Core events. A completed restore advances the generation and authority epoch

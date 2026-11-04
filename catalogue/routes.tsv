@@ -198,6 +198,8 @@ fronten-42a09513c557	changes/unreleased/frontend-viewport-resize.md
 fronten-5717175eba13	changes/unreleased/frontend-working-tree.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 graphic-d6644d957c3e	changes/unreleased/graphical-qemu-session.md
+graphic-194a2bad7a4f	changes/unreleased/graphical-vm-header.md
+graphic-7dd542f5cb3e	changes/unreleased/graphical-vm-projection.md
 grouped-43ef97876a82	changes/unreleased/grouped-app-launcher.md
 guestco-2c2745fc03e0	changes/unreleased/guest-command-adapter-transport.md
 guestco-6106b5a4ceef	changes/unreleased/guest-command-cancel-state.md
@@ -2807,11 +2809,13 @@ SideTer-12ef8e211f74	ui/src/types/SideTerminalPanel.d.ts
 TerminalView.d.ts	ui/src/types/TerminalView.d.ts
 DesktopWorkspace.vue	ui/src/wall/DesktopWorkspace.vue
 EmptyWallView.vue	ui/src/wall/EmptyWallView.vue
+Graphic-25c6b39e7d14	ui/src/wall/GraphicalVmStateControls.vue
 SurfacePanel.vue	ui/src/wall/SurfacePanel.vue
 TileCaptureChrome.vue	ui/src/wall/TileCaptureChrome.vue
 WallWorkspace.vue	ui/src/wall/WallWorkspace.vue
 capsuleId.js	ui/src/wall/capsuleId.js
 capsulePanelRouter.js	ui/src/wall/capsulePanelRouter.js
+graphic-b65b34951bca	ui/src/wall/graphicalStateControls.js
 guestWorkloadTile.js	ui/src/wall/guestWorkloadTile.js
 layout.js	ui/src/wall/layout.js
 restoreDuration.js	ui/src/wall/restoreDuration.js
@@ -2872,8 +2876,10 @@ frameTile.test.js	ui/test/frameTile.test.js
 framesParity.test.mjs	ui/test/framesParity.test.mjs
 graphic-c8d63d0dc408	ui/test/graphical-session-admission.test.js
 graphic-b4e819c27267	ui/test/graphical-session-host.test.js
+graphic-d69e641ed221	ui/test/graphical-session-projection.test.js
 graphic-44a0b41d7087	ui/test/graphical-session-transport.test.js
 graphic-189e7dc03464	ui/test/graphical-session-values.test.js
+graphic-b0d652574649	ui/test/graphical-vm-header.test.js
 grouped-99501e8941f6	ui/test/grouped-launcher.test.js
 guestco-b15865ba25e2	ui/test/guest-command-adoption.test.js
 guestco-9b715f05165d	ui/test/guest-command-host.test.js

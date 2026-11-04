@@ -63,6 +63,7 @@ onMounted(() => globalThis.document?.addEventListener?.('pointerdown', closeMore
 onBeforeUnmount(() => globalThis.document?.removeEventListener?.('pointerdown', closeMore, true));
 const demoOpen=ref(false);
 const props = defineProps({
+  graphicalSessionHost: {type:Object,default:null},
   rewindHost: {type:Object,default:null},
   rewindPanel: {type:[Object,Function],default:null},
   guestCommandHost: { type: Object, default: null },
@@ -1601,6 +1602,31 @@ const rows = computed(() => {
     && (row.backendLifecycle !== 'lost' || admitLostRows.value)) ?? [];
   return admitted.filter(row => !nestedMode.displayOnly || applyNestedWall([row], nestedMode).rows.length > 0);
 });
+const graphicalState=shallowRef(/** @type {any} */({available:false,busy:false,code:null,revision:0,session:null,uncertain:false,point_ages_ms:{}}));
+const graphicalHeader=shallowRef(/** @type {any} */(null));
+let graphicalController=/** @type {ReturnType<typeof import('./wall/graphicalStateControls.js').createGraphicalSessionController>|null} */(null);
+let graphicalCapabilitiesFor=/** @type {((snapshot:any,row:any)=>any)|null} */(null);
+const graphicalHost=computed(()=>nestedMode.displayOnly?null:props.graphicalSessionHost);
+watch(graphicalHost,async(host,_,cleanup)=>{
+  let active=true,controller=/** @type {typeof graphicalController} */(null);
+  graphicalState.value={available:false,busy:false,code:null,revision:0,session:null,uncertain:false,point_ages_ms:{}};
+  graphicalHeader.value=null;graphicalCapabilitiesFor=null;
+  cleanup(()=>{active=false;controller?.dispose();if(graphicalController===controller)graphicalController=null;});
+  if(!host)return;
+  try {
+    const [view,model]=await Promise.all([import('./wall/GraphicalVmStateControls.vue'),import('./wall/graphicalStateControls.js')]);
+    if(!active)return;
+    graphicalHeader.value=markRaw(view.default);graphicalCapabilitiesFor=model.graphicalCapabilities;
+    controller=model.createGraphicalSessionController(host,value=>{graphicalState.value=value;});
+    graphicalController=controller;void controller.refresh();
+  } catch {if(active)hostOutcome.value={code:'GRAPHICAL_UI_UNAVAILABLE',tone:'refusal',message:'VM checkpoint controls could not be loaded.'};}
+},{immediate:true});
+watch(()=>[graphicalState.value,rows.value],()=>{void graphicalController?.attach(rows.value);});
+/** @param {string} id */
+function graphicalControlsFor(id){const caps=graphicalCapabilitiesFor?.(graphicalState.value,rows.value.find(row=>row.id===id));return caps?.visible?caps:null;}
+/** @param {{action:any,revision:number}} value */
+function requestGraphicalState(value){void graphicalController?.request(value.action,value.revision,rows.value);}
+
 /** Pure presentation of admitted projection rows; ownership is never activity.
  * @param {any[]} sourceRows
  * @param {import('../electron/desktopLayout.js').DesktopState} state
@@ -1889,11 +1915,12 @@ onMounted(() => {
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :scroll-enabled="!surface.hostWindow" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </article>
         </section>
-        <DesktopWorkspace v-else :hidden="creativeOpen" :clipboard="props.clipboard" :workload-tiles="guestWorkloadTiles" :validate-workload-tile="validGuestWorkloadTile" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
+        <DesktopWorkspace v-else :hidden="creativeOpen" :clipboard="props.clipboard" :state-controls-for="graphicalControlsFor" :workload-tiles="guestWorkloadTiles" :validate-workload-tile="validGuestWorkloadTile" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #workload="{workload}"><component :is="guestCommandPanel" v-if="guestCommandPanel" :snapshot="workload.snapshot" :rewind="rewindSnapshot" :rewind-panel="rewindPanel" @action="guestCommandAction" @rewind-action="requestRewind" /></template>
+          <template #state-controls="{capsuleId}"><component :is="graphicalHeader" v-if="graphicalHeader && graphicalControlsFor(capsuleId)" :snapshot="graphicalState" :row="rows.find(row=>row.id===capsuleId)" @action="requestGraphicalState" /></template>
           <template #surface="{ surface, capsuleId, desktopActive }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
             <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" :recording-available="captureAvailable" @recordings="openCapturePanel(capsuleId)" @take-control="takeWallControl(surface)" @stored-data="openStoredData" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">

@@ -377,3 +377,16 @@ test('mounted provider menu enables through literal ack, launches one exact spec
     } finally { mounted.close(); booted.close(); }
   }
 });
+
+
+test('graphical session capability is injected into App from the live preload facade', async () => {
+  const fake = fakeHost();
+  const graphical = Object.freeze({status:async()=>({available:false}),request:async()=>{throw Error('not used by bootstrap');},subscribe:()=>()=>{}});
+  fake.host.graphicalSession = graphical;
+  const mounted = await boot(fake.host);
+  try { assert.equal(mounted.props.graphicalSessionHost, graphical); }
+  finally { mounted.close(); }
+  const absent = await boot(fakeHost().host);
+  try { assert.equal(absent.props.graphicalSessionHost, undefined); }
+  finally { absent.close(); }
+});

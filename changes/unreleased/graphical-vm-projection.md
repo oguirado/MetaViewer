@@ -1,0 +1,2 @@
+- Preserve the validated capsule kind and inject the graphical session capability so VM checkpoint controls bind to the observed live VM.
+- Verify the added graphical IPC handlers without changing the existing handler inventory or rollback checks.

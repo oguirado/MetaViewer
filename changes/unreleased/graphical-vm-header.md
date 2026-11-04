@@ -1,0 +1,2 @@
+- Add capability-driven Back and Mark controls to graphical QEMU VM tile headers with host-timed restore points.
+- Fence stale actions and retain uncertain state without changing MicroVM controls or normal Stop behavior.
