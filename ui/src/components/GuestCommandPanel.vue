@@ -1,10 +1,13 @@
 <script setup>
 import {computed,ref,watch,onMounted,onUnmounted} from 'vue';
-import {gcSnapshot,gcAction} from '../../electron/guestCommandValues.js';
+import {gcSnapshot,gcAction,gcObservationSnapshot} from '../../electron/guestCommandValues.js';
 import {rewindHeaderCapabilities,rewindHeaderRestoreAction} from '../wall/rewindStateControls.js';
 const props=defineProps({snapshot:{type:Object,required:true},rewind:{type:Object,default:null},rewindPanel:{type:[Object,Function],default:null}});
 const emit=defineEmits(['action','rewind-action']);
 const command=ref('uname -m'),cwd=ref('');
+const observation=ref(/** @type {any} */(null));
+/** @type {(()=>void)|null} */ let stopObservation=null;
+const transcript=computed(()=>observation.value?.active??observation.value?.history.at(-1)??null);
 const headerCapabilities=computed(()=>rewindHeaderCapabilities(props.rewind,props.snapshot));
 /** @param {string} point_id */
 function restorePoint(point_id){const value=rewindHeaderRestoreAction(props.rewind,props.snapshot,point_id);if(value)emit('rewind-action',value);}
@@ -13,8 +16,8 @@ const ageElapsed=ref(/** @type {number|null} */(0));
 /** @type {ReturnType<typeof setInterval>|null} */ let ageTimer=null;
 watch(()=>props.rewind,()=>{const now=performance.now();ageObserved=Number.isFinite(now)&&now>=0?now:null;ageElapsed.value=ageObserved===null?null:0;},{immediate:true});
 function updateAge(){const now=performance.now(),delta=ageObserved===null?NaN:Math.floor(now-ageObserved);ageElapsed.value=Number.isSafeInteger(delta)&&delta>=0?delta:null;}
-onMounted(()=>{ageTimer=setInterval(updateAge,1000);});
-onUnmounted(()=>{if(ageTimer!==null)clearInterval(ageTimer);ageTimer=null;});
+onMounted(()=>{ageTimer=setInterval(updateAge,1000);const api=/** @type {any} */(globalThis.window)?.metaviewer?.guestCommand;if(typeof api?.onObservation==='function')stopObservation=api.onObservation((/** @type {any} */ value)=>{if(gcObservationSnapshot(value))observation.value=value;});});
+onUnmounted(()=>{stopObservation?.();stopObservation=null;if(ageTimer!==null)clearInterval(ageTimer);ageTimer=null;});
 /** @param {number|null} age */
 const pointAge=age=>{const elapsed=ageElapsed.value;if(age===null||elapsed===null||!Number.isSafeInteger(age)||age<0||!Number.isSafeInteger(age+elapsed))return 'Age unavailable';return `${Math.floor((age+elapsed)/1000)} s ago`;};
 const state=computed(()=>gcSnapshot(props.snapshot)?props.snapshot:{available:false,busy:false,canCancel:false,uncertain:true,code:'INVALID_STATE',session:null,stdout:'',stderr:''}),session=computed(()=>state.value.session);
@@ -42,6 +45,7 @@ function stop(){if(session.value?.ownership==='held'&&!session.value.controls?.s
   <component :is="rewindPanel" v-if="rewindPanel" :snapshot="rewind" :guest="state" @action="emit('rewind-action',$event)" />
   <form @submit.prevent="run"><label for="guest-command">Command</label><textarea id="guest-command" v-model="command" rows="3" spellcheck="false" :disabled="!canRun && state.busy" /><label for="guest-cwd">Working directory (relative to guest workspace)</label><input id="guest-cwd" v-model="cwd" :disabled="state.busy" placeholder="Workspace root" /><button type="submit" :disabled="!canRun">Run command</button></form>
   <div class="controls"><button type="button" :disabled="!state.canCancel" @click="cancel">Cancel command</button><button type="button" :disabled="session?.ownership!=='held'||session?.controls?.stop" @click="stop">Stop capsule</button></div>
+  <section v-if="transcript" aria-label="Observed command"><h3>{{ transcript.requester.component==='agent'?'SDK':'UI' }} command · Generation {{ transcript.generation }}</h3><pre data-testid="observed-command">{{ transcript.command_utf8 }}</pre><p>{{ transcript.state }}</p></section>
   <h3>Standard output</h3><pre data-testid="guest-stdout">{{ state.stdout }}</pre><h3>Standard error</h3><pre data-testid="guest-stderr">{{ state.stderr }}</pre>
   <p v-if="session?.job">Job: {{ session.job.state }} · Exit: {{ session.job.exit_code??'—' }} · Signal: {{ session.job.signal??'—' }} · Output {{ session.job.output_complete?'complete':'not confirmed complete' }}</p>
   <p v-if="state.code" role="alert">{{ state.code }}</p>

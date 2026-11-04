@@ -17,7 +17,7 @@ import { stateRequest, stateEvent } from './preload.js';
  * projected to host preferences; its limits do not change UI preference caps.
  */
 import {rewindAction} from './rewindValues.js';
-import {gcAction} from './guestCommandValues.js';
+import {gcAction,gcObservationSnapshot} from './guestCommandValues.js';
 import {arm64CapsuleStatusSync} from './guestCommandProfile.js';
 import {validAction} from './headlessValues.js';
 import { acquireCapsuleCreation } from './profilePicker.js';
@@ -59,7 +59,7 @@ const CLIPBOARD_CHANNELS = Object.freeze({
   clipboardWrite:'metaviewer:clipboard.writeText',
   clipboardRead:'metaviewer:clipboard.readText',
 });
-export const GUEST_COMMAND_CHANNELS=Object.freeze({guestCommandCapabilities:'metaviewer:guest-command.capabilities',guestCommandStatus:'metaviewer:guest-command.status',guestCommandRequest:'metaviewer:guest-command.request'});
+export const GUEST_COMMAND_CHANNELS=Object.freeze({guestCommandObservation:'metaviewer:guest-command.observation',guestCommandCapabilities:'metaviewer:guest-command.capabilities',guestCommandStatus:'metaviewer:guest-command.status',guestCommandRequest:'metaviewer:guest-command.request'});
 export const REWIND_CHANNELS=Object.freeze({rewindStatus:'metaviewer:rewind.status',rewindRequest:'metaviewer:rewind.request'});
 const ALL_WIRE_CHANNELS = Object.freeze({...REWIND_CHANNELS,...GUEST_COMMAND_CHANNELS,...WIRE_CHANNELS, ...HEADLESS_CHANNELS, ...SIDE_TERMINAL_CHANNELS, ...CLIPBOARD_CHANNELS});
 export const SURFACE_INPUT_CHANNEL = WIRE_CHANNELS.intent;
@@ -876,6 +876,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
   };
   const stopRewind=core.rewind?.status?.().available===true?core.rewind.subscribe((/** @type {any} */ snapshot)=>{if(identity.depth===null)contents.postMessage('metaviewer:rewind.state',snapshot);}):()=>{};
   const stopGuestCommand=core.guestCommand?.status?.().available===true?core.guestCommand.subscribe((/** @type {any} */ snapshot)=>{if(identity.depth===null)contents.postMessage('metaviewer:guest-command.state',snapshot);}):()=>{};
+  const stopObservation=core.guestCommand?.onObservation?.((/** @type {any} */ snapshot)=>{if(!gcObservationSnapshot(snapshot))throw Error('OBSERVATION_SHAPE');if(identity.depth===null)contents.postMessage('metaviewer:guest-command.observation',snapshot);})??(()=>{});
   const stopHeadless = (core.headless?.status?.().available === true ? core.headless.subscribe((/** @type {any} */ snapshot) => {
     if (identity.depth === null) contents.postMessage('metaviewer:headless.state',snapshot);
   }) : null) ?? (()=>{});
@@ -902,6 +903,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     },
     rewindStatus:async()=>identity.depth===null&&core.rewind?core.rewind.status():{available:false,busy:false,code:'UNAVAILABLE',revision:0,session:null,uncertain:false,point_ages_ms:{},stop_target:null},
     rewindRequest:async(/** @type {any} */action)=>{if(identity.depth!==null||!core.rewind||!rewindAction(action))throw Error('BAD_REQUEST');return core.rewind.request(action);},
+    guestCommandObservation: async()=>identity.depth===null&&core.guestCommand?.observationSnapshot?core.guestCommand.observationSnapshot():{staged:null,active:null,history:[],uncertain:false,generation:null},
     guestCommandCapabilities: capsuleCapabilities,
     guestCommandStatus: async()=>identity.depth===null&&core.guestCommand?core.guestCommand.status():{available:false,busy:false,canCancel:false,code:'UNAVAILABLE',revision:0,session:null,uncertain:false,stdout:'',stderr:''},
     guestCommandRequest: async(/** @type {any} */ action)=>{if(identity.depth!==null||!core.guestCommand||!gcAction(action))throw Error('BAD_REQUEST');return core.guestCommand.request(action);},
@@ -1423,7 +1425,7 @@ export function installAuthorityWire({ipcMain,contents,core,env=process.env,argv
     inputPartialSeq,
     inputPartialApplied,
     notifyCreateRefusal: (/** @type {any} */ failure) => refuse(resolveCreateFailureCode(failure)),
-    async dispose() { stopRewind(); stopGuestCommand(); stopHeadless(); disposed=true; subscribed=false; stopFrames(); stopCadence();
+    async dispose() { stopRewind(); stopGuestCommand(); stopObservation(); stopHeadless(); disposed=true; subscribed=false; stopFrames(); stopCadence();
       knownSurfaces.clear();
       inputRateWindow.clear();
       inputLastSeq.clear();

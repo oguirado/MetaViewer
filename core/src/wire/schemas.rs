@@ -1,6 +1,12 @@
 //! Embedded contract references for scalar and union validation.
 pub(super) fn schema(name: &str) -> Option<serde_json::Value> {
     let raw = match name {
+        "guest_command_observation.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_command_observation.schema.json")
+        }
+        "guest_command_observation_envelope.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_command_observation_envelope.schema.json")
+        }
         "rewind_envelope.schema.json" => {
             include_str!("../../../contracts/v0.2/rewind_envelope.schema.json")
         }

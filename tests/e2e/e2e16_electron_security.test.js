@@ -101,7 +101,7 @@ test('typed workload facade groups stay closed and reject private or malformed c
     // Public typed workload groups are shipped independently of frame diagnostics.
     // They expose closed requests/snapshots, never raw IPC or native reset handles.
     for (const [name, methods] of Object.entries({
-      guestCommand: ['capabilities', 'request', 'status', 'subscribe'],
+      guestCommand: ['capabilities', 'onObservation', 'request', 'status', 'subscribe'],
       headless: ['request', 'status', 'subscribe'],
       rewind: ['request', 'status', 'subscribe'],
     })) {
@@ -123,6 +123,7 @@ test('typed workload facade groups stay closed and reject private or malformed c
       await assert.rejects(api[name].request({ op: 'unexpected', privateMethod: 'invoke' }));
       assert.throws(() => api[name].subscribe(null));
     }
+    assert.throws(() => api.guestCommand.onObservation(null));
     assert.equal(invocations.length, beforeInvalidCalls, 'invalid workload calls must not cross IPC');
 
 });

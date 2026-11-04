@@ -1324,6 +1324,9 @@ impl Server {
             clock.row.witness_journal_ns += boundary_started.elapsed().as_nanos();
         }
         match (&env.from.component, &env.body) {
+            (_, Command::GuestCommandObservation(_)) => {
+                return self.unsupported_at(now_ns, &env, boundary);
+            }
             (_, Command::CapsuleStateRequest(request)) => {
                 return self.capsule_state_request_at(now_ns, &env, request, boundary);
             }

@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::time::Duration;
+pub mod command_observation;
 pub mod guest_command;
 pub mod headless;
 pub mod payload;
@@ -253,6 +254,7 @@ fn preflight(raw: &str, limits: &WireLimits) -> Result<(), DecodeError> {
 /// Authentication, sequence and replay state remain shared on one connection.
 pub fn envelope_schema(body: &Command) -> &'static str {
     match body {
+        Command::GuestCommandObservation(_) => "guest_command_observation_envelope/v0.2",
         Command::RewindRequest(_) | Command::RewindEvent(_) => "rewind_envelope/v0.2",
         Command::HeadlessRequest(_)
         | Command::HeadlessEvent(_)
@@ -283,7 +285,10 @@ pub fn decode_envelope_with_limits(
     if value["schema"].as_str().is_some_and(|v| {
         !matches!(
             v,
-            "envelope/v0.2" | "capsule_envelope/v0.2" | "rewind_envelope/v0.2"
+            "envelope/v0.2"
+                | "capsule_envelope/v0.2"
+                | "rewind_envelope/v0.2"
+                | "guest_command_observation_envelope/v0.2"
         )
     }) || is_unknown_body_version(value["body"]["schema"].as_str())
         || value["body"]["schema"] == "hello/v0.2"
@@ -298,6 +303,9 @@ pub fn decode_envelope_with_limits(
         return Err(DecodeError::InvalidField);
     }
     let schema_name = match envelope.schema.as_str() {
+        "guest_command_observation_envelope/v0.2" => {
+            "guest_command_observation_envelope.schema.json"
+        }
         "envelope/v0.2" => "envelope.schema.json",
         "capsule_envelope/v0.2" => "capsule_envelope.schema.json",
         "rewind_envelope/v0.2" => "rewind_envelope.schema.json",

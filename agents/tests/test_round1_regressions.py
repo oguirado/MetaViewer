@@ -68,13 +68,14 @@ class CodecRegressions(unittest.TestCase):
         root = Path(__file__).resolve().parents[2]
         oracle = Validator(root / "contracts/v0.2")
         schemas = {name: oracle.load(name + ".schema.json") for name in
-                   ("envelope", "capsule_envelope", "rewind_envelope")}
+                   ("envelope", "capsule_envelope", "rewind_envelope", "guest_command_observation_envelope")}
         families = {branch["$ref"].removesuffix(".schema.json"): name
                     for name, schema in schemas.items()
-                    for branch in schema["properties"]["body"]["oneOf"]}
+                    for branch in ([schema["properties"]["body"]] if name == "guest_command_observation_envelope" else schema["properties"]["body"]["oneOf"])}
         examples = sorted((root / "contracts/examples/v0.2").glob("*.valid*.json"))
         self.assertTrue(examples)
         base_env = json.loads((root / "contracts/examples/v0.2/envelope.valid.json").read_text())
+        observation_base = json.loads((root / "contracts/examples/v0.2/guest_command_observation_envelope.valid.json").read_text())
         for path in examples:
             with self.subTest(path=path.name):
                 body = json.loads(path.read_text())
@@ -88,12 +89,12 @@ class CodecRegressions(unittest.TestCase):
                         oracle.validate(bad_body, schema)
                     # Direct metadata remains invalid in every wire family, with or without its own tag.
                     for family, schema in schemas.items():
-                        bad = {**base_env, "schema": family + "/v0.2", "body": body}
+                        bad = {**(observation_base if family == "guest_command_observation_envelope" else base_env), "schema": family + "/v0.2", "body": body}
                         with self.assertRaises(ValidationError): oracle.validate(bad, schema)
                         self.assert_bad(bad)
                     continue
                 family = prefix if prefix in schemas else families[prefix]
-                env = body if prefix in schemas else fixtures._wrap(body)
+                env = body if prefix in schemas else ({**observation_base,"body":body} if family == "guest_command_observation_envelope" else fixtures._wrap(body))
                 self.assertEqual(env["schema"], family + "/v0.2")
                 oracle.validate(env, schemas[family])
                 wire = e.dumps_envelope(env, max_bytes=M)

@@ -978,6 +978,7 @@ test('R3-T4-011 (T20): installAuthorityWire unwinds all registered ipcMain handl
     frames,
   });
   assert.deepEqual(GUEST_COMMAND_CHANNELS, {
+    guestCommandObservation:'metaviewer:guest-command.observation',
     guestCommandCapabilities:'metaviewer:guest-command.capabilities',
     guestCommandStatus:'metaviewer:guest-command.status',
     guestCommandRequest:'metaviewer:guest-command.request',
@@ -997,6 +998,19 @@ test('R3-T4-011 control: stranded rewind handler fails the all-handler rollback 
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
   const contents={id:99,mainFrame:frame,isDestroyed:()=>false,postMessage(){}};
   const retained=REWIND_CHANNELS.rewindStatus;
+  const ipcMain={handle:(channel,fn)=>handlers.set(channel,fn),removeHandler:channel=>{if(channel!==retained)handlers.delete(channel);}};
+  assert.throws(()=>installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1'},argv:['--nested-depth=0'],core:{request:async()=>verdict},profiles:new Map(),frames:{subscribe(){throw Error('FRAME_SOURCE');}}}),/FRAME_SOURCE/);
+  assert.deepEqual([...handlers.keys()],[retained]);
+  assert.throws(()=>assert.equal(handlers.size,0),assert.AssertionError,'the unchanged rollback oracle must reject a retained handler');
+});
+
+test('R3-T4-011 control: stranded observation handler fails the all-handler rollback oracle', async t => {
+  const root=await mkdtemp(join(tmpdir(),'wire-r3-011-mutant-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const handlers=new Map();
+  const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
+  const contents={id:99,mainFrame:frame,isDestroyed:()=>false,postMessage(){}};
+  const retained=GUEST_COMMAND_CHANNELS.guestCommandObservation;
   const ipcMain={handle:(channel,fn)=>handlers.set(channel,fn),removeHandler:channel=>{if(channel!==retained)handlers.delete(channel);}};
   assert.throws(()=>installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1'},argv:['--nested-depth=0'],core:{request:async()=>verdict},profiles:new Map(),frames:{subscribe(){throw Error('FRAME_SOURCE');}}}),/FRAME_SOURCE/);
   assert.deepEqual([...handlers.keys()],[retained]);

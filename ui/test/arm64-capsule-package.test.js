@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
+import fsDefault from 'node:fs/promises';
+import {syncBuiltinESMExports} from 'node:module';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -9,6 +11,14 @@ import {arm64CapsuleSessionPlan,productionEntry} from '../tools/package.js';
 import {validateRetailLaunch} from '../electron/main.js';
 
 const commit='1'.repeat(40);
+function fixedSystemPython(t, overrides={}) {
+ const realpath=fsDefault.realpath,lstat=fsDefault.lstat;
+ t.mock.method(fsDefault,'realpath',async (path,...args)=>path==='/usr/bin/python3'?'/usr/bin/python3.12':realpath(path,...args));
+ t.mock.method(fsDefault,'lstat',async (path,...args)=>path==='/usr/bin/python3.12'?{isFile:()=>true,uid:0,mode:0o100755,...overrides}:lstat(path,...args));
+ syncBuiltinESMExports();
+ t.after(()=>{t.mock.restoreAll();syncBuiltinESMExports();});
+}
+
 async function fixture(t){
  const root=await fs.mkdtemp(join(tmpdir(),'arm-package-'));t.after(()=>fs.rm(root,{recursive:true,force:true}));
  const operator=join(root,'operator'),data=join(root,'data');
@@ -31,6 +41,7 @@ test('absent registry retains ordinary startup without requiring UI transport',a
  assert.equal(await arm64CapsuleSessionPlan({XDG_DATA_HOME:root},'arm64','/app','/source',commit,{}),null);
 });
 test('wrapper uses fixed system interpreter and sealed helper paths, not registry execution fields',async t=>{
+ fixedSystemPython(t);
  const f=await fixture(t);await fs.writeFile(f.registry,'{"python":{"path":"/untrusted/do-not-execute"}}\n',{mode:0o600});
  const plan=await arm64CapsuleSessionPlan(f.env,'arm64','/pack/metaviewer',f.operator,commit,f.pins);
  assert.match(plan.python,/^\/usr\/bin\/python3/);assert.equal(plan.helper,join(f.operator,'tools/arm64_capsule_session.py'));
@@ -39,6 +50,7 @@ test('wrapper uses fixed system interpreter and sealed helper paths, not registr
  assert.equal((await fs.readdir(join(f.operator,'tools'))).length,4);
 });
 test('trusted human invocation can preserve absent Xauthority without reading credentials',async t=>{
+ fixedSystemPython(t);
  const f=await fixture(t);delete f.env.MV_HOSTED;delete f.env.XAUTHORITY;
  const plan=await arm64CapsuleSessionPlan(f.env,'arm64','/pack/metaviewer',f.operator,commit,f.pins);
  assert.equal(plan.transport.mode,'trusted-user-invocation');assert.equal(plan.transport.xauthority,null);
@@ -119,3 +131,10 @@ test('actual generated delegation retains refusal and removes transport on parti
   for(const name of ['SIGTERM','SIGINT','SIGHUP'])assert.equal(child.listenerCount(name),0);
  }
 });
+
+for(const [name,metadata] of [['wrong owner',{uid:12345}],['writable interpreter',{mode:0o100775}],['nonexecutable interpreter',{mode:0o100644}],['nonregular interpreter',{isFile:()=>false}]]) {
+ test('fixed interpreter metadata refuses '+name,async t=>{
+  fixedSystemPython(t,metadata);const f=await fixture(t);
+  await assert.rejects(arm64CapsuleSessionPlan(f.env,'arm64','/pack/metaviewer',f.operator,commit,f.pins),/ARM64_SETUP_PYTHON/);
+ });
+}

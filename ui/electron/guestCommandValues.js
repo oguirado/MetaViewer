@@ -42,3 +42,23 @@ export function capsuleCapabilitiesValid(value) {
  const row=(/** @type {any} */ v)=>gcKeys(v,'available,reason')&&typeof v.available==='boolean'&&typeof v.reason==='string'&&[...v.reason].length<=256&&!/[\uD800-\uDFFF]/u.test(v.reason)&&!/[\x00-\x1f\x7f/\\]/.test(v.reason)&&(v.available||v.reason.trim().length>0);
  return gcKeys(value,'microvm,schema,supported_host,vm')&&value.schema==='capsule_capabilities/v0.2'&&typeof value.supported_host==='boolean'&&row(value.vm)&&row(value.microvm)&&(value.supported_host||!value.vm.available&&!value.microvm.available);
 }
+
+/** Closed, readonly command transcript projection; it cannot authorize a request. */
+const gcObservationRow=(/** @type {any} */ row,/** @type {boolean} */ history)=>{
+ if(!gcKeys(row,'accepted_event_id,command_utf8,cwd,event,event_id,generation,job_id,owner_id,request_id,requester,reservation_id,schema,state,stderr,stdout,timeout_ms,workload_id'))return false;
+ const id=(/** @type {any} */ value,/** @type {string} */ prefix)=>typeof value==='string'&&new RegExp('^'+prefix+'-[a-z0-9][a-z0-9._-]{0,63}$(?![\\s\\S])').test(value);
+ const scalar=(/** @type {any} */ value)=>typeof value==='string'&&!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+ return row.schema==='guest_command_observation/v0.2'&&row.event==='accepted_run'
+ &&id(row.event_id,'event')&&id(row.accepted_event_id,'event')&&id(row.request_id,'request')&&id(row.job_id,'job')&&id(row.owner_id,'actor')&&id(row.reservation_id,'reservation')&&id(row.workload_id,'workload')
+ &&Number.isSafeInteger(row.generation)&&row.generation>0&&gcKeys(row.requester,'component,instance')&&['agent','ui'].includes(row.requester.component)&&scalar(row.requester.instance)&&row.requester.instance.length>0&&row.requester.instance.length<=128
+ &&scalar(row.command_utf8)&&gcByteLength(row.command_utf8)>0&&gcByteLength(row.command_utf8)<=16384&&!row.command_utf8.includes('\0')&&scalar(row.cwd)&&gcByteLength(row.cwd)<=1024&&!/[\x00-\x1f\x7f]/.test(row.cwd)
+ &&Number.isSafeInteger(row.timeout_ms)&&row.timeout_ms>=1&&row.timeout_ms<=60000
+ &&(history?['exited','cancelled','timed_out','output_limit']:['running','stopping','unknown']).includes(row.state)
+ &&scalar(row.stdout)&&scalar(row.stderr)&&gcByteLength(row.stdout)+gcByteLength(row.stderr)<=196608;
+};
+const gcObservationSnapshot=(/** @type {any} */ value)=>gcKeys(value,'active,generation,history,staged,uncertain')&&typeof value.uncertain==='boolean'
+ &&(value.generation===null||Number.isSafeInteger(value.generation)&&value.generation>0)
+ &&(value.staged===null||gcKeys(value.staged,'job_id,request_id')&&typeof value.staged.request_id==='string'&&value.staged.request_id.length<=72&&typeof value.staged.job_id==='string'&&value.staged.job_id.length<=68)
+ &&(value.active===null||gcObservationRow(value.active,false))&&Array.isArray(value.history)&&value.history.length<=8&&value.history.every((/** @type {any} */ row)=>gcObservationRow(row,true))&&gcByteLength(JSON.stringify(value))<=1048576;
+
+export {gcObservationSnapshot};

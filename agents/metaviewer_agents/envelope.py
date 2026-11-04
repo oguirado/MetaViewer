@@ -39,6 +39,7 @@ __all__ = [
 SCHEMA = "envelope/v0.2"
 CAPSULE_SCHEMA = "capsule_envelope/v0.2"
 REWIND_SCHEMA = "rewind_envelope/v0.2"
+OBSERVATION_SCHEMA = "guest_command_observation_envelope/v0.2"
 _LEGACY_SCHEMA = "envelope/v0.1"
 _MAX_SAFE_INT = (1 << 53) - 1
 COMPONENTS = frozenset({"core", "ui", "daemon", "agent", "vision", "wender"})
@@ -847,8 +848,14 @@ def validate_envelope(value: object) -> dict:
     schema = value["schema"]
     if not isinstance(schema, str) or not schema:
         raise EnvelopeError("bad_shape", "envelope schema malformed")
-    if schema not in (SCHEMA, CAPSULE_SCHEMA, REWIND_SCHEMA, _LEGACY_SCHEMA):
+    if schema not in (SCHEMA, CAPSULE_SCHEMA, REWIND_SCHEMA, OBSERVATION_SCHEMA, _LEGACY_SCHEMA):
         raise EnvelopeError("unknown_version", "unknown envelope version")
+    if schema == OBSERVATION_SCHEMA:
+        try:
+            _check(value, _V02_FILES["guest_command_observation_envelope.schema.json"], 0)
+        except (_Mismatch, RecursionError):
+            raise EnvelopeError("bad_shape", "observation violates its read-only contract") from None
+        return value
     if not _valid_endpoint(value["from"]) or not _valid_endpoint(value["to"]):
         raise EnvelopeError("bad_shape", "envelope endpoint malformed")
     seq = value["seq"]
@@ -918,7 +925,7 @@ def make_envelope(*, msg_id: str, from_component: str,
         if ts_ns < 0 or ts_ns > _MAX_SAFE_INT:
             raise EnvelopeError("bad_shape", "session clock ceiling exceeded")
     envelope = {
-        "schema": (REWIND_SCHEMA if isinstance(body, dict) and isinstance(body.get("schema"), str) and body["schema"] in _REWIND_BODY_TAGS else CAPSULE_SCHEMA if isinstance(body, dict) and isinstance(body.get("schema"), str) and body["schema"] in _CAPSULE_BODY_TAGS
+        "schema": (OBSERVATION_SCHEMA if isinstance(body, dict) and body.get("schema") == "guest_command_observation/v0.2" else REWIND_SCHEMA if isinstance(body, dict) and isinstance(body.get("schema"), str) and body["schema"] in _REWIND_BODY_TAGS else CAPSULE_SCHEMA if isinstance(body, dict) and isinstance(body.get("schema"), str) and body["schema"] in _CAPSULE_BODY_TAGS
                    else _LEGACY_SCHEMA if isinstance(body, dict) and str(body.get("schema", "")).endswith("/v0.1") else SCHEMA),
         "msg_id": msg_id,
         "ts_ns": ts_ns,
