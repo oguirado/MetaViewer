@@ -1,0 +1,1 @@
+- Keep normal ARM64 sessions inside their guardian with a filtered desktop bus, native GTK folder dialogs on the admitted display and a protected proxy prerequisite.

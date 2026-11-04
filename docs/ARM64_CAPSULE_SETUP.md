@@ -232,3 +232,7 @@ Configuration checks hashes, custody and recognizable ISA headers, not kernel
 compatibility or authenticated guest hello. Source/package pins still require
 independent release verification. These tools and synthetic tests establish no
 new guest execution, installation, runtime acceptance or distribution approval.
+
+## Desktop session bus
+
+Normal ARM64 sessions require a root-owned, non-writable `xdg-dbus-proxy` executable in `/usr/bin`. The setup helper refuses before session admission if this prerequisite is absent or unsafe; it never installs it. The application connects through a guardian-owned filtered endpoint to the admitted session bus. Notifications, accessibility, settings and GTK file services remain available. The user manager and desktop portal are hidden from Chromium, preventing scope migration and portal dialogs routed to a different display. Electron uses its native GTK folder chooser on the admitted display; no runtime switches or sandbox markers are forged. Systemd supervision uses its separate explicit manager connection. The proxy closes through its lifetime descriptor when the application exits; the original guardian cgroup must still be absent before session release. This does not relax either graphical or MicroVM guardian verification.
