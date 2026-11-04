@@ -43,8 +43,11 @@ import (
 	"metaviewer/daemon-adapter/internal/capsule"
 	"metaviewer/daemon-adapter/internal/cli"
 	"metaviewer/daemon-adapter/internal/frames"
+	"metaviewer/daemon-adapter/internal/guestcommand"
+	"metaviewer/daemon-adapter/internal/headless"
 	"metaviewer/daemon-adapter/internal/ipc"
 	"metaviewer/daemon-adapter/internal/record"
+	"metaviewer/daemon-adapter/internal/resourceinventory"
 	"metaviewer/daemon-adapter/internal/view"
 )
 
@@ -81,6 +84,30 @@ func networkModesFromEnv() ([]string, error) {
 
 func RuntimeFromEnv() (Runtime, error) {
 	var zero Runtime
+	if enabled := os.Getenv("MV_REWIND_ENABLED"); enabled != "" && enabled != "1" {
+		return zero, configuration("MV_REWIND_ENABLED must be 1 when set")
+	}
+	if os.Getenv("MV_REWIND_ENABLED") == "1" && (os.Getenv("MV_GUEST_COMMAND_ONLY") != "" || os.Getenv("MV_HEADLESS_ONLY") != "") {
+		return zero, configuration("rewind mode conflicts with other exclusive modes")
+	}
+	if only := os.Getenv("MV_REWIND_ONLY"); only != "" {
+		if only != "1" || os.Getenv("MV_REWIND_ENABLED") != "1" || os.Getenv("MV_GUEST_COMMAND_ONLY") != "" || os.Getenv("MV_HEADLESS_ONLY") != "" {
+			return zero, configuration("exclusive rewind opt-in required")
+		}
+		return guestCommandOnlyRuntimeFromEnv(func() (guestCommandOwner, error) { return guestcommand.NewRewindFromEnv() })
+	}
+	if mode := os.Getenv("MV_GUEST_COMMAND_ONLY"); mode != "" {
+		if mode != "1" || os.Getenv("MV_HEADLESS_ONLY") != "" {
+			return zero, configuration("MV_GUEST_COMMAND_ONLY must be 1 and exclusive")
+		}
+		return guestCommandOnlyRuntimeFromEnv(func() (guestCommandOwner, error) { return guestcommand.NewFromEnv() })
+	}
+	if mode := os.Getenv("MV_HEADLESS_ONLY"); mode != "" {
+		if mode != "1" {
+			return zero, configuration("MV_HEADLESS_ONLY must be 1 when set")
+		}
+		return headlessOnlyRuntimeFromEnv(func() (headlessOwner, error) { return headless.NewFromEnv() })
+	}
 	netModes, err := networkModesFromEnv()
 	if err != nil {
 		return zero, err
@@ -140,12 +167,39 @@ func RuntimeFromEnv() (Runtime, error) {
 	if err != nil {
 		return zero, err
 	}
+	headlessManager, err := headless.NewFromEnv()
+	if err != nil {
+		viewMgr.Close()
+		return zero, configuration("headless host profile: " + err.Error())
+	}
+	guestManager, err := normalGuestCommandFromEnv()
+	if err != nil {
+		viewMgr.Close()
+		return zero, err
+	}
+	guestAdmitted := false
+	defer func() {
+		if !guestAdmitted && guestManager != nil {
+			_ = guestManager.Close()
+		}
+	}()
+	inventory, err := resourceinventory.NewGraphicalFromEnv()
+	if err != nil {
+		viewMgr.Close()
+		return zero, configuration(err.Error())
+	}
+	inventoryAdmitted := false
+	defer func() {
+		if !inventoryAdmitted && inventory != nil {
+			_ = inventory.Seal()
+		}
+	}()
 	recorder, err := record.NewFromEnvironment(origin, monotonic)
 	if err != nil {
 		viewMgr.Close()
 		return zero, err
 	}
-	manager, err := capsule.NewRuntime(capsule.Config{NetModes: netModes, Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: viewMgr}, monotonic)
+	manager, err := capsule.NewRuntime(capsule.Config{Inventory: nativeInventoryOrNil(inventory), NetModes: netModes, Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: viewMgr}, monotonic)
 	if err != nil {
 		_ = recorder.Close()
 		viewMgr.Close()
@@ -181,7 +235,7 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		pubs[profile.RAMRoot] = p
 	}
-	helloSession := helloState{netModes: netModes, manager: manager, view: viewMgr, recorder: recorder, newRecorder: record.NewFromEnvironment}
+	helloSession := helloState{inventory: inventory, netModes: netModes, manager: manager, view: viewMgr, recorder: recorder, newRecorder: record.NewFromEnvironment}
 
 	helloSession.handler = wireHandler(manager, profiles, pubs, origin, recorder)
 	cfg := ipc.Config{SocketPath: filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "metaviewer", "core.sock"), UID: uint32(os.Getuid()), MaxFrameBytes: 1 << 20, MaxDepth: 32, MaxStringBytes: 65536, MaxKeys: 256, MaxArrayItems: 4096, MaxReplayEntries: 100000, MaxConnections: 1, HelloTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, ProbeTimeout: time.Second, ShutdownTimeout: 5 * time.Second}
@@ -194,6 +248,12 @@ func RuntimeFromEnv() (Runtime, error) {
 	}
 	authority.expectedCoreCommit = expectedCoreCommit
 	cleanup := func() {
+		if guestManager != nil && guestManager.Close() != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "adapter: guest command cleanup remains uncertain")
+		}
+		if err := headlessManager.Close(); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "adapter: headless cleanup remains uncertain")
+		}
 		if helloSession.displayTaps != nil {
 			stop, cancel := context.WithTimeout(context.Background(), time.Second)
 			_ = helloSession.displayTaps.Close(stop)
@@ -207,6 +267,11 @@ func RuntimeFromEnv() (Runtime, error) {
 		}
 		if err := helloSession.closeManager(context.Background()); err != nil {
 			_, _ = fmt.Fprintln(os.Stderr, err)
+		}
+		if inventory != nil {
+			if e := inventory.Seal(); e != nil {
+				_, _ = fmt.Fprintln(os.Stderr, "adapter: graphical inventory seal uncertain")
+			}
 		}
 		if helloSession.recorder != nil {
 			_ = helloSession.recorder.Close()
@@ -244,11 +309,30 @@ func RuntimeFromEnv() (Runtime, error) {
 	}
 	probe.From, probe.To = probe.To, probe.From
 	authority.bound = &probe
+	inventoryAdmitted = true
+	guestAdmitted = true
 	return Runtime{Config: cfg, Policy: policy, Handler: func(ctx context.Context, e ipc.Envelope) ([]json.RawMessage, error) {
 		var header struct{ Schema string }
 		_ = json.Unmarshal(e.Body, &header)
 		if header.Schema == "hello/v0.2" {
 			return nil, helloSession.accept(ctx, profiles, pubs, authority, monotonic, capsule.NewRuntime, frames.NewSubscriptions)
+		}
+		if header.Schema == "guest_command_request/v0.2" || header.Schema == "rewind_request/v0.2" {
+			return routeGuestCommand(ctx, guestManager, policy, e)
+		}
+		if header.Schema == "headless_request/v0.2" {
+			return headlessManager.Handle(ctx, e.Body, func(body json.RawMessage) error {
+				out := e
+				out.Schema = ipc.EnvelopeSchema(body)
+				out.From, out.To = out.To, out.From
+				out.Body = body
+				raw, err := json.Marshal(out)
+				if err != nil {
+					return err
+				}
+				_, err = policy.ValidateEnvelope(raw)
+				return err
+			})
 		}
 		return helloSession.handler(ctx, e)
 	}, Client: true, Streaming: true, Registration: probe, Close: cleanup}, nil
@@ -1225,6 +1309,7 @@ func openStateDir(path string) (*os.File, error) {
 // helloState owns the state published by an accepted session handshake.
 // Constructor arguments permit deterministic failure testing without global hooks.
 type helloState struct {
+	inventory      *resourceinventory.Graphical
 	netModes       []string
 	manager        *capsule.Manager
 	handler        ipc.Handler
@@ -1367,7 +1452,7 @@ func (s *helloState) accept(ctx context.Context, profiles map[string]capsule.Pro
 		}
 		return nil
 	}
-	fresh, err := newRuntime(capsule.Config{NetModes: s.netModes, Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: s.view, BeforeDestroy: beforeDestroy}, clock)
+	fresh, err := newRuntime(capsule.Config{Inventory: nativeInventoryOrNil(s.inventory), NetModes: s.netModes, Profiles: profiles, OriginNS: origin, MaxSurfaces: 16, MaxOutputBytes: 1 << 20, Timeout: 90 * time.Second, View: s.view, BeforeDestroy: beforeDestroy}, clock)
 	if err != nil {
 		return err
 	}

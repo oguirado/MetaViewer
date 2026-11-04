@@ -145,6 +145,47 @@ pub enum Input {
         surface_id: String,
         profile_id: String,
     },
+    RewindRequest {
+        request: crate::wire::rewind::RewindRequest,
+        caller: Endpoint,
+        agent: Endpoint,
+        received_ns: u64,
+        enabled: bool,
+    },
+    RewindEvent {
+        notice: crate::wire::rewind::RewindEvent,
+        executor_epoch: u64,
+    },
+    RewindUncertain,
+
+    GuestCommandRequest {
+        request: crate::wire::guest_command::GuestCommandRequest,
+        caller: Endpoint,
+        agent: Endpoint,
+        other_resources: bool,
+        received_ns: u64,
+    },
+    GuestCommandEvent {
+        notice: crate::wire::guest_command::GuestCommandEvent,
+        executor_epoch: u64,
+    },
+    GuestCommandUncertain,
+    GuestCommandRefused {
+        request_id: String,
+    },
+
+    HeadlessRequest {
+        request: crate::wire::headless::HeadlessRequest,
+        caller: Endpoint,
+        agent: Endpoint,
+        graphical_seen: bool,
+        received_ns: u64,
+    },
+    HeadlessEvent {
+        notice: crate::wire::headless::HeadlessEvent,
+        executor_epoch: u64,
+    },
+    HeadlessUncertain,
     /// [TARGET, unit decision] Journal closed lifecycle requests before forwarding.
     SurfaceRequest {
         request: crate::wire::payload::SurfaceRequest,
@@ -222,6 +263,12 @@ pub struct CoreState {
     pub core_seq: u64,
     pub epoch: u64,
     pub remaining_budget: u64,
+    #[serde(default, skip_serializing_if = "crate::headless::State::is_empty")]
+    pub headless: crate::headless::State,
+    #[serde(default, skip_serializing_if = "crate::guest_command::State::is_empty")]
+    pub guest_command: crate::guest_command::State,
+    #[serde(default, skip_serializing_if = "crate::rewind_flow::State::is_empty")]
+    pub rewind: crate::rewind_flow::State,
     pub surfaces: BTreeMap<String, Surface>,
     /// Surface keys; display conflicts are checked against every leased surface.
     pub leases: BTreeMap<String, String>,
@@ -266,6 +313,9 @@ impl CoreState {
             core_seq: 0,
             epoch: 0,
             remaining_budget: budget,
+            headless: crate::headless::State::default(),
+            guest_command: crate::guest_command::State::default(),
+            rewind: crate::rewind_flow::State::default(),
             surfaces: BTreeMap::new(),
             leases: BTreeMap::new(),
             pending: BTreeMap::new(),
@@ -461,6 +511,17 @@ impl CoreState {
     pub fn is_destroyed(&self, id: &str) -> bool {
         self.destroyed.contains(id)
     }
+    /// Retained tombstones are history; active/lost or unresolved resources are
+    /// current custody. Lost is never inferred closed from live=false alone.
+    pub fn has_unclosed_graphical_custody(&self) -> bool {
+        !self.slot_ops.is_empty()
+            || !self.profile_creates.is_empty()
+            || !self.profile_create_extras.is_empty()
+            || self.surfaces.keys().any(|id| !self.is_destroyed(id))
+            || !self.leases.is_empty()
+            || !self.pending.is_empty()
+            || !self.draining.is_empty()
+    }
     /// Pure deterministic reduction. Persistence callers publish only after fsync.
     pub fn apply(&mut self, input: &Input) -> Result<Outcome, AdmissionError> {
         let mut candidate = self.clone();
@@ -482,6 +543,168 @@ impl CoreState {
             control_ready: false,
         };
         match input {
+            Input::RewindRequest {
+                request,
+                caller,
+                agent,
+                received_ns,
+                enabled,
+            } => {
+                if !enabled
+                    || self.remaining_budget == 0
+                    || self
+                        .rewind
+                        .submit(
+                            request,
+                            &self.guest_command,
+                            caller,
+                            agent,
+                            &self.session_id,
+                            *received_ns,
+                        )
+                        .is_err()
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else {
+                    self.remaining_budget -= 1;
+                }
+            }
+            Input::RewindEvent {
+                notice,
+                executor_epoch,
+            } => {
+                if *executor_epoch != self.epoch || self.rewind.observe(notice).is_err() {
+                    out.reason = Some(Refusal::Policy);
+                } else if notice.0["event"] == "completed"
+                    && !self.rewind.stopping
+                    && self
+                        .rewind
+                        .session
+                        .as_ref()
+                        .is_some_and(|s| s["phase"] == "ready")
+                {
+                    if let (Some(t), Some(g)) =
+                        (&self.rewind.target, self.guest_command.session.as_mut())
+                    {
+                        g["generation"] = serde_json::json!(t.generation);
+                        g["job"] = serde_json::Value::Null;
+                        g["controls"] = serde_json::json!({"cancel":null,"stop":null});
+                        g["phase"] = serde_json::json!("ready");
+                    }
+                    self.guest_command.unknown = false;
+                    self.guest_command.stdout.clear();
+                    self.guest_command.stderr.clear();
+                    self.guest_command.run_id = None;
+                    self.guest_command.run_params = None;
+                }
+            }
+            Input::RewindUncertain => self.rewind.mark_unknown(),
+            Input::GuestCommandRequest {
+                request,
+                caller,
+                agent,
+                other_resources,
+                received_ns,
+            } => {
+                let cleanup = matches!(request.0["op"].as_str(), Some("cancel" | "stop"));
+                let mut candidate_gc = self.guest_command.clone();
+                let result = self
+                    .rewind
+                    .prepare_stop(&request.0, &mut candidate_gc)
+                    .and_then(|_| {
+                        candidate_gc.submit(
+                            request,
+                            caller,
+                            agent,
+                            &self.session_id,
+                            *received_ns,
+                            *other_resources
+                                || self.headless.held
+                                || self.has_unclosed_graphical_custody(),
+                        )
+                    });
+                if (!cleanup && (self.remaining_budget == 0 || !self.rewind.allows_command()))
+                    || result.is_err()
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else {
+                    self.guest_command = candidate_gc;
+                    if request.0["op"] == "stop" {
+                        self.rewind.begin_stop();
+                    }
+                    if !cleanup {
+                        self.remaining_budget -= 1;
+                    }
+                }
+            }
+            Input::GuestCommandEvent {
+                notice,
+                executor_epoch,
+            } => {
+                if *executor_epoch != self.epoch
+                    || self.rewind.stale_gc(&notice.0)
+                    || self.guest_command.observe(notice).is_err()
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else if notice.0["event"] == "stopped" {
+                    self.rewind.gc_stopped(&notice.0["session"]);
+                }
+            }
+            Input::GuestCommandUncertain => {
+                self.guest_command.uncertain();
+                self.rewind.mark_unknown();
+            }
+            Input::GuestCommandRefused { request_id } => {
+                if self.guest_command.rejected.len() < 256 {
+                    self.guest_command.rejected.insert(request_id.clone());
+                }
+                out.reason = Some(Refusal::Policy);
+            }
+
+            Input::HeadlessRequest {
+                request,
+                caller,
+                agent,
+                graphical_seen,
+                received_ns,
+            } => {
+                let cleanup = request.0["op"] == "stop";
+                let deadline = received_ns
+                    .checked_add(35_000_000_000)
+                    .filter(|n| *n <= crate::MAX_WIRE_INTEGER);
+                if (request.0["op"] == "create" && self.guest_command.held)
+                    || deadline.is_none()
+                    || (!cleanup && self.remaining_budget == 0)
+                    || self
+                        .headless
+                        .submit(
+                            request,
+                            caller,
+                            agent,
+                            self.epoch,
+                            *graphical_seen || !self.surfaces.is_empty(),
+                        )
+                        .is_err()
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else {
+                    self.headless.pending.as_mut().unwrap().deadline_ns = deadline;
+                    if !cleanup {
+                        self.remaining_budget -= 1;
+                    }
+                }
+            }
+            Input::HeadlessEvent {
+                notice,
+                executor_epoch,
+            } => {
+                if *executor_epoch != self.epoch
+                    || self.headless.observe(notice, *executor_epoch).is_err()
+                {
+                    out.reason = Some(Refusal::Policy);
+                }
+            }
+            Input::HeadlessUncertain => self.headless.uncertain(),
             Input::CapsuleStateRequest { sender, request } => {
                 self.reduce_slot_request(sender, request, &mut out)?;
             }
@@ -522,13 +745,17 @@ impl CoreState {
             Input::SurfaceRequest { request } => {
                 let value =
                     serde_json::to_value(request).map_err(|_| AdmissionError::InvalidInput)?;
-                if !matches!(
-                    value["op"].as_str(),
-                    Some("create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe")
-                ) || (value["op"] == "create"
-                    && value["params"]["profile_id"]
-                        .as_str()
-                        .is_some_and(|profile| self.slot_ops.contains_key(profile)))
+                if (value["op"] == "create" && (self.headless.held || self.guest_command.held))
+                    || !matches!(
+                        value["op"].as_str(),
+                        Some(
+                            "create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe"
+                        )
+                    )
+                    || (value["op"] == "create"
+                        && value["params"]["profile_id"]
+                            .as_str()
+                            .is_some_and(|profile| self.slot_ops.contains_key(profile)))
                     || value["params"]["surface_id"].as_str().is_some_and(|id| {
                         // [TARGET, unit decision] Explicit Stop may retire a lost human
                         // binding; this grants no input, frames or renewed liveness.
@@ -656,7 +883,9 @@ impl CoreState {
                 }
                 match update {
                     LifecycleUpdate::Created(surface) => {
-                        if surface_id.is_empty()
+                        if self.headless.held
+                            || self.guest_command.held
+                            || surface_id.is_empty()
                             || surface.display.is_empty()
                             || surface.frame.is_some()
                             || self.surfaces.contains_key(surface_id)
@@ -722,6 +951,9 @@ impl CoreState {
                 }
             }
             Input::Connect => {
+                self.headless.uncertain();
+                self.guest_command.uncertain();
+                self.rewind.mark_unknown();
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {
                     // Only a durable Dispatch can have reached the executor.

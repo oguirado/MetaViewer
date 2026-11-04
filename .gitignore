@@ -27,3 +27,6 @@ launch.token
 /.p18b-evidence/
 /.p18c-evidence/
 /.p18f-evidence/
+
+# Local dependency materializations can also be symlinks.
+/ui/node_modules

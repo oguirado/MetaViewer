@@ -1,0 +1,9 @@
+{
+  "schema": "guest_command_request/v0.2",
+  "request_id": "request-test",
+  "op": "create",
+  "params": {
+    "profile_id": "guest-command-arm64-v1"
+  },
+  "unknown_field": true
+}

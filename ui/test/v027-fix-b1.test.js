@@ -1,3 +1,4 @@
+import {unavailableArmCapsules} from '../src/catalog/catalogModel.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -148,6 +149,7 @@ test('F22 busy mode switch keeps a retry confirmation and never removes the old 
 test('F19 late identity choices cannot replace an explicitly edited role',async()=>{
   let settle;
   const c=context(catalog.onCreate,{
+    disabledArmKinds:{get value(){return unavailableArmCapsules(c.props.arm64Capabilities);}},
     props:{visible:true},api:{choices:()=>new Promise(resolve=>{settle=resolve;})},
     buildCreateIntent:()=>({ok:true,intent:{kind:'browser'}}),choiceGeneration:0,
     pendingIntent:ref(null),roleChoice:ref('agent'),roleEdited:ref(false),editedRoleChoice:ref('agent'),roleError:ref(''),

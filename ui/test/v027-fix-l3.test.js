@@ -1,3 +1,4 @@
+import {unavailableArmCapsules} from '../src/catalog/catalogModel.js';
 // [TARGET, unit decision] Exercise actual source continuations with explicit barriers.
 // MV_L3_BASELINE=1 runs the same assertions against the checked-in pre-fix source.
 import test from 'node:test';
@@ -59,6 +60,7 @@ test('B5-29: saved program completion is fenced after reopening and a fresh refr
 test('B5-30: a late valid identity clears only the obsolete NO_IDENTITY alert',async()=>{
  const barrier=deferred();
  const env={buildCreateIntent,api:{choices:()=>barrier.promise},choiceGeneration:0,props:{visible:true},pendingIntent:ref(null),roleChoice:ref('agent'),roleError:ref(''),roleEdited:ref(false),editedRoleChoice:ref('agent'),profileChoices:ref([]),profileChoice:ref(''),choosingRole:ref(false),emit:()=>{throw Error('must not auto-create');}};
+ Object.defineProperty(env,'disabledArmKinds',{get:()=>({value:unavailableArmCapsules(env.props.arm64Capabilities)})});
  Object.defineProperty(env,'matchingProfiles',{get:()=>env.profileChoices});
  const name=find('catalog',n=>ts.isFunctionDeclaration(n) && /await api.choices/.test(n.getText())).match(/function (\w+)/)[1];
  const unit=functions('catalog',[name,'confirmRole'],env);const pending=unit[name]({type:{id:'identity-browser'}});unit.confirmRole();assert.match(env.roleError.value,/NO_IDENTITY/);

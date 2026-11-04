@@ -1,4 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
+import * as guestWorkloadTileModel from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import { installRoleMenuInput, openRoleMenuInput } from './role-menu-input-harness.mjs';
 // INPUT-ARM (FEEDBACK R-INPUT): the operator takes control of a capsule from
 // the wall and immediately clicks and types in it, and always sees the state.
@@ -36,6 +39,13 @@ import { tick, until } from './frame-wait.mjs';
 const APP_SOURCE = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
 const CANVAS_SOURCE = readFileSync(new URL('../src/surfaces/SurfaceCanvas.vue', import.meta.url), 'utf8');
 const VUE_URL = import.meta.resolve('vue');
+/** Preserve ESM named aliases when lowering imports into the closed fixture map. */
+function fixtureBinding(binding) {
+  const value=binding.trim();
+  if(value.startsWith('{'))return value.replace(/\b([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)\b/g,'$1: $2');
+  const namespace=/^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(value);
+  return namespace?namespace[1]:value;
+}
 let serial = 0;
 
 /** Rewrites SFC imports through a closed map; an unmapped specifier fails. */
@@ -43,7 +53,7 @@ function rewriteImports(code, resolve) {
   return code.replace(/^import\s+['"][^'"]+['"];?\s*$/gm, '')
     .replace(/import\s+([\s\S]*?)\s+from\s+(['"])(.*?)\2;?/g, (all, bindings, _q, spec) => {
       if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(VUE_URL));
-      return resolve(bindings.trim(), spec);
+      return resolve(fixtureBinding(bindings), spec);
     });
 }
 
@@ -129,6 +139,9 @@ async function loadApp(source, captured) {
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
     './surfaces/tileScheduler.js': { createTileScheduler },
+    './wall/guestWorkloadTile.js': guestWorkloadTileModel,
+    '../electron/guestCommandValues.js': guestCommandValues,
+    '../electron/rewindValues.js': rewindValues,
   };
   const key = `__inputarm${++serial}`;
   globalThis[key] = deps;

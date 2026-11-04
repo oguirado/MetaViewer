@@ -1,0 +1,38 @@
+{
+  "schema": "rewind_session/v0.2",
+  "workload_id": "workload-one",
+  "generation": 2,
+  "authority_epoch": 2,
+  "owner_id": "actor-one",
+  "authority": "core",
+  "guest_counter": null,
+  "compatibility_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile_id": "rewind-arm64-v1",
+  "backend": "firecracker",
+  "isa": "aarch64",
+  "disk_scope": "immutable-boot-and-ram-workspace",
+  "external_effects_warning": "External effects are not rewound.",
+  "phase": "initializing",
+  "ownership": "held",
+  "pending_request_id": null,
+  "points": [
+    {
+      "schema": "rewind_point/v0.2",
+      "point_id": "point-one",
+      "label": "Before edit",
+      "created_order": 1,
+      "created_mono_ns": 123,
+      "source_generation": 1,
+      "source_authority_epoch": 1,
+      "compatibility_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "state_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "memory_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "state_bytes": 4096,
+      "memory_bytes": 268435456,
+      "counter_value": null,
+      "status": "unavailable",
+      "active_references": 0
+    }
+  ],
+  "last_good_usable": null
+}

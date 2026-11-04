@@ -26,6 +26,9 @@ import { UiButton } from 'capsule-ui-kit/ui';
 import { setKitScheme } from 'capsule-ui-kit/theme';
 import WallWorkspace from './wall/WallWorkspace.vue';
 import DesktopWorkspace from './wall/DesktopWorkspace.vue';
+import {guestWorkloadTile,validGuestWorkloadTile} from './wall/guestWorkloadTile.js';
+import {rewindSnapshot as validRewindSnapshot} from '../electron/rewindValues.js';
+import {capsuleCapabilitiesValid} from '../electron/guestCommandValues.js';
 import {createDesktopState, desktopRows, MAX_DESKTOPS_PER_VIEW} from '../electron/desktopLayout.js';
 import SurfaceCanvas from './surfaces/SurfaceCanvas.vue';
 import { createTileScheduler } from './surfaces/tileScheduler.js';
@@ -61,6 +64,12 @@ let entryTimer=/** @type {ReturnType<typeof setTimeout>|undefined} */(undefined)
 onBeforeUnmount(()=>clearTimeout(entryTimer));
 async function copyEntry(){clearTimeout(entryTimer);entryMessage.value='';try{const result=await (/** @type {any} */(globalThis).metaviewer?.operator)?.entry.copy();entryMessage.value=result?.ok?'Copied':'Copy unavailable';}catch{entryMessage.value='Copy unavailable';}entryTimer=setTimeout(()=>{entryMessage.value='';},2000);}
 const props = defineProps({
+  rewindHost: {type:Object,default:null},
+  rewindPanel: {type:[Object,Function],default:null},
+  guestCommandHost: { type: Object, default: null },
+  guestCommandPanel: { type: [Object,Function], default: null },
+  headlessHost: { type: Object, default: null },
+  headlessPanel: { type: [Object,Function], default: null },
   authorityHost: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createAuthorityAdapter>|null>} */ (Object), default: null },
   terminalBroker: { type: /** @type {import('vue').PropType<ReturnType<typeof import('./core/hostAdapters.js').createTerminalBroker>>} */ (Object), default: null },
   // MVUI9 lane A: reactive capture store built by the entry (lane C
@@ -170,6 +179,53 @@ const nestedMode = resolveNestedMode(props.nestedHost ?? (props.fixture?.key ===
 const launcherOpen = ref(props.fixture?.ui.launcherOpen === true);
 // [TARGET, unit decision] Recheck host availability for every catalog opening.
 // Invalidate outstanding reads on close or host replacement.
+// The preload validates the closed nested session. This view additionally rejects stale or malformed snapshots.
+const validSnapshot=(/** @type {any} */ s)=>s && typeof s==='object' && Object.keys(s).sort().join(',')==='available,busy,code,revision,session,uncertain'
+  && typeof s.available==='boolean' && typeof s.busy==='boolean' && typeof s.uncertain==='boolean' && Number.isSafeInteger(s.revision) && s.revision>=0;
+const guestCommandSnapshot=ref(/** @type {any} */ ({available:false,busy:false,canCancel:false,code:null,revision:0,session:null,uncertain:false,stdout:'',stderr:''}));
+const guestCommandOpen=ref(false);
+const rewindSnapshot=ref(/** @type {any} */({available:false,busy:false,code:null,revision:0,session:null,uncertain:false,point_ages_ms:{},stop_target:null}));
+watch(()=>props.rewindHost,(host,_,cleanup)=>{
+ let active=true;
+ const accept=(/** @type {any} */value)=>{if(active&&validRewindSnapshot(value)&&value.revision>=rewindSnapshot.value.revision)rewindSnapshot.value=value;};
+ const stop=host?.subscribe?.(accept);void host?.status?.().then(accept).catch(()=>{});cleanup(()=>{active=false;stop?.();});
+},{immediate:true});
+async function requestRewind(/** @type {any} */action){try{const value=await props.rewindHost?.request?.(action);if(validRewindSnapshot(value)&&value.revision>=rewindSnapshot.value.revision)rewindSnapshot.value=value;}catch{rewindSnapshot.value={...rewindSnapshot.value,uncertain:true,code:'OUTCOME_UNKNOWN'};}}
+
+const arm64Capabilities=ref(/** @type {any} */ (null));
+const guestWorkloadTiles=computed(()=>{const tile=guestWorkloadTile(guestCommandSnapshot.value);return tile?[tile]:[];});
+watch(()=>props.guestCommandHost,(host,_,cleanup)=>{
+ let active=true;
+ const accept=(/** @type {any} */ value)=>{if(active&&value&&Number.isSafeInteger(value.revision)&&value.revision>=guestCommandSnapshot.value.revision){guestCommandSnapshot.value=value;if(value.session||value.uncertain)guestCommandOpen.value=true;}};
+ const stop=host?.subscribe?.(accept);void host?.status?.().then(accept).catch(()=>{});cleanup(()=>{active=false;stop?.();});
+},{immediate:true});
+function showGuestConsole(){selectGlobalView('agent');void nextTick(()=>{const tile=guestWorkloadTiles.value[0];if(tile)wall.value?.revealWorkload?.(tile.id);});}
+async function guestCommandAction(/** @type {any} */ action){
+ guestCommandOpen.value=true;
+ try{const result=await props.guestCommandHost?.request?.(action);if(result&&result.revision>=guestCommandSnapshot.value.revision)guestCommandSnapshot.value=result;}
+ catch{guestCommandSnapshot.value={...guestCommandSnapshot.value,uncertain:true,code:'OUTCOME_UNKNOWN'};}
+}
+const headlessSnapshot=ref(/** @type {any} */ ({available:false,busy:false,code:null,revision:0,session:null,uncertain:false}));
+const headlessOpen=ref(false);
+watch(()=>props.headlessHost,(host,_,cleanup)=>{
+  let active=true;
+  const accept=(/** @type {any} */ s)=>{if(active && validSnapshot(s) && s.revision>=headlessSnapshot.value.revision){headlessSnapshot.value=s;if(s.session || s.uncertain)headlessOpen.value=true;}};
+  const stop=host?.subscribe?.(accept);
+  void host?.status?.().then(accept).catch(()=>{});
+  cleanup(()=>{active=false;stop?.();});
+},{immediate:true});
+async function headlessAction(/** @type {string} */ op,/** @type {number|undefined} */ n=undefined){
+  const s=headlessSnapshot.value.session;
+  const action=op==='create'?{op}:{op,workload_id:s?.workload_id,generation:s?.generation,...(op==='run'?{n}:{})};
+  headlessOpen.value=true;
+  try {const result=await props.headlessHost?.request?.(action);if(validSnapshot(result) && result.revision>=headlessSnapshot.value.revision)headlessSnapshot.value=result;}
+  catch {headlessSnapshot.value={...headlessSnapshot.value,uncertain:true,code:'OUTCOME_UNKNOWN'};}
+}
+function runHeadlessJob(/** @type {number} */ n){void headlessAction('run',n);}
+watch(()=>[launcherOpen.value,props.guestCommandHost],async(_,__,cleanup)=>{
+ let current=true;cleanup(()=>{current=false;});
+ try{const result=await props.guestCommandHost?.capabilities?.();if(current&&capsuleCapabilitiesValid(result))arm64Capabilities.value=result;}catch{/* Existing unavailable state remains disabled. */}
+},{immediate:true});
 const vmAvailable = ref(false);
 watch(() => [launcherOpen.value, props.authorityHost], async (_, __, onCleanup) => {
   let current = true;
@@ -900,6 +956,13 @@ function onCreateCapsule(intent, settle) {
   }
   const propose = props.authorityHost?.propose;
   const body = /** @type {any} */ (intent);
+  if (body?.kind === 'microvm') {
+    selectGlobalView('agent');
+    if(guestWorkloadTiles.value.length){launcherOpen.value=false;showGuestConsole();return;}
+    if(Object.keys(body).every(k=>['kind','type','placement'].includes(k)) && guestCommandSnapshot.value.available){launcherOpen.value=false;void guestCommandAction({op:'create'});return;}
+    if(Object.keys(body).every(k=>['kind','type','placement'].includes(k)) && headlessSnapshot.value.available) {launcherOpen.value=false;void headlessAction('create');}
+    return;
+  }
   if (body?.kind === 'vm') {
     const valid = Object.keys(body).every(key => ['kind','type','placement'].includes(key))
       && (body.type === undefined || body.type === 'create-capsule')
@@ -1711,6 +1774,7 @@ onMounted(() => {
           </section>
         </div>
         <nav aria-label="Workspace tools" class="mv-navigation-tools">
+          <UiButton v-if="guestWorkloadTiles.length" id="shell-microvm-console" data-semantic-anchor="microvm/console/show" :label="railOpen ? 'MicroVM console' : 'VM'" aria-label="MicroVM console" title="MicroVM console" @click="showGuestConsole" />
           <UiButton id="shell-identities" data-semantic-anchor="identities/open" :label="railOpen ? 'Identities' : 'ID'" aria-label="Identities" title="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
           <UiButton id="shell-settings" data-semantic-anchor="settings/open" :label="railOpen ? 'Settings' : '⚙'" aria-label="Settings" title="Settings" :aria-expanded="settingsOpen" @click="toggleSettings()" />
           <UiButton v-if="props.fixture" id="shell-creative" data-semantic-anchor="creative/open" :label="railOpen ? 'Storyboard' : '▦'" aria-label="Storyboard" title="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative()" />
@@ -1763,10 +1827,11 @@ onMounted(() => {
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :scroll-enabled="!surface.hostWindow" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </article>
         </section>
-        <DesktopWorkspace v-else :hidden="creativeOpen" :clipboard="props.clipboard" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
+        <DesktopWorkspace v-else :hidden="creativeOpen" :clipboard="props.clipboard" :workload-tiles="guestWorkloadTiles" :validate-workload-tile="validGuestWorkloadTile" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
+          <template #workload="{workload}"><component :is="guestCommandPanel" v-if="guestCommandPanel" :snapshot="workload.snapshot" :rewind="rewindSnapshot" :rewind-panel="rewindPanel" @action="guestCommandAction" @rewind-action="requestRewind" /></template>
           <template #surface="{ surface, capsuleId, desktopActive }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
             <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @stored-data="openStoredData" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
@@ -1781,7 +1846,7 @@ onMounted(() => {
             </template>
           </template>
         </DesktopWorkspace>
-        <EmptyWallView :hint="otherCapsuleView ? `Your running capsules are in the ${otherCapsuleView === 'agent' ? 'Agents' : 'Humans'} view.` : undefined" v-if="(!visibleRows.length || allTilesClosed) && !nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" @add-capsule="launcherOpen = true">
+        <EmptyWallView :hint="otherCapsuleView ? `Your running capsules are in the ${otherCapsuleView === 'agent' ? 'Agents' : 'Humans'} view.` : undefined" v-if="(!visibleRows.length || allTilesClosed) && !guestWorkloadTiles.length && !nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" @add-capsule="launcherOpen = true">
           <template v-if="otherCapsuleView" #action>
             <UiButton id="empty-wall-other-view" data-semantic-anchor="wall/other-view"
               :label="`Go to ${otherCapsuleView === 'agent' ? 'Agents' : 'Humans'}`"
@@ -1832,7 +1897,9 @@ onMounted(() => {
       </div>
     </div>
     <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :initial-profile="storedDataProfile" :open-program="createProgramCapsule" @close="identitiesOpen=false; storedDataProfile=''" @open-identity="openIdentityChoice" />
-    <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" :vm-available="vmAvailable" @create="onCreateCapsule" />
+    <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" :arm64-capabilities="arm64Capabilities" :vm-available="vmAvailable" :guest-command-available="guestCommandSnapshot.available" :headless-available="(guestCommandSnapshot.available && !guestCommandSnapshot.session && !guestCommandSnapshot.uncertain) || (headlessSnapshot.available && !headlessSnapshot.session && !headlessSnapshot.uncertain)" @create="onCreateCapsule" />
+
+    <component :is="headlessPanel" v-if="headlessOpen && headlessPanel && !nestedMode.displayOnly" :snapshot="headlessSnapshot" @run="runHeadlessJob" @stop="headlessAction('stop')" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>
 </template>

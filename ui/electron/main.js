@@ -36,7 +36,8 @@ import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
-import { createAdapterLauncher, findForbiddenEnv, redactAdapterDiagnostic } from './coreLauncher.js';
+import {requireGuestCommandMode} from './guestCommandProfile.js';
+import { createAdapterLauncher, requireHeadlessMode, findForbiddenEnv, redactAdapterDiagnostic } from './coreLauncher.js';
 
 // [TARGET, unit decision] When MV_SRF_BIN_DIR is configured, supervised adapter
 // failure aborts boot fail-closed with a typed ADAPTER_* MainError before
@@ -2480,6 +2481,9 @@ export async function bootProductionMain(handles) {
     throw error;
   }
   if (!retail.nested) {
+    let headlessOnly=false;
+    try {headlessOnly=requireGuestCommandMode(/** @type {NodeJS.ProcessEnv} */ (typed.env)) || requireHeadlessMode(/** @type {NodeJS.ProcessEnv} */ (typed.env));}
+    catch {await unwind();fail('HEADLESS_PROFILE_INVALID','The configured MicroVM profile is invalid.');}
     /** @type {import('./coreLauncher.js').CoreStatus | null} */
     let coreStatus = null;
     try {
@@ -2491,10 +2495,14 @@ export async function bootProductionMain(handles) {
       await unwind();
       fail('CORE_UNAVAILABLE', 'core did not reach live');
     }
+    if (adapter === null && headlessOnly) {
+      await unwind(); fail('ADAPTER_ABSENT','The configured MicroVM requires the daemon adapter.');
+    }
     if (adapter !== null) {
       const envRec = /** @type {Record<string, unknown>} */ (typed.env);
       const srfRequested =
-        typeof envRec.MV_SRF_BIN_DIR === 'string' && envRec.MV_SRF_BIN_DIR.length > 0;
+        (typeof envRec.MV_SRF_BIN_DIR === 'string' && envRec.MV_SRF_BIN_DIR.length > 0)
+        || headlessOnly;
       /** @type {import('./coreLauncher.js').AdapterStatus | null} */
       let adapterStatus = null;
       /** @type {unknown} */
@@ -2551,6 +2559,8 @@ export async function bootProductionMain(handles) {
         fail(adapterCode, refusal);
       }
       if (
+        !headlessOnly &&
+        envRec.MV_ARM64_CAPSULES !== '1' &&
         adapterStartError === null &&
         adapterStatus !== null &&
         adapterStatus.availability === 'live' &&

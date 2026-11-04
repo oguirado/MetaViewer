@@ -764,6 +764,10 @@ export function createWallWorkspaceController(options = {}) {
       if (!api?.getPanel(panelId)) return [];
       return [{id:panelId,...windows?.state(panelId)}];
     });
+    for(const row of workloadRows()){
+      const panelId=WORKLOAD_PANEL_PREFIX+row.id;
+      if(api?.getPanel(panelId))list.push({id:panelId,...windows?.state(panelId)});
+    }
     if (panelOrder.length > 1) {
       list.sort((a, b) => {
         const ia = panelOrder.indexOf(a.id), ib = panelOrder.indexOf(b.id);

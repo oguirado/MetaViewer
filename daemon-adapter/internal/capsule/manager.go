@@ -67,10 +67,18 @@ type ViewBackend interface {
 	Stop(context.Context, string) error
 }
 
+// NativeInventory is host-owned allocation custody; nil preserves legacy flows.
+type NativeInventory interface {
+	Pending(string, string, string, string) error
+	Bound(context.Context, string, string, string) error
+	Closed(context.Context, string) error
+	Unknown(string) error
+}
 type Config struct {
 	// [TARGET, unit decision] Reserved launcher identity from MV_SRF_LIVE_PROFILE.
 	SlotLiveProfile string
 	Slots           SlotStore
+	Inventory       NativeInventory
 	BinDir          string
 	// NetModes is trusted startup knowledge; absence preserves legacy argv/env.
 	NetModes                    []string
@@ -112,6 +120,7 @@ type Window struct {
 	URL   string `json:"url"`
 }
 type Binding struct {
+	InventoryID                                               string
 	HostXpra                                                  *hostXpraProcess
 	Role                                                      string
 	Surface                                                   Surface
@@ -989,6 +998,18 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	}
 	m.creates[q.ProfileID] = pending
 	defer delete(m.creates, q.ProfileID)
+	if m.cfg.Inventory != nil {
+		if e := m.cfg.Inventory.Pending(id, q.ProfileID, p.NativeKind, pending.Container); e != nil {
+			return nil, e
+		}
+	}
+	if m.cfg.Inventory != nil {
+		defer func() {
+			if err != nil {
+				_ = m.cfg.Inventory.Unknown(id)
+			}
+		}()
+	}
 	out, e := m.execute(ctx, p, args, nil)
 	var refused *preSpawnRefusal
 	if errors.As(e, &refused) {
@@ -1003,7 +1024,7 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if e != nil && p.NativeKind != "holdings" && errors.As(e, &native) && native.Code == "unavailable" {
 		e = fault("identity_unavailable", detailIdentityUnavailable)
 	}
-	b := Binding{Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
+	b := Binding{InventoryID: id, Surface: Surface{Schema: "surface/" + version, SurfaceID: id, Kind: p.Kind, Display: p.Display, Geometry: q.Geometry, State: "active", Visibility: "unfolded", Control: "agent", ProfileID: q.ProfileID}, NativeKind: p.NativeKind, Program: p.Program}
 	// Recover only the cleanup identity from syntactically valid bounded JSON.
 	// Readiness validation below remains closed and authoritative for admission.
 	var cleanup struct {
@@ -1136,6 +1157,11 @@ func (m *Manager) create(ctx context.Context, r Request, version string) (events
 	if b.Role == "" {
 		b.Role = "agent"
 	}
+	if m.cfg.Inventory != nil {
+		if e := m.cfg.Inventory.Bound(ctx, id, b.Container, b.RunID); e != nil {
+			return nil, e
+		}
+	}
 	if err := m.publishHumanBinding(b); err != nil {
 		return nil, err
 	}
@@ -1211,6 +1237,15 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 // An unavailable stop settles only previously proven absence; Holdings also
 // requires its independent ownership/removal verifier. Unknown outcomes retain the slot.
 func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
+	if m.cfg.Inventory != nil && b.InventoryID != "" {
+		defer func() {
+			if err == nil {
+				err = m.cfg.Inventory.Closed(ctx, b.InventoryID)
+			} else {
+				_ = m.cfg.Inventory.Unknown(b.InventoryID)
+			}
+		}()
+	}
 	if b.NativeKind == "host-xpra" {
 		if err := b.HostXpra.stop(); err != nil {
 			return err

@@ -1,3 +1,4 @@
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
@@ -20,7 +21,7 @@ export async function loadSfc(path, deps) {
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, spec) => {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__creativeModules.get(${key})[${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__creativeModules.get(${key})[${JSON.stringify(spec)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#creative-${key}`)).default;
 }

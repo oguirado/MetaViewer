@@ -1,0 +1,53 @@
+{
+  "schema": "capsule_envelope/v0.2",
+  "msg_id": "guest-command-fixture",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "fixture-from"
+  },
+  "to": {
+    "component": "agent",
+    "instance": "fixture-to"
+  },
+  "session_id": "fixture-session",
+  "seq": 1,
+  "nonce": "fixture-nonce",
+  "body": {
+    "schema": "guest_command_event/v0.2",
+    "event_id": "event-fixture",
+    "request_id": "request-fixture",
+    "reservation_id": "reservation-fixture",
+    "owner_id": "actor-fixture",
+    "session": {
+      "schema": "guest_command_session/v0.2",
+      "workload_id": "workload-fixture",
+      "generation": 1,
+      "owner_id": "actor-fixture",
+      "profile_id": "guest-command-arm64-v1",
+      "backend": "firecracker",
+      "isa": "aarch64",
+      "phase": "starting",
+      "ownership": "held",
+      "jobs_started": 0,
+      "job": {
+        "job_id": "job-fixture",
+        "state": "running",
+        "exit_code": 0,
+        "signal": 1,
+        "stdout_bytes": 0,
+        "stderr_bytes": 0,
+        "output_complete": false
+      },
+      "controls": {
+        "cancel": null,
+        "stop": null
+      }
+    },
+    "event": "refused",
+    "data": {
+      "op": "run",
+      "code": "INVALID"
+    }
+  }
+}

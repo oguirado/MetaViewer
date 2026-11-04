@@ -2,6 +2,8 @@
 
 For current VM/MicroVM limits and the proposed launch flow, see the [VM and MicroVM roadmap](VM_MICROVM_ROADMAP.md).
 
+The ARM64 integration candidate documents [verified local capsule setup](docs/ARM64_CAPSULE_SETUP.md): graphical VM and MicroVM command console use external, hash-checked local assets. Full packaged acceptance remains a separate release gate.
+
 For refusal codes and source-backed next steps, see [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
 
 After installation, follow the [Judge tour](docs/JUDGE_TOUR.md) with your AI.
