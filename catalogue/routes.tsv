@@ -158,6 +158,7 @@ browser-ebb6270cc6f8	changes/unreleased/browser-goal-compiled-detector.md
 browser-71ef528e2685	changes/unreleased/browser-goal-compiled.md
 browser-e67161649fc2	changes/unreleased/browser-goal-model-keepalive.md
 browser-goal.md	changes/unreleased/browser-goal.md
+capture-58b9f2666153	changes/unreleased/capture-panel-access.md
 changel-6ee9fc48ce48	changes/unreleased/changelog-fragments.md
 cipacka-468d8ecfdb15	changes/unreleased/ci-packaged-display-arm64.md
 cipacka-ec89db0c8875	changes/unreleased/ci-packaged-display.md
@@ -165,6 +166,7 @@ ciporta-ba0238b657a7	changes/unreleased/ci-portable-arm-fixtures.md
 compact-9378a8397e9e	changes/unreleased/compact-capsule-chrome.md
 compile-238480708e01	changes/unreleased/compiled-browser-entries.md
 desktop-hidden.md	changes/unreleased/desktop-hidden.md
+desktop-05bc81c3745b	changes/unreleased/desktop-launcher-validation.md
 display-polish.md	changes/unreleased/display-polish.md
 display-pool-slot.md	changes/unreleased/display-pool-slot.md
 docs-audit.md	changes/unreleased/docs-audit.md
@@ -234,6 +236,7 @@ release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
 rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.md
 routed-map.md	changes/unreleased/routed-map.md
 sidebar-74e83dfe487d	changes/unreleased/sidebar-entry-cleanup.md
+termina-d99d31338446	changes/unreleased/terminal-input-controls.md
 termina-ea00cc828bad	changes/unreleased/terminal-persist-copy-paste.md
 termina-c004f7723c0f	changes/unreleased/terminal-workflow-program-identities.md
 tree-display-names.md	changes/unreleased/tree-display-names.md

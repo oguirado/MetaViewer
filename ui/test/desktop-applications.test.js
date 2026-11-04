@@ -4,12 +4,12 @@ import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promis
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { desktopEntry, desktopApplications } from '../electron/desktopApplications.js';
-const entry = extra => '\n[Desktop Entry]\nType=Application\nName=Text Editor\nExec=gedit --new-window %U\n'+extra;
-test('desktop entries admit only the first executable token and no hidden/terminal wrappers',()=>{
+const entry = extra => '\n[Desktop Entry]\nType=Application\nName=Text Editor\nExec=gedit %U\n'+extra;
+test('desktop entries admit binary-only launchers and file placeholders, never dropped arguments',()=>{
   assert.equal(desktopEntry(entry('')).binary,'gedit');
   assert.equal(desktopEntry('\n[Desktop Entry]\nType=Application\nName=Editor\nExec="/opt/my editor" %f').binary,'/opt/my editor');
   for(const extra of ['Hidden=true','NoDisplay=true','Terminal=true','Terminal=TRUE','Terminal=1']) assert.equal(desktopEntry(entry(extra)),null);
-  for(const exec of ['env X=1 gedit','sh -c gedit','%f','"broken']) assert.equal(desktopEntry(entry('').replace('gedit --new-window %U',exec)),null);
+  for(const exec of ['env X=1 gedit','sh -c gedit','%f','"broken','gedit --new-window %U','flatpak run org.gimp.GIMP','snap run editor','gedit %i','gedit %%']) assert.equal(desktopEntry(entry('').replace('gedit %U',exec)),null);
   assert.equal(desktopEntry(entry('')).icon,'');
 });
 test('host inventory masks hidden system entries, resolves availability, and remembers only own successful launches',async()=>{
@@ -45,4 +45,9 @@ test('local SVG icons allow internal paint references and refuse external resour
   await writeFile(join(icons,'editor.svg'),'<svg xmlns="http://www.w3.org/2000/svg" onload="bad()"/>');
   assert.equal((await make().list()).apps[0].icon,'');
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('desktop names use the bounded display-label rules and reject C1 and bidi controls',()=>{
+ for(const name of ['Bad\u0085name','Bad\u009bname','Bad\u202ename','Bad\u2066name','Bad\u007fname','x'.repeat(81)]) assert.equal(desktopEntry(entry('').replace('Name=Text Editor','Name='+name)),null);
+ assert.equal(desktopEntry(entry('').replace('Name=Text Editor','Name=Éditeur 文書')).name,'Éditeur 文書');
 });

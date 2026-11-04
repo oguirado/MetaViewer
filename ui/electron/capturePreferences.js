@@ -1,6 +1,6 @@
 // Host-only capture preferences, separate from the frozen four-key settings.
 import { openSync, readSync, closeSync, fstatSync, realpathSync, statSync, constants } from 'node:fs';
-import { open, mkdir, rename, unlink, statfs, readFile } from 'node:fs/promises';
+import { open, mkdir, rename, unlink, statfs, readFile, link } from 'node:fs/promises';
 import { join, isAbsolute, relative, sep, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
@@ -58,17 +58,20 @@ export async function copyScreenshotArchive(grant,folder,item) {
   if(!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(item.id)||!/^[a-f0-9]{64}$/.test(item.sha256)||!Number.isSafeInteger(item.bytes)||item.bytes<1||item.bytes>16*1024*1024)throw Error('Invalid exported screenshot.');
   const name=`${item.id}-${item.sha256}.tar`;
   const source=await open(join(grant,name),constants.O_RDONLY|constants.O_NOFOLLOW);
-  let dir,target,created=false;
+  let dir,target,temp;
   try {
     const st=await source.stat();if(!st.isFile()||st.uid!==process.getuid?.()||st.size!==item.bytes)throw Error('Exported screenshot is unavailable.');
     const bytes=Buffer.alloc(item.bytes+1);let bytesRead=0;
     while(bytesRead<bytes.length){const part=await source.read(bytes,bytesRead,bytes.length-bytesRead,bytesRead);if(!part.bytesRead)break;bytesRead+=part.bytesRead;}
     if(bytesRead!==item.bytes||createHash('sha256').update(bytes.subarray(0,bytesRead)).digest('hex')!==item.sha256)throw Error('Screenshot verification failed.');
     folder=validateCaptureFolder(folder);dir=await open(folder,constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW);const before=await dir.stat();
-    target=await open(`/proc/self/fd/${dir.fd}/${name}`,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);created=true;
+    temp=`/proc/self/fd/${dir.fd}/.mv-shot-${randomUUID()}`;
+    target=await open(temp,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600);
     await target.writeFile(bytes.subarray(0,bytesRead));await target.sync();const after=statSync(folder);
-    if(before.dev!==after.dev||before.ino!==after.ino)throw Error('Screenshot folder changed.');await dir.sync();created=false;
-  } finally {await target?.close();if(created&&dir)await unlink(`/proc/self/fd/${dir.fd}/${name}`).catch(()=>{});await dir?.close();await source.close();}
+    if(before.dev!==after.dev||before.ino!==after.ino)throw Error('Screenshot folder changed.');
+    // Publish only a complete, synced archive; link is atomic and never replaces.
+    await link(temp,`/proc/self/fd/${dir.fd}/${name}`);await dir.sync();
+  } finally {await target?.close();if(temp)await unlink(temp).catch(()=>{});await dir?.close();await source.close();}
 }
 /** @param {any} options */
 export function capturePreferencesHost({file,env,chooseDirectory,notify=()=>{}}) {

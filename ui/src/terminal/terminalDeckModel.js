@@ -1,5 +1,5 @@
 import {AGENT_PROFILE_IDS,AGENT_START_TIMEOUT_MS,agentPromptState} from './agentPromptGate.js';
-import { assertSafeWorkflowPrompt, workflowPrompt } from './workflowPrompts.js';
+import { assertSafeWorkflowPrompt, assertSafeWorkflowIdentity, workflowPrompt } from './workflowPrompts.js';
 /**
  * OpenFresnel-style Terminal Deck model and controller for MetaViewer (P18h).
  *
@@ -1304,7 +1304,7 @@ export function createTerminalDeckController(options = {}) {
    */
   async function launchCustomCli(rawCommand, launchOpts = {}) {
     const commandText = typeof rawCommand === 'string' ? rawCommand.trim() : '';
-    if (!commandText || commandText.includes('\0') || commandText.includes('\r') || commandText.includes('\n')) {
+    if (!commandText || /[\x00-\x1f\x7f-\x9f]/.test(rawCommand)) {
       errorCode = 'COMMAND_NOT_ALLOWED';
       errorMessage = 'COMMAND_NOT_ALLOWED: Enter a single-line command.';
       notify();
@@ -1709,7 +1709,7 @@ export function createTerminalDeckController(options = {}) {
    * @param {string} kind @param {string} identityLine @param {string|null} targetSlotId */
   async function useWorkflowPrompt(kind, identityLine = '', targetSlotId = null) {
     const text = assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
-      '<operator-pasted capsule identity line>', () => identityLine || '<operator-pasted capsule identity line>'));
+      '<operator-pasted capsule identity line>', () => assertSafeWorkflowIdentity(identityLine) || '<operator-pasted capsule identity line>'));
     if (targetSlotId !== null) {
       const slot = findSlot(targetSlotId)?.slot;
       if (!identityLine || !slot || slot.status !== 'running' || !slot.sessionId) {
@@ -1728,7 +1728,7 @@ export function createTerminalDeckController(options = {}) {
    * @param {string} profileId @param {()=>boolean} [stillCurrent] */
   async function prepareAgentPrompt(kind,identityLine,slotId,profileId,stillCurrent=()=>true) {
     const text=assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
-      '<operator-pasted capsule identity line>',()=>identityLine));
+      '<operator-pasted capsule identity line>',()=>assertSafeWorkflowIdentity(identityLine)));
     const sessionId=findSlot(slotId)?.slot.sessionId;
     const fail=(/** @type {string} */ message)=>{toastMessage=message;notify();return {ok:false,pasted:false};};
     if(!identityLine || !AGENT_PROFILE_IDS.includes(profileId) || !sessionId) return fail('Agent terminal unavailable; nothing pasted.');
@@ -2088,7 +2088,7 @@ export function createTerminalDeckController(options = {}) {
     useWorkflowPrompt,
     prepareAgentPrompt,
     copyWorkflowPrompt: (/** @type {string} */ kind, /** @type {string} */ identityLine = '') => bootstrap(assertSafeWorkflowPrompt(
-      workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => identityLine || '<operator-pasted capsule identity line>'),
+      workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => assertSafeWorkflowIdentity(identityLine) || '<operator-pasted capsule identity line>'),
     )),
     dismissError,
     handleKeyDown,

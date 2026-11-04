@@ -302,6 +302,7 @@ onMounted(async () => {
         for(const row of props.workloadTiles)ids.add(row.id);
         for (const id of Object.keys(state.value.assignments)) if (!ids.has(id)) {
           delete state.value.assignments[id];
+          delete state.value.labels?.[id];
           for (const seen of revealed.values()) seen.delete(id);
         }
         cleanLayouts(state.value);
@@ -321,8 +322,18 @@ onBeforeUnmount(() => {
 });
 function forgetSurface(/** @type {string} */ id) {
   delete state.value.assignments[id];
+  delete state.value.labels?.[id];
   for (const seen of revealed.values()) seen.delete(id);
   cleanLayouts(state.value);
+}
+/** Retire identity presentation data durably before deleting its reusable id.
+ * A failed identity delete may lose this alias, but cannot transfer it to a new account.
+ * @param {string} id */
+async function forgetIdentity(id) {
+  if(!loaded.value || readOnly)throw Error('LAYOUT_SAVE_REFUSED');
+  delete state.value.labels?.[id];
+  for(const view of VIEWS)for(const desktop of state.value.views[view].desktops)delete desktop.identityCells?.[id];
+  await persist();announce();
 }
 /** @param {string} id */
 function revealWorkload(id){const home=homeOf(id);if(!home)return;state.value.activeView=home.view;state.value.views[home.view].active=home.desktop;announce();return walls.get(keyOf(home.view,home.desktop))?.revealWorkload?.(id);}
@@ -348,7 +359,7 @@ async function renameCapsule(id,value) {
   pendingNames.add(pendingKey);
   try {await persist();announce();return true;} catch {if(previous===undefined)delete state.value.labels?.[key];else if(state.value.labels)state.value.labels[key]=previous;announce();return false;} finally {pendingNames.delete(pendingKey);}
 }
-defineExpose({renameDesktop,renameCapsule,revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
+defineExpose({forgetIdentity,renameDesktop,renameCapsule,revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
 </script>
 <template>
   <div class="mv-desktop-workspace" :hidden="$attrs.hidden === true">

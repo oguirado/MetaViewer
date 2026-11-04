@@ -32,7 +32,7 @@ const BINDING_ACQUISITION_CAUSES = Object.freeze([
 
 import { spawn as nodeSpawn } from 'node:child_process';
 import { constants as fsConstants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, realpathSync, statSync } from 'node:fs';
-import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
@@ -1754,6 +1754,8 @@ export function createLayoutBridge({directory,app} = {}) {
         const file = await fs.open(temp,'wx',0o600);
         try { await file.writeFile(value); await file.sync(); } finally { await file.close(); }
         await fs.rename(temp,path);
+        const directory = await fs.open(dirname(path), fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW);
+        try { await directory.sync(); } finally { await directory.close(); }
         return true;
       } finally { await fs.rm(temp,{force:true}); }
     } }),

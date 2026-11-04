@@ -409,3 +409,15 @@ test('an in-flight capsule name write cannot be superseded before it settles',as
   assert.equal(JSON.parse(raw).labels.h,'After');
  },undefined,null,{storage:{readRaw:async()=>null,writeAtomic:async value=>{if(hold)await new Promise(resolve=>{release=resolve;});raw=value;}}});
 });
+
+test('identity deletion retires saved aliases and cells while stopping preserves identity aliases',async()=>{
+ const state=model.createDesktopState();state.labels={'identity-a':'Old account',h:'Transient',other:'Keep'};
+ state.views.human.desktops[0].identityCells={'identity-a':{col:0,row:0},other:{col:1,row:0}};
+ await workspaceFixture(async({vm,saved})=>{
+  vm.forgetSurface('h');await tick();assert.equal(saved.at(-1).labels.h,undefined);assert.equal(saved.at(-1).labels['identity-a'],'Old account');
+  await vm.forgetIdentity('identity-a');await tick();const latest=saved.at(-1);
+  assert.equal(latest.labels['identity-a'],undefined);assert.equal(latest.labels.other,'Keep');
+  assert.equal(latest.views.human.desktops[0].identityCells['identity-a'],undefined);
+  assert.deepEqual(latest.views.human.desktops[0].identityCells.other,{col:1,row:0});
+ },undefined,JSON.stringify(state));
+});

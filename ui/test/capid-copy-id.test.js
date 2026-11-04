@@ -339,6 +339,7 @@ async function panelOracle(Panel) {
     assert.equal(button.props.disabled, false);
     assert.notEqual(button.props.tabindex, -1);
     assert.equal(button.props['aria-label'], `Copy ID for AI: capsule ${SURFACE}`);
+    assert.equal(button.props.title, `Copy ID for AI: capsule ${SURFACE}`);
     assert.equal(textOf(button), 'Copy ID for AI');
     assert.equal(button.props['data-semantic-anchor'], `tile-${SURFACE}-copy-id`);
     close();

@@ -213,7 +213,7 @@ function onShotClick() {
         class="mv-tile-capid__copy"
         :data-semantic-anchor="tileCopyIdAnchor"
         :aria-label="capId.copyName"
-        :title="copyDisabledReason || capId.hover"
+        :title="copyDisabledReason || capId.copyName"
         :disabled="copyDisabled"
         :aria-busy="copyState === 'copying' ? 'true' : undefined"
         :data-unavailable-reason="copyDisabledReason || undefined"

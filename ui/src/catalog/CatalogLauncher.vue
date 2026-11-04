@@ -365,7 +365,7 @@ function onClose() {
     aria-label="Desktop window capsule"
   >
     <h2>Desktop window</h2>
-    <label for="shell/new-capsule/window-search">Search open windows</label>
+    <label for="shell/new-capsule/window-search">Search windows</label>
     <input
       id="shell/new-capsule/window-search"
       data-semantic-anchor="dialog/new-capsule/window-search"

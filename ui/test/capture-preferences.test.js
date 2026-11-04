@@ -1,4 +1,6 @@
 import test from 'node:test';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,readFile,writeFile,stat,readdir,rm,symlink,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -56,4 +58,21 @@ test('disk mode exports a sealed screenshot through the selected screenshot rout
  const bridge=installCaptureBridge({ipcMain:{handle:(k,v)=>handlers.set(k,v),removeHandler:k=>handlers.delete(k)},contents,core,env:{MV_RECORDING_DESTINATION:f.recordings},capturePreferences:{shouldSave:()=>true,routeExport:async(...args)=>routes.push(args),saved:(...args)=>outcomes.push(args)}});t.after(()=>bridge.dispose());
  const reply=await handlers.get('metaviewer:capture.screenshot')({sender:contents,senderFrame:frame},{schema:'capture_request/v1',request_id:'shot',surface_id:'surface-one'});
  assert.deepEqual(reply,{ok:true,shot});assert.deepEqual(calls.map(c=>c.method),['screenshot','export']);assert.equal(routes[0][1],'shot');assert.deepEqual(outcomes,[[shot.id,true,'']]);assert.ok(!JSON.stringify(calls).includes(f.root));
+});
+
+test('a killed screenshot copy never publishes a partial final archive and retry succeeds',async t=>{
+ const f=await fixture(t),bytes=Buffer.alloc(65536,42),digest=createHash('sha256').update(bytes).digest('hex');
+ const item={id:'interrupted-shot',bytes:bytes.length,sha256:digest},name=`${item.id}-${digest}.tar`;
+ await writeFile(join(f.recordings,name),bytes,{mode:0o600});
+ const code=`import {open} from 'node:fs/promises';
+ import {copyScreenshotArchive} from ${JSON.stringify(new URL('../electron/capturePreferences.js',import.meta.url).href)};
+ const h=await open(${JSON.stringify(join(f.root,'probe'))},'w');const proto=Object.getPrototypeOf(h);await h.close();
+ proto.writeFile=async function(bytes){await this.write(bytes.subarray(0,8));process.stdout.write('partial\\n');await new Promise(()=>{});};
+ await copyScreenshotArchive(${JSON.stringify(f.recordings)},${JSON.stringify(f.shots)},${JSON.stringify(item)});`;
+ const child=spawn(process.execPath,['--input-type=module','-e',code],{stdio:['ignore','pipe','pipe']});
+ t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');});
+ const ready=await Promise.race([once(child.stdout,'data'),once(child,'exit').then(()=>{throw Error('copy exited before interruption');}),new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error('copy interruption timed out')),3000);timer.unref();})]);
+ assert.match(String(ready[0]),/partial/);child.kill('SIGKILL');await once(child,'exit');
+ await assert.rejects(stat(join(f.shots,name)),{code:'ENOENT'});
+ await copyScreenshotArchive(f.recordings,f.shots,item);assert.deepEqual(await readFile(join(f.shots,name)),bytes);
 });
