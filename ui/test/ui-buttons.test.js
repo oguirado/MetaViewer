@@ -72,6 +72,16 @@ test('refused recording cannot supply a prompt; malformed URLs and output refuse
   const started=f.service.request('demo.start',[{identity:'account',demo:'demo'}]);f.children[0].stdout.emit('data',Buffer.from('{"url":"https://remote.example/"}\n'));assert.equal((await started).ok,false);
   const check=f.service.request('demo.check',[{site:'site'}]);close(f.children[1],{},6);assert.deepEqual(await check,{ok:false,code:'DEMO_REFUSED'});
 });
+test('check keeps the known locate refusal across host and preload, without forwarding authored text',async()=>{
+  for(const code of ['ACTING_STEP_LOCATE_WAIT_REQUIRED','untrusted arbitrary error']) {
+    const f=fixture();
+    const api=createOperatorFacade({invoke:(_channel,args)=>f.service.request('demo.check',args)});
+    const result=api.demo.check({site:'site'});
+    f.children[0].stdout.emit('data',Buffer.from(JSON.stringify({schema:'metaviewer.demo/v1',ok:false,error:code,hint:'untrusted text'})+'\n'));
+    f.children[0].emit('close',6);
+    assert.deepEqual(await result,{ok:false,code:code==='ACTING_STEP_LOCATE_WAIT_REQUIRED'?code:'DEMO_REFUSED'});
+  }
+});
 test('preload exposes closed buttons and nested mode refuses before transport',async()=>{
   const calls=[];const api=createOperatorFacade({invoke:async(...args)=>{calls.push(args);return {ok:true};}});
   await api.entry.copy();assert.deepEqual(calls,[['metaviewer:entry.copy',[]]]);await assert.rejects(api.entry.copy({path:'evil'}));
@@ -115,4 +125,34 @@ test('failure after announcement clears active after exit without another Stop',
   t.mock.timers.tick(10000);await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(await f.service.request('demo.stop',[]),{ok:false,code:'DEMO_NOT_RECORDING'});
   await f.service.dispose();
+});
+
+test('DEMO-HOME-CHECK: accept the actual admitted-home tool result and refuse builtin substitution',async()=>{
+  for(const source of ['home','builtin']) {
+    const f=fixture();const checked=f.service.request('demo.check',[{site:'site'}]);
+    close(f.children[0],{site:'site',validated:true,source});
+    assert.deepEqual(await checked,source==='home'?{ok:true}:{ok:false,code:'DEMO_REFUSED'});
+  }
+});
+
+test('demo state follows native announcement and close, not the pending CLI promise',async()=>{
+  const f=fixture();
+  assert.deepEqual(f.service.state(),{schema:'metaviewer.demo_state/v1',ok:true,phase:'idle',identity:'',demo:''});
+  const start=f.service.request('demo.start',[{identity:'account',demo:'demo'}]);
+  assert.equal(f.service.state().phase,'starting');
+  f.children[0].stdout.emit('data',Buffer.from('{"url":"http://127.0.0.1:1234/"}\n'));await start;
+  assert.equal(f.service.state().phase,'recording');
+  const stop=f.service.request('demo.stop',[]);
+  assert.equal(f.service.state().phase,'sealing');
+  close(f.children[0]);await stop;
+  assert.equal(f.service.state().phase,'idle');
+  assert.equal(f.calls[0][2].env.MV_DEMO_HOST_CHILD,'1');
+});
+
+test('failed startup cleanup never claims that an unannounced demo is recording',async()=>{
+  const f=fixture();const started=f.service.request('demo.start',[{identity:'account',demo:'demo'}]);
+  f.children[0].stdout.emit('data',Buffer.from('{"url":"https://not-a-local-viewer.example/"}\n'));
+  assert.equal(f.service.state().phase,'starting');
+  assert.equal((await started).ok,false);
+  assert.equal(f.service.state().phase,'idle');
 });

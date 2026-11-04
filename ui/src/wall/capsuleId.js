@@ -8,17 +8,9 @@
  * and writes one string to an injected clipboard; it never builds a path,
  * reads the environment or launches anything.
  *
- * [TARGET, unit decision] Attach contract. The PKG-FIX attach pointer
- * (`$XDG_RUNTIME_DIR/metaviewer/attach/current.env`, schema
- * `metaviewer.attach/v1`, published while the packaged app is live and
- * retracted on stop) is not on this branch yet. The ready line therefore
- * names the documented usage from `docs/AGENT_ENTRY.md` (`python3 -m
- * metaviewer_agents.mw_run --identity <id> --site <site> --workflow
- * <workflow>` from the agents directory) and the pointer by its documented
- * name; the line carries no host path, so it is identical in dev and
- * packaged runs. `<site>` and `<workflow>` stay placeholders the AI picks
- * from MemoryWeb data. The line never invents an identity: with no usable
- * `profile_id` it carries the capsule id only and says so.
+ * [TARGET, unit decision] Compact identity data for the shipped agent entry.
+ * Attachment and command guidance live in docs/AGENT_ENTRY.md. This line carries
+ * no host path, and absent identity names remain explicit rather than guessed.
  */
 /** Host-issued surface id grammar: contract surface_id (1..128 [CITED]) narrowed to prompt- and shell-safe characters. */
 export const CAPSULE_SURFACE_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -79,26 +71,7 @@ export function buildCapsuleReadyLine(input) {
   const surfaceId = /** @type {{ surfaceId?: unknown }} */ (source).surfaceId;
   const profileId = /** @type {{ profileId?: unknown }} */ (source).profileId;
   if (!isCapsuleSurfaceId(surfaceId)) return null;
-  if (!isCapsuleIdentity(profileId)) {
-    return `MetaViewer capsule ${surfaceId}. The host reported no usable identity name for this capsule, `
-      + 'so no command is given: ask the operator for the identity name and never guess it.';
-  }
-  return `MetaViewer capsule ${surfaceId} (identity ${profileId}). Manage only this capsule, with the operator present. `
-    + 'In a subshell source "$XDG_RUNTIME_DIR/metaviewer/attach/current.env" '
-    + '(published while MetaViewer is running; ignore it if its pid is not running), '
-    + 'then choose goal mode or stored-workflow mode with the operator. '
-    + 'Choose guidance for the capsule kind reported by the host; never guess it. Desktop-window automation is unsupported. '
-    + 'For program goal mode, read tools/mw_run_program.md; from the agents directory run: '
-    + `\`python3 -m metaviewer_agents.mw_run --surface-kind program --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1\`. `
-    + 'Use the following browser commands only for browser capsules. '
-    + 'For browser goal mode (supported by the compiled kit), read tools/mw_run_browser_goal.md; '
-    + 'from "$MV_OPERATOR_REPO/agents" run: '
-    + `\`python3 -m metaviewer_agents.mw_run --surface-kind browser --identity ${profileId} --planner rules --goal '<exact visible control name>' --steps 1\`. `
-    + 'For stored-workflow mode, which requires a compatible pinned checkout, run from the same directory: '
-    + `python3 -m metaviewer_agents.mw_run --identity ${profileId} --site <site> --workflow <workflow> [--slot name=value]. `
-    + 'Choose the site and workflow from MemoryWeb data only for stored-workflow mode. Read the single JSON result line and accept success only on rc 0 '
-    + 'with the verified run summary. Stop on any refusal or HUMAN_HANDOFF. '
-    + 'Never solve a CAPTCHA, type credentials, retry a send or change the network mode.';
+  return `CAPSULE=${surfaceId}  IDENTITY=${isCapsuleIdentity(profileId) ? profileId : '<none>'}`;
 }
 
 /**
@@ -157,14 +130,17 @@ export function capsuleCopyAvailable(clipboard) {
 }
 
 /**
- * Copies the ready line. Never throws; every outcome is a projected state.
+ * Copies only the full capsule identifier. The legacy export name remains
+ * stable; prompt preparation uses buildCapsuleReadyLine separately.
+ * Never throws; every outcome is a projected state.
  * @param {{ surfaceId?: unknown, profileId?: unknown }} ids Host-issued ids.
  * @param {CapsuleClipboardLike|null|undefined} clipboard Injected clipboard; falls back to the ambient one.
  * @returns {Promise<{ state: 'copied'|'unavailable', reason: string, text: string }>}
  */
 export async function copyCapsuleReadyLine(ids, clipboard) {
-  const text = buildCapsuleReadyLine(ids);
-  if (text === null) return { state: 'unavailable', reason: 'ERR_CAPSULE_ID_INVALID', text: '' };
+  const surfaceId = ids?.surfaceId;
+  if (!isCapsuleSurfaceId(surfaceId)) return { state: 'unavailable', reason: 'ERR_CAPSULE_ID_INVALID', text: '' };
+  const text = /** @type {string} */ (surfaceId);
   if (utf8ByteLength(text) > CAPSULE_READY_LINE_MAX_BYTES) {
     return { state: 'unavailable', reason: 'ERR_CAPSULE_LINE_TOO_LARGE', text: '' };
   }

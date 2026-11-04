@@ -1,0 +1,1 @@
+- Missing or inaccessible desktop bus proxies now produce a typed session refusal before session custody is acquired.

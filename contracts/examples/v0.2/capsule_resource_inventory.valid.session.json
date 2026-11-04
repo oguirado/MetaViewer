@@ -1,0 +1,7 @@
+{
+  "seq": 1,
+  "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+  "payload": "{\"stage\":\"session\",\"producer\":\"setup\",\"run_id\":\"aaaaaaaaaaaaaaaaaaaaaaaa\",\"actor\":\"actor-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"unit\":\"metaviewer-arm64-aaaaaaaaaaaaaaaaaaaaaaaa.scope\",\"root_device\":1,\"root_inode\":2,\"source_commit\":\"cccccccccccccccccccccccccccccccccccccccc\",\"asar_sha256\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"session_helper_sha256\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"setup_helper_sha256\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"producer_pins\":{\"setup\":{\"path\":\"/fixture/producer\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"graphical\":{\"path\":\"/fixture/producer\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"guestcommand\":{\"path\":\"/fixture/producer\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}},\"package_manifest\":{\"path\":\"/fixture/producer\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},\"registry_sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"}",
+  "sha256": "8415dc523424cdbb217254acc7101ca873e896673c07c8bd37e0d0516ccd4486",
+  "schema": "capsule_resource_inventory/v0.2"
+}

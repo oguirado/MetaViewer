@@ -1,0 +1,8 @@
+{
+  "schema": "capsule_state_event/v0.2",
+  "operation_id": "slot-op-1",
+  "op": "copy",
+  "profile_id": "profile-demo",
+  "slot_id": "slot-demo",
+  "event": "accepted"
+}

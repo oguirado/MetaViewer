@@ -1,0 +1,2 @@
+- End journal admission cleanly at capacity, flush accepted records, show a clear refusal, and stop capsules in order while keeping peers connected and the archive replayable.
+- Persist replay-bound end hints atomically, ignore damaged or stale hints, keep admission closed on hint I/O failure, advance cleanup past already-terminal capsules, and withdraw live UI presentation on closure. Document session diagnostics and the normal close-and-reopen path.

@@ -1,3 +1,4 @@
+import {installDemoControl} from './demoControl.js';
 import { isProtectedIdentity, isForeignIdentity } from './identityProtection.js';
 import {adapterNetworkProbe} from './coreLauncher.js';
 import {createButtonService,OPERATOR_STOP_BUDGET_MS} from './buttonBridge.js';
@@ -115,8 +116,8 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
   /** @type {Set<()=>void>} */ const live=new Set();
   const run=(/** @type {string} */method,/** @type {any} */v)=>new Promise((accept,reject)=>{
     if(v?.id && (isForeignIdentity(v.id) || method==='delete' && isProtectedIdentity(v.id))){reject(new Error('IDENTITY_PROTECTED'));return;}
-    const argv=[tool,method,...(method==='list'?[]:['--id',v.id]),...(method==='create'?['--label',v.label,...(v.browser==='program'?['--browser','program']:['--domains',v.domains.join(',')])]:[])];
-    const child=spawnTool('python3',argv,{shell:false,env:Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','MV_MW_HOME'].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]])),stdio:['ignore','pipe','pipe'],detached:true});
+    const argv=[tool,method,...(method==='list'?[]:['--id',v.id]),...(['recover','release'].includes(method)?['--holder',v.holder]:[]),...(method==='recover' && Number.isSafeInteger(v.observerPid)?['--observer-pid',String(v.observerPid)]:[]),...(method==='create'?['--label',v.label,...(v.browser==='program'?['--browser','program']:['--domains',v.domains.join(',')])]:[])];
+    const child=spawnTool('python3',argv,{shell:false,env:Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','TZ','HOME','XDG_RUNTIME_DIR','XDG_STATE_HOME','XDG_CONFIG_HOME','MV_SRF_BIN_DIR','MV_SRF_STATE_DIR','SRF_IDENTITY_STORE_ROOT','SRF_PROXY_REGISTRY','SRF_EGRESS_PROXY','MV_MW_HOME','MV_RAM_ADMISSION_DIR',...(env.MV_ARM64_CAPSULES==='1'?['MV_ARM64_CAPSULES','MV_ARM64_INVENTORY_CONFIG']:[])].filter(k=>typeof env[k]==='string').map(k=>[k,env[k]])),stdio:['ignore','pipe','pipe'],detached:true});
     let stdout='',stderr='',bytes=0,settled=false,opened=false;
     /** @type {ReturnType<typeof setTimeout>|undefined} */ let killTimer;
     const signalGroup=(/** @type {NodeJS.Signals} */signal)=>{try{if(child.pid)process.kill(-child.pid,signal);}catch{/* Already exited. */}};
@@ -150,12 +151,22 @@ export function identityRunner({tool,env=process.env,spawnTool=spawn,openLogin=a
       try {
         if(rc!==0) {
           const code=toolRefusedCode(stdout)??'IDENTITY_EXIT';
+          if (method==='recover') {
+            try {const detail=JSON.parse(stdout)?.error;if (typeof detail==='string' && /^[A-Z][A-Z0-9_]{1,63}$/.test(detail)) console.info(`METAVIEWER_IDENTITY_RELEASE_REFUSED code=${detail}`);} catch {}
+          }
           throw Object.assign(new Error(code), ['PROFILE_NOT_PROVISIONED','PROFILE_MISSING'].includes(code)
             ? {reason:'Docker profile provisioning failed; check Docker access and the installed judge images, then retry identity creation.'} : {});
         }
         const reply=JSON.parse(stdout);
         if(!operatorKeys(reply,['schema','ok','result']) || reply.schema!=='metaviewer.identity/v1' || reply.ok!==true || (method==='login' && !opened))throw new Error('IDENTITY_REPLY');
-        if(method==='delete') {if(!operatorKeys(reply.result,['deleted']) || reply.result.deleted!==v.id)throw new Error('IDENTITY_REPLY');finish(null,{ok:true});}
+        if (method==='recovery') {
+          const r=reply.result;
+          if (!r || typeof r.held!=='boolean' || (r.held && (typeof r.holder!=='string' || !/^srf-id-[a-z0-9-]{1,40}$/.test(r.holder)))) throw new Error('IDENTITY_REPLY');
+          finish(null,r);
+        } else if (method==='recover') {
+          if(reply.result?.released!==v.id || reply.result?.capsule_removed!==true)throw new Error('IDENTITY_REPLY');
+          finish(null,{ok:true});
+        } else if(method==='delete') {if(!operatorKeys(reply.result,['deleted']) || reply.result.deleted!==v.id)throw new Error('IDENTITY_REPLY');finish(null,{ok:true});}
         else if(method==='login') {if(!operatorKeys(reply.result,['profile_id','container','login_view_closed']) || reply.result.profile_id!==v.id || reply.result.login_view_closed!==true)throw new Error('IDENTITY_REPLY');finish(null,{ok:true});}
         else {
           const rows=method==='list'?reply.result:[reply.result];
@@ -369,8 +380,10 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
   return {request,refresh};
 }
 /** @param {any} options */
-export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,spawnTool=spawn,buttons=createButtonService({root:buttonRoot,demoRoot,clipboard,env,stopBudgetMs:OPERATOR_STOP_BUDGET_MS}),runIdentity=(()=>{const resolved=resolveIdentityTool({tool,env});return identityRunner({tool:resolved,env:identityEnvironment(env,resolved),spawnTool,openLogin});})()}) {
+export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,spawnTool=spawn,buttons=null,runIdentity=(()=>{const resolved=resolveIdentityTool({tool,env});return identityRunner({tool:resolved,env:identityEnvironment(env,resolved),spawnTool,openLogin});})()}) {
   let disposed=false;
+  buttons??=createButtonService({root:buttonRoot,demoRoot,clipboard,env,stopBudgetMs:OPERATOR_STOP_BUDGET_MS,onState:()=>{if(!disposed)contents.send('metaviewer:demo.state',buttons.state());}});
+  const demoControl=installDemoControl({env,buttons,privateDirectory});
   const service=createOperatorService({env,runIdentity,buttons,notify:(/** @type {any} */v)=>{if(!disposed)contents.send('metaviewer:handoff.state',v);}});
   /** @type {string[]} */ const installed=[];
   try {
@@ -383,5 +396,5 @@ export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demo
     }
   }catch(e){for(const c of installed)ipcMain.removeHandler(c);throw e;}
   const timer=setInterval(()=>service.refresh(),1000);timer.unref();
-  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);runIdentity.dispose?.();await buttons.dispose();}};
+  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);runIdentity.dispose?.();await buttons.dispose();await demoControl?.dispose();}};
 }

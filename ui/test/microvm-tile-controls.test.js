@@ -1,0 +1,21 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {createRequire} from 'node:module';
+import {pathToFileURL} from 'node:url';
+import {parse,compileScript,compileTemplate} from '@vue/compiler-sfc';
+import {createSSRApp} from 'vue';
+import {renderToString} from '@vue/server-renderer';
+const require=createRequire(import.meta.url),source=readFileSync(new URL('../src/components/GuestCommandPanel.vue',import.meta.url),'utf8'),d=parse(source).descriptor;
+const replacements=[['vue',pathToFileURL(require.resolve('vue')).href],['vue/server-renderer',pathToFileURL(require.resolve('vue/server-renderer')).href],['../../electron/guestCommandValues.js',new URL('../electron/guestCommandValues.js',import.meta.url).href],['../wall/rewindStateControls.js',new URL('../src/wall/rewindStateControls.js',import.meta.url).href],['../wall/restoreDuration.js',new URL('../src/wall/restoreDuration.js',import.meta.url).href]];
+function imports(s){for(const [a,b] of replacements)for(const quote of ["'",'"'])s=s.replaceAll(`from ${quote}${a}${quote}`,`from '${b}'`);return s;}
+const script=compileScript(d,{id:'microvm-controls'}),C=(await import('data:text/javascript;base64,'+Buffer.from(imports(script.content)).toString('base64'))).default;
+const t=compileTemplate({source:d.template.content,filename:'GuestCommandPanel.vue',id:'microvm-controls',ssr:true,ssrCssVars:d.cssVars,compilerOptions:{bindingMetadata:script.bindings}});assert.deepEqual(t.errors,[]);
+const {ssrRender}=await import('data:text/javascript;base64,'+Buffer.from(imports(t.code)).toString('base64'));
+const session={schema:'guest_command_session/v0.2',workload_id:'workload-test',generation:1,owner_id:'actor-test',profile_id:'guest-command-arm64-v1',backend:'firecracker',isa:'aarch64',phase:'ready',ownership:'held',jobs_started:0,job:null,controls:{cancel:null,stop:null}};
+const snapshot={available:true,busy:false,canCancel:false,uncertain:false,code:null,revision:1,session,stdout:'',stderr:''};
+const SSR={...C,ssrRender};
+test('unmeasured restore is neutral and never reports a fabricated time',async()=>{const html=await renderToString(createSSRApp(SSR,{snapshot}));assert.match(html,/Not measured yet/);assert.doesNotMatch(html,/data-testid="restore-duration"[^>]*>Unavailable/);assert.doesNotMatch(html,/>0(?:\.0)? ms</);});
+test('live workload has capsule ID and host-only paired terminal projection',()=>{const calls=[],p=C.setup({snapshot,terminalComponent:{},terminalBroker:{open(){}}},{expose(){},emit:(...a)=>calls.push(a)});assert.equal(p.terminalTarget.value.kind,'microvm');assert.equal(p.terminalTarget.value.workloadId,'workload-test');assert.equal(p.terminalTarget.value.ownerId,'actor-test');assert.equal(p.terminalTarget.value.surfaceId,undefined);p.toggleTerminal();assert.equal(p.terminalOpen.value,true);assert.equal(p.terminalStarted.value,true);assert.deepEqual(calls,[]);assert.match(source,/Host paired terminal/);assert.match(source,/:paired-target="terminalTarget"/);});
+test('invalid snapshot cannot launch a host pair or expose a forged workload',()=>{const p=C.setup({snapshot:{...snapshot,session:{...session,owner_id:'bad\nowner'}},terminalComponent:{},terminalBroker:{open(){}}},{expose(){},emit(){throw Error('no authority action');}});assert.equal(p.terminalTarget.value,null);p.toggleTerminal();assert.equal(p.terminalOpen.value,false);});
+test('App forwards the existing host terminal capability to workload panel',()=>{const app=readFileSync(new URL('../src/App.vue',import.meta.url),'utf8');const workload=app.match(/<template #workload[^]*?<\/template>/)?.[0]??'';assert.match(workload,/terminal-component="TerminalDeckView"/);assert.match(workload,/:terminal-broker="props.terminalBroker"/);assert.match(workload,/:terminal-session-port="props.terminalSessionPort"/);assert.match(workload,/:host-providers="props.hostProviders"/);});

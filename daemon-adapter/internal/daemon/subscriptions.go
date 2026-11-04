@@ -51,10 +51,8 @@ func subscriptionHandler(m *capsule.Manager, profiles map[string]capsule.Profile
 		if err != nil {
 			return fail(err)
 		}
-		// Human openings use only native xpra; never start a frame poll.
-		if b.Role == "human" {
-			return nil, nil
-		}
+		// Native xpra owns human input and presentation. A verified-frame
+		// subscription is also needed by recording; it grants no input rights.
 		profile, ok := profiles[b.Surface.ProfileID]
 		if !ok {
 			profile, ok = m.ProfileFor(b.Surface.ProfileID)

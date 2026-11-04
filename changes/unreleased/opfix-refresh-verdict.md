@@ -1,0 +1,1 @@
+- Refuse wall refresh with stale state and report incomplete panel restoration without clearing unrelated layout errors.

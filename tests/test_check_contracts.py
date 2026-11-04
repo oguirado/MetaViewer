@@ -128,7 +128,7 @@ class VersionedContractTests(unittest.TestCase):
              'observation', 'action_proposal', 'action_verdict', 'action_receipt',
              'hello', 'capsule_meta', 'ui_intent', 'catalog_entry', 'terminal_session',
              'record_request', 'record_event', 'settings', 'mv_tool_call', 'mv_tool_result',
-             'session_record')
+             'session_record', 'capsule_state_request', 'capsule_state_event')
 
     def test_ui_control_fixtures(self):
         validator = Validator(ROOT / 'contracts/v0.2')
@@ -459,6 +459,42 @@ class VersionedContractTests(unittest.TestCase):
                     with self.assertRaises(ValidationError): validator.validate(bad, envelope)
 
 
+def effective_transport_bound(schema, kind, validator, root, active=frozenset()):
+    """Conservative finite bound; unsupported forms refuse rather than guess."""
+    from re import _parser, _constants, MULTILINE
+    if id(schema) in active:
+        return None
+    active = active | {id(schema)}
+    keyword = {'string': 'maxLength', 'array': 'maxItems', 'object': 'maxProperties'}[kind]
+    bounds = []
+    explicit = schema.get(keyword)
+    if type(explicit) is int and explicit >= 0:
+        bounds.append(explicit)
+    values = [schema['const']] if 'const' in schema else schema.get('enum')
+    if type(values) is list:
+        typed = [v for v in values if type(v) is {'string': str, 'array': list, 'object': dict}[kind]]
+        bounds.append(max(map(len, typed), default=0))
+    if kind == 'object' and schema.get('additionalProperties') is False and not schema.get('patternProperties'):
+        bounds.append(len(schema.get('properties', {})))
+    if kind == 'string' and type(schema.get('pattern')) is str:
+        parsed = _parser.parse(schema['pattern'], 0)
+        if not parsed.state.flags & MULTILINE and parsed and parsed[0] == (_constants.AT, _constants.AT_BEGINNING) and parsed[-1][0] == _constants.AT and parsed[-1][1] in (_constants.AT_END, _constants.AT_END_STRING):
+            width = parsed.getwidth()[1]
+            if width < _constants.MAXREPEAT:
+                # $ can match before a final newline; retain a conservative extra code point.
+                bounds.append(width + (parsed[-1][1] == _constants.AT_END))
+    if '$ref' in schema:
+        target, target_root = validator.resolve(schema['$ref'], root)
+        bound = effective_transport_bound(target, kind, validator, target_root, active)
+        if bound is not None:
+            bounds.append(bound)
+    if 'oneOf' in schema:
+        alternatives = [effective_transport_bound(v, kind, validator, root, active) for v in schema['oneOf'] if v.get('type', kind) == kind]
+        if alternatives and all(v is not None for v in alternatives):
+            bounds.append(max(alternatives))
+    return min(bounds) if bounds else None
+
+
 class TransportCapTests(unittest.TestCase):
     def test_max_properties_boundaries_and_bad_keyword_values(self):
         validator = Validator(ROOT / 'contracts/v0.2')
@@ -494,20 +530,40 @@ class TransportCapTests(unittest.TestCase):
         with self.assertRaises(ValidationError): validator.validate('A' * 65540, b64)
 
     def test_every_v02_schema_node_has_transport_caps(self):
-        def walk(schema):
+        validator = Validator(ROOT / 'contracts/v0.2')
+        def walk(schema, root):
             typ = schema.get('type')
             for kind, keyword, limit in (('string', 'maxLength', 65536),
                                          ('array', 'maxItems', 4096),
                                          ('object', 'maxProperties', 256)):
                 if typ == kind:
-                    self.assertIn(keyword, schema)
-                    self.assertLessEqual(schema[keyword], limit)
+                    bound = effective_transport_bound(schema, kind, validator, root)
+                    self.assertIsNotNone(bound, f'unproven {kind} transport cap: {schema}')
+                    self.assertLessEqual(bound, limit)
             for keyword in ('properties', '$defs'):
-                for child in schema.get(keyword, {}).values(): walk(child)
-            for child in schema.get('oneOf', []): walk(child)
-            if 'items' in schema: walk(schema['items'])
+                for child in schema.get(keyword, {}).values(): walk(child, root)
+            for child in schema.get('oneOf', []): walk(child, root)
+            if 'items' in schema: walk(schema['items'], root)
         for path in (ROOT / 'contracts/v0.2').glob('*.schema.json'):
-            with self.subTest(path=path.name): walk(json.loads(path.read_text()))
+            with self.subTest(path=path.name):
+                schema = validator.load(path.name)
+                validator.audit(schema)
+                walk(schema, schema)
+
+    def test_effective_transport_caps_reject_unbounded_mutants(self):
+        validator = Validator(ROOT / 'contracts/v0.2')
+        cases = [('string', {'type':'string','pattern':'^[0-9a-f]{64}$'}, {'type':'string','pattern':'[0-9a-f]{64}'}),
+                 ('string', {'type':'string','enum':['ready','stopped']}, {'type':'string'}),
+                 ('object', {'type':'object','properties':{'a':{'type':'null'}},'additionalProperties':False}, {'type':'object','properties':{'a':{'type':'null'}},'additionalProperties':True}),
+                 ('array', {'type':'array','maxItems':3,'items':{'type':'null'}}, {'type':'array','items':{'type':'null'}})]
+        for kind, good, bad in cases:
+            with self.subTest(kind=kind):
+                self.assertIsNotNone(effective_transport_bound(good, kind, validator, good))
+                self.assertIsNone(effective_transport_bound(bad, kind, validator, bad))
+        self.assertIsNone(effective_transport_bound({'type':'string','pattern':'^[a-z]+$'}, 'string', validator, {}))
+        self.assertIsNone(effective_transport_bound({'type':'string','pattern':'(?m)^[a-z]{2}$'}, 'string', validator, {}))
+        root={'$defs':{'finite':{'type':'string','maxLength':7}}}
+        self.assertEqual(effective_transport_bound({'type':'string','$ref':'#/$defs/finite'}, 'string', validator, root),7)
 
     def test_nullable_alternatives_are_not_negative_controls(self):
         schema = {'oneOf': [{'type': 'string', 'minLength': 1}, {'type': 'null'}]}

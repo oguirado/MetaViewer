@@ -1,0 +1,28 @@
+{
+  "schema": "capsule_envelope/v0.2",
+  "msg_id": "message-demo",
+  "ts_ns": 1000000,
+  "from": {
+    "component": "agent",
+    "instance": "agent-demo"
+  },
+  "to": {
+    "component": "core",
+    "instance": "core-demo"
+  },
+  "session_id": "session-demo",
+  "seq": 1,
+  "nonce": "nonce-demo",
+  "body": {
+    "schema": "headless_event/v0.2",
+    "event_id": "event-32",
+    "request_id": "request-32",
+    "event": "refused",
+    "data": {
+      "workload_id": null,
+      "generation": null,
+      "code": "DUPLICATE_REQUEST",
+      "effect": "not_dispatched"
+    }
+  }
+}

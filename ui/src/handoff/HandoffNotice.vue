@@ -4,12 +4,12 @@ import { UiButton } from 'capsule-ui-kit/ui';
 import { operatorHost } from '../operatorHost.js';
 import { createHandoffModel, describeHandoff } from './handoffModel.js';
 const props=defineProps({host:{type:Object,default:operatorHost}});
-const emit=defineEmits(['activity','take-control']);
+const emit=defineEmits(['activity','take-control','pending']);
 const rows=ref(/** @type {any[]} */([])), error=ref('');
 const model=createHandoffModel(props.host?.handoff,row=>emit('activity',{code:'CAPTCHA_HANDOFF',...row}));
 let active=true;
 /** @type {()=>void} */ let stop=()=>{};
-function sync(){if(active)rows.value=model.rows();}
+function sync(){if(active){rows.value=model.rows();emit('pending',rows.value.map(row=>row.surface_id));}}
 /** @param {any} row */
 async function acknowledge(row){try{await model.acknowledge(row);error.value='';}catch{error.value='Acknowledgement could not be saved. The notice stays visible.';}sync();}
 onMounted(async()=>{

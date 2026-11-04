@@ -46,10 +46,10 @@ was started with, and `$MV_WENDER_ROOT` is the wender-agent checkout at its
    EOF
    ```
 
-4. **Copy the prompt.** Click **Use MetaViewer** and paste the copied prompt into
-   the external AI. Give it `MV_OPERATOR_REPO` and `MV_WENDER_ROOT` when it asks.
-   Do not give it the app's own variables: `mw_run` attaches to the running app
-   by itself.
+4. **Copy the prompt.** Copy the fenced text from [AGENT_ENTRY.md](AGENT_ENTRY.md)
+   and paste it into the external AI. Give it `MV_OPERATOR_REPO` and `MV_WENDER_ROOT` when it asks.
+   Source the live app attachment in a subshell as documented in
+   [AGENT_ENTRY.md](AGENT_ENTRY.md#attachment-and-identity); never guess app values.
 
 ## Before the first run on a site: check the anchors
 
@@ -166,7 +166,7 @@ explicit STALE_FRAME refusal after fresh perception and target verification.
 
 ## Focused E1 receipt path
 
-[TARGET, unit decision] Each perception acquisition now shares one native AX
+[TARGET] Each perception acquisition now shares one native AX
 snapshot across Wender state, handoff detection and AX predicates. Repeated AX
 reads could exhaust Wender's fixed locate deadline before dispatch; the deadline
 is unchanged. The forward trace records grounding deadline and remaining time.
@@ -203,7 +203,7 @@ tokens, keys or `auth.json`.
 
 ## STALE_FRAME: idle metadata fence
 
-[TARGET, unit decision] The host backend re-perceives before submission and
+[TARGET] The host backend re-perceives before submission and
 checks the same AX identity, role, name, geometry and focus. It binds the latest
 verified frame only if its pixels and dimensions still match that perception.
 At most three submissions [TARGET] fit within the original delivery budget;
@@ -239,7 +239,7 @@ The separate DISPLAY stream is not the proposal source: `tools.observe` obtains
 core's verified `frame_ref`, and `core/src/serve/tools.rs:822` joins it to the
 current authority frame. DISPLAY updates cannot clear the verified-frame fence.
 The sampled source published 0 advancing frames/s [MEASURED]; its next-frame
-period is AUSENTE — no inventar. Observation-entry-to-core-submit was 2.680178165 seconds; perception-return-to-
+period is ABSENT — do not invent. Observation-entry-to-core-submit was 2.680178165 seconds; perception-return-to-
 submit was 1.739014699 seconds [MEASURED]. Independent preserved boundary
 witnesses show metadata intervals of 10.006900617 and 9.996868696 seconds
 [MEASURED]. Reducing that delay cannot clear an already-set fence.

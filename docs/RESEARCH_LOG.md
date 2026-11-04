@@ -8,7 +8,7 @@ Reading map: evidence quality §1; all questions §2; source integrity §3; adop
 <a id="section-1"></a>
 ## 1. Evidence quality and source handling
 
-The harvest mostly retains Perplexity citation labels such as `dockview`, `github`, `openvue`, not resolvable source URLs. The source column below preserves those reported labels (without `+n` residue); it does not pretend they identify a specific release, repository revision or page. Original exact URLs are AUSENTE — no inventar except the Electron references listed after the table. A citation label is weaker than a checked primary source.
+The harvest mostly retains Perplexity citation labels such as `dockview`, `github`, `openvue`, not resolvable source URLs. The source column below preserves those reported labels (without `+n` residue); it does not pretend they identify a specific release, repository revision or page. Original exact URLs are ABSENT — do not invent except the Electron references listed after the table. A citation label is weaker than a checked primary source.
 
 Question text, sample code and answer proposals are distinguished from findings. Numerical examples from answers are not local performance evidence or ratified product limits. No harvest code was executed. Q18 and Q20 combine Electron testing and AI-disclosure briefs, with substantial duplicate content. Q22 mixes repository layout, shared-kit and Electron security text. Q12 is predominantly Spanish; its digest below is English. Mixed text is not an additional independent corroboration.
 

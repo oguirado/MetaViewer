@@ -1,0 +1,1 @@
+- End the execution timer before terminal diagnostics and report writing so an uncertain input remains uncertain during finalization.

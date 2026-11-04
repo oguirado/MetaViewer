@@ -1,0 +1,10 @@
+{
+  "schema": "rewind_request/v0.2",
+  "request_id": "request-pause",
+  "op": "pause",
+  "params": {
+    "workload_id": "workload-one",
+    "generation": 2,
+    "authority_epoch": 2
+  }
+}

@@ -33,4 +33,4 @@ Version seals refer to planned release lines; the maintainer selects the exact
 SemVer patch, dates the changelog and creates tags only after the gates pass.
 In the historical plan, the scaffold retained its version until sealing. The maintainer alone
 pushes and submits. Scale thresholds come from recorded capacity measurements,
-which this plan does not supply: AUSENTE — no inventar.
+which this plan does not supply: ABSENT — do not invent.

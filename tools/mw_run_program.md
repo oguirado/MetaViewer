@@ -8,13 +8,16 @@ visible in the current observation; a general task description is not grounded.
 `--planner rules` is the default and needs no Muse account. It requires the locked
 Wender and vision dependencies; it is not a general game solver.
 
-Copy the running app's **Copy env path** (`METAVIEWER_ATTACH`), replace the
-placeholder below and source it in a subshell. It supplies `MV_CORE_CONFIG`,
-`XDG_RUNTIME_DIR` and `MV_SRF_STATE_DIR`; legacy container programs also need
-`MV_SRF_BIN_DIR` and `SRF_IDENTITY_STORE_ROOT`. Supply the verified roots
-`MV_WENDER_ROOT` and `VQA_VE_ROOT` when using checkout dependencies. Do not guess
-missing paths: obtain the pinned roots from the operator. A verified compiled
-runtime is supported for programs; its browser support is separately gated.
+Resolve `ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env`
+and source it in a subshell: `set -a; . "$ENV"; set +a`. Use the terminal's
+original runtime directory to locate it, and stop if the recorded app PID is
+no longer live. The file supplies `MV_CORE_CONFIG`, `XDG_RUNTIME_DIR` and
+`MV_SRF_STATE_DIR`; legacy container programs also need `MV_SRF_BIN_DIR` and
+`SRF_IDENTITY_STORE_ROOT`. `METAVIEWER_ATTACH` is a launcher stdout prefix, not a
+UI control. Supply the verified roots `MV_WENDER_ROOT` and `VQA_VE_ROOT` when
+using checkout dependencies. Do not guess missing paths: obtain the pinned roots
+from the operator. A verified compiled runtime is supported for programs; its
+browser support is separately gated.
 
 [TARGET, unit decision] Click verification uses a core `changed_region` over
 the complete surface, followed by an independent, hash-checked RGB comparison
@@ -38,7 +41,7 @@ PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --identity PROGRAM_PROFILE
 current focus. It makes no planner/model call and submits one `type` action
 through the existing core admission, custody, frame rebind and settlement path.
 It never clicks or manufactures a target mark. Empty visual observations are
-allowed only for this mode. Known password evidence in the observation refuses
+allowed for explicit focused text and navigation modes. Known password evidence in the observation refuses
 before input; visual data cannot guarantee detection of unlabeled password fields.
 Immediately before each submission, focused mode observes and drains pending
 frame publications to bind the newest frame, including after explicit
@@ -54,8 +57,32 @@ field when available. Unrelated labels outside this box do not affect readback.
 The report retains `changed_box` and `readback_box`. A single terminal OCR `|`
 is treated as a blinking caret when the requested text does not end in `|`;
 all other characters, case and spacing must still match literally.
-This mode requires `--text` and `--steps 1`; `--key`
-remains browser only. The direct program tool accepts the same goal and text.
+This text mode requires `--text` and `--steps 1`. The direct program tool accepts
+the same goal and text.
+
+[TARGET, unit decision] An Agent Host program also accepts one explicit
+operator-selected navigation key at its current focus:
+
+```sh
+PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --identity PROGRAM_PROFILE \
+  --surface-kind program --planner rules --goal focused-key --key Right --steps 1
+```
+
+Allowed keys are `Up`, `Down`, `Left`, `Right`, and `Enter`. The native transport
+takes X11 keysyms, so the Enter option emits `Return` in its proposal.
+This mode requires the exported Host program binding (`host_xpra: true`), Agent ownership, no text,
+and the rules planner selection; it makes no model or planner call. Legacy
+container programs, arbitrary chords, other goals and multiple steps refuse.
+Each invocation acquires a fresh observation, checks known password evidence,
+and uses the existing admission, frame rebind, native dispatch and settlement.
+Only pixel drift is admitted for this explicit focus assertion; surface,
+geometry, monotonic generation, custody and deadline checks remain mandatory.
+An uncertain delivery is never replayed. Evidence includes immutable intent and
+dispatch artifacts, native/core receipts and retained before/after RGB frames.
+`verified_key` proves key delivery and visible effect. `gameplay_verified: false`
+explicitly withholds movement, dialog progress or game-completion claims:
+unrelated animation can satisfy a whole-surface pixel effect. A rules loop using
+these keys is a rules bot, not model-driven play. Frozen contracts remain unchanged.
 
 For a named field requiring a grounded focus click, use:
 
@@ -91,7 +118,7 @@ Use the public engine entry against an already running agent-owned program capsu
 
 ```sh
 (
-  set -a; . "<copied-current.env-path>"; set +a
+  set -a; . "$ENV"; set +a
   export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-program.XXXXXX)"
   PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
     --surface-kind program --identity '<program-profile>' --planner rules \
@@ -105,7 +132,7 @@ configuration are unnecessary. The legacy container-backed host-exec lane also
 requires the adapter witness for the same public surface and native run; an
 unrelated active lease cannot provide custody. The command does not create a
 capsule or attach an arbitrary desktop window. Programs admit clicks and bounded
-operator-supplied `--text` as described above; program `--key` remains unsupported.
+operator-supplied `--text`, plus the explicit Host-only `focused-key` mode above.
 Goal mode cannot use `--site`, `--workflow` or `--slot`.
 
 Evidence defaults to a private subtree beneath `/dev/shm/vqa-cu`. An explicit
@@ -126,7 +153,7 @@ mark-bound clicks authorized by the same custody gate are admitted.
 | --- | --- | --- |
 | `PROGRAM_BOUNDED_ACTIONS_VERIFIED` / `0` | Bounded actions verified, including exact readback for text; not task completion. | Check receipts and fresh visible outcome before choosing another goal. |
 | `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` / `0` | Text was sent but readback is not_readable; explicitly uncertified. | Inspect the editor and retained evidence; do not treat the exit code as text verification. |
-| argparse error / `2` | Invalid command; no run. | Correct flags and budget; program key input is unsupported. |
+| argparse error / `2` | Invalid command; no run. | Correct flags and budget; keys require the explicit Host-only navigation mode. |
 | `INPUT_UNCERTAIN` / `5` | Delivery/settlement unknown, possibly after earlier moves. | Stop and inspect report, intent, dispatch and receipts with the operator; never automatically retry. |
 | refusal / `6` | A named precondition or planner gate failed; earlier moves may exist. | Read `verdict_code` and inspect evidence before repairing the cause. |
 

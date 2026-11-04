@@ -1,0 +1,1 @@
+- Keep the MicroVM interface connected when an agent creates a recovery point through the SDK, validating the passive mark before enabling subsequent commands and human Back.

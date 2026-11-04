@@ -58,21 +58,26 @@ class FrameRefParityTests(unittest.TestCase):
     def test_python_mirror_inlined_frame_blocks_match_frame_ref(self):
         frame_ref = _RAW_V02_FILES["frame_ref.schema.json"]
         tool_result = _RAW_V02_FILES["mv_tool_result.schema.json"]
+        from test_python_contract_mirror import normalized
         inlined = []
         for branch in tool_result["oneOf"]:
             props = branch.get("properties", {})
-            obs_props = props.get("observation", {}).get("properties", {})
-            if "frame_ref" in obs_props:
-                inlined.append(obs_props["frame_ref"])
-            receipt_props = props.get("receipt", {}).get("properties", {})
-            if "after_frame" in receipt_props:
-                inlined.append(receipt_props["after_frame"])
+            obs = normalized(props.get("observation", {}), tool_result, 'mv_tool_result.schema.json', True)
+            if "frame_ref" in obs.get("properties", {}):
+                inlined.append(obs["properties"]["frame_ref"])
+            receipt = normalized(props.get("receipt", {}), tool_result, 'mv_tool_result.schema.json', True)
+            if "after_frame" in receipt.get("properties", {}):
+                inlined.append(receipt["properties"]["after_frame"])
         self.assertEqual(len(inlined), 2)
+        expected = normalized(frame_ref, frame_ref, 'frame_ref.schema.json', True)
         for block in inlined:
-            self.assertEqual(block, frame_ref)
+            self.assertEqual(block, expected)
             mutant = copy.deepcopy(block)
             mutant["properties"]["height"]["maximum"] = 32768
-            self.assertNotEqual(mutant, frame_ref)
+            self.assertNotEqual(mutant, expected)
+        broken = copy.deepcopy(tool_result)
+        broken['$defs']['frame']['properties']['height']['maximum'] = 32768
+        self.assertNotEqual(normalized({'$ref':'#/$defs/frame'}, broken, 'mv_tool_result.schema.json', True), expected)
 
     def test_session_relative_clock_contract_documented_in_v02_schemas(self):
         v02 = ROOT / "contracts" / "v0.2"

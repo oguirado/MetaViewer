@@ -1,0 +1,1 @@
+- Remove the Bootstrap button and rocket while retaining workflow actions, the capsule ID chip, and safe prompt preparation.
