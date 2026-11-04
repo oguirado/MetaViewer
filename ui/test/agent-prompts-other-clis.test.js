@@ -54,4 +54,17 @@ for(const profile of ['agent-gemini','agent-opencode']){
     assert.equal((await f.controller.prepareAgentPrompt('automate','identity-a',slot.id,profile)).pasted,false);
     assert.deepEqual(f.writes,[]);
   });
+  test(`${profile} remains ready across ST and BEL OSC sequences and pastes when already idle for a minute`,async t=>{
+    const oscStream='\x1b]10;?\x1b\\\x1b]11;?\x1b\\'+screens[profile]+'\x1b]0;~/workspace\x07\x1b]8;;https://example.invalid\x07link\x1b]8;;\x07';
+    assert.equal(agentPromptState(profile,oscStream),'ready');
+    t.mock.timers.enable({apis:['setTimeout']});let now=0;t.mock.method(performance,'now',()=>now);
+    const f=fixture(profile,oscStream);t.after(()=>f.controller.dispose());
+    const slot=await f.controller.launchProfile(profile);
+    now=60000;
+    for(const kind of ['use-automation','automate','no-automation']){
+      const reply=await f.controller.prepareAgentPrompt(kind,'Capsule identity: surface-a',slot.id,profile);
+      assert.equal(reply.pasted,true,`${profile}:${kind}`);
+    }
+    assert.equal(f.writes.length,3);
+  });
 }

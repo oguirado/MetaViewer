@@ -1,4 +1,4 @@
-import {AGENT_PROFILE_IDS,AGENT_START_TIMEOUT_MS,agentPromptState} from './agentPromptGate.js';
+import {AGENT_PROFILE_IDS,AGENT_START_TIMEOUT_MS,agentPromptState,plainAgentOutput} from './agentPromptGate.js';
 import { assertSafeWorkflowPrompt, assertSafeWorkflowIdentity, workflowPrompt } from './workflowPrompts.js';
 /**
  * OpenFresnel-style Terminal Deck model and controller for MetaViewer (P18h).
@@ -647,7 +647,7 @@ export function createTerminalDeckController(options = {}) {
       output={text:'',decoder:new TextDecoder(),refused:false,lastAt:performance.now()};agentOutput.set(frame.session,output);
     }
     output.lastAt=performance.now();
-    output.text=(output.text+output.decoder.decode(new Uint8Array(frame.bytes),{stream:true})).slice(-32768);
+    output.text=plainAgentOutput(output.text+output.decoder.decode(new Uint8Array(frame.bytes),{stream:true})).slice(-32768);
     if(agentPromptState('',output.text)==='authentication') output.refused=true;
   }
   /** @type {Set<{ timer: ReturnType<typeof setTimeout>, resolve: () => void }>} */

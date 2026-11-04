@@ -256,7 +256,14 @@ const agentProfiles=computed(()=>profiles.value.filter(profile=>AGENT_PROFILE_ID
 /** @param {string} kind */
 async function chooseWorkflow(kind) {
   if(!pairMatchesTarget.value || !focusedPair.value) return controller.useWorkflowPrompt(kind,workflowIdentity.value,null);
-  agentGeneration++;agentPreparing.value=false;agentChoice.value={kind,pair:{...focusedPair.value}};
+  const pair={...focusedPair.value},slot=controller.findSlot(pair.slotId)?.slot;
+  if(slot?.status==='running' && AGENT_PROFILE_IDS.includes(slot.profileId)) {
+    const generation=++agentGeneration;agentChoice.value=null;agentPreparing.value=true;pairError.value='';
+    const current=()=>generation===agentGeneration && props.open && focusedPair.value?.surfaceId===pair.surfaceId;
+    try {return await controller.prepareAgentPrompt(kind,pair.identityLine,slot.id,slot.profileId,current);}
+    finally {if(generation===agentGeneration)agentPreparing.value=false;}
+  }
+  agentGeneration++;agentPreparing.value=false;agentChoice.value={kind,pair};
   await controller.refreshProviders();
 }
 function cancelAgentChoice() {agentGeneration++;agentChoice.value=null;agentPreparing.value=false;agentPreparing.value=false;}
