@@ -752,7 +752,7 @@ export function createWallWorkspaceController(options = {}) {
     try {
       const existing=api.getPanel(panelId);
       if(existing){if(windows.state(panelId).hidden)windows.show(panelId);else existing.api.setActive();}
-      else api.addPanel({id:panelId,component:'CapsulePanel',title:row.title,params:{sessionId:id},renderer:'always',minimumWidth:320,minimumHeight:240});
+      else {api.addPanel({id:panelId,component:'CapsulePanel',title:row.title,params:{sessionId:id},renderer:'always',minimumWidth:320,minimumHeight:240});collapseEmptyGroups();}
       return succeed(Object.freeze({panelId}));
     }catch{return fail('ERR_PRESENTATION_FAILED','The workload panel could not be shown.');}
   }
