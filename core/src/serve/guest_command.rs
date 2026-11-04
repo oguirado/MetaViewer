@@ -927,7 +927,7 @@ mod tests {
     #[test]
     fn command_observation_never_leaks_to_noncreator_or_refused_run() {
         for creator in [Component::Ui, Component::Agent] {
-            let mut f = observation_fixture(creator.clone());
+            let mut f = observation_fixture(creator);
             let _d = f.attach(Component::Daemon);
             let u = f.attach(Component::Ui);
             let _a = f.attach(Component::Agent);

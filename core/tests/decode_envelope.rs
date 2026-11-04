@@ -76,6 +76,7 @@ const CAPSULE_BODIES: &[&str] = &[
     "guest_command_event",
 ];
 const REWIND_BODIES: &[&str] = &["rewind_request", "rewind_event"];
+const COMMAND_OBSERVATION_BODIES: &[&str] = &["guest_command_observation"];
 fn family(prefix: &str) -> Option<&'static str> {
     if prefix == "envelope" || LEGACY_BODIES.contains(&prefix) {
         Some("envelope")
@@ -83,6 +84,10 @@ fn family(prefix: &str) -> Option<&'static str> {
         Some("capsule_envelope")
     } else if prefix == "rewind_envelope" || REWIND_BODIES.contains(&prefix) {
         Some("rewind_envelope")
+    } else if prefix == "guest_command_observation_envelope"
+        || COMMAND_OBSERVATION_BODIES.contains(&prefix)
+    {
+        Some("guest_command_observation_envelope")
     } else {
         None
     }
@@ -223,7 +228,14 @@ fn check_frozen_example(
     }
     let value: serde_json::Value =
         serde_json::from_slice(raw).map_err(|err| format!("{name}: {err}"))?;
-    let mut env = base.clone();
+    let mut env = if family == "guest_command_observation_envelope" {
+        serde_json::from_str(include_str!(
+            "../../contracts/examples/v0.2/guest_command_observation_envelope.valid.json"
+        ))
+        .unwrap()
+    } else {
+        base.clone()
+    };
     if prefix == family {
         env = value;
     } else {
@@ -280,6 +292,19 @@ fn all_frozen_body_examples_and_negative_controls() {
         assert_eq!(actual, expected.iter().map(|v| v.to_string()).collect());
         envelope_bodies.extend(actual);
     }
+    // This separate read-only family intentionally uses one direct body ref.
+    let observation_schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/v0.2/guest_command_observation_envelope.schema.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        observation_schema
+            .pointer("/properties/body/$ref")
+            .and_then(serde_json::Value::as_str),
+        Some("guest_command_observation.schema.json")
+    );
+    assert_eq!(COMMAND_OBSERVATION_BODIES, &["guest_command_observation"]);
+    envelope_bodies.extend(COMMAND_OBSERVATION_BODIES.iter().map(|s| s.to_string()));
     assert_eq!(LEGACY_BODIES.len(), 21);
     assert_eq!(CAPSULE_BODIES.len(), 4);
     assert_eq!(REWIND_BODIES.len(), 2);
@@ -792,4 +817,31 @@ fn merged_slot_and_arm_families_stay_disjoint() {
             );
         }
     }
+}
+
+#[test]
+fn command_observation_fourth_family_stays_read_only_and_closed() {
+    let value: serde_json::Value = serde_json::from_str(include_str!(
+        "../../contracts/examples/v0.2/guest_command_observation_envelope.valid.ui.json"
+    ))
+    .unwrap();
+    assert!(decode_envelope(&value.to_string()).is_ok());
+    for tag in [
+        "envelope/v0.2",
+        "capsule_envelope/v0.2",
+        "rewind_envelope/v0.2",
+    ] {
+        let mut bad = value.clone();
+        bad["schema"] = tag.into();
+        assert!(decode_envelope(&bad.to_string()).is_err());
+    }
+    for (field, component) in [("from", "agent"), ("from", "daemon"), ("to", "agent")] {
+        let mut bad = value.clone();
+        bad[field]["component"] = component.into();
+        assert!(decode_envelope(&bad.to_string()).is_err());
+    }
+    let mut extra = value.clone();
+    extra["body"]["stdin_b64"] = "".into();
+    assert!(decode_envelope(&extra.to_string()).is_err());
+    assert!(family("guest_command_observation_unknown").is_none());
 }

@@ -791,8 +791,9 @@ test('authority dispose revokes all streams despite one close failure', async (t
   }
   assert.deepEqual(revoked, ['s1:SHUTDOWN', 's2:SHUTDOWN']);
   assert.equal(terminalDisposed, 1);
-  const guestChannels = ['metaviewer:guest-command.capabilities', 'metaviewer:guest-command.status', 'metaviewer:guest-command.request'];
+  const guestChannels = ['metaviewer:guest-command.capabilities', 'metaviewer:guest-command.status', 'metaviewer:guest-command.request', 'metaviewer:guest-command.observation'];
   assert.deepEqual(Object.values(GUEST_COMMAND_CHANNELS).sort(), [...guestChannels].sort());
+  assert.throws(() => assert.deepEqual([...guestChannels,'metaviewer:guest-command.foreign'].sort(),Object.values(GUEST_COMMAND_CHANNELS).sort()),assert.AssertionError);
   const rewindChannels = ['metaviewer:rewind.request', 'metaviewer:rewind.status'];
   assert.deepEqual(Object.values(REWIND_CHANNELS).sort(), [...rewindChannels].sort());
   assert.throws(() => assert.deepEqual([...Object.values(REWIND_CHANNELS), 'metaviewer:rewind.foreign'].sort(), [...rewindChannels].sort()), assert.AssertionError);

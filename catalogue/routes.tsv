@@ -229,6 +229,7 @@ program-593ec53b328a	changes/unreleased/program-moves-in-a-row.md
 program-037135db5049	changes/unreleased/program-provider-kill-guard.md
 program-53a257f2b164	changes/unreleased/program-standard-dirs.md
 release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
+rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.md
 routed-map.md	changes/unreleased/routed-map.md
 sidebar-74e83dfe487d	changes/unreleased/sidebar-entry-cleanup.md
 termina-ea00cc828bad	changes/unreleased/terminal-persist-copy-paste.md
@@ -827,8 +828,10 @@ guestco-5b46cb04910a	contracts/examples/v0.2/guest_command_observation.invalid.t
 guestco-d7bf95720218	contracts/examples/v0.2/guest_command_observation.invalid.too_long_command.json
 guestco-913638fa9cc3	contracts/examples/v0.2/guest_command_observation.invalid.zero_generation.json
 guestco-16b85f622bb5	contracts/examples/v0.2/guest_command_observation.valid.json
+guestco-bbee83ace094	contracts/examples/v0.2/guest_command_observation.valid.ui.json
 guestco-685e8ee6af37	contracts/examples/v0.2/guest_command_observation_envelope.invalid.sender.json
 guestco-59ecd1a65d7c	contracts/examples/v0.2/guest_command_observation_envelope.valid.json
+guestco-8385e45efe71	contracts/examples/v0.2/guest_command_observation_envelope.valid.ui.json
 guestco-4ac4b9fa92d8	contracts/examples/v0.2/guest_command_request.invalid.extra.json
 guestco-7019f8e8b5e7	contracts/examples/v0.2/guest_command_request.valid.generated0.json
 guestco-3861685e9fb7	contracts/examples/v0.2/guest_command_request.valid.generated1.json
@@ -1973,6 +1976,7 @@ prepare.go	daemon-adapter/internal/guestcommand/prepare.go
 process-509aebce38b5	daemon-adapter/internal/guestcommand/process.go
 profile.go	daemon-adapter/internal/guestcommand/profile.go
 profile_test.go	daemon-adapter/internal/guestcommand/profile_test.go
+rewindc-381acc7ea3af	daemon-adapter/internal/guestcommand/rewind_capacity_test.go
 rewind_manager.go	daemon-adapter/internal/guestcommand/rewind_manager.go
 rewindm-4db073fb7d4c	daemon-adapter/internal/guestcommand/rewind_manager_test.go
 rewind_profile.go	daemon-adapter/internal/guestcommand/rewind_profile.go
@@ -1989,6 +1993,7 @@ capsule_envelope.go	daemon-adapter/internal/ipc/capsule_envelope.go
 capsule-dc18a06427ba	daemon-adapter/internal/ipc/capsule_envelope_test.go
 client.go	daemon-adapter/internal/ipc/client.go
 client_test.go	daemon-adapter/internal/ipc/client_test.go
+command-9b4e9e69b318	daemon-adapter/internal/ipc/command_observation_fixture_pins_test.go
 command-f4af136781b9	daemon-adapter/internal/ipc/command_observation_test.go
 config.go	daemon-adapter/internal/ipc/config.go
 conform-8ca4cdb6f485	daemon-adapter/internal/ipc/conformance_probe_test.go
