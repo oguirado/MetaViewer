@@ -402,11 +402,12 @@ without an absolute operator repository. It preserves the app's private
 `XDG_RUNTIME_DIR` in Muse's environment, keeps the normal sandbox and workspace
 trust checks, and does not initiate sign-in or update the installed CLI. A
 working Muse sandbox backend is a prerequisite for shell tools; a visible
-input prompt is not proof that an agent task can run. When Muse hides private
-`/dev/shm`, start the app with `TMPDIR` set to a unique owner-only directory
-inside the existing user runtime directory. Keep that directory at `0700` and
-retain the app's ownership and symlink checks. This places only this app session
-there; it grants no access to `/dev/shm` and does not disable the sandbox.
+input prompt is not proof that an agent task can run. The private-session
+launcher below confines writable runtime and automation state without granting
+access to `/dev/shm`. Filesystem access alone does not grant access to the core
+socket: the installed Muse network sandbox can deny Unix sockets before any
+connection. Stop on that refusal; never retry outside the sandbox or accept a
+native approval to bypass it.
 Authentication and trust questions remain the person's responsibility.
 
 For an ephemeral Muse session, run `python3 tools/muse_session.py --app

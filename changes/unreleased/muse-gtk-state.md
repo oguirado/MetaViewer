@@ -1,0 +1,1 @@
+- Keep GTK session runtime state inside the validated ephemeral Muse workspace without admitting unknown entries.
