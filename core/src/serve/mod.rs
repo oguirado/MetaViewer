@@ -2041,8 +2041,19 @@ impl Server {
         if self.journal_end.is_some() {
             return self.poll_journal_stop_failure(now_ns);
         }
-        self.poll_headless_at(now_ns)?;
-        self.poll_guest_command_at(now_ns)?;
+        if let Err(error) = self
+            .poll_headless_at(now_ns)
+            .and_then(|()| self.poll_guest_command_at(now_ns))
+        {
+            return if matches!(
+                error.downcast_ref::<crate::journal::JournalError>(),
+                Some(crate::journal::JournalError::Policy)
+            ) {
+                self.end_full_journal_on_tick(now_ns)
+            } else {
+                Err(error)
+            };
+        }
         let prev = self.route_now_ns.replace(now_ns);
         let result = self.poll_tool_waiters();
         self.route_now_ns = prev;

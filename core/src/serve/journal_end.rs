@@ -141,7 +141,7 @@ impl Server {
         Ok(())
     }
 
-    pub(super) fn end_full_journal(&mut self, now_ns: u64, env: &Envelope) -> Result<()> {
+    pub(super) fn close_full_journal(&mut self, now_ns: u64) -> Result<()> {
         self.authority.flush_sync()?;
         if self.journal_end.is_none() {
             // Close admission before attempting this non-authoritative hint.
@@ -166,6 +166,11 @@ impl Server {
                 }
             }
         }
+        Ok(())
+    }
+
+    pub(super) fn end_full_journal(&mut self, now_ns: u64, env: &Envelope) -> Result<()> {
+        self.close_full_journal(now_ns)?;
         // Inspect the capacity-triggering event before issuing the first stop:
         // a refused error is not an acknowledgment of a cleanup not yet sent.
         if env.from.component == Component::Daemon {
@@ -173,6 +178,11 @@ impl Server {
         } else {
             self.start_next_journal_stop(now_ns)
         }
+    }
+
+    pub(super) fn end_full_journal_on_tick(&mut self, now_ns: u64) -> Result<()> {
+        self.close_full_journal(now_ns)?;
+        self.start_next_journal_stop(now_ns)
     }
 
     fn start_next_journal_stop(&mut self, now_ns: u64) -> Result<()> {

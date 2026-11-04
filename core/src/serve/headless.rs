@@ -433,4 +433,51 @@ mod tests {
         assert!(f.server.authority.state().headless.pending.is_none());
         assert!(f.server.authority.state().headless.session.is_none());
     }
+    #[test]
+    fn headless_timer_full_journal_ends_without_dropping_peers() {
+        let mut f = Fixture::new();
+        let daemon = f.attach(Component::Daemon);
+        let ui = f.attach(Component::Ui);
+        f.dispatch(f.create()).unwrap();
+        daemon.try_recv().unwrap();
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        let before = f.server.snapshot().unwrap();
+        let journal = fs::read(f.server.root.join("journal.jsonl")).unwrap();
+        f.server.poll_tool_waiters_at(34999999999).unwrap();
+        assert!(
+            f.server.journal_end.is_none(),
+            "negative control: before deadline"
+        );
+        f.server
+            .poll_tool_waiters_at(35000000000)
+            .expect("timer capacity ends admission, not transport");
+        assert!(f.server.journal_end.is_some());
+        assert_eq!(f.server.connections.len(), 2);
+        assert_eq!(f.server.snapshot().unwrap(), before);
+        assert_eq!(
+            fs::read(f.server.root.join("journal.jsonl")).unwrap(),
+            journal
+        );
+        assert!(f.server.root.join("journal-ended.json").exists());
+        assert_eq!(
+            serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
+            "JOURNAL_FULL"
+        );
+        assert!(ui.try_recv().is_err(), "no unjournaled deadline event");
+        f.server.poll_tool_waiters_at(35000000001).unwrap();
+    }
+    #[test]
+    fn headless_timer_io_failure_is_not_a_capacity_end() {
+        let mut f = Fixture::new();
+        let daemon = f.attach(Component::Daemon);
+        let ui = f.attach(Component::Ui);
+        f.dispatch(f.create()).unwrap();
+        daemon.try_recv().unwrap();
+        crate::journal::fail_next_append_with_torn_event_sidecar(&f.server.root);
+        assert!(f.server.poll_tool_waiters_at(35_000_000_000).is_err());
+        assert!(f.server.journal_end.is_none());
+        assert!(!f.server.root.join("journal-ended.json").exists());
+        assert!(ui.try_recv().is_err());
+    }
 }

@@ -20,12 +20,16 @@ import (
 // [TARGET, unit decision] Executables and environment are configured at the
 // trusted seam; no request may add an executable, environment key or shell text.
 type ProcessRunner struct {
-	stateDir string
-	stat     func(string) (os.FileInfo, error)
-	env      []string
-	limit    int
-	timeout  time.Duration
-	root     string
+	// Native identity commands share a control lock. Keep our probe and the
+	// following command in one cancellable lane so our own captures cannot be
+	// mistaken for an external recorder holding that lock.
+	nativeGate chan struct{}
+	stateDir   string
+	stat       func(string) (os.FileInfo, error)
+	env        []string
+	limit      int
+	timeout    time.Duration
+	root       string
 }
 
 func NewProcessRunner(binDir string, environment []string, maxOutput int, timeout time.Duration) (*ProcessRunner, error) {
@@ -51,7 +55,7 @@ func NewProcessRunner(binDir string, environment []string, maxOutput int, timeou
 	if !seen["PATH"] {
 		return nil, fault("configuration", "explicit process search path required")
 	}
-	return &ProcessRunner{env: childEnv, stateDir: stateDir, stat: stateDirInfo, limit: maxOutput, timeout: timeout, root: filepath.Clean(binDir)}, nil
+	return &ProcessRunner{nativeGate: make(chan struct{}, 1), env: childEnv, stateDir: stateDir, stat: stateDirInfo, limit: maxOutput, timeout: timeout, root: filepath.Clean(binDir)}, nil
 }
 
 // [TARGET, unit decision] State configuration is captured with the trusted
@@ -91,7 +95,7 @@ func (r *ProcessRunner) deferBusyFrame() error {
 	if syscall.Fstat(fd, &st) != nil || st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Uid != uint32(os.Getuid()) || st.Mode&0777 != 0600 {
 		return &preSpawnRefusal{fault("configuration", "native control lock invalid")}
 	}
-	err = syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+	err = syscall.Flock(fd, syscall.LOCK_SH|syscall.LOCK_NB)
 	if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
 		return &preSpawnRefusal{fault("native_busy", "native control lock held")}
 	}
@@ -227,7 +231,15 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 	if len(argv) < 2 || filepath.Dir(argv[0]) != r.root || (!adminShow && !adminCreate && !hostWin && filepath.Base(argv[0]) != "srf-identity-surface" && filepath.Base(argv[0]) != "srf-holdings-capsule") {
 		return nil, fault("execution", "unadmitted executable")
 	}
+	ctx, cancel := context.WithTimeout(ctx, r.timeout)
+	defer cancel()
 	if filepath.Base(argv[0]) == "srf-identity-surface" {
+		select {
+		case r.nativeGate <- struct{}{}:
+			defer func() { <-r.nativeGate }()
+		case <-ctx.Done():
+			return nil, &preSpawnRefusal{fault("timeout", "native command queue deadline")}
+		}
 		if err := r.validateStateDir(); err != nil {
 			return nil, &preSpawnRefusal{err}
 		}
@@ -244,8 +256,6 @@ func (r *ProcessRunner) Run(ctx context.Context, argv []string, stdin []byte) ([
 		}
 		argv = append(append([]string(nil), argv...), "--state-dir", r.stateDir)
 	}
-	ctx, cancel := context.WithTimeout(ctx, r.timeout)
-	defer cancel()
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	// [TARGET, unit decision] Own a fresh group for this native invocation.
 	// CommandContext's default Kill reaches only the leader, leaving helpers
