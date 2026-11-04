@@ -53,7 +53,9 @@ impl Server {
                 .is_some_and(|creator| creator.component == Component::Ui)
         {
             self.authority.apply_with_witnesses(
-                Input::Refuse { reason: Refusal::Policy },
+                Input::Refuse {
+                    reason: Refusal::Policy,
+                },
                 vec![boundary],
             )?;
             return self.rewind_refused(now, env, r, "OWNER");

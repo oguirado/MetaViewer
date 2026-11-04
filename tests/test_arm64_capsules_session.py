@@ -277,12 +277,33 @@ class SessionTests(Fixture):
                 patch.object(s.setup, 'host_check', return_value={}), \
                 patch.object(s.setup, 'interpreter_check'), \
                 patch.object(s, 'ui_transport', return_value={}), \
+                patch.object(s, 'ui_bus_executable', return_value='/synthetic/xdg-dbus-proxy'), \
                 patch.object(s.setup, 'read', return_value=b'{}'), \
                 patch.object(s.setup, 'registry_path', return_value=directory / 'setup.json'), \
                 patch.object(s.subprocess, 'call') as call:
-            with self.assertRaises(s.setup.Refused):
+            with self.assertRaisesRegex(s.setup.Refused, 'previous session requires reconciliation'):
                 s.launch(self.value['package']['app']['path'], self.value['source_root'], str(self.root / 'ui.json'), self.value['source_commit'], 111, 222)
             call.assert_not_called()
+
+    def test_ui_bus_proxy_unavailable_is_typed_refusal(self):
+        for error in (FileNotFoundError(), PermissionError()):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(Path, 'resolve', side_effect=error):
+                with self.assertRaisesRegex(s.setup.Refused, 'protected desktop bus proxy required'):
+                    s.ui_bus_executable()
+
+    def test_ui_bus_proxy_requires_protected_executable(self):
+        binary = Path('/synthetic/xdg-dbus-proxy')
+        for uid, mode, admitted in ((0, 0o100755, True), (1, 0o100755, False),
+                                    (0, 0o100777, False), (0, 0o100644, False)):
+            with self.subTest(uid=uid, mode=mode), \
+                    patch.object(Path, 'resolve', return_value=binary), \
+                    patch.object(Path, 'stat', return_value=Mock(st_uid=uid, st_mode=mode)):
+                if admitted:
+                    self.assertEqual(s.ui_bus_executable(), str(binary))
+                else:
+                    with self.assertRaisesRegex(s.setup.Refused, 'protected desktop bus proxy required'):
+                        s.ui_bus_executable()
 
     def test_invalid_scope_limits_block_admission(self):
         raw = b'ActiveState=active\nControlGroup=/user.slice/owned.scope\nMemoryHigh=1\nMemoryMax=8589934592\nMemorySwapMax=0\nTasksMax=256\nCPUQuotaPerSecUSec=2s\n'
