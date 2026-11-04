@@ -78,7 +78,7 @@ test('mounted launcher restores only after visible changes to false and renders 
   globalThis.document = { activeElement: { isConnected: true, focus() { focused++; } } };
   const stub = vue.defineComponent({ setup(_props, ctx) { dialog = ctx; return () => vue.h('div', {}, ctx.slots.empty?.()); } });
   const Launcher = await component('catalog/CatalogLauncher.vue', {
-    '../../.kit/capsule-ui-kit/src/index-shell.js': { NewCapsuleDialog: stub }, './catalogModel.js': catalog,
+    './GroupedCapsuleDialog.vue': stub, './catalogModel.js': catalog,
   });
   const state = vue.reactive({ visible: false });
   const Wrapper = vue.defineComponent({ setup: () => () => vue.h(Launcher, { visible: state.visible, kinds: ['ERR_PRIVATE /secret', '!!!', '???'] }) });

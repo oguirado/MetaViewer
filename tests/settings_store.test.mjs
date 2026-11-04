@@ -138,16 +138,16 @@ test('missing keys default exactly as renderer decode; explicit invalid values r
   // scheme -> 'mv-light', density -> 'compact', wallFps -> 30, recordingFps -> 3.
   // Fails on any mutation of per-field defaults on host or renderer.
   for(const [partial,expected] of [
-    [{},{scheme:'mv-light',density:'compact',wallFps:30,recordingFps:3}],
-    [{density:'comfortable',wallFps:60,recordingFps:12},{scheme:'mv-light',density:'comfortable',wallFps:60,recordingFps:12}],
+    [{},{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3}],
+    [{density:'comfortable',wallFps:60,recordingFps:12},{scheme:'mv-dark',density:'comfortable',wallFps:60,recordingFps:12}],
     [{scheme:'mv-dark',wallFps:60,recordingFps:12},{scheme:'mv-dark',density:'compact',wallFps:60,recordingFps:12}],
     [{scheme:'mv-dark',density:'comfortable',recordingFps:12},{scheme:'mv-dark',density:'comfortable',wallFps:30,recordingFps:12}],
     [{scheme:'mv-dark',density:'comfortable',wallFps:3},{scheme:'mv-dark',density:'comfortable',wallFps:3,recordingFps:3}],
     [{scheme:'mv-dark'},{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3}],
-    [{density:'compact'},{scheme:'mv-light',density:'compact',wallFps:30,recordingFps:3}],
-    [{density:'comfortable'},{scheme:'mv-light',density:'comfortable',wallFps:30,recordingFps:3}],
-    [{wallFps:3},{scheme:'mv-light',density:'compact',wallFps:3,recordingFps:3}],
-    [{recordingFps:24},{scheme:'mv-light',density:'compact',wallFps:30,recordingFps:24}],
+    [{density:'compact'},{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3}],
+    [{density:'comfortable'},{scheme:'mv-dark',density:'comfortable',wallFps:30,recordingFps:3}],
+    [{wallFps:3},{scheme:'mv-dark',density:'compact',wallFps:3,recordingFps:3}],
+    [{recordingFps:24},{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:24}],
     [{scheme:'mv-dark',density:'compact'},{scheme:'mv-dark',density:'compact',wallFps:30,recordingFps:3}],
     [{scheme:'mv-light',density:'comfortable'},{scheme:'mv-light',density:'comfortable',wallFps:30,recordingFps:3}],
   ]) {

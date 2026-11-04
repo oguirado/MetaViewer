@@ -1,0 +1,2 @@
+- Seal rejected ARM inventory bindings before closing their owner, preserving the original binding error.
+- Keep schema, metadata and facade regression checks exact without requiring historical Git objects in shallow CI clones.

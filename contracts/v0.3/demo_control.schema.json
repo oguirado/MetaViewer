@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:metaviewer:demo-control:v1",
+  "title": "Private host demo controller request",
+  "description": "Session-bound CLI requests to the existing host recording controller; no paths, PIDs or shell text.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "method",
+        "args"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "method": {
+          "const": "demo.start"
+        },
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "identity",
+              "demo"
+            ],
+            "properties": {
+              "identity": {
+                "type": "string",
+                "minLength": 2,
+                "maxLength": 40,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "demo": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "method",
+        "args"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "method": {
+          "const": "demo.prompt"
+        },
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "demo",
+              "site"
+            ],
+            "properties": {
+              "demo": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              },
+              "site": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "method",
+        "args"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "method": {
+          "const": "demo.check"
+        },
+        "args": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "site"
+            ],
+            "properties": {
+              "site": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "^[a-z0-9][a-z0-9-]*$"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "method",
+        "args"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "method": {
+          "const": "demo.stop"
+        },
+        "args": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 0
+        }
+      }
+    }
+  ]
+}

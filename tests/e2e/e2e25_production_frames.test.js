@@ -1099,6 +1099,10 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       ipcRenderer: {
         invoke: async (channel, ...args) => {
           invocations.push([channel, args]);
+          if (channel === 'metaviewer:capsule-state.request') {
+            const { credential_copy_confirmed, ...request } = args[0];
+            return { ...request, schema: 'capsule_state_event/v0.2', event: 'completed', slots: [] };
+          }
           return true;
         },
         on() {},
@@ -1110,17 +1114,49 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'capture',
       'clipboard',
       'frames',
+      'guestCommand',
+      'headless',
       'input',
       'load',
       'loadSettings',
       'nestedDepth',
       'operator',
       'recordingDestination',
+      'rewind',
       'save',
       'saveSettings',
       'selfCapsuleId',
       'sideTerminal',
+      'slots',
     ]);
+
+    // Public typed workload groups are shipped independently of frame diagnostics.
+    // They expose closed requests/snapshots, never raw IPC or native reset handles.
+    for (const [name, methods] of Object.entries({
+      guestCommand: ['capabilities', 'onObservation', 'request', 'status', 'subscribe'],
+      headless: ['request', 'status', 'subscribe'],
+      rewind: ['request', 'status', 'subscribe'],
+    })) {
+      assert.deepEqual(Object.keys(api[name]).sort(), methods);
+      assert.equal(Object.isFrozen(api[name]), true);
+      for (const method of methods) assert.equal(typeof api[name][method], 'function');
+      assert.throws(() => assert.deepEqual(Object.keys({ ...api[name], unexpected() {} }).sort(), methods),
+        { code: 'ERR_ASSERTION' });
+      for (const privateMethod of ['invoke', 'send', 'reset', 'transport']) {
+        assert.equal(Object.hasOwn(api[name], privateMethod), false);
+      }
+    }
+    for (const privateMethod of ['invoke', 'send', 'transport', 'frameDiag']) {
+      assert.equal(Object.hasOwn(api, privateMethod), false);
+    }
+    const beforeInvalidCalls = invocations.length;
+    for (const name of ['guestCommand', 'headless', 'rewind']) {
+      await assert.rejects(api[name].status('unexpected'));
+      await assert.rejects(api[name].request({ op: 'unexpected', privateMethod: 'invoke' }));
+      assert.throws(() => api[name].subscribe(null));
+    }
+    assert.throws(() => api.guestCommand.onObservation(null));
+    assert.equal(invocations.length, beforeInvalidCalls, 'invalid workload calls must not cross IPC');
     const facadeKeys = Object.keys(api).sort();
     assert.throws(() => assert.deepEqual(Object.keys({ ...api, unexpected() {} }).sort(), facadeKeys),
       { code: 'ERR_ASSERTION' });
@@ -1146,8 +1182,18 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       'subscribeFrames',
       'vmAvailable',
     ]);
+    assert.deepEqual(Object.keys(api.slots), ['request']);
+    assert.ok(Object.isFrozen(api.slots));
     assert.deepEqual(Object.keys(api.frames), ['reportDiag']);
     assert.equal(invocations.length, 0);
+    const slotRequest = { schema: 'capsule_state_request/v0.2', operation_id: 'facade-slot',
+      op: 'list', profile_id: 'profile-demo', slot_id: 'slot-demo', credential_copy_confirmed: true };
+    await api.slots.request(slotRequest);
+    const { WIRE_CHANNELS } = await import('../../ui/electron/authorityWire.js');
+    assert.equal(WIRE_CHANNELS.slotRequest, 'metaviewer:capsule-state.request');
+    assert.deepEqual(invocations, [[WIRE_CHANNELS.slotRequest, [slotRequest]]]);
+    await assert.rejects(api.slots.request({ ...slotRequest, channel: 'unexpected' }));
+    assert.equal(invocations.length, 1, 'invalid slot request must not cross IPC');
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -1,0 +1,12 @@
+{
+  "schema": "capsule_capabilities/v0.2",
+  "supported_host": true,
+  "vm": {
+    "available": true,
+    "reason": ""
+  },
+  "microvm": {
+    "available": true,
+    "reason": ""
+  }
+}

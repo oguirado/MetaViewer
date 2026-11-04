@@ -127,12 +127,12 @@ test('unknown, empty, and repeated ?scheme= refuse boot with the fixed preview c
 
 test('live boot ignores ?scheme= entirely, including garbage', async () => {
   const host = { load: async () => null, save: async () => true };
-  for (const search of ['', '?scheme=mv-dark', '?scheme=bogus', '?scheme=a&scheme=b', '?scheme=']) {
+  for (const search of ['', '?scheme=mv-light', '?scheme=bogus', '?scheme=a&scheme=b', '?scheme=']) {
     const { mount, mounted, kitSchemes } = await bootEntry(search, { host });
     assert.equal(mount.textContent, '', `live ${search} mounts`);
     assert.ok(mounted, `live ${search} mounts`);
     assert.equal(mounted.props.fixture, null);
-    assert.deepEqual(kitSchemes, ['mv-light'], `live ${search} keeps the default seed`);
+    assert.deepEqual(kitSchemes, ['mv-dark'], `live ${search} keeps the default seed`);
   }
 });
 

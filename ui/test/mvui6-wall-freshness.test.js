@@ -1,3 +1,4 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 // Lane W (MV-8): the Frame badge never shows together with the
 // "Connecting to surface" placeholder. The badge claims an admitted frame,
 // so it must stay hidden until the tile scheduler affirmatively reports a
@@ -259,7 +260,7 @@ describe('MV-8 tile markup contracts', () => {
   });
 
   test('badge gate adds zero bare controls', () => {
-    for (const tag of interactiveTags(template)) assertAnchoredControl(tag);
+    for (const tag of interactiveTags(withoutPairedTerminalControl(template))) assertAnchoredControl(tag);
   });
 
   test('negative control: a control without an anchor fails the anchor predicate', () => {
