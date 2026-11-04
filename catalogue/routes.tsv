@@ -329,6 +329,12 @@ v028-fit.md	changes/unreleased/v028-fit.md
 v028-grid6.md	changes/unreleased/v028-grid6.md
 v028-orphan-2.md	changes/unreleased/v028-orphan-2.md
 v028-orphan.md	changes/unreleased/v028-orphan.md
+v028qui-b5369b94aa59	changes/unreleased/v028-quick-crash-c5.md
+v028-quick-perf4.md	changes/unreleased/v028-quick-perf4.md
+v028-quick-sec2-t3.md	changes/unreleased/v028-quick-sec2-t3.md
+v028-quick-sec2-t5.md	changes/unreleased/v028-quick-sec2-t5.md
+v028-quick-sec2-t6.md	changes/unreleased/v028-quick-sec2-t6.md
+v028-quick-sec2-t8.md	changes/unreleased/v028-quick-sec2-t8.md
 v028-ref.md	changes/unreleased/v028-ref.md
 v028-slots-core.md	changes/unreleased/v028-slots-core.md
 v028-slots-store.md	changes/unreleased/v028-slots-store.md
@@ -3224,6 +3230,7 @@ v027til-aec2d0c0bc3c	ui/test/v027-tile-chrome.test.js
 v027-u3c.test.js	ui/test/v027-u3c.test.js
 v027win-4af1694b2e2c	ui/test/v027-window-close-live-order.test.js
 v027win-4508650304ef	ui/test/v027-window-resize.test.js
+v028dis-327661b55429	ui/test/v028-display-conversion.test.js
 v028-fit-render.cjs	ui/test/v028-fit-render.cjs
 v028fit-1d677c28111c	ui/test/v028-fit-render.test.js
 v028-fit.test.js	ui/test/v028-fit.test.js
@@ -3233,6 +3240,7 @@ v028orp-8bfbd9efdd7e	ui/test/v028-orphan-release-live.cjs
 v028orp-960ca38225fe	ui/test/v028-orphan-release-live.html
 v028orp-b574bd667de3	ui/test/v028-orphan-release-live.js
 v028orp-a675e6c6ca58	ui/test/v028-orphan-release.test.js
+v028pro-c087ddecf946	ui/test/v028-program-sidecar.test.js
 v028-tiles-visual.js	ui/test/v028-tiles-visual.js
 v028-tiles.html	ui/test/v028-tiles.html
 v028-tiles.test.js	ui/test/v028-tiles.test.js
