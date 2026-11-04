@@ -1,0 +1,15 @@
+{"q":"how do I install without docker","expect":["docs/JUDGE_NO_DOCKER.md"]}
+{"q":"what is MetaViewer and what is it not","expect":["README.md"]}
+{"q":"how does rewind restore deleted files on the arm64 microvm","expect":["docs/ARM64_MICROVM_REWIND.md"]}
+{"q":"set up arm64 capsule assets for VM and MicroVM","expect":["docs/ARM64_CAPSULE_SETUP.md"]}
+{"q":"what happens when the session journal is full","expect":["docs/JOURNAL_END.md"]}
+{"q":"how does an AI operator drive the app","expect":["docs/AI_OPERATOR_GUIDE.md"]}
+{"q":"judge install fails troubleshooting","expect":["docs/JUDGE_TROUBLESHOOTING.md"]}
+{"q":"commit message rules and authorship identity","expect":["docs/COMMIT_LAWS.md","LAWS.md"]}
+{"q":"how do I run the test suite","expect":["docs/TESTING.md"]}
+{"q":"which components are private and closed source","expect":["NOTICE-EVALUATION.md"]}
+{"q":"adapter input limits for long typed text","expect":["docs/ADAPTER_INPUT_LIMITS.md"]}
+{"q":"admission refuses an action from the agent","expect":["core/src/admission/"]}
+{"q":"replay a session journal with mv-replay","expect":["core/src/replay/","core/src/bin/"]}
+{"q":"several capsules on one wall grid","expect":["docs/MULTI_CAPSULE.md"]}
+{"q":"what is proven and where is the evidence","expect":["docs/EVIDENCE.md"]}

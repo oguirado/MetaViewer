@@ -5,8 +5,13 @@ Findings are unreviewed model output, pinned to a commit. Each row is marked aga
 working tree: FRESH (cited code unchanged), SHIFT (same bytes, moved), STALE (changed or
 gone), UNKNOWN (citation never resolved). They are coordinates, not proof: read the code.
 Empty rows mean not indexed, not absent. Reads only; writes nothing. Standard library only.
+
+docs and any return a shortlist under 2000 bytes and 20 rows, or {"abstain": "no_query_term"}
+when no word of the question is in the index. check verifies the docs index, every anchor,
+every link and every study span, and prints ROUTE_OK.
 """
 import argparse
+import importlib.util
 import hashlib
 import json
 import math
@@ -24,6 +29,18 @@ CODE = frozenset({'.rs', '.go', '.c', '.h', '.py', '.js', '.mjs', '.cjs', '.jsx'
 LITERALS = (re.compile(r'"((?:[^"\\\n]|\\.){6,200})"'), re.compile(r"'((?:[^'\\\n]|\\.){6,200})'"), re.compile(r'`([^`\n]{6,200})`'))
 RRF = 60
 RANKED = 30
+SHORTLIST_BYTES = 2000
+SHORTLIST_ROWS = 20
+BM25_K1, BM25_B = 1.2, 0.75
+DOC_FIELDS = {'title': 3.0, 'answers': 3.0, 'doc': 2.0, 'body': 1.0}
+LEVELS = ('extract', 'part', 'folder', 'root', 'dossier')
+
+
+def load_docs_tool(root=ROOT):
+    spec = importlib.util.spec_from_file_location('route_docs', Path(root) / 'tools' / 'route_docs.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def words(value):
@@ -49,8 +66,18 @@ class Map:
         self.manifest = json.loads((self.data / 'manifest.json').read_text(encoding='utf-8'))
         self.skip = re.compile(self.manifest['skip'])
         self.symbols = [{'path': row[0], 'name': row[1], 'kind': row[2], 'start': row[3], 'end': row[4]} for row in jsonl(self.data / 'symbols.jsonl')]
-        self.nodes = jsonl(self.data / 'nodes.jsonl')
+        self.nodes = self.merge_study(jsonl(self.data / 'nodes.jsonl'))
+        self.docs_index = jsonl(self.data / 'docs.jsonl')
         self.bytes_cache = {}
+
+    def merge_study(self, base):
+        """Study rows first; an older extract row is dropped when a study row cites the same file."""
+        study = []
+        for path in sorted((self.data / 'study').glob('*.jsonl')) if (self.data / 'study').is_dir() else []:
+            study.extend(dict(row, origin=path.stem) for row in jsonl(path) if row.get('s') is not None)
+        covered = {cite[0].split('::', 1)[0] for row in study for cite in row['s'][:1]}
+        kept = [row for row in base if not (row['l'] == 'extract' and row['s'] and row['s'][0][0].split('::', 1)[0] in covered)]
+        return study + kept
 
     def read(self, path):
         """Bytes with CRLF normalised, so a Windows checkout compares equal to the pin."""
@@ -83,6 +110,8 @@ class Map:
             return ('FRESH' if digest(data) == sha else 'STALE'), path, None, None
         if digest(data[start:start + length]) == sha:
             return 'FRESH', path, start, start + length
+        if length > start and digest(data[start:length]) == sha:
+            return 'FRESH', path, start, length
         position = data.find(b'\n')
         lines = [0]
         while position != -1:
@@ -102,15 +131,18 @@ class Map:
                 code.append(f'{path}@{start}-{end}' if start is not None else path)
         worst = next((state for state in ('STALE', 'UNKNOWN', 'SHIFT') if state in states), 'FRESH')
         row = {'state': worst, 'level': node['l'], 'folder': node['f'], 'kind': node['k'], 'text': node['t'], 'sids': [cite[0] for cite in node['s'][:4]], 'code': code}
+        if node.get('origin'):
+            row['study'] = node['origin']
         if score is not None:
             row['score'] = round(score, 3)
         return row
 
-    def rank_nodes(self, query):
+    def rank_nodes(self, query, level=None):
         wanted = terms(query)
-        if not wanted or not self.nodes:
+        nodes = [node for node in self.nodes if level is None or node['l'] == level]
+        if not wanted or not nodes:
             return []
-        documents = [set(words(node['t'])) | set(words(' '.join(cite[0].rsplit('::', 1)[-1] for cite in node['s']))) for node in self.nodes]
+        documents = [set(words(node['t'])) | set(words(' '.join(cite[0].rsplit('::', 1)[-1] for cite in node['s']))) for node in nodes]
         frequency = {word: sum(1 for document in documents if word in document) for word in wanted}
         weight = {word: math.log(1 + (len(documents) + 1) / (1 + frequency[word])) for word in wanted}
         scored = []
@@ -118,11 +150,11 @@ class Map:
             score = sum(weight[word] for word in wanted if word in document)
             if score > 0:
                 scored.append((-score, index))
-        return [(-score, self.nodes[index]) for score, index in sorted(scored)]
+        return [(-score, nodes[index]) for score, index in sorted(scored)]
 
-    def ask(self, query, k):
+    def ask(self, query, k, level=None):
         out, seen = [], set()
-        for score, node in self.rank_nodes(query):
+        for score, node in self.rank_nodes(query, level):
             if node['t'] in seen:
                 continue
             seen.add(node['t'])
@@ -268,6 +300,86 @@ class Map:
         return [{'path': row['path'], 'name': row['name'], 'line': row.get('line')} for row in rows if (row['path'], row['name']) not in known][:k]
 
 
+    def doc_section(self, node):
+        data = self.read(node['path'])
+        if data is None:
+            return None, 'STALE'
+        section = data[node['start']:node['end']]
+        return section, ('FRESH' if hashlib.sha256(section).hexdigest() == node['sha256'] else 'STALE')
+
+    def rank_docs(self, query, level=None):
+        """Field-weighted BM25: title and Answers 3, document path and H1 2, section text 1."""
+        wanted = terms(query)
+        nodes = [node for node in self.docs_index if level != 'dossier' or node['path'].startswith('docs/dossiers/')]
+        if not wanted or not nodes:
+            return []
+        fields, states = [], []
+        for node in nodes:
+            section, state = self.doc_section(node)
+            fields.append({'title': words(node['title']), 'answers': words(node['answers']),
+                           'doc': words(node['path']) + words(node.get('doc_title', '')),
+                           'body': words(section.decode('utf-8', 'replace')) if section else []})
+            states.append(state)
+        sets = [set().union(*field.values()) for field in fields]
+        frequency = {word: sum(1 for found in sets if word in found) for word in wanted}
+        wanted = [word for word in wanted if frequency[word]]
+        if not wanted:
+            return []
+        idf = {word: math.log(1 + (len(nodes) - frequency[word] + 0.5) / (frequency[word] + 0.5)) for word in wanted}
+        average = {name: max(1.0, sum(len(field[name]) for field in fields) / len(fields)) for name in DOC_FIELDS}
+        scored = []
+        for index, field in enumerate(fields):
+            if not sets[index] & set(wanted):
+                continue
+            score = 0.0
+            for name, weight in DOC_FIELDS.items():
+                bag = field[name]
+                if not bag:
+                    continue
+                norm = BM25_K1 * (1 - BM25_B + BM25_B * len(bag) / average[name])
+                for word in wanted:
+                    count = bag.count(word)
+                    if count:
+                        score += weight * idf[word] * count * (BM25_K1 + 1) / (count + norm)
+            scored.append((-score, index))
+        return [(-score, nodes[index], states[index]) for score, index in sorted(scored)]
+
+    def docs(self, query, k, level=None):
+        rows = []
+        for score, node, state in self.rank_docs(query, level)[:k]:
+            rows.append({'ref': f"{node['path']}#{node['anchor']}", 'at': f"{node['path']}:{node['line']}", 'title': node['title'][:90], 'answers': node['answers'][:120], 'state': state, 'score': round(score, 2)})
+        return rows
+
+    def any(self, query, k, level=None):
+        """One shortlist over docs sections, code files and findings, fused by reciprocal rank."""
+        sources = {'doc': self.docs(query, RANKED, level)}
+        if level != 'dossier':
+            sources['code'] = [{'path': row['path'], 'line': row['line'], 'via': row['via']} for row in self.locate(query, RANKED)]
+        sources['finding'] = [{'state': row['state'], 'level': row['level'], 'text': row['text'][:140], 'code': row['code'][:1]} for row in self.ask(query, RANKED, level)]
+        order = {'doc': 0, 'code': 1, 'finding': 2}
+        votes = []
+        for kind, rows in sources.items():
+            for position, row in enumerate(rows, 1):
+                votes.append((-1 / (RRF + position), order[kind], position, dict({'type': kind}, **{key: value for key, value in row.items() if key != 'score'})))
+        # Equal reciprocal ranks interleave the sources: a section first, then code, then a finding.
+        return [row for *_, row in sorted(votes, key=lambda item: item[:3])[:k]]
+
+
+def shortlist(rows, abstain=None):
+    """Compact JSON, one row per line, at most SHORTLIST_ROWS rows and SHORTLIST_BYTES bytes."""
+    if abstain:
+        return json.dumps({'abstain': abstain, 'rows': []})
+    head, tail = '{"note":"coordinates, not proof","rows":[', '\n]}'
+    lines = []
+    for row in rows[:SHORTLIST_ROWS]:
+        line = json.dumps(row, ensure_ascii=False, separators=(',', ':'))
+        candidate = head + ','.join('\n' + item for item in lines + [line]) + tail
+        if len(candidate.encode('utf-8')) > SHORTLIST_BYTES:
+            break
+        lines.append(line)
+    return head + ','.join('\n' + item for item in lines) + tail
+
+
 def rank(scores):
     ordered = sorted((item for item in scores.items() if item[1] > 0), key=lambda item: (-item[1], item[0]))
     return [path for path, _ in ordered[:RANKED]]
@@ -275,13 +387,27 @@ def rank(scores):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('command', choices=['locate', 'ask', 'find', 'where', 'error', 'file', 'folder', 'map', 'tests', 'show', 'stats', 'new'])
+    parser.add_argument('command', choices=['any', 'docs', 'check', 'locate', 'ask', 'find', 'where', 'error', 'file', 'folder', 'map', 'tests', 'show', 'stats', 'new'])
     parser.add_argument('query', nargs='?', default='')
     parser.add_argument('--k', type=int, default=8)
+    parser.add_argument('--level', choices=LEVELS, default=None, help='only findings of this level; dossier also limits docs to docs/dossiers/')
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    if args.command == 'check':
+        failures = load_docs_tool().check(ROOT)
+        for failure in failures[:50]:
+            print(failure)
+        print(f'ROUTE_FAIL {len(failures)} failure(s)' if failures else 'ROUTE_OK')
+        return 1 if failures else 0
     route = Map()
+    if args.command in ('docs', 'any'):
+        rows = getattr(route, args.command)(args.query, min(args.k, SHORTLIST_ROWS), args.level)
+        print(shortlist(rows, None if rows else 'no_query_term'))
+        return 0
+    if args.command == 'ask':
+        print(json.dumps({'rows': route.ask(args.query, args.k, args.level)}, indent=1, ensure_ascii=False))
+        return 0
     if args.command == 'file':
         out = route.file(args.query, args.k)
     elif args.command == 'folder':
