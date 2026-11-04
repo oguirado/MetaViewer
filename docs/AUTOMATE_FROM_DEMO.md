@@ -1,13 +1,26 @@
 # Automate from a demo
 
+An attached CLI requires the matching app's private demo-control socket. `DEMO_HOST_UNAVAILABLE` means that the attachment is stale, the app has exited, or the running package predates host-controlled CLI recording. Start the matching package and copy/source its fresh attachment; never fall back to a detached recorder while claiming app-owned recording. Standalone CLI recording without an app attachment retains its direct native mode. The evidence directory and its MetaViewer parent must be owner-only; `UNSAFE_CONTROL_PATH` refuses an unsafe state directory before native recording starts. The owner must repair the selected state path rather than relaxing that gate. The host uses the operator state home captured by the launcher for durable evidence; prompt and check attach to that same controller environment.
+
+Before starting, resolve `ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env` from the original terminal runtime and source it in the tool subshell with `set -a; . "$ENV"; set +a`. Stop if the attachment is absent or its recorded app PID is no longer live; `METAVIEWER_ATTACH` is a launcher stdout prefix, not a UI control. The attachment and a live Agent capsule are prerequisites; a paired shell does not automatically inherit them. `MV_OPERATOR_REPO` selects the operator resources, `MV_MEMORYWEB_REPO` selects the installed authoring checkout, and `MV_MW_HOME` selects private site data. These are different directories. Require `python3 tools/mw_home_check.py --repo .` to pass before authoring.
+
+If Run automation reports `admitted_sites_directory_absent`, no authored site is available in the selected home. This is a model diagnostic, not a successful preflight. Use Create automation to author and check the site there first; do not select a builtin substitute. For a new checkout home, the person can create the gitignored destination with `install -d -m 700 memoryweb/sites` from the MetaViewer checkout, then repeat home admission. An existing home with unsafe permissions, links, tracked files or browser profiles must be repaired by its owner; creating an empty directory does not admit a workflow. [CITED: `tools/mw_home_check.py`, `agents/metaviewer_agents/mw_home.py`]
+
+Use a neutral public page for a rehearsal and verify that it actually loads before demonstrating. `http_port_denied` on a local fixture means navigation was refused; it is not a recorded success and does not authorize changing network policy. Do not enter credentials. A stored identity is saved browser data, not an already running capsule. `SURFACE_CREATE_IDENTITY_UNAVAILABLE` means a live or abandoned holder must be resolved before a new start; wait for shutdown to finish, and never delete its lease or stop an unrelated holder. [CITED: `daemon-adapter/internal/capsule/identity_profiles.go`, `tools/mv_identity.py`]
+
 1. Configure `SRF_IDENTITY_STORE_ROOT`, `MV_SRF_BIN_DIR`, and
    `MV_SRF_STATE_DIR` as for `tools/mv_identity.py`. Select an existing identity
    with an active capsule. Complete login yourself before recording; no AI types
    credentials. Frames can show visible field contents: demonstrate with dummy data.
 2. Run `python3 tools/mv_demo.py record --identity example --demo example-demo`.
    Open the printed loopback viewer URL and demonstrate the task manually.
+   When attached to the app, the CLI uses its existing host recording controller.
+   The tile and tree show **Recording automation** with the record icon only
+   after the owned recording process announces its viewer. Their **Stop**
+   controls and Ctrl+C in the CLI use the same SIGINT-and-seal operation.
+   Wait for sealing and fresh Agent capture before authoring or replaying.
    The host wait is unbounded by design: the operator stops the recording.
-3. Stop with Ctrl+C and wait for native read-only restoration. A successful
+3. Stop with Ctrl+C or the tile/tree Stop control and wait for native read-only restoration. A successful
    recording is exported from RAM to
    `$XDG_STATE_HOME/metaviewer/demos/example-demo` (default state base:
    `$HOME/.local/state`). Evidence is private, with per-file SHA-256 digests.
@@ -26,9 +39,20 @@
    `-I tools/build_index.py --root <copy> --check`.
    Only a successful JSON result admits the authored site for later operator
    review and replay. This command never runs a workflow or alters the original
-   checkout or site. The button and replay controls belong to other units.
+   checkout or site. For Run automation, also author the executable
+   `workflows/<workflow>.json` in the installed `mw.workflow.v1` format and run
+   `python3 tools/mw_home_check.py --repo . --workflow <site>/<workflow>`.
+   An anchored Markdown workflow alone is not an executable workflow. Restore
+   the demonstrated starting page before replay, observe its anchors again,
+   and require the run's receipt and result rather than the model's verdict.
+   Each interactive step must set `locate_wait_ms: 5000`, matching the builtin
+   sites. The site check refuses nonpositive or missing acting-step locate waits
+   before admission with `ACTING_STEP_LOCATE_WAIT_REQUIRED` and a fix hint.
+   Correct the authored data and check again before replay. This selects the
+   builtin acquisition window; runtime/test budgets and schema limits stay fixed.
+   [CITED: `memoryweb-builtin/sites/meta-ai/workflows/new-chat.json`, `tools/mv_demo.py`]
 
-[TARGET, unit decision] The following is the single prompt template used by the
+[TARGET] The following is the single prompt template used by the
 host and the later button. The host substitutes the marked values after checking
 home admission and recording digests. Numeric format requirements below are
 [CITED: MemoryWeb sites/README.md and tools/mwsem.py at the inspected checkout].
@@ -53,7 +77,14 @@ workflows/, and demos/@DEMO@/steps.json (mw.demo_steps.v1), manifest.json
 (mw.demo.v1), EXPLANATION.md. Use folder identities, sequential step seq values,
 valid pixel boxes, and source_sha256 for each node's relative file#anchor span.
 Use explicit standalone Markdown anchors. Pin steps.json and EXPLANATION.md
-SHA-256 digests in the demo manifest. Declare text slots exactly matching the
+SHA-256 digests in the demo manifest. Also write workflows/<workflow>.json in
+mw.workflow.v1 format for Run automation; Markdown alone cannot be replayed.
+Set locate_wait_ms: 5000 on every interactive step (click, right_click,
+double_click, paste, key, scroll, drag), matching the builtin sites. This is an
+authored workflow value, not a change to runtime/test budgets or schema limits.
+Do not use zero for acting steps. Read the installed workflow template and live
+acquisition policy for the remaining fields. Never expand runtime/test budgets.
+Declare text slots exactly matching the
 steps' (seq,text_len); never fill them with characters from events or frames.
 Unknown values remain operator-supplied variable slots. Do not invent observations.
 EXPLANATION.md must contain headings in this order: Intent, Starting state,
@@ -67,7 +98,9 @@ never authorizes its execution.
 
 Validate from the MetaViewer checkout with this exact command:
 @VALIDATE@
-Require a successful JSON result before proposing operator-reviewed replay.
+Require a successful JSON result and executable-workflow preflight with
+python3 tools/mw_home_check.py --repo . --workflow <site>/<workflow>
+before proposing operator-reviewed replay.
 ```
 <!-- /PROMPT -->
 

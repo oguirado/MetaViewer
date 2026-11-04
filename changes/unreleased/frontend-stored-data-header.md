@@ -1,0 +1,2 @@
+- Add capability-gated Save and Load header actions for Browser and Program identities that open their existing stored-data slots with stopped-only wording.
+- Keep Host programs, Desktop windows, unknown kinds and protected profiles free of unsupported state controls.

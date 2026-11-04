@@ -1,0 +1,2 @@
+- Add ARM64 MicroVM guest commands with persistent workspace files, separate output streams, exit status, cancellation and owned stop. Commands execute as an unprivileged guest user with host-owned images and resource limits.
+- Keep graphical VM and fixed-job MicroVM capabilities separate. General image import, networking, graphical MicroVM and other architectures require their own acceptance.

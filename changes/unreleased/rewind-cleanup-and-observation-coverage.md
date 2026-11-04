@@ -1,0 +1,1 @@
+- Reserve the final rewind request slot for authenticated Stop and cover command observation fixtures across validators and renderer event tests.

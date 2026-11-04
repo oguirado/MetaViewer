@@ -1,0 +1,2 @@
+- Retain release and list reconciliation refresh requirements across failed native captures so the next successful static-page capture publishes a fresh generation.
+- Verify static-page control release across the real core and adapter: require another native capture, reject the old generation, and admit the fresh generation even when pixels match.

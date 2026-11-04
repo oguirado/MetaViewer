@@ -611,7 +611,7 @@ export function createCaptureState(port) {
     if (known !== undefined) return known;
     const entry = freshEntry();
     bySurface[surfaceId] = entry;
-    return entry;
+    return bySurface[surfaceId];
   }
 
   /**

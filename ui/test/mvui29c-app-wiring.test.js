@@ -1,3 +1,6 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI29c lane T: App terminal wiring. The multislot child receives the
 // terminal session port, the provider list, the broker commands and the
@@ -50,7 +53,7 @@ async function mountAppForTerminal(initial = {}) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': stub,
       './surfaces/SurfaceCanvas.vue': stub,
-      './surfaces/tileScheduler.js': { createTileScheduler },
+      './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
     });
     const id = initial.fixture?.capsules?.[0]?.id ?? 'cap-01';
     const row = vue.reactive({

@@ -1,0 +1,1 @@
+- Disarm the run timer before publishing the final result so expiry cannot append a contradictory result line.

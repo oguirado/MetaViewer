@@ -81,20 +81,20 @@ function liveHost(settingsHost, saveText = () => {}) {
 }
 
 test('live boot paints the stored scheme before mount and reads the host once', async () => {
-  let text = settings('mv-dark');
+  let text = settings('mv-light');
   const host = liveHost({ loadSettings: async () => text }, json => { text = json; });
   const { mount, mounted, kitSchemes } = await bootEntry('', { host });
   assert.equal(mount.textContent, '');
   assert.ok(mounted, 'live boots');
   assert.equal(mounted.props.fixture, null);
-  assert.equal(mounted.props.initialScheme, 'mv-dark');
-  assert.deepEqual(kitSchemes, ['mv-dark'], 'kit follows the stored scheme');
-  assert.deepEqual(mounted.kitAtMount, ['mv-dark'], 'scheme is known before mount: no flash');
+  assert.equal(mounted.props.initialScheme, 'mv-light');
+  assert.deepEqual(kitSchemes, ['mv-light'], 'kit follows the stored scheme');
+  assert.deepEqual(mounted.kitAtMount, ['mv-light'], 'scheme is known before mount: no flash');
   assert.deepEqual(host.calls, ['load'], 'one host read at boot');
   assert.equal(await mounted.props.settingsHost.loadSettings(), text, 'panel reuses the settled read');
   assert.deepEqual(host.calls, ['load'], 'the reuse hits no host call');
-  await mounted.props.settingsHost.saveSettings(settings('mv-light'));
-  assert.equal(await mounted.props.settingsHost.loadSettings(), settings('mv-light'), 'save refreshes the memoized read');
+  await mounted.props.settingsHost.saveSettings(settings('mv-dark'));
+  assert.equal(await mounted.props.settingsHost.loadSettings(), settings('mv-dark'), 'save refreshes the memoized read');
 });
 
 test('negative control: absent storage boots the primary scheme, proving the scheme came from storage', async () => {
@@ -102,8 +102,8 @@ test('negative control: absent storage boots the primary scheme, proving the sch
   const { mount, mounted, kitSchemes } = await bootEntry('', { host });
   assert.equal(mount.textContent, '');
   assert.ok(mounted);
-  assert.equal(mounted.props.initialScheme, 'mv-light');
-  assert.deepEqual(kitSchemes, ['mv-light']);
+  assert.equal(mounted.props.initialScheme, 'mv-dark');
+  assert.deepEqual(kitSchemes, ['mv-dark']);
   assert.deepEqual(host.calls, ['load']);
 });
 
@@ -113,8 +113,8 @@ test('malformed stored text boots defaults silently and stays mounted', async ()
     const { mount, mounted, kitSchemes } = await bootEntry('', { host });
     assert.equal(mount.textContent, '', bad);
     assert.ok(mounted, bad);
-    assert.equal(mounted.props.initialScheme, 'mv-light', bad);
-    assert.deepEqual(kitSchemes, ['mv-light'], bad);
+    assert.equal(mounted.props.initialScheme, 'mv-dark', bad);
+    assert.deepEqual(kitSchemes, ['mv-dark'], bad);
   }
 });
 
@@ -123,8 +123,8 @@ test('a failed boot read keeps bootable defaults and rethrows typed for the pane
   const { mount, mounted, kitSchemes } = await bootEntry('', { host });
   assert.equal(mount.textContent, '');
   assert.ok(mounted);
-  assert.equal(mounted.props.initialScheme, 'mv-light');
-  assert.deepEqual(kitSchemes, ['mv-light']);
+  assert.equal(mounted.props.initialScheme, 'mv-dark');
+  assert.deepEqual(kitSchemes, ['mv-dark']);
   await assert.rejects(mounted.props.settingsHost.loadSettings(), /ERR_SETTINGS_HOST/);
 });
 
@@ -158,7 +158,7 @@ test('negative control: other failures never retry; a dead binding stays bounded
   });
   const booted = await bootEntry('', { host: missing });
   assert.ok(booted.mounted);
-  assert.equal(booted.mounted.props.initialScheme, 'mv-light');
+  assert.equal(booted.mounted.props.initialScheme, 'mv-dark');
   assert.equal(dead, 100, 'retries stay bounded like the layout read');
 });
 

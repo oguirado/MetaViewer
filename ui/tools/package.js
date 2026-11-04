@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { buildFuseConfig, ELECTRON_PIN, FUSE_TABLE } from '../electron/main.js';
 import { extractFile, listPackage, statFile, uncache } from '@electron/asar';
 import { checkInstalled, syncKit } from '../../tools/sync_kit.mjs';
+import { executeSmoke } from './smokeProcess.js';
 
 export { ELECTRON_PIN };
 export const PKG_BOOT_BUDGET_MS = 10000;
@@ -57,6 +58,8 @@ export async function stageProductNotices(bundle) {
     await fs.copyFile(join(repo, name), join(destination, name));
     await fs.chmod(join(destination, name), 0o644);
   }
+  await fs.copyFile(join(repo,'docs/ARM64_CAPSULE_ASSET_NOTICES.md'),join(destination,'ARM64_CAPSULE_ASSET_NOTICES.md'));
+  await fs.chmod(join(destination,'ARM64_CAPSULE_ASSET_NOTICES.md'),0o644);
 }
 /** Stage the complete host module tree, shared by packaging and smoke fixtures.
  * @param {string} app
@@ -732,6 +735,7 @@ Source it in a subshell, because it points XDG_RUNTIME_DIR at the private runtim
  * identity tool here when packaged (PKG-FIX ID-01/B1); the RAM-admission reclaim
  * tool ships next to it (L-04). */
 export const OPERATOR_RESOURCES = Object.freeze([...new Set(['docs/AGENT_ENTRY.md', 'docs/AUTOMATE_FROM_DEMO.md',
+  'docs/MW_RUN_FIRST_RUN.md', 'tools/mw_run_browser_goal.md', 'tools/mw_run_program.md',
   'tools/mv_identity.py', 'tools/mv_ram_admission.py', 'deps.lock', 'VERSION',
   'tests/e2e/e2e1_slice/live.py','agents/metaviewer_agents/mw_run.py',
   'tools/mw_run_backend.py','tools/mw_run_program.py','tools/mw_program_muse.py',...publicRuntimeFiles(repo)])]);
@@ -755,7 +759,7 @@ function publicRuntimeFiles(root) {
       return entry.isFile() && /\.(py|json)$/.test(entry.name) && !entry.name.startsWith('test_') ? [path] : [];
     });
   };
-  return [...walk('agents/metaviewer_agents'),...walk('tools'),...walk('contracts/v0.2')].sort();
+  return [...walk('agents/metaviewer_agents'),...walk('tools'),...walk('contracts/v0.2'),...walk('daemon-adapter/guest_command_runtime'),...walk('daemon-adapter/rewind_runtime'),'daemon-adapter/tools/guest_command_runner.py','daemon-adapter/tools/rewind_runner.py','daemon-adapter/tools/rewind_recover.py'].sort();
 }
 
 /** Packaged relative directory for the out-of-ASAR node-pty runtime (P18H-R2-PTY). */
@@ -998,8 +1002,10 @@ export async function createPackagedBootLifecycle(options = {}) {
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       await fs.chmod(dir, 0o700);
     }
+    const rewindCoreEnabled = env.MV_REWIND_ENABLED === '1';
+    const agentInstance = await headlessAgentInstance(env);
     const registration = (component) => ({
-      endpoint: { component, instance: `${component}-${randomUUID()}` },
+      endpoint: { component, instance: component === 'agent' && agentInstance ? agentInstance : `${component}-${randomUUID()}` },
       hello: {
         schema: 'hello/v0.2',
         contract_version: 'v0.2',
@@ -1033,6 +1039,7 @@ export async function createPackagedBootLifecycle(options = {}) {
     delete env.MV_CORE_BOOTSTRAP;
     const coreEnv = {
       ...scrubFn(env, runtime),
+      ...(rewindCoreEnabled && agentInstance ? { MV_REWIND_ENABLED: '1' } : {}),
       XDG_STATE_HOME: stateHome,
       MV_CORE_CONFIG: configPath,
     };
@@ -1094,6 +1101,64 @@ export async function createPackagedBootLifecycle(options = {}) {
 // [TARGET, unit decision] The delivered entry owns a fresh real-core session and
 // supervises the bundled adapter next to core when OpenSuperficies (MV_SRF_BIN_DIR)
 // is configured, degrading cleanly to core-only when absent.
+/** Host-only agent binding for the fixed MicroVM mode; ordinary launches remain random.
+ * @param {NodeJS.ProcessEnv} env @returns {Promise<string|null>} */
+export async function headlessAgentInstance(env) {
+  const rewind=env.MV_REWIND_ENABLED==='1';
+  const guest=rewind||env.MV_GUEST_COMMAND_ONLY==='1'||env.MV_ARM64_CAPSULES==='1';
+  if(guest && env.MV_HEADLESS_ONLY!==undefined && env.MV_HEADLESS_ONLY!=='')throw Error('GUEST_COMMAND_AGENT_BINDING');
+  if(!guest && env.MV_HEADLESS_ONLY!=='1')return null;
+  const path=rewind?env.MV_REWIND_PROFILE:guest?env.MV_GUEST_COMMAND_PROFILE:env.MV_HEADLESS_PROFILE,instance=rewind?env.MV_REWIND_AGENT_INSTANCE:guest?env.MV_GUEST_COMMAND_AGENT_INSTANCE:env.MV_HEADLESS_AGENT_INSTANCE;
+  if(!path || !isAbsolute(path) || !instance || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(instance))throw Error('HEADLESS_AGENT_BINDING');
+  if(await fs.realpath(path)!==path)throw Error('HEADLESS_AGENT_BINDING');
+  const before=await fs.lstat(path,{bigint:true});
+  if(!before.isFile())throw Error('HEADLESS_AGENT_BINDING');
+  const f=await fs.open(path,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+  try {
+    const st=await f.stat({bigint:true});
+    const fields=['dev','ino','mode','uid','gid','nlink','size','mtimeNs','ctimeNs'];
+    const same=(/** @type {any} */ x,/** @type {any} */ y)=>fields.every(k=>x[k]===y[k]);
+    if(!same(before,st) || !st.isFile() || st.uid!==BigInt(process.getuid?.() ?? -1) || (st.mode&0o077n)!==0n || st.nlink!==1n || st.size>65536n)throw Error('HEADLESS_AGENT_BINDING');
+    const buf=Buffer.alloc(65537),{bytesRead}=await f.read(buf,0,buf.length,0);
+    if(bytesRead!==Number(st.size) || !same(st,await f.stat({bigint:true})) || !same(st,await fs.lstat(path,{bigint:true})) || await fs.realpath(path)!==path)throw Error('HEADLESS_AGENT_BINDING');
+    const profile=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(buf.subarray(0,bytesRead)));
+    if(Object.keys(profile).sort().join(',')!=='config_template,controller_relative,files,guardian_unit,owner_id,python,python_prefix,runner,runtime_root,schema,state_root' || typeof profile.python_prefix!=='string' || !isAbsolute(profile.python_prefix) || await fs.realpath(profile.python_prefix)!==profile.python_prefix || !(await fs.stat(profile.python_prefix)).isDirectory() || profile.schema!==(rewind?'mv-rewind-host/v1':guest?'mv-guest-command-host/v1':'mv-headless-host/v1') || profile.config_template?.schema!==(rewind?'rewind-host-config/v1':guest?'guest-command-host-config/v1':'mc06-host-config/v1') || profile.config_template?.runtime_admitted!==true || profile.config_template?.owner_id!==profile.owner_id || profile.owner_id!=='actor-'+createHash('sha256').update('agent:'+instance).digest('hex'))throw Error('HEADLESS_AGENT_BINDING');
+    return instance;
+  } finally {await f.close();}
+}
+
+/** Plan an optional configured ARM session before starting any owned core.
+ * The registry is never used to choose a host executable by this wrapper.
+ * @param {NodeJS.ProcessEnv} env @param {string} arch @param {string} appPath
+ * @param {string} operatorRoot @param {string} expectedCommit
+ * @param {Record<string,string>} helperPins
+ */
+export async function arm64CapsuleSessionPlan(env,arch,appPath,operatorRoot,expectedCommit,helperPins) {
+  if(arch!=='arm64' || env.MV_ARM64_CAPSULES==='1' || env.MV_REWIND_ENABLED==='1')return null;
+  const home=env.XDG_DATA_HOME || (env.HOME?join(env.HOME,'.local/share'):null);
+  if(!home)return null;
+  if(!isAbsolute(home)||resolve(home)!==home)throw Error('ARM64_SETUP_LOCATION');
+  const registry=join(home,'metaviewer/capsules/arm64/setup.json');
+  let st;
+  try{st=await fs.lstat(registry);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+  if(!st.isFile()||st.isSymbolicLink()||st.uid!==process.getuid?.()||(st.mode&0o077)!==0||st.nlink!==1||st.size<1||st.size>1048576||await fs.realpath(registry)!==registry)throw Error('ARM64_SETUP_CUSTODY');
+  if(!/^[0-9a-f]{40}$/.test(expectedCommit)||!isAbsolute(appPath)||!isAbsolute(operatorRoot))throw Error('ARM64_SETUP_BINDING');
+  for(const name of ['tools/arm64_capsules.py','tools/arm64_capsule_session.py','tools/arm64_capsule_reconcile.py','tools/mv_identity.py']) {
+    const path=join(operatorRoot,name),s=await fs.lstat(path);
+    if(!s.isFile()||s.isSymbolicLink()||![0,process.getuid?.()].includes(s.uid)||(s.mode&0o022)!==0||s.nlink!==1||s.size<1||s.size>1048576||await fs.realpath(path)!==path||!Object.hasOwn(helperPins,name))throw Error('ARM64_SETUP_HELPER');
+    if(createHash('sha256').update(await fs.readFile(path)).digest('hex')!==helperPins[name])throw Error('ARM64_SETUP_HELPER_PIN');
+  }
+  const python=await fs.realpath('/usr/bin/python3'),py=await fs.lstat(python);
+  if(!py.isFile()||py.uid!==0||(py.mode&0o022)!==0||(py.mode&0o111)===0||!/^python3(?:\.[0-9]+)?$/.test(python.slice(python.lastIndexOf('/')+1)))throw Error('ARM64_SETUP_PYTHON');
+  const display=env.DISPLAY,bus=env.DBUS_SESSION_BUS_ADDRESS;
+  if(typeof display!=='string'||!/^:[0-9]{1,5}(?:\.[0-9]+)?$/.test(display)||typeof bus!=='string'||!bus.startsWith('unix:')||bus.length>4096)throw Error('ARM64_SETUP_UI_TRANSPORT');
+  const xauthority=env.XAUTHORITY || null;
+  if(xauthority!==null&&(!isAbsolute(xauthority)||resolve(xauthority)!==xauthority))throw Error('ARM64_SETUP_UI_TRANSPORT');
+  return {python,registry,helper:join(operatorRoot,'tools/arm64_capsule_session.py'),
+    argv:['--app',appPath,'--source-root',operatorRoot,'--expected-commit',expectedCommit],
+    transport:{schema:'metaviewer-arm64-ui-transport/v1',mode:env.MV_HOSTED==='1'?'private-ui':'trusted-user-invocation',display,xauthority,dbus_session_bus_address:bus}};
+}
+
 export const productionEntry = String.raw`
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
@@ -1104,6 +1169,8 @@ import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { format } from 'node:util';
+${headlessAgentInstance.toString().replace('export ', '')}
+${arm64CapsuleSessionPlan.toString().replace('export ', '')}
 ${preparePackagedAdmission.toString().replace('export ', '')}
 ${preflightLiveRamRoot.toString().replace('export ', '')}
 ${validateAttachRecord.toString().replace('export ', '')}
@@ -1112,6 +1179,7 @@ ${renderAttachEnv.toString().replace('export ', '')}
 ${publishAttachPointer.toString().replace('export ', '')}
 ${retractAttachPointerSync.toString().replace('export ', '')}
 const PACKAGED_EXEC_DIGESTS = Object.freeze({});
+const ARM64_SETUP_HELPER_PINS = Object.freeze({});
 const root = dirname(fileURLToPath(import.meta.url));
 const appRoot = dirname(root);
 function writeFdSync(fd, value) {
@@ -1227,7 +1295,7 @@ try {
 const { app, protocol, BrowserWindow } = await import('electron').catch(() => ({ app: { exit: code => process.exit(code), on: () => {}, removeAllListeners: () => {}, whenReady: async () => {} }, protocol: null }));
 const mainModule = await import('./main.js');
 const { mainDirectEntry, validateRetailLaunch } = mainModule;
-const { scrubChildEnv, validateKillTarget } = await import('./coreLauncher.js');
+const { scrubChildEnv, validateKillTarget, applySavedCapturePreferences } = await import('./coreLauncher.js');
 const retail = validateRetailLaunch(process.argv.slice(1), process.env);
 if (!retail.ok) {writeFdSync(2, retail.code + ': retail launch refused');app.exit(1);}
 else if (process.argv.includes('--nested-depth=1')) {
@@ -1237,6 +1305,32 @@ else if (process.argv.includes('--nested-depth=1')) {
     try { mainModule.registerPrivilegedScheme(protocol); } catch {}
   }
   const resourcesPath = process.resourcesPath || dirname(appRoot);
+const armOperatorRoot=join(process.resourcesPath || dirname(appRoot),'operator');
+try {
+  if(process.arch==='arm64' && process.env.MV_ARM64_CAPSULES!=='1') {
+  const armPin=JSON.parse(await fs.readFile(join(root,'package-pin.json'),'utf8'));
+  const armPlan=await arm64CapsuleSessionPlan(process.env,process.arch,process.execPath,armOperatorRoot,armPin.commit,ARM64_SETUP_HELPER_PINS);
+  if(armPlan) {
+    const uiRoot=await fs.mkdtemp('/dev/shm/mv-arm64-ui-');await fs.chmod(uiRoot,0o700);
+    const transport=join(uiRoot,'transport.json');
+    await fs.writeFile(transport,JSON.stringify(armPlan.transport)+'\n',{mode:0o600,flag:'wx'});
+    let code=2;
+    try {
+      const selfStat=await fs.readFile('/proc/self/stat','utf8');
+      const tail=selfStat.slice(selfStat.lastIndexOf(')')+2).trim().split(/\s+/);
+      const launcherStart=tail[19];
+      if(!/^[0-9]+$/.test(launcherStart))throw Error('ARM64_LAUNCHER_IDENTITY');
+      const child=spawn(armPlan.python,['-I','-B',armPlan.helper,...armPlan.argv,'--ui-transport',transport,'--launcher-pid',String(process.pid),'--launcher-start',launcherStart],{env:process.env,stdio:'inherit',shell:false});
+      const signals=['SIGTERM','SIGINT','SIGHUP'];
+      const forward=signal=>{if(child.exitCode===null&&child.signalCode===null){try{child.kill(signal);}catch{}}};
+      const listeners=signals.map(signal=>{const fn=()=>forward(signal);process.on(signal,fn);return [signal,fn];});
+      try {const result=await once(child,'exit');code=Number.isInteger(result[0])?result[0]:2;}
+      finally {for(const [signal,fn] of listeners)process.removeListener(signal,fn);}
+    } finally {await fs.rm(uiRoot,{recursive:true,force:true});}
+    process.exit(code);
+  }
+  }
+} catch(error) {writeFdSync(2,'ARM64_SETUP_REFUSED: '+String(error?.message || error));process.exit(2);}
   let runtime = null;
   let core = null;
   let boot = null;
@@ -1361,7 +1455,9 @@ else if (process.argv.includes('--nested-depth=1')) {
     }
     // [TARGET, unit decision] mv-daemon-adapter pins hello/v0.2 component_version
     // to 0.1.1 in daemon/environment.go; core pins pin.version from VERSION.
-    const registration = component => ({endpoint:{component,instance:component+'-'+randomUUID()},hello:{
+    const rewindCoreEnabled = process.env.MV_REWIND_ENABLED === '1';
+    const agentInstance = await headlessAgentInstance(process.env);
+    const registration = component => ({endpoint:{component,instance:component==='agent'&&agentInstance?agentInstance:component+'-'+randomUUID()},hello:{
       schema:'hello/v0.2',contract_version:'v0.2',component,component_version:component==='daemon'?'0.1.1':pin.version,
       component_commit:pin.commit,dependencies:[]}});
     const config = {session_id:'pkg-'+randomUUID(),core:registration('core'),
@@ -1385,7 +1481,12 @@ else if (process.argv.includes('--nested-depth=1')) {
     process.env.SRF_PROXY_REGISTRY = process.env.SRF_PROXY_REGISTRY || join(runtime, 'srf-proxy-registry.json');
     process.env.MV_ADAPTER_BIN = join(resourcesPath, 'bin/mv-daemon-adapter');
     delete process.env.MV_CORE_BOOTSTRAP;
-    const coreEnv = {...scrubChildEnv(process.env, runtime), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
+    if (typeof app.getPath === 'function') {
+      const captureEnv = applySavedCapturePreferences(process.env, join(app.getPath('userData'),'capture-preferences.json'));
+      if(captureEnv.MV_RECORDING_DESTINATION!==undefined) process.env.MV_RECORDING_DESTINATION=captureEnv.MV_RECORDING_DESTINATION;
+      if(captureEnv.MV_CAPTURE_PREFERENCES_ERROR) process.env.MV_CAPTURE_PREFERENCES_ERROR=captureEnv.MV_CAPTURE_PREFERENCES_ERROR;
+    }
+    const coreEnv = {...scrubChildEnv(process.env, runtime), ...(rewindCoreEnabled && agentInstance ? {MV_REWIND_ENABLED:'1'} : {}), XDG_STATE_HOME:stateHome, MV_CORE_CONFIG:configPath};
     core = spawn(join(resourcesPath,'bin/metaviewer-core'), [], {env:coreEnv,stdio:['pipe','pipe','pipe'],shell:false});
     let failure;
     core.on('error', error => {failure=error;});
@@ -2621,7 +2722,7 @@ export async function operatorPackagedSmoke(installed, source = process.env) {
   env.MV_PACKAGE_SMOKE_OPERATOR = '1';
   const admission = await preparePackagedAdmission(env);
   const before = new Set(await fs.readdir(admission));
-  const result = await execute('xvfb-run', ['-a', join(resolve(installed), 'metaviewer')],
+  const result = await executeSmoke('xvfb-run', ['-a', join(resolve(installed), 'metaviewer')],
     {cwd:installed, env, timeout:120000, maxBuffer:1024*1024});
   assertSmokeOutput(result);
   if (!result.stdout.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY') || !result.stdout.includes('METAVIEWER_ADAPTER_HOLD_OK')) throw new Error('PKG_OPERATOR_HOLD_FAILED');
@@ -2643,6 +2744,12 @@ export async function cleanInstallSmoke(artifact) {
   const clean=await fs.mkdtemp(join(tmpdir(),'mv-clean-'));
   try {
     validateOutput(clean,repo);
+    // Linux sockaddr_un includes the terminating NUL. Check both the core
+    // socket and Chromium's temporary SingletonSocket before starting children.
+    if ([join(clean,'host-runtime/metaviewer/core.sock'),
+      join(clean,'scoped_dirXXXXXX/SingletonSocket')].some(path => Buffer.byteLength(path) >= 108)) {
+      throw new Error('PKG_SMOKE_SOCKET_PATH: set TMPDIR to a short private directory under /tmp and retry; use the judge installer for recorded cleanup');
+    }
     const types=await execute('tar',['-tvf',artifact],{maxBuffer:1024*1024});
     if (types.stdout.split('\n').filter(Boolean).some(line => !['-','d'].includes(line[0]))) throw new Error('PKG_ARCHIVE_ALIAS');
     const listing=await execute('tar',['-tf',artifact],{maxBuffer:1024*1024});
@@ -2680,8 +2787,8 @@ export async function cleanInstallSmoke(artifact) {
     try {
       await writeFakeSmokeAdapter(adapter,receiptPath);
       const trace=join(clean,'files.trace');
-      const env={XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
-      await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
+      const env={TMPDIR:clean,XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
+      await runSmokeCommand(() => executeSmoke('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
         join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024}));
       await verifySmokeAdapterReceipt(receiptPath,srfBinDir);
       const accesses=await fs.readFile(trace,'utf8');
@@ -2712,6 +2819,7 @@ export async function cleanInstallSmoke(artifact) {
       });
       const realTrace=join(clean,'real-files.trace');
       const realEnv={
+        TMPDIR:clean,
         XDG_RUNTIME_DIR:hostRuntime,
         PATH:process.env.PATH,
         HOME:clean,
@@ -2723,7 +2831,7 @@ export async function cleanInstallSmoke(artifact) {
         MV_SRF_PROFILES:srfProfiles,
         MV_PACKAGE_SMOKE_HOLD:'1',
       };
-      await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',realTrace,
+      await runSmokeCommand(() => executeSmoke('xvfb-run',['-a','strace','-f','-e','trace=file','-o',realTrace,
         join(installed,'metaviewer'),`--user-data-dir=${join(clean,'real-profile')}`],{cwd:clean,env:realEnv,timeout:60000,maxBuffer:1024*1024}));
       // An entry that never opened the shared ledger left no reservation; other errors fail.
       // A missing host runtime directory itself is never read as an empty ledger.
@@ -2737,6 +2845,7 @@ export async function cleanInstallSmoke(artifact) {
       const negSrfIdentityDir=await fs.mkdtemp(join(clean,'neg-srf-identity-'));
       for (const dir of [negSrfStateDir,negSrfIdentityDir]) await fs.chmod(dir,0o700);
       const noProfilesEnv={
+        TMPDIR:clean,
         XDG_RUNTIME_DIR:hostRuntime,
         PATH:process.env.PATH,
         HOME:clean,
@@ -2749,7 +2858,7 @@ export async function cleanInstallSmoke(artifact) {
       const configTrace=join(clean,'config-refusal.trace');
       let configResult;
       try {
-        const result=await execute('xvfb-run',['-a','strace','-ff','-e','trace=write',
+        const result=await executeSmoke('xvfb-run',['-a','strace','-ff','-e','trace=write',
           '-s','256','-o',configTrace,join(installed,'metaviewer'),
           `--user-data-dir=${join(clean,'no-profiles-profile')}`],
           {cwd:clean,env:noProfilesEnv,timeout:60000,maxBuffer:1024*1024});
@@ -2763,10 +2872,10 @@ export async function cleanInstallSmoke(artifact) {
     } finally {
       await fs.rm(shmRoot,{recursive:true,force:true});
     }
-    const env={XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
+    const env={TMPDIR:clean,XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
     let refused=false, refusalDetail='';
     try {
-      await execute('xvfb-run',['-a',join(installed,'metaviewer'),
+      await executeSmoke('xvfb-run',['-a',join(installed,'metaviewer'),
         `--user-data-dir=${join(clean,'refusal-profile')}`,'--remote-debugging-port=9222'],
         {cwd:clean,env,timeout:60000,maxBuffer:1024*1024});
     } catch (error) {
@@ -2842,7 +2951,8 @@ export async function packageShell(env = process.env) {
     if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error('PKG_REVISION_INVALID');
     await fs.rename(join(app,'electron/nesting.js'),join(app,'electron/nested-display.js'));
     await fs.appendFile(join(app,'electron/main.js'),'\nexport { mainDirectEntry };\n');
-    await fs.writeFile(join(app,'electron/nesting.js'),productionEntry);
+    const armHelperPins=Object.fromEntries(await Promise.all(['tools/arm64_capsules.py','tools/arm64_capsule_session.py','tools/arm64_capsule_reconcile.py','tools/mv_identity.py'].map(async name=>[name,await digest(join(repo,name))])));
+    await fs.writeFile(join(app,'electron/nesting.js'),productionEntry.replace('const ARM64_SETUP_HELPER_PINS = Object.freeze({});','const ARM64_SETUP_HELPER_PINS = Object.freeze('+JSON.stringify(armHelperPins)+');'));
     await fs.writeFile(join(app,'electron/package-pin.json'),JSON.stringify({version:pkgVersion,commit}));
     await sealRendererAssets(app);
     const pkg = JSON.parse(await fs.readFile(join(ui, 'package.json'), 'utf8'));
@@ -2890,6 +3000,7 @@ export async function packageShell(env = process.env) {
     for(const relative of OPERATOR_RESOURCES) {
       await fs.mkdir(dirname(join(operatorRoot,relative)),{recursive:true});
       await fs.copyFile(join(repo,relative),join(operatorRoot,relative));
+      await fs.chmod(join(operatorRoot,relative),0o644);
     }
     await fs.writeFile(join(operatorRoot,'ATTACH.md'),ATTACH_GUIDE);
     const runtimeFiles=Object.fromEntries(await Promise.all(OPERATOR_RESOURCES.map(async path=>[path,await digest(join(operatorRoot,path))])));
@@ -2905,7 +3016,9 @@ Public agents and tools are bundled under resources/operator. MV_OPERATOR_REPO
 optionally overrides this runtime. Private compiled sidecars are supplied through
 MV_WENDER_EXECUTABLE and MV_VISION_EXECUTABLE with pinned distribution hashes.
 MemoryWeb user data defaults to the user data directory outside the app.
-Use MetaViewer copies the bundled resources/operator/docs/AGENT_ENTRY.md prompt.
+Create automation, Run automation and Direct task prepare prompts pointing to
+resources/operator/docs/AGENT_ENTRY.md. The person adds the task and submits it;
+the app never sends Enter.
 An external AI attaches to the running session through the pointer described in
 resources/operator/ATTACH.md. The identity tool used by Identities and Automate
 is resources/operator/tools/mv_identity.py (python3, standard library only);

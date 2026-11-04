@@ -1,3 +1,4 @@
+import {readFileSync} from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -6,7 +7,7 @@ import { join } from 'node:path';
 import { resolveHostBinary, HOST_BINARY_STANDARD_DIRS } from '../electron/roleHost.js';
 import { buildCreateIntent, CATALOG_KINDS } from '../src/catalog/catalogModel.js';
 import * as catalogModel from '../src/catalog/catalogModel.js';
-import { copyCapsuleReadyLine } from '../src/wall/capsuleId.js';
+import { buildCapsuleReadyLine, copyCapsuleReadyLine } from '../src/wall/capsuleId.js';
 import { workflowPrompt } from '../src/terminal/workflowPrompts.js';
 import { compileSfc, childStub, mountComponent, flush, nodes, text } from './mvui2-terminal-mount.mjs';
 
@@ -36,21 +37,30 @@ test('B3-10 sanitized launcher PATH also searches the Snap executable directory'
   assert.throws(() => resolveHostBinary('absent-editor', { PATH: '/nonexistent' }, [snap]), { code: 'HOST_PROGRAM_UNAVAILABLE' });
 });
 
-test('B3-06 copying a capsule preserves the choice between goal and stored workflow modes', async () => {
-  const writes = [];
-  await copyCapsuleReadyLine({ surfaceId: 'surf-demo', profileId: 'demo' }, { writeText: line => writes.push(line) });
-  assert.equal(writes.length, 1);
-  assert.match(writes[0], /goal mode/i);
-  assert.match(writes[0], /stored.workflow mode/i);
-  assert.match(writes[0], /--goal/);
-  assert.match(writes[0], /compiled.*goal|goal.*compiled/i);
-  writes.length = 0;
-  await copyCapsuleReadyLine({ surfaceId: 'surf-demo' }, { writeText: line => writes.push(line) });
-  assert.doesNotMatch(writes[0], /--goal|--identity|mw_run/);
+test('B3-06 Copy ID writes only the exact capsule identifier', async () => {
+  for (const ids of [{surfaceId:'surf-demo',profileId:'demo'}, {surfaceId:'surf-demo'}]) {
+    const writes=[];
+    const result=await copyCapsuleReadyLine(ids,{writeText:line=>writes.push(line)});
+    assert.equal(result.state,'copied');
+    assert.deepEqual(writes,['surf-demo']);
+    assert.equal(result.text,'surf-demo');
+  }
+});
+
+test('B3-06 ready prompt preserves the choice between goal and stored workflow modes', () => {
+  assert.equal(buildCapsuleReadyLine({surfaceId:'surf-demo',profileId:'demo'}),'CAPSULE=surf-demo  IDENTITY=demo');
+  const prompt=readFileSync(new URL('../../docs/AGENT_ENTRY.md',import.meta.url),'utf8').replace(/\s+/g,' ');
+  assert.match(prompt,/goal mode/i);
+  assert.match(prompt,/stored.workflow mode/i);
+  assert.match(prompt,/--goal/);
+  assert.match(prompt,/compiled.*goal|goal.*compiled/i);
+  const withoutIdentity=buildCapsuleReadyLine({surfaceId:'surf-demo'});
+  assert.doesNotMatch(withoutIdentity,/--goal|--identity|mw_run/);
 });
 
 test('B3-11 goal prompt distinguishes compiled goal support from stored-workflow refusal', () => {
-  const prompt = workflowPrompt('no-automation');
+  assert.match(workflowPrompt('no-automation'),/section "Direct task"/);
+  const prompt=readFileSync(new URL('../../docs/AGENT_ENTRY.md',import.meta.url),'utf8').replace(/\s+/g,' ');
   assert.match(prompt, /compiled.*browser goals|browser goals.*compiled/i);
   assert.match(prompt, /MW_COMPILED_BROWSER_UNAVAILABLE.*stored.workflow/);
   assert.doesNotMatch(prompt, /wait for the compiled browser build/);
@@ -62,7 +72,8 @@ test('B3-20 opening Desktop window explains empty X11 inventory and then a faile
   t.after(() => { globalThis.metaviewerRoles = previous; });
   const children = {};
   const component = await compileSfc('catalog/CatalogLauncher.vue', {
-    '../../.kit/capsule-ui-kit/src/index-shell.js': { NewCapsuleDialog: childStub('catalog', children) },
+    './GroupedCapsuleDialog.vue': childStub('catalog', children, {type:{id:'desktop-window'}}),
+    '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': childStub('icon', children),
     './catalogModel.js': catalogModel,
   });
   const mounted = mountComponent(component, { visible: true });

@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "ok",
+    "phase",
+    "identity",
+    "demo"
+  ],
+  "properties": {
+    "schema": {
+      "const": "metaviewer.demo_state/v1"
+    },
+    "ok": {
+      "const": true
+    },
+    "phase": {
+      "enum": [
+        "idle",
+        "starting",
+        "recording",
+        "sealing"
+      ]
+    },
+    "identity": {
+      "type": "string",
+      "maxLength": 40
+    },
+    "demo": {
+      "type": "string",
+      "maxLength": 40
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:metaviewer:demo-state:v1",
+  "title": "Live host recorder state",
+  "description": "Derived from the owned child announcement, stop request and process close; unrelated to frame capture.",
+  "oneOf": [
+    {
+      "properties": {
+        "phase": {
+          "const": "idle"
+        },
+        "identity": {
+          "const": ""
+        },
+        "demo": {
+          "const": ""
+        }
+      }
+    },
+    {
+      "properties": {
+        "phase": {
+          "enum": [
+            "starting",
+            "recording",
+            "sealing"
+          ]
+        },
+        "identity": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        },
+        "demo": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "pattern": "^[a-z0-9][a-z0-9-]*$"
+        }
+      }
+    }
+  ]
+}

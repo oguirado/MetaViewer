@@ -1349,17 +1349,23 @@ class PackagedInstallAndCapsuleBootTests(unittest.TestCase):
         mutant_runtime = METAVIEWER_RUNTIME_MJS.replace(marker_line, "")
         with tempfile.TemporaryDirectory(prefix="mv-sim-no-renderer-") as tmp:
             artifact = self._build_packaged_tarball(Path(tmp) / "dist", mutant_runtime)
+            runtime, state = Path(tmp) / "runtime", Path(tmp) / "processes"
+            runtime.mkdir(mode=0o700)
+            state.mkdir(mode=0o700)
             smoke_proc = self._run_node_packaging(
                 f"""
                 import * as pkg from './ui/tools/package.js';
                 await pkg.cleanInstallSmoke({json.dumps(str(artifact))});
-                """
+                """,
+                env_extra={"TMPDIR": str(runtime), "MV_PACKAGE_SMOKE_STATE_DIR": str(state)},
             )
             self.assertNotEqual(smoke_proc.returncode, 0, smoke_proc.stdout + smoke_proc.stderr)
             self.assertIn("PKG_SMOKE_MARKER_MISSING", smoke_proc.stderr)
             self.assertIn("METAVIEWER_MAIN_READY", smoke_proc.stderr)
             self.assertIn("METAVIEWER_MAIN_SMOKE_OK", smoke_proc.stderr)
             self.assertNotIn("METAVIEWER_RENDERER_READY", smoke_proc.stderr)
+            self.assertEqual(list(runtime.iterdir()), [], "failed smoke must remove its clean/private runtime roots")
+            self.assertEqual(list(state.iterdir()), [], "failed smoke must verify and retire its process ownership")
 
     def test_u02n_simulation_refusal_on_stdout_refuses_smoke(self) -> None:
         """MUT-SIM-REFUSAL-STDOUT: the exact refusal on fd 1 cannot pass packaged smoke."""

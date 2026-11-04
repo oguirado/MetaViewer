@@ -1,0 +1,349 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:metaviewer:demo-control-response:v1",
+  "title": "Private demo controller reply",
+  "description": "Bounded ready and sealed completion replies to the attached CLI.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "event",
+        "reply"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "event": {
+          "const": "ready"
+        },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "url"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "url": {
+              "type": "string",
+              "maxLength": 2048,
+              "pattern": "^http://"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "event",
+        "reply"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "event": {
+          "const": "ready"
+        },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "code"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "code": {
+              "enum": [
+                "BUTTON_UNAVAILABLE",
+                "DEMO_REFUSED",
+                "DEMO_BUSY",
+                "DEMO_NOT_RECORDING"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "event",
+        "reply"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "event": {
+          "const": "done"
+        },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok",
+            "code"
+          ],
+          "properties": {
+            "ok": {
+              "const": false
+            },
+            "code": {
+              "enum": [
+                "BUTTON_UNAVAILABLE",
+                "DEMO_REFUSED",
+                "DEMO_BUSY",
+                "DEMO_NOT_RECORDING"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "event",
+        "reply",
+        "result"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "event": {
+          "const": "done"
+        },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evidence",
+            "schema",
+            "sha256"
+          ],
+          "properties": {
+            "evidence": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 4096,
+              "pattern": "^/"
+            },
+            "schema": {
+              "const": "metaviewer.demo/v1"
+            },
+            "sha256": {
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": false,
+              "patternProperties": {
+                "^(events\\.jsonl|README\\.md|final(?:_w[0-9]+)?\\.png|[0-9]+_(before|after)\\.png)$": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "event",
+        "reply",
+        "result"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "event": {
+          "const": "done"
+        },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            }
+          }
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "site",
+            "validated",
+            "source"
+          ],
+          "properties": {
+            "site": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "pattern": "^[a-z0-9][a-z0-9-]*$"
+            },
+            "validated": {
+              "const": true
+            },
+            "source": {
+              "enum": [
+                "home",
+                "user"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "event",
+        "reply",
+        "text"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "event": {
+          "const": "done"
+        },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            }
+          }
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema",
+        "session_id",
+        "event",
+        "reply"
+      ],
+      "properties": {
+        "schema": {
+          "const": "metaviewer.demo_control/v1"
+        },
+        "session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]*$"
+        },
+        "event": {
+          "const": "done"
+        },
+        "reply": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "ok"
+          ],
+          "properties": {
+            "ok": {
+              "const": true
+            }
+          }
+        }
+      }
+    }
+  ]
+}

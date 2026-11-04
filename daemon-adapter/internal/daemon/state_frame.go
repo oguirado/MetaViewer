@@ -2,7 +2,8 @@ package daemon
 
 // [TARGET, unit decision] A successful active agent state update publishes a
 // forced current frame after its reply. Capture/publication failure is diagnostic
-// only; the existing subscription path can still satisfy the core refresh fence.
+// only; the next validated subscription capture must satisfy the refresh fence
+// even when its pixels match the previous publication.
 import (
 	"context"
 	"errors"
@@ -12,7 +13,7 @@ import (
 )
 
 func captureStateFrame(ctx context.Context, m *capsule.Manager, profiles map[string]capsule.Profile, pubs map[string]*frames.Publisher, id string) (frames.Ref, error) {
-	binding, err := m.SubscriptionBinding(id)
+	binding, err := m.RequireFrameRefresh(id)
 	if err != nil {
 		return frames.Ref{}, err
 	}

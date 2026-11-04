@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -34,6 +38,7 @@ async function loadApp(captured, row) {
     './settings/settingsHost.js':{createSettingsHost},
     './nested/nested.js':{resolveNestedMode,applyNestedWall},
     './surfaces/tileScheduler.js':{createTileScheduler},
+    './wall/guestWorkloadTile.js':guestWorkloadTile, '../electron/guestCommandValues.js':guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   globalThis.__mvuiEngineDeps=deps;
   const {descriptor}=parse(readFileSync(new URL('../src/App.vue',import.meta.url),'utf8'));
@@ -42,7 +47,7 @@ async function loadApp(captured, row) {
   const code=compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,(all,bindings,_quote,specifier)=>{
     if(specifier==='vue') return all.replace(/(['"])vue\1/,JSON.stringify(pathToFileURL(require.resolve('vue')).href));
     const binding=bindings.trim();
-    return `const ${binding}=globalThis.__mvuiEngineDeps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)}=globalThis.__mvuiEngineDeps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${row?.id??'unavailable'}`)).default;
 }

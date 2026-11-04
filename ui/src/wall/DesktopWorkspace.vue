@@ -4,18 +4,20 @@ import WallWorkspace from './WallWorkspace.vue';
 import {createWallLayout} from './layout.js';
 import {decodeAndMigrateLayoutProfile} from '../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js';
 import {DESKTOP_SCHEMA, VIEWS, createDesktopState, validateDesktopState, addDesktop as appendDesktop,
-  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout, normalizeDesktopLayout, renumberDesktops, moveSurface as relocateSurface} from '../../electron/desktopLayout.js';
+  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout, normalizeDesktopLayout, renumberDesktops, moveSurface as relocateSurface, renameDesktop as setDesktopName, renameCapsule as setCapsuleName, capsuleDisplayLabel} from '../../electron/desktopLayout.js';
 import {desktopShortcut} from '../../electron/desktopShortcuts.js';
 defineOptions({inheritAttrs:false});
 const props = defineProps({
   storage:{type:Object,required:true}, scope:{type:/** @type {import('vue').PropType<import('capsule-ui-kit/layout').LayoutProfileScope>} */ (Object),required:true}, defaultProfile:{type:Object,required:true},
   projectionView:{type:Object,required:true},
+  workloadTiles:{type:/** @type {import('vue').PropType<Array<any>>} */ (Array),default:()=>[]},
   intentBuilders:{type:Object,required:true}, controlRegistry:{type:Object,required:true}, scheduler:{type:Object,required:true}, tileScheduler:{type:Object,required:true}, rows:{type:/** @type {import('vue').PropType<Array<{id:string,[key:string]:any}>>} */ (Array),default:()=>[]}, modes:{type:Object,default:()=>({})},
 });
 const emit = defineEmits(['ready','wall-settled','desktops-change','layout-error','navigate','activate-surface','panel-closed','submit-intent']);
 const state = ref(createDesktopState()), loaded = ref(false);
 const walls = new Map(), ready = new Set(), adapters = new Map(), listeners = new Set();
 const revealed = new Map();
+const dismissed = new Map();
 let alive = true, readOnly = false, dirty = false, saving = /** @type {Promise<void>|null} */ (null), pruneTimer = /** @type {ReturnType<typeof setTimeout>|undefined} */ (undefined);
 // [TARGET, unit decision] Fresh sessions may follow the first reported agent role.
 // Saved layouts and explicit navigation close this startup-only choice.
@@ -46,7 +48,7 @@ function announce() {
 /** @param {import("../../electron/desktopLayout.js").DesktopState} value */
 function cleanLayouts(value) {
   for (const view of VIEWS) for (const desktop of value.views[view].desktops) {
-    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid');
+    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid' || desktop.preset === 'grid-3x2');
   }
   return value;
 }
@@ -67,7 +69,7 @@ function persist() {
 }
 function reconcile() {
   if (!loaded.value) return;
-  for (const row of props.rows) {
+  for (const row of [...props.rows,...props.workloadTiles]) {
     const view = props.modes[row.id] || 'agent';
     if (VIEWS.includes(view)) assignSurface(state.value,row.id,view);
   }
@@ -76,7 +78,7 @@ function reconcile() {
     state.value.activeView = 'agent';
     initialViewPending = false;
   }
-  for (const [key,seen] of revealed) for (const id of seen) {
+  for (const collection of [revealed,dismissed]) for (const [key,seen] of collection) for (const id of seen) {
     const home = homeOf(id);
     if (!home || keyOf(home.view,home.desktop) !== key) seen.delete(id);
   }
@@ -86,7 +88,7 @@ function adapter(view,id) {
   const key = keyOf(view,id);
   if (adapters.has(key)) return adapters.get(key);
   const owner = state.value.views[view].desktops.find(d=>d.id === id);
-  const rows = () => desktopRows(state.value,props.rows,view,owner?.id ?? -1);
+  const rows = () => desktopRows(state.value,props.rows,view,owner?.id ?? -1).map(row=>{const title=capsuleDisplayLabel(state.value,row);return title?{...row,title}:row;});
   const snapshot = () => {
     const base = props.projectionView.getSnapshot();
     return base?.envelope ? {...base,envelope:{...base.envelope,projection:{...base.envelope.projection,rows:rows()}}} : base;
@@ -102,23 +104,76 @@ function adapter(view,id) {
     },writeAtomic:async (/** @type {string} */ json) => {
       const desktop = owner;
       if (!desktop) return;
-      desktop.layout = JSON.parse(json); await persist();
+      desktop.layout = JSON.parse(json);
+      // [TARGET, unit decision] Bounded identity hints outlive stopped surface IDs.
+      const grid = desktop.snapGrid ?? {cols:2,rows:2};
+      for (const group of desktop.layout.dockview?.floatingGroups ?? []) {
+        const position = group.position;
+        if (!position) continue;
+        const layout = desktop.layout.dockview;
+        const col = Math.round(position.left*grid.cols/layout.grid.width), row = Math.round(position.top*grid.rows/layout.grid.height);
+        if (col < 0 || col >= grid.cols || row < 0 || row >= grid.rows) continue;
+        for (const panelId of group.data?.views ?? []) {
+          const surfaceId = layout.panels[panelId]?.params?.capsuleId;
+          const profile = props.rows.find(r=>r.id === surfaceId)?.profile_id;
+          if (!profile || ['__proto__','constructor','prototype'].includes(profile) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(profile)) continue;
+          desktop.identityCells ??= {};
+          delete desktop.identityCells[profile];
+          desktop.identityCells[profile] = {col,row};
+          while (Object.keys(desktop.identityCells).length > 256) delete desktop.identityCells[Object.keys(desktop.identityCells)[0]];
+        }
+      }
+      await persist();
     }},
     defaultProfile:createWallLayout(props.scope),
   });
   adapters.set(key,value); return value;
 }
 /** @param {string} key */
-function revealAll(key) {
+function revealAll(key,force = false,sourceRows = props.rows) {
   if (!ready.has(key)) return;
   const entry = desktops.value.find(d => d.key === key);
   if (!entry) return;
   if (!revealed.has(key)) revealed.set(key,new Set());
   const seen = revealed.get(key);
-  for (const row of desktopRows(state.value,props.rows,entry.view,entry.desktop.id)) {
-    if (seen.has(row.id)) continue;
-    if (walls.get(key)?.revealSurface(row.id,'split')?.ok) seen.add(row.id);
+  const wall = walls.get(key);
+  const failed = [];
+  for (const row of desktopRows(state.value,sourceRows,entry.view,entry.desktop.id)) {
+    if (!force && dismissed.get(key)?.has(row.id)) continue;
+    if (!force && seen.has(row.id) && wall?.hasSurfacePanel?.(row.id) !== false) continue;
+    if (wall?.revealSurface(row.id,'split')?.ok) {
+      seen.add(row.id);
+      if(force)dismissed.get(key)?.delete(row.id);
+    } else failed.push(row.id);
   }
+  return failed;
+}
+/** @param {string} key @param {{capsuleId:string}} event */
+function panelClosed(key,event) {
+  if (!dismissed.has(key)) dismissed.set(key,new Set());
+  dismissed.get(key).add(event.capsuleId);
+  emit('panel-closed',event);
+}
+/** Rebuild presentation from the live rows; no capsule command is issued. */
+async function refreshCurrentDesktop() {
+  const key = activeKey();
+  if (!loaded.value || !ready.has(key)) return {ok:false,code:'ERR_NOT_READY'};
+  await nextTick();
+  if (key !== activeKey()) return {ok:false,code:'DESKTOP_CHANGED'};
+  const wall=walls.get(key);
+  const entry = desktops.value.find(d=>d.key===key);
+  if(!ready.has(key) || !wall || !entry)return {ok:false,code:'ERR_NOT_READY'};
+  const snapshot=props.projectionView.getSnapshot?.();
+  const liveRows=snapshot?.envelope?.projection?.rows;
+  if(snapshot?.status!=='live' || snapshot.stale!==false || !Array.isArray(liveRows))return {ok:false,code:'PROJECTION_UNAVAILABLE'};
+  const failedCapsules=revealAll(key,true,liveRows.filter(row=>row.backendLifecycle!=='destroyed')) ?? [];
+  for (const row of props.workloadTiles) {
+    const home = homeOf(row.id);
+    if (home && keyOf(home.view,home.desktop)===key && wall.revealWorkload?.(row.id)?.ok!==true)failedCapsules.push(row.id);
+  }
+  const layout=wall.setPreset(entry.desktop.preset ?? null);
+  if(layout?.ok!==true)return layout ?? {ok:false,code:'ERR_NOT_READY'};
+  return failedCapsules.length ? {ok:false,code:'SURFACE_UNAVAILABLE',failedCapsules} : layout;
 }
 /** @param {string} key */
 function wallReady(key) {
@@ -145,7 +200,7 @@ function addDesktop() { if (loaded.value) {try {return appendDesktop(state.value
 function removeDesktop(id) {
   const key = keyOf(state.value.activeView,id);
   if (!deleteDesktop(state.value,state.value.activeView,id)) return false;
-  ready.delete(key); adapters.delete(key); revealed.delete(key);
+  ready.delete(key); adapters.delete(key); revealed.delete(key); dismissed.delete(key);
   return true;
 }
 /** @param {string} id @param {string} [mode] */
@@ -160,7 +215,10 @@ async function followSurface(id, mode) {
 /** @param {string} id @param {unknown} placement */
 function revealSurface(id,placement) {
   const home = homeOf(id); if (!home) return {ok:false};
-  return walls.get(keyOf(home.view,home.desktop))?.revealSurface(id,placement) ?? {ok:false};
+  const key=keyOf(home.view,home.desktop);
+  const result=walls.get(key)?.revealSurface(id,placement) ?? {ok:false};
+  if(result.ok)dismissed.get(key)?.delete(id);
+  return result;
 }
 /** @param {any} intent */
 function applyPresentationIntent(intent) {
@@ -180,6 +238,8 @@ function setPreset(preset) {
   const result = walls.get(activeKey())?.setPreset(preset);
   if (!desktop || !result?.ok) return result ?? {ok:false,code:'ERR_NOT_READY'};
   desktop.preset = preset;
+  if (preset === 'grid-3x2') desktop.snapGrid = {cols:3,rows:2};
+  if (preset === 'grid') desktop.snapGrid = {cols:2,rows:2};
   return result;
 }
 // Transfer tokens are local ownership handoffs, never backend lifecycle verbs.
@@ -236,8 +296,15 @@ function onKey(event) {
 }
 /** @param {Event} event */
 const onNativeShortcut = event => shortcut(/** @type {CustomEvent} */(event).detail);
-watch(() => [props.rows,props.modes], () => {reconcile(); announce(); for (const key of ready) revealAll(key);}, {deep:true});
+watch(() => [props.rows,props.modes,props.workloadTiles], () => {reconcile(); announce(); for (const key of ready) revealAll(key);}, {deep:true});
 watch(state, () => {announce(); void persist().catch(() => {});}, {deep:true});
+watch(activeKey,async key=>{
+  await nextTick();
+  if(key!==activeKey() || !ready.has(key))return;
+  revealAll(key);
+  const entry=desktops.value.find(d=>d.key===key);
+  walls.get(key)?.setPreset(entry?.desktop.preset ?? null);
+},{flush:'post'});
 onMounted(async () => {
   try {
     const raw = await props.storage.readRaw();
@@ -277,8 +344,10 @@ onMounted(async () => {
       projectionSince ??= Date.now();
       if (Date.now() - projectionSince >= 5000) {
         const ids = new Set(projection.rows.filter((/** @type {any} */ row)=>row.backendLifecycle !== 'destroyed').map((/** @type {any} */ row)=>row.id));
+        for(const row of props.workloadTiles)ids.add(row.id);
         for (const id of Object.keys(state.value.assignments)) if (!ids.has(id)) {
           delete state.value.assignments[id];
+          delete state.value.labels?.[id];
           for (const seen of revealed.values()) seen.delete(id);
         }
         cleanLayouts(state.value);
@@ -298,10 +367,44 @@ onBeforeUnmount(() => {
 });
 function forgetSurface(/** @type {string} */ id) {
   delete state.value.assignments[id];
+  delete state.value.labels?.[id];
   for (const seen of revealed.values()) seen.delete(id);
   cleanLayouts(state.value);
 }
-defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
+/** Retire identity presentation data durably before deleting its reusable id.
+ * A failed identity delete may lose this alias, but cannot transfer it to a new account.
+ * @param {string} id */
+async function forgetIdentity(id) {
+  if(!loaded.value || readOnly)throw Error('LAYOUT_SAVE_REFUSED');
+  delete state.value.labels?.[id];
+  for(const view of VIEWS)for(const desktop of state.value.views[view].desktops)delete desktop.identityCells?.[id];
+  await persist();announce();
+}
+/** @param {string} id */
+function revealWorkload(id){const home=homeOf(id);if(!home)return;state.value.activeView=home.view;state.value.views[home.view].active=home.desktop;announce();return walls.get(keyOf(home.view,home.desktop))?.revealWorkload?.(id);}
+const pendingNames=new Set();
+/** Save through the existing host layout owner; failed writes restore the label.
+ * @param {string} view @param {number} id @param {string} value */
+async function renameDesktop(view,id,value) {
+  const pendingKey=`desktop:${view}:${id}`;
+  if(!loaded.value || readOnly || pendingNames.has(pendingKey))return false;
+  const desktop=state.value.views[view]?.desktops.find(item=>item.id===id),previous=desktop?.label;
+  if(!setDesktopName(state.value,view,id,value))return false;
+  pendingNames.add(pendingKey);
+  try {await persist();announce();return true;} catch {if(desktop){if(previous===undefined)delete desktop.label;else desktop.label=previous;}announce();return false;} finally {pendingNames.delete(pendingKey);}
+}
+/** @param {string} id @param {string} value */
+async function renameCapsule(id,value) {
+  if(!loaded.value || readOnly)return false;
+  const row=props.rows.find(item=>item.id===id) ?? props.workloadTiles.find(item=>item.id===id);
+  if(!row)return false;
+  const key=row.profile_id || row.id,previous=capsuleDisplayLabel(state.value,row),pendingKey=`capsule:${key}`;
+  if(pendingNames.has(pendingKey))return false;
+  if(!setCapsuleName(state.value,id,value,key))return false;
+  pendingNames.add(pendingKey);
+  try {await persist();announce();return true;} catch {if(previous===undefined)delete state.value.labels?.[key];else if(state.value.labels)state.value.labels[key]=previous;announce();return false;} finally {pendingNames.delete(pendingKey);}
+}
+defineExpose({refreshCurrentDesktop,forgetIdentity,renameDesktop,renameCapsule,revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
 </script>
 <template>
   <div class="mv-desktop-workspace" :hidden="$attrs.hidden === true">
@@ -310,10 +413,12 @@ defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,appl
         v-bind="$attrs" :hidden="!isActive(view,desktop.id)" :data-desktop="key"
         :intent-builders="/** @type {any} */ (intentBuilders)" :control-registry="controlRegistry" :scheduler="scheduler" :tile-scheduler="/** @type {any} */ (tileScheduler)"
         :scope="scope" :default-profile="adapter(view,desktop.id).defaultProfile" :storage="adapter(view,desktop.id).storage"
-        :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
+        :identity-cells="desktop.identityCells" :snap-grid="desktop.snapGrid" @custom-layout="desktop.preset = $event ?? null" @snap-grid-change="desktop.snapGrid = $event"
+        :workload-tiles="props.workloadTiles.filter(row=>homeOf(row.id)?.view===view&&homeOf(row.id)?.desktop===desktop.id)" :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
-        @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">
+        @layout-error="emit('layout-error',$event)" @panel-closed="panelClosed(key,$event)" @submit-intent="emit('submit-intent',$event)">
         <template #surface="slotProps"><slot name="surface" v-bind="slotProps" :desktop-active="isActive(view,desktop.id)" /></template>
+        <template #workload="slotProps"><slot name="workload" v-bind="slotProps" /></template>
       </WallWorkspace>
     </template>
   </div>

@@ -1,0 +1,9 @@
+{
+  "kind": "hello",
+  "workload_id": "workload-fixture",
+  "generation": 1,
+  "reservation_id": "reservation-fixture",
+  "nonce": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "owner_id": "actor-fixture",
+  "profile_id": "guest-command-arm64-v1"
+}

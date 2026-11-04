@@ -210,6 +210,8 @@ describe('mvui17 activity count live behavior (L2-6)', () => {
     const { app, props, root } = mountStrip(Strip, { entries: feedFor(9, 16) });
     try {
       await tick();
+      find(root, n => n.props?.['aria-expanded'] === false).props.onClick();
+      await tick();
       const countOf = () => find(root, (n) => typeof n.props?.class === 'string'
         && n.props.class.includes('mv-activity__count'))?.text;
       const listNameOf = () => find(root, (n) => n.tag === 'ol')?.props?.['aria-label'];
