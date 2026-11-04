@@ -191,7 +191,7 @@ test('F09/F51 Bootstrap paste destination and selected identity are visible besi
   assert.match(template,/Capsule ID:/);
   assert.match(template,/:value="focusedPair\?\.surfaceId \?\? pastedBootstrapText"/);
   assert.match(template,/placeholder="Paste AI ID…"/);
-  assert.match(template,/id="terminal-deck-bootstrap-paste-target"/);
+  assert.match(template,/:id="domId\('terminal-deck-bootstrap-paste-target'\)"/);
   assert.match(template,/:readonly="!!focusedPair"/);
   assert.match(template,/@input="onBootstrapInput"/);
   assert.match(source,/focusedPair\.value\?\.identityLine \?\? pastedBootstrapText\.value/);

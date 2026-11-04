@@ -261,30 +261,31 @@ const foldOverrides = ref(/** @type {Record<string, boolean>} */ ({}));
 const selectedFolded = computed(() => selectedSurface.value
   ? foldOverrides.value[selectedSurface.value.id] ?? selectedSurface.value.visibility === 'folded' : false);
 const selectedSurface = computed(() => rows.value.find(row => row.id === selectedCapsuleId.value) ?? rows.value[0] ?? null);
-const pairedTerminalOpen = ref(false);
-// Paired session layout is local to this retained view, never restored into the side panel.
+// Retain one view per capsule; visibility never owns the PTY lifetime.
 const pairedTerminalStorage = {getItem: () => null, setItem: () => {}};
-const pairedTerminalTarget = shallowRef(/** @type {any} */ (null));
-const activeTerminalPair = ref(/** @type {string|null} */ (null));
-const terminalPreferDock = ref(false);
+const pairedTerminalEntries = shallowRef(/** @type {Record<string,{target:any,open:boolean}>} */ ({}));
 const terminalDrawerHosts = shallowRef(/** @type {Record<string,{element:HTMLElement,width:number,height:number,visible:boolean}>} */ ({}));
-/** Keep the wall cell stable; sufficiently tall visible tiles reserve a row
- * below their live viewport. Unknown geometry stays in the side dock.
- * @param {any} target @param {Record<string,any>} hosts @param {boolean} open @param {boolean} preferDock */
+/** @param {any} target @param {Record<string,any>} hosts @param {boolean} open @param {boolean} preferDock */
 function pairedDrawerTarget(target, hosts, open, preferDock) {
   const host=target && hosts[target.surfaceId];
-  return open && !preferDock && host?.visible && host.width >= 400 && host.height >= 600 ? host.element : null;
+  return open && !preferDock && host?.visible && Number.isFinite(host.width) && host.width > 0 && Number.isFinite(host.height) && host.height > 0 ? host.element : null;
 }
-const terminalDrawerTarget = computed(() => pairedDrawerTarget(pairedTerminalTarget.value,terminalDrawerHosts.value,pairedTerminalOpen.value,terminalPreferDock.value));
-const terminalInDrawer = computed(() => Boolean(terminalDrawerTarget.value));
+const pairedDrawers = computed(() => Object.values(pairedTerminalEntries.value).map(entry => ({...entry,
+  host: pairedDrawerTarget(entry.target,terminalDrawerHosts.value,entry.open,false),
+})));
 const terminalDockOpen = computed(() => terminalDeckOpen.value);
 function toggleTerminalDock() {
   toggleTerminal();
 }
+/** @param {string} id @param {boolean} open */
+function setPairedDrawerOpen(id,open) {
+  const entry=pairedTerminalEntries.value[id];
+  if(entry) pairedTerminalEntries.value={...pairedTerminalEntries.value,[id]:{...entry,open}};
+}
 provide('capsuleTerminal', {
   available: () => !nestedMode.displayOnly && typeof props.terminalBroker?.open === 'function',
-  isOpen: (/** @type {string} */ id) => pairedTerminalOpen.value && activeTerminalPair.value === id,
-  inDrawer: (/** @type {string} */ id) => terminalInDrawer.value && pairedTerminalTarget.value?.surfaceId === id,
+  isOpen: (/** @type {string} */ id) => pairedTerminalEntries.value[id]?.open === true,
+  inDrawer: (/** @type {string} */ id) => pairedDrawers.value.some(entry => entry.target.surfaceId===id && !!entry.host),
   registerDrawer(/** @type {string} */ id, /** @type {HTMLElement|null} */ element, /** @type {{width:number,height:number,visible:boolean}} */ geometry) {
     const previous=terminalDrawerHosts.value[id];
     if (previous?.element===element && previous?.width===geometry.width && previous?.height===geometry.height && previous?.visible===geometry.visible) return;
@@ -293,12 +294,13 @@ provide('capsuleTerminal', {
     terminalDrawerHosts.value=next;
   },
   toggle(/** @type {string} */ id) {
-    if (pairedTerminalOpen.value && activeTerminalPair.value === id) { pairedTerminalOpen.value=false; return; }
+    const entry=pairedTerminalEntries.value[id];
+    if(entry?.open) {setPairedDrawerOpen(id,false);return;}
     const row=rows.value.find(row=>row.id===id && row.backendLifecycle!=='destroyed' && row.backendLifecycle!=='lost');
     if (!row) return;
-    terminalPreferDock.value=false;
-    pairedTerminalOpen.value=true;
-    pairedTerminalTarget.value={surfaceId:row.id,profileId:row.profile_id,title:surfaceLabel(row)};
+    pairedTerminalEntries.value={...pairedTerminalEntries.value,[id]:{
+      target:{surfaceId:row.id,profileId:row.profile_id,title:surfaceLabel(row)},open:true,
+    }};
   },
 });
 /** Renderer intents remain events until a host supplies an authoritative dispatcher. */
@@ -1976,7 +1978,7 @@ onMounted(() => {
           <TerminalDeckView :open="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @update:open="terminalOpen = $event" />
         </section>
         <div v-if="!nestedMode.displayOnly" hidden>
-          <Teleport :to="terminalDrawerTarget || 'body'" :disabled="!terminalInDrawer"><TerminalDeckView :compact="true" :open="pairedTerminalOpen && terminalInDrawer" :paired-target="pairedTerminalTarget" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="pairedTerminalStorage" @pair-focus="activeTerminalPair = $event" @update:open="pairedTerminalOpen = $event" /></Teleport>
+          <Teleport v-for="entry in pairedDrawers" :key="entry.target.surfaceId" :to="entry.host || 'body'" :disabled="!entry.host"><TerminalDeckView :compact="true" :id-prefix="entry.target.surfaceId" :open="!!entry.host" :paired-target="entry.target" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="pairedTerminalStorage" @update:open="setPairedDrawerOpen(entry.target.surfaceId, $event)" /></Teleport>
         </div>
     </aside>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">

@@ -2930,3 +2930,19 @@ test('Custom CLI rejects C0, DEL and C1 before creating a shell or writing bytes
   assert.equal(harness.openCalls.length,0);assert.equal(harness.writeCalls.length,0);
  } finally {controller.dispose();}
 });
+
+test('paired deck namespaces its controls and ignores shortcuts from another deck',async()=>{
+ const h=createBrokerDouble();
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,idPrefix:'surface-a',terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});
+ try {
+  const root=mounted.findById('surface-a-mv-terminal-deck');assert.ok(root);
+  assert.equal(mounted.findById('mv-terminal-deck'),null);
+  assert.ok(mounted.findById('surface-a-terminal-deck-new'));
+  let consumed=false;
+  root.props.onKeydown({key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>({})},preventDefault(){consumed=true;},stopPropagation(){},stopImmediatePropagation(){}});
+  await tick();assert.equal(consumed,false);assert.equal(h.openCalls.length,0);
+ } finally {mounted.app.unmount();}
+});
