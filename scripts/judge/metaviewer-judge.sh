@@ -675,7 +675,8 @@ cmd_run() {
     dest=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/recordings
     mkdir -p "$dest" && chmod 0700 "$dest" ||
         fail JUDGE_PROFILE "cannot prepare private recording directory $dest" "make XDG_STATE_HOME writable and retry run"
-    envv+=("MV_RECORDING_DESTINATION=$dest")
+    # A launcher default must not override the person's saved native folder choice.
+    envv+=("MV_RECORDING_DEFAULT_DESTINATION=$dest")
     if [ "$TIER" = T2 ]; then
         statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
         ramroot=$SHM/vqa-ramws/opensuperficies/os-cu-0

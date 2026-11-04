@@ -380,8 +380,14 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       const sid = entry.surfaceId;
       const cs = sid ? capsuleStates.get(sid) : [...capsuleStates.values()].find(s => s?.profile_id === profId);
       const hs = sid && typeof core.getHumanSurface === 'function' ? core.getHumanSurface(sid) : cs;
-      const csDead = !cs || cs.state === 'destroyed' || cs.state === 'lost' || cs.profile_id !== profId;
-      const hsDead = !hs || hs.state === 'destroyed' || hs.state === 'lost' || hs.profile_id !== profId;
+      if (sid && cs && cs.state !== 'destroyed' && hs?.state === 'lost'
+          && hs.profile_id === profId && hs.surface_id === sid) {
+        capsuleStates.set(sid, hs);
+      }
+      // A lost Program still needs its profile to authorize the explicit Stop.
+      // Only terminal removal releases it; losing pixels is not a stop receipt.
+      const csDead = !cs || cs.state === 'destroyed' || cs.profile_id !== profId;
+      const hsDead = (!hs && cs?.state !== 'lost') || hs?.state === 'destroyed' || (hs && hs.profile_id !== profId);
       if (csDead || hsDead) {
         programProfiles.delete(profId);
         if (sid) {
@@ -644,6 +650,7 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
 
   // [TARGET, unit decision] Separate from browser-only choices used by Add capsule.
   async function programs() {
+    pruneProgramProfiles();
     const reply = await listIdentities();
     if (reply?.ok !== true || !Array.isArray(reply.rows)) throw refuse('IDENTITY_LIST_UNAVAILABLE');
     await savedPrograms.reconcile?.(reply.rows);

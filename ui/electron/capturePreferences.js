@@ -43,12 +43,13 @@ export async function writeCapturePreferences(file,row) {
     await rename(temp,join(pinned,basename(file)));temp=undefined;await dir.sync();
   } finally {if(temp)await unlink(temp).catch(()=>{});await dir.close();}
 }
-/** Environment is authoritative; stored selection is applied only before core starts. @param {NodeJS.ProcessEnv} env @param {string} file */
+/** Explicit grants win; a launcher default yields to the saved native choice before core starts. @param {NodeJS.ProcessEnv} env @param {string} file */
 export function applySavedCapturePreferences(env,file) {
   if(env.MV_RECORDING_DESTINATION!==undefined)return env;
   try {
     const row=readCapturePreferences(file);
-    return row.recordingsFolder?{...env,MV_RECORDING_DESTINATION:validateCaptureFolder(row.recordingsFolder)}:env;
+    const folder=row.recordingsFolder || env.MV_RECORDING_DEFAULT_DESTINATION;
+    return folder?{...env,MV_RECORDING_DESTINATION:validateCaptureFolder(folder)}:env;
   } catch {return {...env,MV_CAPTURE_PREFERENCES_ERROR:'The saved recording folder or preferences are unavailable. Captures remain in RAM until you choose a valid folder.'};}
 }
 /** Copy a verified core archive through pinned descriptors; never accept a renderer path. @param {string} grant @param {string} folder @param {{id:string,bytes:number,sha256:string}} item */
