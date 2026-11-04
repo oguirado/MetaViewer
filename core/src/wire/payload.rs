@@ -2235,6 +2235,7 @@ pub struct CapsuleStateEvent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Command {
+    GuestCommandObservation(Box<super::command_observation::GuestCommandObservation>),
     CapsuleStateRequest(Box<CapsuleStateRequest>),
     CapsuleStateEvent(Box<CapsuleStateEvent>),
     RewindRequest(Box<super::rewind::RewindRequest>),

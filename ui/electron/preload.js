@@ -37,6 +37,24 @@ function gcAction(a){
 /** @param {any} s */
 const gcSnapshot=s=>gcKeys(s,'available,busy,canCancel,code,revision,session,stderr,stdout,uncertain') && typeof s.available==='boolean' && typeof s.busy==='boolean' && typeof s.canCancel==='boolean' && typeof s.uncertain==='boolean' && Number.isSafeInteger(s.revision) && s.revision>=0 && (s.code===null || typeof s.code==='string' && s.code.length<=64) && typeof s.stdout==='string' && typeof s.stderr==='string' && s.stdout.length+s.stderr.length<=131072 && (s.session===null || gcValid('guest_command_session.schema.json',s.session));
 
+
+/** Closed, readonly command transcript projection; it cannot authorize a request. */
+const gcObservationRow=(/** @type {any} */ row,/** @type {boolean} */ history)=>{
+ if(!gcKeys(row,'accepted_event_id,command_utf8,cwd,event,event_id,generation,job_id,owner_id,request_id,requester,reservation_id,schema,state,stderr,stdout,timeout_ms,workload_id'))return false;
+ const id=(/** @type {any} */ value,/** @type {string} */ prefix)=>typeof value==='string'&&new RegExp('^'+prefix+'-[a-z0-9][a-z0-9._-]{0,63}$(?![\\s\\S])').test(value);
+ const scalar=(/** @type {any} */ value)=>typeof value==='string'&&!/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+ return row.schema==='guest_command_observation/v0.2'&&row.event==='accepted_run'
+ &&id(row.event_id,'event')&&id(row.accepted_event_id,'event')&&id(row.request_id,'request')&&id(row.job_id,'job')&&id(row.owner_id,'actor')&&id(row.reservation_id,'reservation')&&id(row.workload_id,'workload')
+ &&Number.isSafeInteger(row.generation)&&row.generation>0&&gcKeys(row.requester,'component,instance')&&['agent','ui'].includes(row.requester.component)&&scalar(row.requester.instance)&&row.requester.instance.length>0&&row.requester.instance.length<=128
+ &&scalar(row.command_utf8)&&gcByteLength(row.command_utf8)>0&&gcByteLength(row.command_utf8)<=16384&&!row.command_utf8.includes('\0')&&scalar(row.cwd)&&gcByteLength(row.cwd)<=1024&&!/[\x00-\x1f\x7f]/.test(row.cwd)
+ &&Number.isSafeInteger(row.timeout_ms)&&row.timeout_ms>=1&&row.timeout_ms<=60000
+ &&(history?['exited','cancelled','timed_out','output_limit']:['running','stopping','unknown']).includes(row.state)
+ &&scalar(row.stdout)&&scalar(row.stderr)&&gcByteLength(row.stdout)+gcByteLength(row.stderr)<=196608;
+};
+const gcObservationSnapshot=(/** @type {any} */ value)=>gcKeys(value,'active,generation,history,staged,uncertain')&&typeof value.uncertain==='boolean'
+ &&(value.generation===null||Number.isSafeInteger(value.generation)&&value.generation>0)
+ &&(value.staged===null||gcKeys(value.staged,'job_id,request_id')&&typeof value.staged.request_id==='string'&&value.staged.request_id.length<=72&&typeof value.staged.job_id==='string'&&value.staged.job_id.length<=68)
+ &&(value.active===null||gcObservationRow(value.active,false))&&Array.isArray(value.history)&&value.history.length<=8&&value.history.every((/** @type {any} */ row)=>gcObservationRow(row,true))&&gcByteLength(JSON.stringify(value))<=1048576;
 /** @param {any} value */
 function capsuleCapabilitiesValid(value) {
  const row=(/** @type {any} */ v)=>gcKeys(v,'available,reason')&&typeof v.available==='boolean'&&typeof v.reason==='string'&&[...v.reason].length<=256&&!/[\uD800-\uDFFF]/u.test(v.reason)&&!/[\x00-\x1f\x7f/\\]/.test(v.reason)&&(v.available||v.reason.trim().length>0);
@@ -929,7 +947,7 @@ return Object.freeze({rewindValid,rewindAction,rewindSnapshot});
 
 const {rewindValid,rewindAction,rewindSnapshot}=createRewindChecks(RW_SCHEMAS);
 // REWIND_VALIDATORS_END
-const WIRE_NAMES = Object.freeze({slotRequest:'capsule-state.request',rewindStatus:'rewind.status',rewindRequest:'rewind.request',guestCommandCapabilities:'guest-command.capabilities',guestCommandStatus:'guest-command.status',guestCommandRequest:'guest-command.request',headlessStatus:'headless.status',headlessRequest:'headless.request',loadSettings:'settings.load',saveSettings:'settings.save',
+const WIRE_NAMES = Object.freeze({slotRequest:'capsule-state.request',rewindStatus:'rewind.status',rewindRequest:'rewind.request',guestCommandObservation:'guest-command.observation',guestCommandCapabilities:'guest-command.capabilities',guestCommandStatus:'guest-command.status',guestCommandRequest:'guest-command.request',headlessStatus:'headless.status',headlessRequest:'headless.request',loadSettings:'settings.load',saveSettings:'settings.save',
   recordingDestination:'recording.destination',nestedDepth:'nested.depth',selfCapsuleId:'nested.self',
   vmAvailable:'authority.vmAvailable',propose:'authority.propose',intent:'authority.intent',createSurface:'authority.createSurface',subscribeFrames:'authority.subscribe',
   unsubscribeFrames:'authority.unsubscribe',terminalOpen:'side-terminal.open',terminalEnabled:'side-terminal.enabled',
@@ -1176,6 +1194,7 @@ function wireFacade(transport) {
       return reply;
     }
     if(name==='rewindStatus'||name==='rewindRequest'){if(!rewindSnapshot(reply))throw new ContractError('OUTCOME','rewind state');return structuredClone(reply);}
+    if(name==='guestCommandObservation'){if(!gcObservationSnapshot(reply))throw new ContractError('OUTCOME','command observation');return structuredClone(reply);}
     if(name==='guestCommandCapabilities'){if(!capsuleCapabilitiesValid(reply))throw new ContractError('OUTCOME','capsule capabilities');return reply;}
     if(name==='guestCommandStatus'||name==='guestCommandRequest'){if(!gcSnapshot(reply))throw new ContractError('OUTCOME','guest command state');return reply;}
     if (name==='headlessStatus' || name==='headlessRequest') {
@@ -1591,7 +1610,7 @@ function wireFacade(transport) {
     },
   });
   api.rewind=Object.freeze({status:(/** @type {any[]} */...args)=>call('rewindStatus',args),request:(/** @type {any[]} */...args)=>call('rewindRequest',args),subscribe:(/** @type {(value:any)=>void} */cb)=>{if(typeof cb!=='function'||!transport.subscribe)throw new ContractError('ARGS','rewind callback');return transport.subscribe('metaviewer:rewind.state',value=>{if(!rewindSnapshot(value))throw new ContractError('OUTCOME','rewind state');cb(structuredClone(value));});}});
-  api.guestCommand=Object.freeze({capabilities:(/** @type {any[]} */ ...args)=>call('guestCommandCapabilities',args),status:(/** @type {any[]} */ ...args)=>call('guestCommandStatus',args),request:(/** @type {any[]} */ ...args)=>call('guestCommandRequest',args),subscribe:(/** @type {(v:any)=>void} */ cb)=>{if(typeof cb!=='function'||!transport.subscribe)throw new ContractError('ARGS','guest command callback');return transport.subscribe('metaviewer:guest-command.state',value=>{if(!gcSnapshot(value))throw new ContractError('OUTCOME','guest command state');cb(structuredClone(value));});}});
+  api.guestCommand=Object.freeze({onObservation:(/** @type {any[]} */ ...args)=>{const cb=args[0];if(args.length!==1||typeof cb!=='function'||!transport.subscribe)throw new ContractError('ARGS','observation callback');let active=true,received=false;const off=transport.subscribe('metaviewer:guest-command.observation',value=>{if(!gcObservationSnapshot(value))throw new ContractError('OUTCOME','command observation');if(active){received=true;cb(structuredClone(value));}});void call('guestCommandObservation',[]).then(value=>{if(active&&!received)cb(value);}).catch(()=>{});return()=>{active=false;off();};},capabilities:(/** @type {any[]} */ ...args)=>call('guestCommandCapabilities',args),status:(/** @type {any[]} */ ...args)=>call('guestCommandStatus',args),request:(/** @type {any[]} */ ...args)=>call('guestCommandRequest',args),subscribe:(/** @type {(v:any)=>void} */ cb)=>{if(typeof cb!=='function'||!transport.subscribe)throw new ContractError('ARGS','guest command callback');return transport.subscribe('metaviewer:guest-command.state',value=>{if(!gcSnapshot(value))throw new ContractError('OUTCOME','guest command state');cb(structuredClone(value));});}});
   api.headless=Object.freeze({
     /** @param {...unknown} args */
     status:(...args)=>call('headlessStatus',args),
@@ -1842,7 +1861,7 @@ export function installPreload(electron) {
       /** @param {string} channel @param {(value:any,ports?:MessagePort[])=>void} cb */
       (channel,cb) => {
         if (nested && channel === 'metaviewer:side-terminal.port') throw new ContractError('DISPLAY_ONLY','side-terminal is disabled in nested display');
-        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port','metaviewer:handoff.state','metaviewer:headless.state','metaviewer:guest-command.state','metaviewer:rewind.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
+        if (!['metaviewer:authority.frames','metaviewer:capture.state','metaviewer:side-terminal.port','metaviewer:handoff.state','metaviewer:headless.state','metaviewer:guest-command.state','metaviewer:guest-command.observation','metaviewer:rewind.state'].includes(channel)) throw new ContractError('CHANNEL','subscription refused');
         const native = /** @type {any} */(ipcRenderer);
         const listener = (/** @type {any} */event,/** @type {any} */value) => {
           // The facade validates this authenticated host channel before transfer.

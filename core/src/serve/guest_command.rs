@@ -129,6 +129,13 @@ impl Server {
                 self.authority.state().core_seq,
             );
         }
+        let prior = self
+            .authority
+            .state()
+            .guest_command
+            .pending
+            .get(e.0["request_id"].as_str().unwrap_or(""))
+            .cloned();
         let receivers = self.guest_command_receivers()?;
         let out = self.authority.apply_with_witnesses(
             Input::GuestCommandEvent {
@@ -151,6 +158,44 @@ impl Server {
             .session
             .clone()
             .unwrap_or(Value::Null);
+        let observation = match accepted_run_observation(
+            &self.authority.state().guest_command,
+            prior.as_ref(),
+            e,
+            out.core_seq,
+        ) {
+            Ok(observation) => observation,
+            Err(error) => {
+                self.mark_guest_command_unknown(now)?;
+                return Err(error);
+            }
+        };
+        if let Some((ui, observation)) = observation {
+            // The accepted transition is durably committed above. The pair is
+            // adjacent on the creator's queue; neither member grants authority.
+            if self.send_at(now, &ui, observation).is_err()
+                || self
+                    .send_at(
+                        now,
+                        &ui,
+                        Command::GuestCommandEvent(Box::new(forwarded.clone())),
+                    )
+                    .is_err()
+            {
+                self.mark_guest_command_unknown(now)?;
+                return Err(invalid("command observation delivery unknown"));
+            }
+            for p in receivers.into_iter().filter(|p| p != &ui) {
+                if self.connections.contains_key(&p) {
+                    let _ = self.send_at(
+                        now,
+                        &p,
+                        Command::GuestCommandEvent(Box::new(forwarded.clone())),
+                    );
+                }
+            }
+            return Ok(());
+        }
         for p in receivers {
             if self.connections.contains_key(&p) {
                 let _ = self.send_at(
@@ -208,6 +253,70 @@ impl Server {
         }
         Ok(())
     }
+}
+
+/// Builds display-only data from the committed accepted transition and the
+/// original authenticated intent, never from unvalidated daemon command text.
+fn accepted_run_observation(
+    state: &crate::guest_command::State,
+    prior: Option<&crate::guest_command::Pending>,
+    event: &GuestCommandEvent,
+    sequence: u64,
+) -> Result<Option<(Endpoint, Command)>> {
+    if event.0["event"] != "accepted" || event.0["data"]["op"] != "run" {
+        return Ok(None);
+    }
+    let Some(ui) = state
+        .creator
+        .as_ref()
+        .filter(|p| p.component == Component::Ui)
+    else {
+        return Ok(None);
+    };
+    let prior = prior.ok_or_else(|| invalid("missing accepted command intent"))?;
+    let id = event.0["request_id"]
+        .as_str()
+        .ok_or_else(|| invalid("accepted request ID"))?;
+    let accepted = state
+        .pending
+        .get(id)
+        .ok_or_else(|| invalid("missing accepted command"))?;
+    let params = &prior.request["params"];
+    let session = state
+        .session
+        .as_ref()
+        .ok_or_else(|| invalid("missing accepted session"))?;
+    if prior.accepted
+        || prior.unknown
+        || state.unknown
+        || !accepted.accepted
+        || accepted.request != prior.request
+        || accepted.caller != prior.caller
+        || prior.request["op"] != "run"
+        || prior.request["request_id"] != event.0["request_id"]
+        || state.actor.as_deref() != event.0["owner_id"].as_str()
+        || state.reservation.as_deref() != event.0["reservation_id"].as_str()
+        || params["workload_id"] != session["workload_id"]
+        || params["generation"] != session["generation"]
+        || params["job_id"] != session["job"]["job_id"]
+    {
+        return Err(invalid("accepted command observation binding"));
+    }
+    let value = json!({
+        "schema":"guest_command_observation/v0.2",
+        "event_id":format!("event-command-observation-{sequence}"),
+        "event":"accepted_run", "accepted_event_id":event.0["event_id"],
+        "request_id":event.0["request_id"], "reservation_id":event.0["reservation_id"],
+        "owner_id":event.0["owner_id"], "workload_id":params["workload_id"],
+        "generation":params["generation"], "job_id":params["job_id"],
+        "requester":prior.caller, "command_utf8":params["command_utf8"],
+        "cwd":params["cwd"], "timeout_ms":params["timeout_ms"]
+    });
+    let observation = serde_json::from_value(value)?;
+    Ok(Some((
+        ui.clone(),
+        Command::GuestCommandObservation(Box::new(observation)),
+    )))
 }
 
 #[cfg(test)]
@@ -675,6 +784,11 @@ mod tests {
         };
         let w = f.server.authority.retain_witness(b"lagged-run").unwrap();
         f.server.guest_command_event(0, &env, &e, 0, w).unwrap();
+        let observation = serde_json::to_value(u.try_recv().unwrap().body).unwrap();
+        assert_eq!(observation["schema"], "guest_command_observation/v0.2");
+        assert_eq!(observation["accepted_event_id"], "event-run-ack");
+        assert_eq!(observation["request_id"], "request-run");
+        assert_eq!(observation["job_id"], "job-lag");
         for rx in [&u, &a] {
             let v = serde_json::to_value(rx.try_recv().unwrap().body).unwrap();
             assert_eq!(v["session"]["phase"], "stopping");
@@ -699,5 +813,222 @@ mod tests {
             .pending
             .values()
             .all(|p| p.unknown));
+    }
+    fn observation_fixture(creator: Component) -> Fixture {
+        let mut f = Fixture::new();
+        let mut create = f.create();
+        create.from = f.endpoint(creator);
+        let r = match create.body {
+            Command::GuestCommandRequest(r) => r,
+            _ => unreachable!(),
+        };
+        f.server
+            .authority
+            .apply(Input::GuestCommandRequest {
+                request: *r,
+                caller: f.endpoint(creator),
+                agent: f.endpoint(Component::Agent),
+                other_resources: false,
+                received_ns: 0,
+            })
+            .unwrap();
+        let state = &f.server.authority.state().guest_command;
+        let mut session = json!({"schema":"guest_command_session/v0.2","workload_id":"workload-observation","generation":1,"owner_id":state.actor,"profile_id":"guest-command-arm64-v1","backend":"firecracker","isa":"aarch64","phase":"starting","ownership":"held","jobs_started":0,"job":null,"controls":{"cancel":null,"stop":null}});
+        for (id, kind, data) in [
+            ("event-observe-create", "accepted", json!({"op":"create"})),
+            ("event-observe-ready", "ready", json!({})),
+        ] {
+            if kind == "ready" {
+                session["phase"] = json!("ready");
+            }
+            let state = &f.server.authority.state().guest_command;
+            let notice = serde_json::from_value(json!({"schema":"guest_command_event/v0.2","event_id":id,"request_id":"request-create","reservation_id":state.reservation,"owner_id":state.actor,"session":session,"event":kind,"data":data})).unwrap();
+            assert!(f
+                .server
+                .authority
+                .apply(Input::GuestCommandEvent {
+                    notice,
+                    executor_epoch: 0
+                })
+                .unwrap()
+                .reason
+                .is_none());
+        }
+        f
+    }
+    fn observation_run(f: &Fixture) -> Envelope {
+        f.env(Component::Agent,json!({"schema":"guest_command_request/v0.2","request_id":"request-observed-run","op":"run","params":{"workload_id":"workload-observation","generation":1,"job_id":"job-observation","command_utf8":"printf observed","cwd":"work","stdin_b64":"cHJpdmF0ZQ==","timeout_ms":1000}}))
+    }
+    fn observation_event(f: &Fixture, kind: &str) -> (Envelope, GuestCommandEvent) {
+        let state = &f.server.authority.state().guest_command;
+        let mut session = state.session.clone().unwrap();
+        let data = if kind == "accepted" {
+            session["phase"] = json!("running");
+            session["jobs_started"] = json!(1);
+            session["job"] = json!({"job_id":"job-observation","state":"running","exit_code":null,"signal":null,"stdout_bytes":0,"stderr_bytes":0,"output_complete":false});
+            json!({"op":"run"})
+        } else {
+            json!({"op":"run","code":"INVALID"})
+        };
+        let env = f.env(Component::Daemon,json!({"schema":"guest_command_event/v0.2","event_id":"event-observed-accepted","request_id":"request-observed-run","reservation_id":state.reservation,"owner_id":state.actor,"session":session,"event":kind,"data":data}));
+        let event = match &env.body {
+            Command::GuestCommandEvent(e) => *e.clone(),
+            _ => unreachable!(),
+        };
+        (env, event)
+    }
+    fn observe_dispatch(f: &mut Fixture, env: &Envelope, event: &GuestCommandEvent) -> Result<()> {
+        let witness = f
+            .server
+            .authority
+            .retain_witness(b"accepted-observation-test")?;
+        f.server.guest_command_event(0, env, event, 0, witness)
+    }
+    #[test]
+    fn command_observation_follows_commit_and_precedes_exact_acceptance() {
+        let mut f = observation_fixture(Component::Ui);
+        let d = f.attach(Component::Daemon);
+        let u = f.attach(Component::Ui);
+        let a = f.attach(Component::Agent);
+        f.dispatch(observation_run(&f)).unwrap();
+        assert!(d.try_recv().is_ok());
+        assert!(u.try_recv().is_err());
+        let (env, event) = observation_event(&f, "accepted");
+        observe_dispatch(&mut f, &env, &event).unwrap();
+        let observation = u.try_recv().unwrap();
+        let accepted = u.try_recv().unwrap();
+        assert_eq!(accepted.seq, observation.seq + 1);
+        let body = serde_json::to_value(&observation.body).unwrap();
+        assert_eq!(body["accepted_event_id"], event.0["event_id"]);
+        assert_eq!(body["command_utf8"], "printf observed");
+        assert_eq!(
+            body["requester"],
+            serde_json::to_value(f.endpoint(Component::Agent)).unwrap()
+        );
+        assert!(body.get("stdin_b64").is_none());
+        assert!(body.get("authority_epoch").is_none());
+        assert_eq!(observation.to, f.endpoint(Component::Ui));
+        assert!(crate::decode_envelope(&serde_json::to_string(&observation).unwrap()).is_ok());
+        assert_eq!(
+            serde_json::to_value(accepted.body).unwrap()["event_id"],
+            event.0["event_id"]
+        );
+        assert!(matches!(
+            a.try_recv().unwrap().body,
+            Command::GuestCommandEvent(_)
+        ));
+        assert!(a.try_recv().is_err());
+        observe_dispatch(&mut f, &env, &event).unwrap();
+        assert!(f.server.authority.state().guest_command.unknown);
+        while let Ok(e) = u.try_recv() {
+            assert!(!matches!(e.body, Command::GuestCommandObservation(_)));
+        }
+    }
+    #[test]
+    fn command_observation_never_leaks_to_noncreator_or_refused_run() {
+        for creator in [Component::Ui, Component::Agent] {
+            let mut f = observation_fixture(creator.clone());
+            let _d = f.attach(Component::Daemon);
+            let u = f.attach(Component::Ui);
+            let _a = f.attach(Component::Agent);
+            f.dispatch(observation_run(&f)).unwrap();
+            let (env, event) = observation_event(
+                &f,
+                if creator == Component::Ui {
+                    "refused"
+                } else {
+                    "accepted"
+                },
+            );
+            observe_dispatch(&mut f, &env, &event).unwrap();
+            while let Ok(e) = u.try_recv() {
+                assert!(!matches!(e.body, Command::GuestCommandObservation(_)));
+            }
+        }
+    }
+    #[test]
+    fn command_observation_journal_and_delivery_fail_closed() {
+        for journal_failure in [true, false] {
+            let mut f = observation_fixture(Component::Ui);
+            let _d = f.attach(Component::Daemon);
+            let u = f.attach(Component::Ui);
+            f.dispatch(observation_run(&f)).unwrap();
+            let (env, event) = observation_event(&f, "accepted");
+            if journal_failure {
+                crate::journal::fail_next_append_with_torn_event_sidecar(&f.server.root);
+            } else {
+                drop(u);
+            }
+            assert!(observe_dispatch(&mut f, &env, &event).is_err());
+            if !journal_failure {
+                assert!(f.server.authority.state().guest_command.unknown);
+            }
+        }
+    }
+    #[test]
+    fn command_observation_rejects_unaccepted_changed_and_stale_metadata() {
+        let mut f = observation_fixture(Component::Ui);
+        let _d = f.attach(Component::Daemon);
+        f.dispatch(observation_run(&f)).unwrap();
+        let (_, event) = observation_event(&f, "accepted");
+        let prior =
+            f.server.authority.state().guest_command.pending["request-observed-run"].clone();
+        assert!(accepted_run_observation(
+            &f.server.authority.state().guest_command,
+            Some(&prior),
+            &event,
+            1
+        )
+        .is_err());
+        let mut state = f.server.authority.state().guest_command.clone();
+        state
+            .pending
+            .get_mut("request-observed-run")
+            .unwrap()
+            .accepted = true;
+        state.session = Some(event.0["session"].clone());
+        assert!(accepted_run_observation(&state, Some(&prior), &event, 1)
+            .unwrap()
+            .is_some());
+        state.session.as_mut().unwrap()["generation"] = json!(2);
+        assert!(accepted_run_observation(&state, Some(&prior), &event, 1).is_err());
+        state.session = Some(event.0["session"].clone());
+        state
+            .pending
+            .get_mut("request-observed-run")
+            .unwrap()
+            .request["params"]["command_utf8"] = json!("changed");
+        assert!(accepted_run_observation(&state, Some(&prior), &event, 1).is_err());
+    }
+    #[test]
+    fn command_observation_foreign_actor_cannot_publish() {
+        let mut f = observation_fixture(Component::Ui);
+        let _d = f.attach(Component::Daemon);
+        let u = f.attach(Component::Ui);
+        f.dispatch(observation_run(&f)).unwrap();
+        let (mut env, mut event) = observation_event(&f, "accepted");
+        event.0["owner_id"] = json!("actor-foreign");
+        env.body = Command::GuestCommandEvent(Box::new(event.clone()));
+        observe_dispatch(&mut f, &env, &event).unwrap();
+        assert!(f.server.authority.state().guest_command.unknown);
+        while let Ok(e) = u.try_recv() {
+            assert!(!matches!(e.body, Command::GuestCommandObservation(_)));
+        }
+    }
+    #[test]
+    fn command_observation_is_never_an_inbound_authority() {
+        let mut f = Fixture::new();
+        let d = f.attach(Component::Daemon);
+        let _a = f.attach(Component::Agent);
+        let peer = ready(&f, Component::Agent);
+        let body: Value = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/guest_command_observation.valid.json"
+        ))
+        .unwrap();
+        let env = f.env(Component::Agent, body);
+        let before = f.server.authority.state().guest_command.clone();
+        let _ = f.server.route(&peer, 0, env);
+        assert_eq!(f.server.authority.state().guest_command, before);
+        assert!(d.try_recv().is_err());
     }
 }

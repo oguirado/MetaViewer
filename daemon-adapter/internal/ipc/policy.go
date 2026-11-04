@@ -24,10 +24,11 @@ type Authority interface {
 }
 type SchemaPolicy struct {
 	Authority
-	config   Config
-	envelope *schemaNode
-	capsule  *schemaNode
-	rewind   *schemaNode
+	config      Config
+	envelope    *schemaNode
+	capsule     *schemaNode
+	rewind      *schemaNode
+	observation *schemaNode
 }
 
 var _ Policy = (*SchemaPolicy)(nil)
@@ -269,7 +270,19 @@ func NewPolicy(c Config, source fs.FS, authority Authority) (policy *SchemaPolic
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		return nil, statErr
 	}
-	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot}, nil
+	var observationRoot *schemaNode
+	if _, statErr := fs.ReadFile(source, "guest_command_observation_envelope.schema.json"); statErr == nil {
+		observationRoot, err = resolve("guest_command_observation_envelope.schema.json", "")
+		if err != nil {
+			return nil, err
+		}
+		if observationRoot.kind != "object" || !observationRoot.closed || observationRoot.props["schema"] == nil || observationRoot.props["schema"].constant != "guest_command_observation_envelope/v0.2" || observationRoot.props["body"] == nil || observationRoot.props["body"].ref == nil || observationRoot.props["body"].ref.props["schema"] == nil || observationRoot.props["body"].ref.props["schema"].constant != "guest_command_observation/v0.2" {
+			return nil, errors.New("closed command observation contract required")
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return nil, statErr
+	}
+	return &SchemaPolicy{Authority: authority, config: c, envelope: n, capsule: capsuleRoot, rewind: rewindRoot, observation: observationRoot}, nil
 }
 func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 	var e Envelope
@@ -300,6 +313,8 @@ func (p *SchemaPolicy) ValidateEnvelope(raw []byte) (Envelope, error) {
 		selected = p.capsule
 	case "rewind_envelope/v0.2":
 		selected = p.rewind
+	case "guest_command_observation_envelope/v0.2":
+		selected = p.observation
 	default:
 		return e, errors.New("unknown envelope discriminator")
 	}

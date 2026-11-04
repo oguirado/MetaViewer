@@ -65,6 +65,7 @@ testbou-9c41687e5027	agents/tests/test_boundary_sweep.py
 testcap-a20ace9b4e0e	agents/tests/test_capsule_envelope.py
 test_client.py	agents/tests/test_client.py
 testcli-3ace4ec56b6f	agents/tests/test_client_statemachine.py
+testcom-46cec8a8f60c	agents/tests/test_command_observation_contracts.py
 testcom-86e3b307c857	agents/tests/test_compiled_browser_entries.py
 testcom-0d0238f46370	agents/tests/test_compiled_runtime.py
 test_deps_lock.py	agents/tests/test_deps_lock.py
@@ -191,6 +192,7 @@ fronten-5717175eba13	changes/unreleased/frontend-working-tree.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 guestco-2c2745fc03e0	changes/unreleased/guest-command-adapter-transport.md
 guestco-6106b5a4ceef	changes/unreleased/guest-command-cancel-state.md
+guestco-e65e1dc50fac	changes/unreleased/guest-command-observation.md
 handoff-state-home.md	changes/unreleased/handoff-state-home.md
 identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
 judgeki-2abc0a3eae20	changes/unreleased/judge-kit-capsule-net.md
@@ -809,6 +811,17 @@ guestco-2b44de69198a	contracts/examples/v0.2/guest_command_event.valid.generated
 guestco-50f168c3c6dc	contracts/examples/v0.2/guest_command_event.valid.generated8.json
 guestco-5d364c94f8c6	contracts/examples/v0.2/guest_command_event.valid.generated9.json
 guestco-6d675c1ae6d9	contracts/examples/v0.2/guest_command_event.valid.json
+guestco-99d183ef02c4	contracts/examples/v0.2/guest_command_observation.invalid.bool_generation.json
+guestco-bce442c69bab	contracts/examples/v0.2/guest_command_observation.invalid.empty_command.json
+guestco-415a1ae65f70	contracts/examples/v0.2/guest_command_observation.invalid.extra.json
+guestco-3246cc670f4f	contracts/examples/v0.2/guest_command_observation.invalid.stdin.json
+guestco-fda3123ad35c	contracts/examples/v0.2/guest_command_observation.invalid.submitted.json
+guestco-5b46cb04910a	contracts/examples/v0.2/guest_command_observation.invalid.timeout.json
+guestco-d7bf95720218	contracts/examples/v0.2/guest_command_observation.invalid.too_long_command.json
+guestco-913638fa9cc3	contracts/examples/v0.2/guest_command_observation.invalid.zero_generation.json
+guestco-16b85f622bb5	contracts/examples/v0.2/guest_command_observation.valid.json
+guestco-685e8ee6af37	contracts/examples/v0.2/guest_command_observation_envelope.invalid.sender.json
+guestco-59ecd1a65d7c	contracts/examples/v0.2/guest_command_observation_envelope.valid.json
 guestco-4ac4b9fa92d8	contracts/examples/v0.2/guest_command_request.invalid.extra.json
 guestco-7019f8e8b5e7	contracts/examples/v0.2/guest_command_request.valid.generated0.json
 guestco-3861685e9fb7	contracts/examples/v0.2/guest_command_request.valid.generated1.json
@@ -1563,6 +1576,8 @@ catalog-374a755bed97	contracts/v0.2/catalog_entry.schema.json
 envelop-8a426711a504	contracts/v0.2/envelope.schema.json
 framere-c880d4608fa9	contracts/v0.2/frame_ref.schema.json
 guestco-0cd8abecc696	contracts/v0.2/guest_command_event.schema.json
+guestco-89b51b5c1592	contracts/v0.2/guest_command_observation.schema.json
+guestco-5eda9cfa9d58	contracts/v0.2/guest_command_observation_envelope.schema.json
 guestco-99d16cd34545	contracts/v0.2/guest_command_request.schema.json
 guestco-6982d9a78adb	contracts/v0.2/guest_command_session.schema.json
 guesttr-bc22aa8fc8ab	contracts/v0.2/guest_transport_metadata.schema.json
@@ -1649,6 +1664,7 @@ v027tes-e1246c2b6a52	core/src/supervisor/v027_tests.rs
 transport-mod.rs	core/src/transport/mod.rs
 verify-mod.rs	core/src/verify/mod.rs
 ownership_tests.rs	core/src/verify/ownership_tests.rs
+command-b501c7b783f5	core/src/wire/command_observation.rs
 wire-guest_command.rs	core/src/wire/guest_command.rs
 wire-headless.rs	core/src/wire/headless.rs
 wire-mod.rs	core/src/wire/mod.rs
@@ -1966,6 +1982,7 @@ capsule_envelope.go	daemon-adapter/internal/ipc/capsule_envelope.go
 capsule-dc18a06427ba	daemon-adapter/internal/ipc/capsule_envelope_test.go
 client.go	daemon-adapter/internal/ipc/client.go
 client_test.go	daemon-adapter/internal/ipc/client_test.go
+command-f4af136781b9	daemon-adapter/internal/ipc/command_observation_test.go
 config.go	daemon-adapter/internal/ipc/config.go
 conform-8ca4cdb6f485	daemon-adapter/internal/ipc/conformance_probe_test.go
 ipc-dispatch_test.go	daemon-adapter/internal/ipc/dispatch_test.go
@@ -2485,6 +2502,7 @@ check_theme.py	tools/check_theme.py
 tools-gate.sh	tools/gate.sh
 gate_g_ai.py	tools/gate_g_ai.py
 generat-787520f795c4	tools/generate_guest_command_contracts.py
+generat-62f24e862477	tools/generate_guest_command_observation.py
 generat-a95dc59a46f3	tools/generate_guest_command_runtime.py
 generat-f7334b59521f	tools/generate_guest_command_sdk.py
 generat-4f785fccb627	tools/generate_headless_contracts.py
@@ -2536,6 +2554,8 @@ frameDiag.js	ui/electron/frameDiag.js
 framePort.js	ui/electron/framePort.js
 frameReader.js	ui/electron/frameReader.js
 guestCommandHost.js	ui/electron/guestCommandHost.js
+guestCo-82eb0d009d63	ui/electron/guestCommandObservation.js
+guestCo-828471f4ea88	ui/electron/guestCommandObservationValues.js
 guestCo-3d16179401b4	ui/electron/guestCommandProfile.js
 guestCommandValues.js	ui/electron/guestCommandValues.js
 headlessHost.js	ui/electron/headlessHost.js
@@ -2726,7 +2746,12 @@ frameReader.test.js	ui/test/frameReader.test.js
 frameRe-ec3058eeff9f	ui/test/frameReaderOnePass.test.mjs
 frameTile.test.js	ui/test/frameTile.test.js
 framesParity.test.mjs	ui/test/framesParity.test.mjs
+guestco-b15865ba25e2	ui/test/guest-command-adoption.test.js
 guestco-9b715f05165d	ui/test/guest-command-host.test.js
+guestco-0b3d4bf2e3ae	ui/test/guest-command-observation-ipc.test.js
+guestco-829bad3c03d4	ui/test/guest-command-observation-panel.test.js
+guestco-aa750a03de5b	ui/test/guest-command-observation-transport.test.js
+guestco-5dbd9bf7f132	ui/test/guest-command-observation.test.js
 guestco-8fa2f673be90	ui/test/guest-command-panel.test.js
 guestco-996637030635	ui/test/guest-command-profile.test.js
 guestco-cb9d57e33163	ui/test/guest-command-transport.test.js

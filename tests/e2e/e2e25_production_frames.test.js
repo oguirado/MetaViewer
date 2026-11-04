@@ -1133,7 +1133,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
     // Public typed workload groups are shipped independently of frame diagnostics.
     // They expose closed requests/snapshots, never raw IPC or native reset handles.
     for (const [name, methods] of Object.entries({
-      guestCommand: ['capabilities', 'request', 'status', 'subscribe'],
+      guestCommand: ['capabilities', 'onObservation', 'request', 'status', 'subscribe'],
       headless: ['request', 'status', 'subscribe'],
       rewind: ['request', 'status', 'subscribe'],
     })) {
@@ -1155,6 +1155,7 @@ test('W2-FRAME-LIVE-DIAG: MV_FRAME_DIAG is off by default, adds no window.metavi
       await assert.rejects(api[name].request({ op: 'unexpected', privateMethod: 'invoke' }));
       assert.throws(() => api[name].subscribe(null));
     }
+    assert.throws(() => api.guestCommand.onObservation(null));
     assert.equal(invocations.length, beforeInvalidCalls, 'invalid workload calls must not cross IPC');
     const facadeKeys = Object.keys(api).sort();
     assert.throws(() => assert.deepEqual(Object.keys({ ...api, unexpected() {} }).sort(), facadeKeys),

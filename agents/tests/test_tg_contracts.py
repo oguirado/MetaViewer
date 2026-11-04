@@ -101,13 +101,14 @@ class ContractGapTests(unittest.TestCase):
     def test_raw_source_oracle_accepts_examples_and_rejects_closed_mutants(self):
         oracle = Validator(ROOT / "contracts/v0.2")
         schemas = {name: oracle.load(name + ".schema.json") for name in
-                   ("envelope", "capsule_envelope", "rewind_envelope")}
+                   ("envelope", "capsule_envelope", "rewind_envelope", "guest_command_observation_envelope")}
         families = {branch["$ref"].removesuffix(".schema.json"): name
                     for name, schema in schemas.items()
-                    for branch in schema["properties"]["body"]["oneOf"]}
+                    for branch in ([schema["properties"]["body"]] if name == "guest_command_observation_envelope" else schema["properties"]["body"]["oneOf"])}
         examples = sorted((ROOT / "contracts/examples/v0.2").glob("*.valid*.json"))
         self.assertTrue(examples)
         base_env = json.loads((ROOT / "contracts/examples/v0.2/envelope.valid.json").read_text())
+        observation_base = json.loads((ROOT / "contracts/examples/v0.2/guest_command_observation_envelope.valid.json").read_text())
         for path in examples:
             with self.subTest(path=path.name):
                 body = json.loads(path.read_text())
@@ -121,7 +122,7 @@ class ContractGapTests(unittest.TestCase):
                         oracle.validate(bad_body, schema)
                     # Direct metadata remains invalid in every wire family, with or without its own tag.
                     for family, schema in schemas.items():
-                        bad = {**base_env, "schema": family + "/v0.2", "body": body}
+                        bad = {**(observation_base if family == "guest_command_observation_envelope" else base_env), "schema": family + "/v0.2", "body": body}
                         with self.assertRaises(ValidationError): oracle.validate(bad, schema)
                         for call in (lambda: envelope.validate_envelope(bad),
                                      lambda: envelope.dumps_envelope(bad, max_bytes=1048576),
@@ -131,7 +132,7 @@ class ContractGapTests(unittest.TestCase):
                             self.assertEqual(caught.exception.code, "bad_shape")
                     continue
                 family = prefix if prefix in schemas else families[prefix]
-                env = body if prefix in schemas else wrap(body)
+                env = body if prefix in schemas else ({**observation_base,"body":body} if family == "guest_command_observation_envelope" else wrap(body))
                 self.assertEqual(env["schema"], family + "/v0.2")
                 oracle.validate(env, schemas[family])
                 wire = envelope.dumps_envelope(env, max_bytes=1048576)
