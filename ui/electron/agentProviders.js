@@ -39,7 +39,10 @@ export function installedAgentProfiles(env,resolve=resolveHostBinary,hostUser=us
     try {
       const {path}=resolve(entry.binary,discoveryEnv);
       if(typeof path!=='string' || !path.startsWith('/')) continue;
-      profiles.set(entry.id,{argv:[path],...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:discoveryEnv.HOME}:{}),...(hostEnv?{env:hostEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
+      const argv=hostEnv && entry.id==='agent-codex'
+        ? [path,'-c',`shell_environment_policy.set.XDG_RUNTIME_DIR=${JSON.stringify(hostEnv.XDG_RUNTIME_DIR)}`]
+        : [path];
+      profiles.set(entry.id,{argv,...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:discoveryEnv.HOME}:{}),...(hostEnv?{env:hostEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
     } catch { /* Missing CLI is omitted, never replaced with a shell. */ }
   }
   return profiles;

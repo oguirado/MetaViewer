@@ -7,7 +7,7 @@ test('ARM private-home app resolves and launches the host-user installed CLI wit
  const before={...env},calls=[];
  const profiles=installedAgentProfiles(env,(name,context)=>{calls.push({name,context});if(name==='codex' && context.PATH.split(':')[0]==='/host-person/.local/bin')return {path:'/host-person/.local/bin/codex'};throw Error('missing');},()=>({homedir:'/host-person'}));
  const profile=profiles.get('agent-codex');assert.ok(profile);
- assert.deepEqual(profile.argv,['/host-person/.local/bin/codex']);assert.equal(profile.cwd,'/host-person');
+ assert.deepEqual(profile.argv,['/host-person/.local/bin/codex','-c','shell_environment_policy.set.XDG_RUNTIME_DIR='+JSON.stringify(env.XDG_RUNTIME_DIR)]);assert.equal(profile.cwd,'/host-person');
  assert.equal(profile.env.HOME,'/host-person');assert.equal(profile.env.XDG_RUNTIME_DIR,env.XDG_RUNTIME_DIR);
  assert.equal(profile.env.PATH.split(':')[0],'/host-person/.local/bin');
  assert.deepEqual(Object.keys(profile.env).sort(),['HOME','PATH','TERM','XDG_RUNTIME_DIR']);
@@ -32,4 +32,13 @@ test('non-ARM profile behavior stays unchanged and never queries the login user'
   const profile=installedAgentProfiles(input,name=>{if(name==='codex')return {path:'/tools/codex'};throw Error('missing');},()=>{throw Error('must not query user');}).get('agent-codex');
   assert.equal(profile.cwd,env.HOME);assert.equal(profile.env,undefined);assert.deepEqual(profile.argv,['/tools/codex']);
  }
+});
+
+test('ARM Codex sets only the verified runtime in child shell policy; other CLIs keep plain argv',()=>{
+ const profiles=installedAgentProfiles(env,name=>({path:'/tools/'+name}),()=>({homedir:'/host-person'}));
+ assert.deepEqual(profiles.get('agent-codex').argv,['/tools/codex','-c','shell_environment_policy.set.XDG_RUNTIME_DIR='+JSON.stringify(env.XDG_RUNTIME_DIR)]);
+ assert.deepEqual(profiles.get('agent-gemini').argv,['/tools/gemini']);
+ assert.deepEqual(profiles.get('agent-opencode').argv,['/tools/opencode']);
+ for(const invalid of ['', 'relative/runtime', '/runtime/../other', '/runtime\nspoof', '/runtime\0spoof'])
+  assert.equal(installedAgentProfiles({...env,XDG_RUNTIME_DIR:invalid},name=>({path:'/tools/'+name}),()=>({homedir:'/host-person'})).size,0);
 });

@@ -681,6 +681,27 @@ export async function publishAttachPointer(hostRuntime, record) {
   } finally { await fs.rmdir(lock); }
 }
 
+/** Publish identical public attachment data for external and paired host agents.
+ * Roll back this session only if either publication fails.
+ * @param {string} hostRuntime @param {ReturnType<typeof buildAttachRecord>} record
+ * @param {()=>boolean} [stopping] */
+export async function publishSessionAttachments(hostRuntime, record, stopping = () => false) {
+  validateAttachRecord(record);
+  const roots = [...new Set([hostRuntime, record.env.XDG_RUNTIME_DIR])];
+  let host;
+  try {
+    for (const root of roots) {
+      if (stopping()) throw new Error('ATTACH_STOPPING');
+      const published = await publishAttachPointer(root, record);
+      host ??= published;
+    }
+    return host;
+  } catch (error) {
+    for (const root of roots) retractAttachPointerSync(root, record.session_id);
+    throw error;
+  }
+}
+
 /** Remove the pointer pair only when it still names this session (never a newer
  * instance's). Synchronous so exit paths can call it. Never throws.
  * @param {string | null} hostRuntime @param {string | null} sessionId */
@@ -1177,6 +1198,7 @@ ${validateAttachRecord.toString().replace('export ', '')}
 ${buildAttachRecord.toString().replace('export ', '')}
 ${renderAttachEnv.toString().replace('export ', '')}
 ${publishAttachPointer.toString().replace('export ', '')}
+${publishSessionAttachments.toString().replace('export ', '')}
 ${retractAttachPointerSync.toString().replace('export ', '')}
 const PACKAGED_EXEC_DIGESTS = Object.freeze({});
 const ARM64_SETUP_HELPER_PINS = Object.freeze({});
@@ -1335,12 +1357,14 @@ try {
   let core = null;
   let boot = null;
   let entry = null;
+  let attachPublication = null;
   let stopping = false;
   let stopPromise = null;
   // PKG-FIX UM-02: host runtime + session of the published attach pointer.
   let attachHost = null;
+  let attachPrivate = null;
   let attachSession = null;
-  const retractAttach = () => { retractAttachPointerSync(attachHost, attachSession); };
+  const retractAttach = () => { retractAttachPointerSync(attachHost, attachSession); retractAttachPointerSync(attachPrivate, attachSession); };
   const cleanupRuntimeSync = () => {
     retractAttach();
     if (!runtime) return;
@@ -1364,6 +1388,8 @@ try {
         app.on?.('window-all-closed', () => {});
       } catch {}
       try { if (entry) await entry; } catch {}
+      try { if (attachPublication) await attachPublication; } catch {}
+      retractAttach();
       try { await boot?.dispose?.(); } catch {}
       if (isLiveCore(core)) {
         const exited = once(core,'exit');
@@ -1583,15 +1609,17 @@ try {
     });
     void entry.catch(async error => {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}app.exit(1);});
     // PKG-FIX UM-02 / P2: publish the attach pointer once the session is live.
-    void entry.then(async () => {
+    attachPublication = entry.then(async () => {
       if (stopping) return;
       const record = buildAttachRecord({sessionId:config.session_id,pid:process.pid,runtime,configPath,env:process.env});
       attachHost = hostRuntime;
+      attachPrivate = runtime;
       attachSession = record.session_id;
-      const published = await publishAttachPointer(hostRuntime, record);
+      const published = await publishSessionAttachments(hostRuntime, record, () => stopping);
       if (stopping) {retractAttach();return;}
       writeFdSync(1, 'METAVIEWER_ATTACH ' + published.env);
     }).catch(error => {
+      retractAttach();
       if (!stopping) writeFdSync(2, 'METAVIEWER_ATTACH_UNAVAILABLE ' + (error?.message || String(error)));
     });
   } catch(error) {writeFdSync(2, formatErrorLine(error));try {await stop();} catch {}cleanupRuntimeSync();app.exit(1);}

@@ -15,6 +15,13 @@ ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env
 set -a; . "$ENV"; set +a
 ```
 
+The packaged ARM host-agent profile supplies its actual app runtime to Codex's
+command shell through a per-launch `shell_environment_policy.set.XDG_RUNTIME_DIR`
+override. It changes no global configuration, inheritance rule or unrelated
+shell restriction. The packaged app publishes the attachment in that private
+runtime as well as at the host pointer; use the supplied runtime, never infer a
+parent path. If an operator policy prevents access, stop instead of bypassing it.
+
 The attachment changes `XDG_RUNTIME_DIR`. Use the original environment to locate
 it first; stop if the file is missing or its recorded app PID is no longer live.
 Resolve and source it once per task invocation. Keep that session's environment

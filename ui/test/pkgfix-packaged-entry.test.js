@@ -17,6 +17,7 @@ import {
   preflightLiveRamRoot,
   productionEntry,
   publishAttachPointer,
+  publishSessionAttachments,
   renderAttachEnv,
   retractAttachPointerSync,
   validateAttachRecord,
@@ -219,15 +220,18 @@ test('PKG-FIX QC-02 + UM-02 entry: attach pointer published when live, SIGHUP di
     const scenario = async source => {
       const {host, env} = await hostEnv();
       let seen = null;
+      let privateSeen = null;
       try {
         const result = await runEntry({source, env, onLine: (line, child) => {
           if (line.startsWith('METAVIEWER_ATTACH ')) {
             const json = join(host, 'metaviewer', 'attach', 'current.json');
             seen = existsSync(json) ? validateAttachRecord(JSON.parse(readFileSync(json, 'utf8'))) : null;
+            const privateJson = seen && join(seen.env.XDG_RUNTIME_DIR, 'metaviewer', 'attach', 'current.json');
+            privateSeen = privateJson && existsSync(privateJson) ? JSON.parse(readFileSync(privateJson, 'utf8')) : null;
             child.kill('SIGHUP');
           }
         }});
-        return {...result, seen, left: existsSync(join(host, 'metaviewer', 'attach', 'current.json'))};
+        return {...result, seen, privateSeen, left: existsSync(join(host, 'metaviewer', 'attach', 'current.json'))};
       } finally { await rm(host, {recursive: true, force: true}); }
     };
     const ok = await scenario(seamless);
@@ -235,6 +239,7 @@ test('PKG-FIX QC-02 + UM-02 entry: attach pointer published when live, SIGHUP di
     assert.equal(ok.code, 0, ok.stderr);
     assert.match(ok.stdout, /^DISPOSED$/m);
     assert.ok(ok.seen, 'attach record must be readable while live');
+    assert.deepEqual(ok.privateSeen, ok.seen, 'paired agent runtime must expose the same live attachment');
     assert.equal(ok.seen.boot_profile, 'mv-live-1');
     assert.equal(ok.seen.env.MV_WENDER_ROOT, '/srv/wender');
     assert.equal(ok.left, false, 'attach pointer must be retracted at stop');
@@ -246,7 +251,7 @@ test('PKG-FIX QC-02 + UM-02 entry: attach pointer published when live, SIGHUP di
     assert.equal(hup.signal, 'SIGHUP');
     assert.doesNotMatch(hup.stdout, /DISPOSED/);
 
-    const noRetract = seamless.replace('const retractAttach = () => { retractAttachPointerSync(attachHost, attachSession); };',
+    const noRetract = seamless.replace('const retractAttach = () => { retractAttachPointerSync(attachHost, attachSession); retractAttachPointerSync(attachPrivate, attachSession); };',
       'const retractAttach = () => {};');
     assert.notEqual(noRetract, seamless);
     assert.equal((await scenario(noRetract)).left, true);
@@ -299,4 +304,43 @@ test('journal packaged relaunch creates a fresh session even with an inherited e
     assert.notEqual(second.core_socket,first.core_socket);
     assert.equal(existsSync(join(host,'metaviewer/attach/current.json')),false);
   } finally {await rm(host,{recursive:true,force:true});}
+});
+
+
+test('paired host attachment publishes identical records and rolls back both on private refusal', async () => {
+  const host = await mkdtemp(join(tmpdir(), 'mv-dual-attach-'));
+  const core = join(host, 'private-core');
+  try {
+    await mkdir(core, {mode:0o700});
+    const record = validRecord(core);
+    const external = await publishSessionAttachments(host, record);
+    const local = join(core, 'metaviewer', 'attach', 'current.json');
+    assert.deepEqual(JSON.parse(await readFile(external.json,'utf8')), record);
+    assert.deepEqual(JSON.parse(await readFile(local,'utf8')), record);
+    assert.equal((await stat(local)).mode & 0o777, 0o600);
+    const replacement = {...record,session_id:'pkg-00000000-0000-4000-8000-000000000000',env:{...record.env,MV_SESSION_ID:'pkg-00000000-0000-4000-8000-000000000000'}};
+    await publishAttachPointer(core,replacement);
+    assert.equal(retractAttachPointerSync(core,record.session_id),false);
+    assert.deepEqual(JSON.parse(await readFile(local,'utf8')),replacement);
+    retractAttachPointerSync(core,replacement.session_id);
+    await chmod(join(core,'metaviewer','attach'),0o755);
+    await assert.rejects(publishSessionAttachments(host,record),/ATTACH_DIR_UNSAFE/);
+    assert.equal(existsSync(external.json),false,'failed second publication retracts first');
+    assert.equal(existsSync(external.env),false);
+    assert.equal(existsSync(local),false);
+  } finally {await rm(host,{recursive:true,force:true});}
+});
+
+test('independent SIGHUP during first pointer pair must leave no stale pointer', {timeout:30000},async()=>{
+ const {host,env}=await hostEnv();
+ const anchor="await fs.rename(temp, join(dir, name));";
+ assert.ok(seamless.includes(anchor));
+ const delayed=seamless.replace(anchor,anchor+"\n        if(hostRuntime!==record.env.XDG_RUNTIME_DIR && name==='current.json'){process.stdout.write('TEST_PARTIAL_POINTER\\n');await new Promise(resolve=>setTimeout(resolve,200));}");
+ let sent=false;
+ try{
+  const result=await runEntry({source:delayed,env,onLine:(line,child)=>{if(line==='TEST_PARTIAL_POINTER'&&!sent){sent=true;child.kill('SIGHUP');}}});
+  assert.equal(sent,true,result.stderr);assert.equal(result.code,0,result.stderr);
+  assert.equal(existsSync(join(host,'metaviewer/attach/current.json')),false,'current.json left after stop while publisher held lock');
+  assert.equal(existsSync(join(host,'metaviewer/attach/current.env')),false,'current.env left after stop');
+ }finally{await rm(host,{recursive:true,force:true});}
 });
