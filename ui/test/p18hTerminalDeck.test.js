@@ -1546,7 +1546,7 @@ test('V023-T1: deck hide and show keeps the same session id, preserves scrollbac
   );
   assert.ok(
     appSource.includes('v-if="!nestedMode.displayOnly"') &&
-      appSource.includes(':hidden="!terminalDeckOpen || terminalInDrawer"') &&
+      appSource.includes(':hidden="!terminalDeckOpen"') &&
       appSource.includes(':inert="!terminalDeckOpen ? true : undefined"'),
     'App.vue must keep the terminal deck mounted and hidden/inert when closed',
   );
@@ -2829,11 +2829,11 @@ test('paired terminal keeps newest requested capsule focused and retains hidden 
     waiting[1]({session:'pair-b'});await tick();
     const b=deck.controller.state.focusedSlotId;assert.ok(b);assert.equal(focus.at(-1),'surface-b');
     assert.equal(deck.controller.state.focusedSlotId,b,'latest Beta retains focus');
-    const pairedInput=mounted.findById('terminal-deck-bootstrap-paste-target');
-    assert.equal(pairedInput.props.value,'surface-b','pill shows the actual capsule id, not its workflow prompt');
-    assert.equal(pairedInput.props.readonly,true);
-    pairedInput.props.onInput({target:{value:'wrong-capsule'}});await tick();
-    assert.equal(mounted.findById('terminal-deck-bootstrap-paste-target').props.value,'surface-b');
+    const pairedInput=mounted.findById('terminal-deck-copy-capsule-id');
+    assert.match(mounted.textOf(pairedInput),/surface-b/,'chip shows the actual capsule id, not its workflow prompt');
+    assert.equal(pairedInput.props['aria-label'],'Copy capsule ID');
+    assert.equal(pairedInput.props.onInput,undefined,'paired identity cannot be edited');await tick();
+    assert.match(mounted.textOf(mounted.findById('terminal-deck-copy-capsule-id')),/surface-b/);
 
     assert.match(mounted.textOf(mounted.root),/Beta.*Host shell/);
     open.value=false;await tick();open.value=true;await tick();
@@ -2929,4 +2929,49 @@ test('Custom CLI rejects C0, DEL and C1 before creating a shell or writing bytes
   for(const value of ['echo\tBAD','echo\x1b[2J','echo\x7fBAD','echo\x85BAD','echo\x9bBAD','\techo bad']) await assert.rejects(()=>controller.launchCustomCli(value),/single line/);
   assert.equal(harness.openCalls.length,0);assert.equal(harness.writeCalls.length,0);
  } finally {controller.dispose();}
+});
+
+test('paired deck namespaces its controls and ignores shortcuts from another deck',async()=>{
+ const h=createBrokerDouble();
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,idPrefix:'surface-a',terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});
+ try {
+  const root=mounted.findById('surface-a-mv-terminal-deck');assert.ok(root);
+  assert.equal(mounted.findById('mv-terminal-deck'),null);
+  assert.ok(mounted.findById('surface-a-terminal-deck-new'));
+  let consumed=false;
+  root.props.onKeydown({key:'T',ctrlKey:true,shiftKey:true,target:{closest:()=>({})},preventDefault(){consumed=true;},stopPropagation(){},stopImmediatePropagation(){}});
+  await tick();assert.equal(consumed,false);assert.equal(h.openCalls.length,0);
+ } finally {mounted.app.unmount();}
+});
+
+test('paired Capsule ID chip copies only its identifier',async()=>{
+ const h=createBrokerDouble();let copied='';
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const mounted=mountTree(View,{open:true,compact:true,pairedTarget:{surfaceId:'surface-chip',title:'Chip fixture'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,clipboard:{async writeText(text){copied=text;}},storage:createMemoryStorage()});
+ try {
+  await tick();const chip=mounted.findById('terminal-deck-copy-capsule-id');assert.ok(chip,'paired identity is a copy button');
+  await chip.props.onClick();assert.equal(copied,'surface-chip');assert.deepEqual(h.writeCalls,[]);
+ } finally {mounted.app.unmount();}
+});
+
+test('terminal context menu keeps focus without claiming global modal ownership',async()=>{
+ const h=createBrokerDouble(),globalClaims=[],surfaceClaims=[];let deck;
+ class Terminal {loadAddon(){}attachCustomKeyEventHandler(){}onData(){return {dispose(){}};}open(){}write(){}focus(){}dispose(){}}
+ class FitAddon {fit(){}}
+ const View=await compileSfc('../src/terminal/TerminalDeckView.vue',{'@xterm/xterm':{Terminal},'@xterm/addon-fit':{FitAddon},'../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js':{createTerminalDocument:()=>({})},'./terminalDeckModel.js':deckModel});
+ const Root={setup(){vue.provide('overlayCoordinator',{set:(owner,open)=>globalClaims.push(open),setSurface:(owner,id,open)=>surfaceClaims.push({id,open})});return()=>vue.h(View,{ref:v=>{deck=v;},open:true,compact:true,pairedTarget:{surfaceId:'surface-context',title:'Context'},terminalBroker:h.broker,terminalBinding:h.sessionFacade,storage:createMemoryStorage()});}};
+ const mounted=mountTree(Root);
+ try {
+  await tick();const id=deck.controller.state.focusedSlotId;assert.ok(id);globalClaims.length=0;
+  deck.onTileContextMenu(id,{clientX:40,clientY:50,preventDefault(){},stopPropagation(){}});await tick();
+  assert.equal(deck.controller.state.focusedSlotId,id);assert.equal(deck.contextMenu.open,true);
+  assert.equal(globalClaims.includes(true),false,'local context menu must not deactivate all capsule views');
+  assert.deepEqual(surfaceClaims.at(-1),{id:'surface-context',open:true});
+ } finally {mounted.app.unmount();}
+ assert.equal(surfaceClaims.at(-1).open,false,'unmount releases only this menu owner');
 });

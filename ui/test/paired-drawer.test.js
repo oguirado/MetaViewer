@@ -10,15 +10,15 @@ assert.ok(node);
 const c=vm.createContext({});vm.runInContext(descriptor.scriptSetup.content.slice(node.start,node.end),c);
 const choose=c.pairedDrawerTarget;
 test('drawer requires real visible geometry large enough for both content and terminal',()=>{
- const element={},target={surfaceId:'a'},host={element,width:400,height:600,visible:true};
+ const element={},target={surfaceId:'a'},host={element,width:240,height:320,visible:true};
  assert.equal(choose(target,{a:host},true,false),element);
- for(const patch of [{width:399},{height:599},{visible:false},{width:NaN},{height:undefined}]) assert.equal(choose(target,{a:{...host,...patch}},true,false),null);
+ for(const patch of [{width:0},{height:0},{visible:false},{width:NaN},{height:undefined}]) assert.equal(choose(target,{a:{...host,...patch}},true,false),null);
  assert.equal(choose(target,{a:host},false,false),null);
  assert.equal(choose(target,{a:host},true,true),null);
  assert.equal(choose(target,{},true,false),null);assert.equal(choose(null,{a:host},true,false),null);
 });
 test('drawer is tile-contained, keeps the deck instance and reserves live presentation space',()=>{
- assert.match(source,/<Teleport :to="terminalDrawerTarget \|\| 'body'" :disabled="!terminalInDrawer">/);
+ assert.match(source,/<Teleport v-for="entry in pairedDrawers"[^>]+:disabled="!entry.host">/);
  assert.doesNotMatch(source,/terminalDrawerOwner/,'the drawer cannot occlude its live native view');
  const css=readFileSync(new URL('../src/wall/wall.css',import.meta.url),'utf8');
  assert.match(css,/\.mv-tile-terminal-drawer \{[^}]*position:absolute;[^}]*inset:auto 0 0;[^}]*height:min\(45%,360px\)/);
@@ -38,4 +38,38 @@ test('narrow headers move Close into the tool row while preserving its anchored 
  const kit=readFileSync(new URL('../.kit/capsule-ui-kit/src/capsules/CapsulePanel.vue',import.meta.url),'utf8');
  assert.match(kit,/:data-semantic-anchor="anchors.close"/);
  assert.match(kit,/@click="onClosePanel"/);
+});
+
+test('paired drawers retain an independent view and visibility flag for each capsule',()=>{
+ assert.match(source,/v-for="entry in pairedDrawers"/);
+ assert.match(source,/:key="entry.target.surfaceId"/);
+ assert.match(source,/:paired-target="entry.target"/);
+ assert.match(source,/setPairedDrawerOpen\(entry.target.surfaceId, \$event\)/);
+ assert.doesNotMatch(source,/terminalPreferDock.value=true/);
+});
+
+test('drawer visibility and desktop registration retain each capsule entry independently',async()=>{
+ const vue=await import('vue');
+ const begin=source.indexOf('const pairedTerminalStorage =');
+ const end=source.indexOf('/** Renderer intents remain events',begin);
+ assert.ok(begin>0 && end>begin);
+ let controls;
+ const context=vm.createContext({...vue,nestedMode:{displayOnly:false},props:{terminalBroker:{open(){}}},
+  terminalDeckOpen:vue.ref(false),toggleTerminal(){throw Error('side panel must stay independent');},
+  surfaceLabel:r=>r.id,rows:vue.ref([{id:'surface-a'},{id:'surface-b'}]),provide(_key,value){controls=value;}});
+ vm.runInContext(source.slice(begin,end)+';globalThis.entries=pairedTerminalEntries;globalThis.drawers=pairedDrawers;',context);
+ const a={},b={};
+ controls.registerDrawer('surface-a',a,{width:250,height:350,visible:true});
+ controls.registerDrawer('surface-b',b,{width:500,height:700,visible:true});
+ controls.toggle('surface-a');controls.toggle('surface-b');
+ assert.equal(controls.inDrawer('surface-a'),true);assert.equal(controls.inDrawer('surface-b'),true);
+ const retainedA=context.entries.value['surface-a'].target;
+ controls.toggle('surface-a');assert.equal(controls.inDrawer('surface-a'),false);assert.equal(controls.inDrawer('surface-b'),true);
+ assert.equal(context.entries.value['surface-a'].target,retainedA,'hiding retains the view key and target');
+ controls.registerDrawer('surface-b',b,{width:500,height:700,visible:false});
+ assert.equal(controls.inDrawer('surface-b'),false);assert.equal(controls.isOpen('surface-b'),true,'desktop hiding preserves requested visibility');
+ controls.registerDrawer('surface-b',b,{width:500,height:700,visible:true});
+ assert.equal(controls.inDrawer('surface-b'),true);
+ controls.toggle('surface-a');assert.equal(controls.inDrawer('surface-a'),true);
+ assert.equal(Object.keys(context.entries.value).length,2);
 });

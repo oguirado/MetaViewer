@@ -439,3 +439,17 @@ test('recording-capable tile menu opens its capture panel and releases native ov
   action.props.onClick();await tick();assert.deepEqual(opened,['capture-menu']);assert.equal(overlays.count,0);
  });
 });
+
+test('terminal-owned local menus do not deactivate capsules through the global observer',()=>{
+ const previousObserver=globalThis.MutationObserver,previousStyle=globalThis.getComputedStyle;
+ let scan;globalThis.MutationObserver=class{constructor(fn){scan=fn;}observe(){}disconnect(){}};
+ globalThis.getComputedStyle=()=>({visibility:'visible'});
+ try {
+  const {doc,attrs}=documentFixture(),coordinator=createOverlayCoordinator(doc);
+  const terminalMenu={getAttribute:k=>k==='role'?'menu':k==='data-mv-overlay-scope'?'terminal':null,closest:s=>s==='.mv-terminal-deck'?{}:null,getClientRects:()=>[1],hasAttribute:()=>false};
+  let nodes=[terminalMenu];doc.querySelectorAll=()=>nodes;
+  const dispose=observeOverlays(coordinator,doc);assert.equal(attrs.has('data-mv-modal'),false);
+  nodes=[{...terminalMenu,getAttribute:k=>k==='role'?'menu':null}];scan();assert.equal(attrs.get('data-mv-modal'),'open','unmarked popups remain global');
+  nodes=[];scan();assert.equal(attrs.has('data-mv-modal'),false);dispose();
+ } finally {globalThis.MutationObserver=previousObserver;globalThis.getComputedStyle=previousStyle;}
+});
