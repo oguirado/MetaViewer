@@ -39,18 +39,18 @@ class GateUiConcurrencyTests(unittest.TestCase):
             with patch.object(api['shutil'], 'which', side_effect=lambda name, **kwargs: '/synthetic/' + Path(name).name), patch.object(api['subprocess'], 'run', return_value=subprocess.CompletedProcess([], 0, '24\n', '')):
                 self.assertEqual(api['build_leg']('ui', root, env), 0)
             self.assertEqual(calls[0][0], ['/synthetic/npm', 'ci', '--offline'])
-            self.assertEqual(calls[1][0], ['/synthetic/node', '--test', '--test-concurrency=2', '--test-timeout=120000', 'test/a.test.js', 'test/b.test.js'])
+            self.assertEqual(calls[1][0], ['/synthetic/node', '--test', '--test-concurrency=1', '--test-timeout=120000', 'test/a.test.js', 'test/b.test.js'])
             self.assertEqual([call[3] for call in calls], [300, 300, 300, 300])
             self.assertEqual([call[0][-1] for call in calls[2:]], ['--noEmit', 'build'])
             self.assertTrue(all(call[2]['npm_config_offline'] == 'true' for call in calls))
             self.assertTrue(all(call[2]['ELECTRON_SKIP_BINARY_DOWNLOAD'] == '1' for call in calls))
 
-    def test_explicit_two_preserves_all_files_and_limits(self):
+    def test_explicit_serial_preserves_all_files_and_limits(self):
         self.assert_ui_plan()
 
     def test_original_implicit_concurrency_is_detected(self):
         with self.assertRaises(AssertionError):
-            self.assert_ui_plan(lambda s: s.replace("'--test-concurrency=2', ", '', 1))
+            self.assert_ui_plan(lambda s: s.replace("'--test-concurrency=1', ", '', 1))
 
     def test_omitted_test_file_is_detected(self):
         with self.assertRaises(AssertionError):

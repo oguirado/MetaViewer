@@ -50,18 +50,21 @@ class PromptTests(unittest.TestCase):
     def test_prompt_current_and_mut_prompt_stale(self):
         text = (ROOT / 'docs/AGENT_ENTRY.md').read_text()
         check_prompt(text)
+        # Mutate the validated reference, not an earlier prose/compact prompt.
+        block = re.search(r'```text\n(.*?)```', text, re.S).group(1)
         for old in ('--identity', '--site', '--workflow', '--slot'):
             with self.assertRaisesRegex(AssertionError, '--no-such-flag'):
-                check_prompt(text.replace(old, '--no-such-flag', 1))
+                check_prompt(text.replace(block, block.replace(old, '--no-such-flag', 1), 1))
         with self.assertRaisesRegex(AssertionError, 'module'):
-            check_prompt(text.replace('metaviewer_agents.mw_run', 'metaviewer_agents.absent', 1))
+            check_prompt(text.replace(block, block.replace('metaviewer_agents.mw_run', 'metaviewer_agents.absent', 1), 1))
 
     def test_mut_prompt_safety_limit_removed(self):
         text = (ROOT / 'docs/AGENT_ENTRY.md').read_text()
+        block = re.search(r'```text\n(.*?)```', text, re.S).group(1)
         for sentence in SAFETY_LIMITS:
             with self.subTest(sentence=sentence):
                 with self.assertRaisesRegex(AssertionError, re.escape(sentence)):
-                    check_prompt(text.replace(sentence, '', 1))
+                    check_prompt(text.replace(block, block.replace(sentence, '', 1), 1))
 
 
 if __name__ == '__main__':

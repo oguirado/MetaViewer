@@ -2686,7 +2686,9 @@ async fn connection_with_liveness(
             .checked_add(observations.len() as u64 + 3)
             .is_none_or(|last| last > MAX_WIRE_INTEGER)
         {
-            return Err(invalid("guest observation replay envelope sequence exhausted"));
+            return Err(invalid(
+                "guest observation replay envelope sequence exhausted",
+            ));
         }
         s.replay
             .record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;

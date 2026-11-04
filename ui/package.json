@@ -9,7 +9,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --max-old-space-size=1024 --test --test-timeout=120000 test/*.test.js",
+    "test": "node --max-old-space-size=1024 --test --test-concurrency=1 --test-timeout=120000 test/*.test.js",
     "check": "vue-tsc --noEmit -p tsconfig.json",
     "build": "vite build",
     "smoke": "node test/smoke.mjs",

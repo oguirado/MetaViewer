@@ -577,8 +577,11 @@ def ui_bus_address(root):
 
 
 def ui_bus_executable():
-    binary = Path('/usr/bin/xdg-dbus-proxy').resolve(strict=True)
-    info = binary.stat()
+    try:
+        binary = Path('/usr/bin/xdg-dbus-proxy').resolve(strict=True)
+        info = binary.stat()
+    except OSError as error:
+        raise setup.Refused('protected desktop bus proxy required') from error
     setup.need(stat.S_ISREG(info.st_mode) and info.st_uid == 0
                and not info.st_mode & 0o022 and info.st_mode & 0o111,
                'protected desktop bus proxy required')
