@@ -483,3 +483,9 @@
 
 .mv-terminal-deck__identity-copy { cursor: pointer; max-width: min(100%, 28ch); }
 .mv-terminal-deck__identity-copy .mv-terminal-deck__identity-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* FitAddon accounts for xterm padding; keep its parent viewport unpadded. */
+.mv-terminal-deck__viewport .xterm,
+.cui-terminal-viewport .xterm {
+  padding: 4px 6px 4px 8px;
+}
