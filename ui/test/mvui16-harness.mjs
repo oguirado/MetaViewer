@@ -1,3 +1,5 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
 import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
@@ -59,7 +61,7 @@ export function mutatedCompiler(target, mutate) {
       if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(import.meta.resolve('vue')));
       addOperatorStubs(deps);
       assert.ok(spec in deps, `Unmapped mutant dependency: ${spec}`);
-      return `const ${bindings.trim()} = globalThis.__mvui16NegativeDeps[${JSON.stringify(spec)}];`;
+      return `const ${sfcImportBinding(bindings)} = globalThis.__mvui16NegativeDeps[${JSON.stringify(spec)}];`;
     });
     globalThis.__mvui16NegativeDeps = deps;
     try {
@@ -143,7 +145,7 @@ export async function mountApp(initial = {}, compile = compileSfc, options = {})
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
-    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   });
   const row = vue.reactive({ id: MVUI16_ID, surfaceId: MVUI16_ID, title: 'Capsule', generation: 1, visibility: 'unfolded', control: 'human', backendLifecycle: 'active' });
   const feed = { getSnapshot: () => null, getProjection: () => ({ rows: [row] }), subscribe: () => () => {} };

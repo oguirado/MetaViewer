@@ -1,4 +1,5 @@
 import * as workloadPanelParams from '../src/wall/workloadPanelParams.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 // Lane V2 dock tabs (MV-2): every capsule dock tab carries a stable id and a
 // capsule-scoped semantic anchor through the renderer's own tab component.
 import { test, describe, after } from 'node:test';
@@ -177,7 +178,7 @@ async function compileWall(deps) {
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^[ \t]*import\s*['"][^'"\n]+['"];?$/gm, '').replace(/^[ \t]*import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, spec) => {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__v2WallDeps[${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__v2WallDeps[${JSON.stringify(spec)}];`;
   });
   try {
     return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#v2-wall-${serial}`)).default;

@@ -1,3 +1,5 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
 import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
@@ -42,7 +44,7 @@ const SurfaceCanvas = await importCode(rewriteImports(
   compileScript(parse(CANVAS_SOURCE).descriptor, { id: 'uxchip-canvas', inlineTemplate: true }).content,
   (bindings, spec) => {
     assert.ok(Object.hasOwn(CANVAS_DEPS, spec), `unmapped canvas dependency ${spec}`);
-    return `const ${bindings} = await import(${JSON.stringify(CANVAS_DEPS[spec])});`;
+    return `const ${sfcImportBinding(bindings)} = await import(${JSON.stringify(CANVAS_DEPS[spec])});`;
   }), 'uxchip-canvas');
 
 async function loadApp(source) {
@@ -91,7 +93,7 @@ async function loadApp(source) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': SurfaceCanvas,
-    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const key = `__uxchip${++serial}`;
   globalThis[key] = deps;
@@ -99,7 +101,7 @@ async function loadApp(source) {
   const compiled = compileScript(descriptor, { id: `uxchip-app-${serial}`, inlineTemplate: true });
   const code = rewriteImports(compiled.content, (bindings, spec) => {
     assert.ok(Object.hasOwn(deps, spec), `unmapped App dependency ${spec}`);
-    return `const ${bindings} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(bindings)} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`;
   });
   return importCode(code, `uxchip-app-${serial}`);
 }

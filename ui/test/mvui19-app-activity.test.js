@@ -1,3 +1,5 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
 import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
@@ -67,14 +69,14 @@ async function loadApp(captured) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
-    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `mvui19-app-${++serial}`, inlineTemplate: true });
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__mvui19deps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__mvui19deps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#a-${serial}`)).default;
 }
@@ -351,7 +353,7 @@ async function loadStrip() {
   code = code.replace(/import\s+([\s\S]*?)\s+from\s+(['"])(.*?)\2;?/g, (all, bindings, _q, spec) => {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
     assert.ok(spec in globalThis.__mvui19strip, `Unmapped SFC dependency: ${spec}`);
-    return `const ${bindings.trim()} = globalThis.__mvui19strip[${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(bindings)} = globalThis.__mvui19strip[${JSON.stringify(spec)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#mvui19s`)).default;
 }

@@ -1,3 +1,4 @@
+import {guestWorkloadTile} from '../src/wall/guestWorkloadTile.js';
 // WallWorkspace contract: kit DockWorkspace composition, one panel per
 // capsuleId, local presentation intents, opaque emit forwarding.
 import { test, describe, after } from 'node:test';
@@ -133,7 +134,9 @@ describe('WallWorkspace.vue static contract (pinned compiler)', async () => {
   test('SFC imports only vue, the kit, SurfacePanel and the pure workload router', () => {
     const source = readSfc();
     const specifiers = [...source.matchAll(/from\s*['"]([^'"]+)['"]/g)].map((m) => m[1]);
-    assert.deepEqual([...new Set(specifiers)].sort(), ['./SurfacePanel.vue', './workloadPanelParams.js', 'capsule-ui-kit/DockWorkspace', 'vue']);
+    const expected = ['./SurfacePanel.vue', './workloadPanelParams.js', 'capsule-ui-kit/DockWorkspace', 'vue'];
+    assert.deepEqual([...new Set(specifiers)].sort(), expected);
+    assert.throws(() => assert.deepEqual([...new Set([...specifiers, 'foreign-module'])].sort(), expected), assert.AssertionError);
   });
 
   test('forbidden effects are absent: no popout, storage, controller or backend calls', () => {
@@ -652,13 +655,16 @@ export default defineComponent({
 });
 `;
 
-  async function loadCompiledWall() {
+  async function loadCompiledWall({oldPanelKind=false} = {}) {
     mkdirSync(tmpDir, { recursive: true });
-    const { descriptor, errors } = parse(readSfc(), { filename: 'WallWorkspace.vue' });
+    let source=readSfc();
+    if(oldPanelKind) { assert.ok(source.includes('markRaw({CapsulePanel:CapsuleContentRouter})')); source=source.replace('markRaw({CapsulePanel:CapsuleContentRouter})','markRaw({GuestWorkloadPanel:CapsuleContentRouter})'); }
+    const { descriptor, errors } = parse(source, { filename: 'WallWorkspace.vue' });
     assert.equal(errors.length, 0);
     const compiled = compileScript(descriptor, { id: 'wall-workspace-test', inlineTemplate: true });
     let code = compiled.content;
     code=code.replaceAll("'./guestWorkloadTile.js'",JSON.stringify(pathToFileURL(path.join(uiDir,'src/wall/guestWorkloadTile.js')).href));
+    code=code.replaceAll("'./capsulePanelRouter.js'",JSON.stringify(pathToFileURL(path.join(uiDir,'src/wall/capsulePanelRouter.js')).href));
     code = code.replace(/(['"])capsule-ui-kit\/DockWorkspace\1/g, "'./stubDockWorkspace.mjs'");
     code = code.replace(/(['"])\.\/SurfacePanel\.vue\1/g, "'./stubSurfacePanel.mjs'");
     code = code.replace(/(['"])\.\/workloadPanelParams\.js\1/g, JSON.stringify(pathToFileURL(path.join(uiDir,'src/wall/workloadPanelParams.js')).href));
@@ -666,7 +672,7 @@ export default defineComponent({
     assert.ok(!code.includes('./SurfacePanel.vue'), 'sibling import is stubbed');
     writeFileSync(path.join(tmpDir, 'stubDockWorkspace.mjs'), STUB_DOCKWORKSPACE);
     writeFileSync(path.join(tmpDir, 'stubSurfacePanel.mjs'), STUB_SURFACEPANEL);
-    const compiledPath = path.join(tmpDir, 'wallWorkspace.compiled.mjs');
+    const compiledPath = path.join(tmpDir, oldPanelKind ? 'wallWorkspace.old-panel-mutant.mjs' : 'wallWorkspace.compiled.mjs');
     writeFileSync(compiledPath, code);
     const [wall, dockStub, panelStub] = await Promise.all([
       import(pathToFileURL(compiledPath).href),
@@ -687,7 +693,7 @@ export default defineComponent({
     defaultProfile: Object.freeze({ stub: 'layout-profile' }),
   };
 
-  function mountWall(loaded, { rows, slotSpy, extraProps } = {}) {
+  function mountWall(loaded, { rows, slotSpy, workloadSlot, extraProps } = {}) {
     const received = [];
     const wallRef = vue.ref(null);
     const projectionView = makeProjectionView(rows ?? makeRows());
@@ -716,6 +722,7 @@ export default defineComponent({
           onSubmitIntent: (payload) => received.push(['submit-intent', payload]),
           onActivateSurface: (payload) => received.push(['activate-surface', payload]),
         }, {
+          ...(workloadSlot ? {workload:workloadSlot} : {}),
           surface: (slotProps) => {
             slotSpy?.(slotProps);
             return vue.h('i', {
@@ -751,7 +758,7 @@ export default defineComponent({
       assert.equal(kitProps.initialViewportWidth, 1280);
       assert.equal(kitProps.initialViewportHeight, 720);
       assert.ok(kitProps.panelComponents?.CapsulePanel, 'CapsulePanel router is registered');
-      assert.deepEqual(Object.keys(kitProps.panelComponents), ['GuestWorkloadPanel','CapsulePanel'], 'only product panel types are registered');
+      assert.deepEqual(Object.keys(kitProps.panelComponents), ['CapsulePanel'], 'only product panel types are registered');
       assert.ok(kitProps.tabComponents?.SurfaceTab, 'product tab is registered');
       assert.ok(html.includes('data-scope-product="metaviewer"'));
       assert.ok(html.includes('data-viewport="1280x720"'));
@@ -802,7 +809,25 @@ export default defineComponent({
     }
   });
 
-  test('missing capsule id renders an alert and never mounts the panel', async () => {
+  test('validated workload slot preserves exact generation; wrong, duplicate and mixed identities refuse', async () => {
+    const session={schema:'guest_command_session/v0.2',workload_id:'workload-one',generation:7,owner_id:'actor-one',profile_id:'guest-command-arm64-v1',backend:'firecracker',isa:'aarch64',phase:'ready',ownership:'held',jobs_started:0,job:null,controls:{cancel:null,stop:null}};
+    const snapshot={available:true,busy:false,canCancel:false,uncertain:false,code:null,revision:1,session,stdout:'',stderr:''};
+    const tile=guestWorkloadTile(snapshot); assert.ok(tile);
+    async function render(params,tiles,oldPanelKind=false){
+      const loaded=await loadCompiledWall({oldPanelKind});loaded.dockStub.resetStub();loaded.panelStub.resetPanelStub();loaded.dockStub.routerParams.params=params;
+      const seen=[];const mounted=mountWall(loaded,{extraProps:{workloadTiles:tiles},workloadSlot:({workload})=>{seen.push(workload);return vue.h('button',{'data-stop-generation':workload.generation},'Stop');}});
+      try{return {html:mounted.html,seen,graphical:loaded.panelStub.capturedPanelProps.length};}finally{mounted.app.unmount();loaded.dockStub.routerParams.params={capsuleId:'cap-1'};}
+    }
+    const nominal=await render({sessionId:tile.id},[tile]);
+    assert.equal(nominal.seen.length,1);assert.equal(nominal.seen[0],tile);assert.equal(nominal.graphical,0);assert.ok(nominal.html.includes('data-stop-generation="7"'));
+    for(const [params,tiles] of [[{sessionId:'foreign'},[tile]],[{sessionId:tile.id},[tile,tile]],[{sessionId:tile.id,capsuleId:'cap-1'},[tile]],[{sessionId:tile.id,extra:true},[tile]],[{sessionId:tile.id},[{...tile,generation:8}]]]){
+      const refused=await render(params,tiles);assert.equal(refused.seen.length,0);assert.equal(refused.graphical,0);assert.ok(refused.html.includes('no longer available'));
+    }
+    const old=await render({sessionId:tile.id},[tile],true);
+    assert.throws(()=>assert.equal(old.seen.length,1),assert.AssertionError,'old excluded panel kind kills the passing nominal');
+  });
+
+  test('missing capsule identity is refused by the closed router and never mounts the graphical panel', async () => {
     const loaded = await loadCompiledWall();
     loaded.dockStub.resetStub();
     loaded.panelStub.resetPanelStub();
@@ -811,8 +836,8 @@ export default defineComponent({
       const { app, html } = mountWall(loaded);
       try {
         assert.equal(loaded.panelStub.capturedPanelProps.length, 0);
-        assert.ok(html.includes('Missing capsule id'));
-        assert.ok(html.includes('role="alert"'));
+        assert.ok(html.includes('This capsule presentation is no longer available.'));
+        assert.ok(html.includes('role="status"'));
       } finally {
         app.unmount();
       }

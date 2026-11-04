@@ -1,3 +1,5 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
 import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
@@ -60,7 +62,7 @@ async function compileCanvas(canvasSource = CANVAS_SOURCE) {
     compileScript(parse(canvasSource).descriptor, { id, inlineTemplate: true }).content,
     (bindings, spec) => {
       assert.ok(Object.hasOwn(CANVAS_DEPS, spec), `unmapped canvas dependency ${spec}`);
-      return `const ${bindings} = await import(${JSON.stringify(CANVAS_DEPS[spec])});`;
+      return `const ${sfcImportBinding(bindings)} = await import(${JSON.stringify(CANVAS_DEPS[spec])});`;
     }), id);
 }
 
@@ -150,7 +152,7 @@ async function loadApp(source, captured, canvasComponent = DefaultSurfaceCanvas)
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': canvasComponent,
-    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const key = `__ctlarm${++serial}`;
   globalThis[key] = deps;
@@ -158,7 +160,7 @@ async function loadApp(source, captured, canvasComponent = DefaultSurfaceCanvas)
   const compiled = compileScript(descriptor, { id: `ctlarm-app-${serial}`, inlineTemplate: true });
   const code = rewriteImports(compiled.content, (bindings, spec) => {
     assert.ok(Object.hasOwn(deps, spec), `unmapped App dependency ${spec}`);
-    return `const ${bindings} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(bindings)} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`;
   });
   return importCode(code, `ctlarm-app-${serial}`);
 }

@@ -1,3 +1,5 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
 import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
@@ -73,14 +75,14 @@ async function loadDropApp(captured) {
     '../electron/desktopLayout.js': p18cDesktopModel,
     './wall/WallWorkspace.vue': wallStub,
     './surfaces/SurfaceCanvas.vue': canvasStub,
-    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `v-drop-${++appSerial}`, inlineTemplate: true });
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__mvui26bdeps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__mvui26bdeps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#v-drop-${appSerial}`)).default;
 }

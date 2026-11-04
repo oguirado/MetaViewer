@@ -1,3 +1,5 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
 import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
@@ -135,8 +137,8 @@ function rewriteImports(code, deps) {
     addOperatorStubs(deps);
     assert.ok(spec in deps, `Unmapped SFC dependency: ${spec}`);
     const target = deps[spec];
-    if (typeof target === 'string') return `const ${bindings.trim()} = await import(${target});`;
-    return `const ${bindings.trim()} = globalThis.__mvui18Deps[${JSON.stringify(spec)}];`;
+    if (typeof target === 'string') return `const ${sfcImportBinding(bindings)} = await import(${target});`;
+    return `const ${sfcImportBinding(bindings)} = globalThis.__mvui18Deps[${JSON.stringify(spec)}];`;
   });
   return out;
 }
@@ -651,7 +653,7 @@ async function loadAppHarness(captured, row) {
     './agent/AgentLaneHost.vue': stub,
     './settings/settingsHost.js': { createSettingsHost },
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues,
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   addOperatorStubs(deps);
   globalThis.__mvui18AppDeps = deps;
@@ -661,7 +663,7 @@ async function loadAppHarness(captured, row) {
     const require = createRequire(import.meta.url);
     const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, bindings, _quote, specifier) => {
       if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-      return `const ${bindings.trim()} = globalThis.__mvui18AppDeps[${JSON.stringify(specifier)}];`;
+      return `const ${sfcImportBinding(bindings)} = globalThis.__mvui18AppDeps[${JSON.stringify(specifier)}];`;
     });
     const tag = `mvui18-app-${sfcSerial++}`;
     return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${tag}`)).default;

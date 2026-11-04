@@ -1,3 +1,5 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
 import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
 import * as guestCommandValues from '../electron/guestCommandValues.js';
 import {addOperatorStubs} from './operator-stubs.mjs';
@@ -30,9 +32,10 @@ export async function compileSfc(file, deps) {
     if (file === 'multislot/MultislotHost.vue' && spec === 'capsule-ui-kit/ui') deps[spec] = { UiButton };
     if(spec==='./guestWorkloadTile.js'||spec==='./wall/guestWorkloadTile.js')deps[spec]=guestWorkloadTile;
     if(spec==='../electron/guestCommandValues.js')deps[spec]=guestCommandValues;
+    if(spec==='../electron/rewindValues.js')deps[spec]=rewindValues;
     addOperatorStubs(deps);
     assert.ok(spec in deps, `Unmapped SFC dependency: ${spec}`);
-    return `const ${bindings.trim()} = globalThis.__mvui2v1Deps[${JSON.stringify(spec)}];`;
+    return `const ${sfcImportBinding(bindings)} = globalThis.__mvui2v1Deps[${JSON.stringify(spec)}];`;
   });
   globalThis.__mvui2v1Deps = deps;
   try {
