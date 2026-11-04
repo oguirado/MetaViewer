@@ -62,7 +62,7 @@ test('B3-20 opening Desktop window explains empty X11 inventory and then a faile
   t.after(() => { globalThis.metaviewerRoles = previous; });
   const children = {};
   const component = await compileSfc('catalog/CatalogLauncher.vue', {
-    '../../.kit/capsule-ui-kit/src/index-shell.js': { NewCapsuleDialog: childStub('catalog', children, {type:{id:'desktop-window'}}) },
+    './GroupedCapsuleDialog.vue': childStub('catalog', children, {type:{id:'desktop-window'}}),
     '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': childStub('icon', children),
     './catalogModel.js': catalogModel,
   });

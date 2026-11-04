@@ -190,6 +190,7 @@ fronten-43746ea4feed	changes/unreleased/frontend-terminal-drawer.md
 fronten-42a09513c557	changes/unreleased/frontend-viewport-resize.md
 fronten-5717175eba13	changes/unreleased/frontend-working-tree.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
+grouped-43ef97876a82	changes/unreleased/grouped-app-launcher.md
 guestco-2c2745fc03e0	changes/unreleased/guest-command-adapter-transport.md
 guestco-6106b5a4ceef	changes/unreleased/guest-command-cancel-state.md
 handoff-state-home.md	changes/unreleased/handoff-state-home.md
@@ -2590,6 +2591,7 @@ agentLane.js	ui/src/agent/agentLane.js
 captureDouble.js	ui/src/capture/captureDouble.js
 capturePort.js	ui/src/capture/capturePort.js
 CatalogLauncher.vue	ui/src/catalog/CatalogLauncher.vue
+Grouped-0f165af14680	ui/src/catalog/GroupedCapsuleDialog.vue
 catalog.css	ui/src/catalog/catalog.css
 catalogModel.js	ui/src/catalog/catalogModel.js
 GuestCommandPanel.vue	ui/src/components/GuestCommandPanel.vue
@@ -2735,6 +2737,7 @@ frameReader.test.js	ui/test/frameReader.test.js
 frameRe-ec3058eeff9f	ui/test/frameReaderOnePass.test.mjs
 frameTile.test.js	ui/test/frameTile.test.js
 framesParity.test.mjs	ui/test/framesParity.test.mjs
+grouped-99501e8941f6	ui/test/grouped-launcher.test.js
 guestco-9b715f05165d	ui/test/guest-command-host.test.js
 guestco-8fa2f673be90	ui/test/guest-command-panel.test.js
 guestco-996637030635	ui/test/guest-command-profile.test.js
