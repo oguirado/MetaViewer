@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // Lane V bench hook: fixture-only dispatch handle driving production paths.
 import { test, describe } from 'node:test';
@@ -37,6 +41,9 @@ const PINNED_IMPORTS = [
   'capsule-ui-kit/theme',
   './wall/WallWorkspace.vue',
   './wall/DesktopWorkspace.vue',
+  './wall/guestWorkloadTile.js',
+  '../electron/rewindValues.js',
+  '../electron/guestCommandValues.js',
   '../electron/desktopLayout.js',
   './surfaces/SurfaceCanvas.vue',
   './surfaces/tileScheduler.js',
@@ -115,14 +122,14 @@ async function loadApp(captured) {
     './creative/CreativeCapsule.vue': stub,
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
-    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler },
+    './nested/nested.js': { resolveNestedMode, applyNestedWall }, './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `v-bench-${++serial}`, inlineTemplate: true });
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__vdeps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__vdeps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#v-bench-${serial}`)).default;
 }

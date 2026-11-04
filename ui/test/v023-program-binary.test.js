@@ -47,6 +47,7 @@ function createLauncherHarness(sfcSource, buildIntentFn, apiDouble = null) {
   const events = [];
   const ctx = {
     props: { visible: true },
+    disabledArmKinds: { get value() { return catalogModel.unavailableArmCapsules(ctx.props.arm64Capabilities); } },
     buildCreateIntent: buildIntentFn,
     api: apiDouble,
     pendingIntent: { value: null },

@@ -1,4 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
+import * as guestWorkloadTileModel from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 // @ts-check
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -29,6 +32,13 @@ const HOST_ADAPTERS_SOURCE = readFileSync(HOST_ADAPTERS_PATH, 'utf8');
 const ACTIVITY_MODEL_SOURCE = readFileSync(ACTIVITY_MODEL_PATH, 'utf8');
 const WIRE_SOURCE = readFileSync(WIRE_PATH, 'utf8');
 
+/** Preserve ESM named aliases when lowering imports into the closed fixture map. */
+function fixtureBinding(binding) {
+  const value=binding.trim();
+  if(value.startsWith('{'))return value.replace(/\b([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)\b/g,'$1: $2');
+  const namespace=/^\*\s+as\s+([A-Za-z_$][\w$]*)$/.exec(value);
+  return namespace?namespace[1]:value;
+}
 let serial = 0;
 
 /**
@@ -45,7 +55,7 @@ async function compileRealHostOutcome(adaptersMod = hostAdapters) {
     /^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
     (all, binding, _q, spec) => {
       if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-      if (spec === './hostAdapters.js') return `const ${binding.trim()} = globalThis.__e4OutcomeAdapters;`;
+      if (spec === './hostAdapters.js') return `const ${fixtureBinding(binding)} = globalThis.__e4OutcomeAdapters;`;
       throw new Error(`unexpected HostOutcome import: ${spec}`);
     },
   );
@@ -125,6 +135,9 @@ async function compileApp(captured, transform = (s) => s, adaptersMod = hostAdap
     './wall/WallWorkspace.vue': wall,
     './surfaces/SurfaceCanvas.vue': stub,
     './surfaces/tileScheduler.js': { createTileScheduler },
+    './wall/guestWorkloadTile.js': guestWorkloadTileModel,
+    '../electron/guestCommandValues.js': guestCommandValues,
+    '../electron/rewindValues.js': rewindValues,
   };
   const mutatedSource = transform(APP_SOURCE);
   const { descriptor } = parse(mutatedSource);
@@ -132,10 +145,11 @@ async function compileApp(captured, transform = (s) => s, adaptersMod = hostAdap
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(
     /^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
-    (all, binding, _q, spec) =>
-      spec === 'vue'
-        ? all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href))
-        : `const ${binding.trim()} = globalThis.__e4Deps[${JSON.stringify(spec)}];`,
+    (all, binding, _q, spec) => {
+      if(spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
+      assert.ok(Object.hasOwn(globalThis.__e4Deps,spec), `unmapped App dependency ${spec}`);
+      return `const ${fixtureBinding(binding)} = globalThis.__e4Deps[${JSON.stringify(spec)}];`;
+    },
   );
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#e4-${serial}`)).default;
 }

@@ -3,7 +3,7 @@
   capture store passed down from the wall root; a missing store disables the
   controls with the shared unavailable reason instead of throwing. Hidden in
   nested display-only mode. Kit owns the record toggle (SaasRecordButton)
-  and the screenshot glyph (SidebarIcon); the lane owns layout and copy. -->
+  while the lane owns decorative capture glyphs, layout and copy. -->
 <script setup>
 import { computed, onBeforeUnmount, shallowRef } from 'vue';
 import SaasRecordButton from '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue';
@@ -48,6 +48,8 @@ import {
 
 const props = defineProps({
   capsuleId: { type: String, required: true },
+  compact: { type: Boolean, default: false },
+  headerTarget: { type: /** @type {import('vue').PropType<Element|null>} */ (Object), default: null },
   capsuleLabel: { type: String, default: '' },
   captureState: {
     type: /** @type {import('vue').PropType<TileCaptureStateLike | null>} */ (Object),
@@ -176,7 +178,7 @@ function onShotClick() {
 }
 </script>
 <template>
-  <div v-if="!props.displayOnly" class="mv-tile-chrome" role="group" :aria-label="groupName">
+  <div v-if="!props.displayOnly" class="mv-tile-chrome" :class="{ 'mv-tile-chrome--compact': compact }" role="group" :aria-label="groupName">
     <span :id="recordWrapId" class="mv-tile-chrome__record" :data-semantic-anchor="recordAnchor">
       <SaasRecordButton
         :capsule-id="props.capsuleId"
@@ -216,17 +218,19 @@ function onShotClick() {
         :aria-busy="copyState === 'copying' ? 'true' : undefined"
         :data-unavailable-reason="copyDisabledReason || undefined"
         @click="onCopyId"
-      >{{ CAPSULE_COPY_LABEL }}</button>
+      ><SidebarIcon class="mv-tile-copy-icon" name="save" aria-hidden="true" /><span class="mv-tile-copy-label">{{ CAPSULE_COPY_LABEL }}</span></button>
       <span v-if="copyStatusText !== ''" role="status" class="mv-tile-capid__status" :data-copy-outcome="copyState" :title="copyReason || undefined">{{ copyStatusText }}</span>
     </span>
     <span v-if="refusal" role="alert" class="mv-tile-chrome__refusal">{{ refusal }}</span>
+    <Teleport :to="headerTarget || 'body'" :disabled="!headerTarget">
     <span
       :id="badgeId"
-      class="mv-tile-chrome__badge"
+      class="mv-tile-chrome__badge" :class="{ 'mv-tile-chrome__badge--header': headerTarget }"
       :data-variant="badgeVariant"
       role="status"
       :data-semantic-anchor="badgeAnchor"
       :title="badgeTitle"
-    >{{ badgeText }}</span>
+    >{{ phase === 'error' ? 'Error' : badgeText }}</span>
+    </Teleport>
   </div>
 </template>

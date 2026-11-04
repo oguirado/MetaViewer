@@ -1,0 +1,2 @@
+- Move workspace navigation and activity into a collapsible left column and keep the terminal beside live capsules in a collapsible right dock.
+- Add a six-cell grid preset while preserving existing preset identifiers and native-view presentation during dock changes.

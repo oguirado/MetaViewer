@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
 import {EventEmitter} from 'node:events';
-import {installAuthorityWire,WIRE_CHANNELS,INTENT_OPS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity,validateIntentBody} from '../electron/authorityWire.js';
+import {installAuthorityWire,REWIND_CHANNELS,GUEST_COMMAND_CHANNELS,HEADLESS_CHANNELS,WIRE_CHANNELS,INTENT_OPS,createSettingsStore,deliverAuthorityFrame,createSideTerminalAdapter,nestedIdentity,validateIntentBody} from '../electron/authorityWire.js';
 import {createPreloadFacade,installPreload} from '../electron/preload.js';
 
 const surface={schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'human',profile_id:'test'};
@@ -933,7 +933,7 @@ test('R3-T4-012 (T19): main propose validates full 7-key action_proposal/v0.2 co
   assert.equal(f.coreCalls.length, 1);
 });
 
-test('R3-T4-011 (T20): installAuthorityWire unwinds all 11 ipcMain handlers when frames.subscribe throws', async t => {
+test('R3-T4-011 (T20): installAuthorityWire unwinds all registered ipcMain handlers when frames.subscribe throws', async t => {
   const root = await mkdtemp(join(tmpdir(), 'wire-r3-011-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const handlers = new Map();
@@ -977,9 +977,30 @@ test('R3-T4-011 (T20): installAuthorityWire unwinds all 11 ipcMain handlers when
     terminal: stubTerminal,
     frames,
   });
-  assert.equal(handlers.size, Object.keys(WIRE_CHANNELS).length);
+  assert.deepEqual(GUEST_COMMAND_CHANNELS, {
+    guestCommandCapabilities:'metaviewer:guest-command.capabilities',
+    guestCommandStatus:'metaviewer:guest-command.status',
+    guestCommandRequest:'metaviewer:guest-command.request',
+  });
+  const rewindChannels=['metaviewer:rewind.request','metaviewer:rewind.status'];
+  assert.deepEqual(Object.values(REWIND_CHANNELS).sort(),[...rewindChannels].sort());
+  assert.equal(handlers.size, Object.keys(WIRE_CHANNELS).length + Object.keys(HEADLESS_CHANNELS).length + Object.keys(GUEST_COMMAND_CHANNELS).length + rewindChannels.length);
+  assert.deepEqual(new Set(handlers.keys()),new Set([...Object.values(WIRE_CHANNELS),...Object.values(HEADLESS_CHANNELS),...Object.values(GUEST_COMMAND_CHANNELS),...rewindChannels]));
   await binding.dispose();
   assert.equal(handlers.size, 0);
+});
+
+test('R3-T4-011 control: stranded rewind handler fails the all-handler rollback oracle', async t => {
+  const root=await mkdtemp(join(tmpdir(),'wire-r3-011-mutant-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const handlers=new Map();
+  const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
+  const contents={id:99,mainFrame:frame,isDestroyed:()=>false,postMessage(){}};
+  const retained=REWIND_CHANNELS.rewindStatus;
+  const ipcMain={handle:(channel,fn)=>handlers.set(channel,fn),removeHandler:channel=>{if(channel!==retained)handlers.delete(channel);}};
+  assert.throws(()=>installAuthorityWire({ipcMain,contents,env:{XDG_CONFIG_HOME:root,MV_SELF_CAPSULE_ID:'capsule-1'},argv:['--nested-depth=0'],core:{request:async()=>verdict},profiles:new Map(),frames:{subscribe(){throw Error('FRAME_SOURCE');}}}),/FRAME_SOURCE/);
+  assert.deepEqual([...handlers.keys()],[retained]);
+  assert.throws(()=>assert.equal(handlers.size,0),assert.AssertionError,'the unchanged rollback oracle must reject a retained handler');
 });
 
 test('R3-T4-002: refused unknown sids leave 0 rate-window keys and dispose clears all surface maps', async t => {

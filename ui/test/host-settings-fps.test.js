@@ -45,13 +45,13 @@ const BASE_PRELOAD_DIAG = Object.freeze({
 
 test('HOST-FPS-1: validateSettings admits closed {scheme, density, wallFps, recordingFps} set and rejects invalid values or unknown keys', () => {
   assert.deepEqual(validateSettings('{}'), {
-    scheme: 'mv-light',
+    scheme: 'mv-dark',
     density: 'compact',
     wallFps: 30,
     recordingFps: 3,
   });
   assert.deepEqual(DEFAULT_SETTINGS, {
-    scheme: 'mv-light',
+    scheme: 'mv-dark',
     density: 'compact',
     wallFps: 30,
     recordingFps: 3,
@@ -69,7 +69,7 @@ test('HOST-FPS-1: validateSettings admits closed {scheme, density, wallFps, reco
   }
 
   assert.throws(
-    () => validateSettings(JSON.stringify({ scheme: 'mv-light', density: 'compact', extra: 1 })),
+    () => validateSettings(JSON.stringify({ scheme: 'mv-dark', density: 'compact', extra: 1 })),
     /SETTINGS_UNKNOWN_KEY/,
   );
   assert.throws(

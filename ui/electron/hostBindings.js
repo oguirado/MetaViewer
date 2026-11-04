@@ -1,3 +1,4 @@
+import { stateRequest, stateEvent } from './preload.js';
 // @ts-check
 /** [TARGET, unit decision] Attach to the already running owner-only core socket
  * at $XDG_RUNTIME_DIR/metaviewer/core.sock, using the UI registration and core
@@ -26,8 +27,20 @@ import { spawnSync } from 'node:child_process';
 import { open, lstat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import {createRewindHost} from './rewindHost.js';
+import {createGuestCommandHost} from './guestCommandHost.js';
+import {guestCommandProfileOwnerSync,arm64CapsuleStatusSync} from './guestCommandProfile.js';
+import { createHeadlessHost } from './headlessHost.js';
+import {headlessProfileOwnerSync} from './coreLauncher.js';
+import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+
+/** Exact capsule-family tag selection; hello, list and graphical traffic stay legacy.
+ * @param {any} body */
+export function envelopeTagForBody(body) {
+ if(['rewind_request/v0.2','rewind_event/v0.2'].includes(body?.schema))return 'rewind_envelope/v0.2';
+ return ['headless_request/v0.2','headless_event/v0.2','guest_command_request/v0.2','guest_command_event/v0.2'].includes(body?.schema)?'capsule_envelope/v0.2':'envelope/v0.2';
+}
 
 export const SURFACE_CREATE_DEADLINE_MS = 60000; // [TARGET, unit decision] Capsule startup bound, independent of boot readiness.
 const MAX_WIRE = 1024 * 1024, MAX_FRAME = 64 * 1024 * 1024, MAX_ITEMS = 64, DEADLINE = 3000;
@@ -179,6 +192,9 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const peers = config.peers?.filter((/** @type {any} */ peer) => peer?.endpoint?.component === 'ui');
     if (!id(config.session_id) || !hello(config.core, 'core') || peers?.length !== 1 || !hello(peers[0], 'ui')) throw fail();
     const ui = peers[0];
+    const headlessOwner = headlessProfileOwnerSync(env);
+    const guestCommandOwner=guestCommandProfileOwnerSync(env);
+    const agentPeers = config.peers.filter((/** @type {any} */ p) => p?.endpoint?.component === 'agent');
     acquisitionStep = 'HOST_CAPABILITIES';
     const destination = recordingDestination(env);
     /** @type {any} */ let electronMod = null;
@@ -263,6 +279,9 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @param {Error} [reason] */
     const shutdown = (reason = acquireFail('HELLO_CLOSED')) => {
       clearTimeout(helloTimer); clearInterval(keepalive);
+      headless.disconnect();
+      guestCommand.disconnect();
+      rewind?.disconnect();
       if (disposed) return; disposed = true; live = false;
       // [TARGET, unit decision] End every painted lifetime before transport
       // teardown so renderer snapshots close WRITE and offer session recovery.
@@ -282,12 +301,18 @@ export async function createMainBindings({env = process.env, createMessageChanne
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
       channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();failedFrameGenerations.clear();listeners.clear();captureListeners.clear();cadenceListeners.clear();
     };
+    const headless = createHeadlessHost({send,
+      available:()=>live && !disposed && process.arch === 'arm64' && headlessOwner !== null && agentPeers.length === 1 && headlessOwner === 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'),
+      ownerId:agentPeers.length === 1 ? 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex') : ''});
+    let rewind=/** @type {ReturnType<typeof createRewindHost>|null} */(null);
+    const guestCommand=createGuestCommandHost({send,commandAllowed:()=>!rewind||rewind.commandAllowed(),stopTarget:()=>rewind?.stopTarget(),cancelAvailable:()=>env.MV_REWIND_ENABLED!=='1',sessionId:config.session_id,ownerId:agentPeers.length===1?'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'):'',available:()=>live&&!disposed&&arm64CapsuleStatusSync(env).microvm.available&&guestCommandOwner!==null&&agentPeers.length===1&&guestCommandOwner==='actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex')});
+    rewind=createRewindHost({send,available:()=>env.MV_REWIND_ENABLED==='1'&&process.arch==='arm64'&&guestCommand.status().available,ownerId:guestCommandOwner??'',guest:guestCommand.status,commitReady:guestCommand.commitRewind});
     /** @type {Set<(state:any)=>void>} */ const captureListeners = new Set();
     const helloTimer = setTimeout(() => shutdown(acquireFail('HELLO_TIMEOUT')), DEADLINE);
     /** @param {any} body @param {string} [messageId] @param {(error?: Error | null) => void} [onWritten] */
     function send(body, messageId = undefined, onWritten = undefined) {
       if (disposed || !socket || !Number.isSafeInteger(++seq)) throw fail();
-      const value = {schema:'envelope/v0.2',msg_id:messageId || body.request_id || body.proposal_id || randomUUID(),ts_ns:0,
+      const value = {schema:envelopeTagForBody(body),msg_id:messageId || body.request_id || body.proposal_id || randomUUID(),ts_ns:0,
         from:ui.endpoint,to:config.core.endpoint,session_id:config.session_id,seq,nonce:randomUUID(),body};
       const line = JSON.stringify(value) + '\n'; if (Buffer.byteLength(line) > MAX_WIRE || socket.writableLength > MAX_WIRE) throw fail();
       socket.write(line, onWritten);
@@ -453,16 +478,27 @@ export async function createMainBindings({env = process.env, createMessageChanne
       const validKeys = keyList === 'body,from,msg_id,nonce,schema,seq,session_id,to,ts_ns'
         || (!live && keyList === 'body,from,msg_id,nonce,schema,seq,session_id,to');
       if (!validKeys
-          || env.schema !== 'envelope/v0.2' || env.session_id !== config.session_id
+          || env.schema !== envelopeTagForBody(env.body) || env.session_id !== config.session_id
           || !isDeepStrictEqual(env.from,config.core.endpoint) || !isDeepStrictEqual(env.to,ui.endpoint)
           || ((live || Object.hasOwn(env,'ts_ns')) && (!Number.isSafeInteger(env.ts_ns) || env.ts_ns < 0))
           || !Number.isSafeInteger(env.seq) || env.seq <= received || !id(env.nonce) || !id(env.msg_id)
           || !env.body || typeof env.body !== 'object' || Array.isArray(env.body)) throw fail();
       received = env.seq;const body = env.body;
+      if (body.schema==='capsule_state_event/v0.2') {
+        const event=stateEvent(body), item=pending.get(event.operation_id);
+        if (!item) return;
+        if (item.body.schema!=='capsule_state_request/v0.2' || item.body.profile_id!==event.profile_id
+            || item.body.slot_id!==event.slot_id || item.body.op!==event.op) throw fail();
+        if (event.event!=='accepted') {clearTimeout(item.timer);pending.delete(event.operation_id);item.resolve(event);}
+        return;
+      }
       if (!live) {
         if (!isDeepStrictEqual(body,config.core.hello)) throw fail();
         live = true;clearTimeout(helloTimer);ready();return;
       }
+      if(body.schema==='rewind_event/v0.2'){if(!rewind)throw fail();rewind.receive(body);return;}
+      if(body.schema==='guest_command_event/v0.2'){guestCommand.receive(body);if(body.event==='stopped')rewind?.guestClosed();return;}
+      if (body.schema === 'headless_event/v0.2') { headless.receive(body); return; }
       // [TARGET, unit decision] Capture metadata uses the frozen error-detail
       // carrier. It never reaches renderer error consumers or exposes raw detail.
       if (body.schema === 'surface_event/v0.2' && body.event === 'error'
@@ -878,6 +914,9 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
     }
     return {core:{
+      headless,
+      guestCommand,
+      rewind,
       /** @param {(state:any)=>void} cb */
       subscribeCapture(cb) {
         if(disposed || typeof cb !== 'function' || captureListeners.size >= MAX_ITEMS) throw fail();
@@ -930,6 +969,15 @@ export async function createMainBindings({env = process.env, createMessageChanne
       },
       /** @param {any} message */
       async request(message) {
+        if (message?.op==='capsule-state') {
+          const body=stateRequest(message.request);
+          if (!live || disposed || nonInputPendingCount()>=MAX_ITEMS || pending.has(body.operation_id)) throw fail();
+          return new Promise((resolve,reject)=>{
+            const timer=setTimeout(()=>{pending.delete(body.operation_id);reject(new Error('SLOT_OPERATION_TIMEOUT'));},190000);
+            pending.set(body.operation_id,{body,resolve,reject,timer});
+            try {send(body,body.operation_id);} catch {shutdown();}
+          });
+        }
         // [TARGET, unit decision] Serialize creates: v0.2 created/error events
         // carry no request id. This closed path is never a wire passthrough.
         if (message?.schema === 'surface_request/v0.2' || message?.op === 'create') {

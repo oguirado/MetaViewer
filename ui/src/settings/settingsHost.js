@@ -3,6 +3,7 @@ import {
   MV_DEFAULT_RECORDING_FPS,
   MV_DEFAULT_WALL_FPS,
   MV_DENSITY,
+  MV_PRIMARY_SCHEME,
   decodeMvSettings,
   decodeStoredSettings,
   encodeMvSettings,
@@ -42,7 +43,7 @@ function createSettingsHostImpl(host, storage, fixtureScheme = null) {
     loadSettings: load !== null
       ? () => load()
       : async () => {
-        const stored = readStoredSetting(storage, SETTINGS_STORAGE_KEYS.scheme, 'mv-light');
+        const stored = readStoredSetting(storage, SETTINGS_STORAGE_KEYS.scheme, MV_PRIMARY_SCHEME);
         const scheme = stored === 'dark' ? 'mv-dark' : stored === 'light' ? 'mv-light' : stored;
         const storedDensity = readStoredSetting(storage, SETTINGS_STORAGE_KEYS.density, MV_DENSITY);
         const density = isMvDensity(storedDensity) ? storedDensity : MV_DENSITY;

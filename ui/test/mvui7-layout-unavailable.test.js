@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -57,7 +61,7 @@ async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runti
       './settings/MvSettingsPanel.vue': slotStub, './agent/AgentLaneHost.vue': slotStub,
       './activity/ActivityStrip.vue': slotStub,
       './surfaces/SurfaceCanvas.vue': slotStub, './nested/nested.js': { resolveNestedMode, applyNestedWall },
-      './surfaces/tileScheduler.js': { createTileScheduler },
+      './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
     });
     const fixture = resolveFixture('one').fixture;
     const layout = createWallLayout(SCOPE, [...fixture.capsules]);
@@ -163,7 +167,7 @@ async function bootFixture(search) {
   };
   try {
     const code = main.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
-      (_all, binding, _quote, spec) => `const ${binding.trim()} = globalThis.__mvui7Boot[${JSON.stringify(spec)}];`)
+      (_all, binding, _quote, spec) => `const ${sfcImportBinding(binding)} = globalThis.__mvui7Boot[${JSON.stringify(spec)}];`)
       .replace(/^import\s+['"][^'"\n]+['"];?$/gm, '');
     await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#layout-${++serial}`);
     await tick();
@@ -268,9 +272,9 @@ for (const displayOnly of [false, true]) test(`notice grid mode renders correctl
     assert.equal(nodes(body).some(n => n.props?.class === 'mv-nested-wall'), displayOnly);
     const styles = parse(appSource).descriptor.styles.map(s => s.content).join('\n');
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested > .mv-shell-body' : '.mv-shell-body'),
-      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:3(?:;|$)/);
+      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:2(?:;|$)/);
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested' : '.mv-shell'),
-      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) auto minmax\(0,1fr\)/);
+      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) minmax\(0,1fr\)/);
   } finally { app.close(); }
 });
 

@@ -9,10 +9,12 @@
  * translates the kit choice into a create intent payload.
  */
 import { computed, ref, watch } from 'vue';
+import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 import { NewCapsuleDialog } from '../../.kit/capsule-ui-kit/src/index-shell.js';
 import {
   CATALOG_KIND_IDS,
   availableCatalogKindIds,
+  unavailableArmCapsules,
   buildCreateIntent,
   createInvokerFocus,
   filterWindowCandidates,
@@ -23,14 +25,32 @@ import {
 const props = defineProps({
   visible: { type: Boolean, default: false },
   kinds: { type: Array, default: () => [...CATALOG_KIND_IDS] },
+  headlessAvailable: { type: Boolean, default: false },
+  guestCommandAvailable: { type: Boolean, default: false },
   vmAvailable: { type: Boolean, default: false },
+  arm64Capabilities:{type:/** @type {import('vue').PropType<any>} */ (Object),default:null},
   title: { type: String, default: 'Add capsule' },
-  subtitle: { type: String, default: 'Choose a capsule kind to open in your wall' },
+  subtitle: { type: String, default: 'Open an installed app or choose a capsule kind' },
   emptyText: { type: String, default: 'No capsule kinds match this search.' },
 });
 const emit = defineEmits(['update:visible', 'create', 'close']);
 
 const api = /** @type {any} */ (globalThis).metaviewerRoles;
+const installedApps = ref(/** @type {Array<{id:string,name:string,binary:string,icon:string}>} */ ([]));
+const recentApps = ref(/** @type {string[]} */ ([]));
+const appListError = ref('');
+watch(() => props.visible, async visible => {
+  if (!visible || !api?.listApps) return;
+  appListError.value = '';
+  try {
+    const result = await api.listApps();
+    if (!props.visible) return;
+    if (!Array.isArray(result?.apps) || !Array.isArray(result?.recent)) throw Error('APP_LIST_UNAVAILABLE');
+    installedApps.value = result.apps.slice(0,256).filter((/** @type {any} */ a) => a && /^[a-f0-9]{24}$/.test(a.id) && typeof a.name === 'string' && typeof a.binary === 'string' && typeof a.icon === 'string' && (!a.icon || /^data:image\/(?:png|svg\+xml);base64,/.test(a.icon)));
+    recentApps.value = result.recent.filter((/** @type {any} */ id) => typeof id === 'string').slice(0,12);
+  } catch { installedApps.value=[];recentApps.value=[];appListError.value='Installed apps are unavailable. Choose a capsule kind or type a binary.'; }
+}, {immediate:true});
+const appByCard = computed(() => new Map(installedApps.value.flatMap(app=>[[`app-${app.id}`,app],[`recent-${app.id}`,app]])));
 const roleChoice = ref('agent'), profileChoice = ref(''), choosingRole = ref(false), roleError = ref('');
 const roleEdited = ref(false);
 const editedRoleChoice = ref('agent');
@@ -171,7 +191,11 @@ function cancelWindow() {
   emit('update:visible', false);
 }
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
-const dialogTypes = computed(() => normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable).includes(type.id)));
+const disabledArmKinds=computed(()=>unavailableArmCapsules(props.arm64Capabilities));
+const dialogTypes = computed(() => {
+  const appType = (/** @type {{id:string,name:string,binary:string,icon:string}} */ app, /** @type {boolean} */ recent) => ({id:`${recent?'recent':'app'}-${app.id}`,label:app.name,category:recent?'Recent':'Installed apps',description:'Host program — not isolated',opensAs:'tab',footprint:'',keywords:[app.name,app.binary],icon:'box'});
+  return [...recentApps.value.flatMap(id=>{const app=installedApps.value.find(a=>a.id===id);return app?[appType(app,true)]:[];}),...installedApps.value.map(app=>appType(app,false)),...normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable,props.headlessAvailable,props.arm64Capabilities).includes(type.id)).map(type=>type.id==='microvm'&&props.guestCommandAvailable?{...type,description:'Run commands inside an isolated ARM64 guest. No interactive terminal or desktop.'}:type)];
+});
 const catalogErrors = computed(() => normalized.value.errors);
 
 const invokerFocus = createInvokerFocus();
@@ -194,6 +218,12 @@ function forwardVisible(value) {
 
 /** @param {{ type?: { id?: unknown }, placement?: unknown, binary?: unknown, role?: unknown } | null} payload */
 async function onCreate(payload) {
+  if(disabledArmKinds.value.some(row=>row.kind===payload?.type?.id))return;
+  const app = /^(app|recent)-/.test(String(payload?.type?.id)) ? appByCard.value.get(String(payload?.type?.id)) : null;
+  if (app) {
+    pendingIntent.value = {kind:'host-program',placement:payload?.placement};
+    programBinary.value=app.binary;programRole.value='human';programError.value='';choosingProgram.value=true;return;
+  }
   if (payload?.type?.id === 'program' || payload?.type?.id === 'host-program') {
     pendingIntent.value = { kind: payload.type.id, placement: payload?.placement };
     if (typeof choosingProgram !== 'undefined') {
@@ -404,11 +434,21 @@ function onClose() {
     :title="title"
     :subtitle="subtitle"
     :empty-text="emptyText"
+    search-label="Search apps and capsule kinds"
+    placeholder="Search installed apps or capsule kinds…"
     @update:visible="forwardVisible"
     @create="onCreate"
     @close="onClose"
   >
-    <template v-if="catalogErrors.length" #empty>
+    <template #type-icon="{ type }">
+      <img v-if="appByCard.get(type.id)?.icon" class="mv-installed-app-icon" :src="appByCard.get(type.id)?.icon || ''" alt="" width="32" height="32" />
+      <SidebarIcon v-else :name="type.icon || 'box'" />
+    </template>
+    <template v-if="catalogErrors.length || disabledArmKinds.length || appListError" #empty>
+      <section v-if="disabledArmKinds.length" aria-label="Unavailable ARM64 capsules" class="mv-arm64-unavailable">
+        <div v-for="row in disabledArmKinds" :key="row.kind" :data-semantic-anchor="`dialog/new-capsule/unavailable-${row.kind}`"><button type="button" disabled :aria-describedby="`capsule-${row.kind}-reason`">{{ row.label }}</button><p :id="`capsule-${row.kind}-reason`" :data-semantic-anchor="`dialog/new-capsule/unavailable-reason-${row.kind}`" role="status">{{ row.reason }}</p></div>
+      </section>
+      <p v-if="appListError" role="status">{{ appListError }}</p>
       <ul class="mv-catalog-errors" aria-label="Unavailable capsule kinds">
         <li
           v-for="row in catalogErrors"
@@ -427,6 +467,11 @@ function onClose() {
 <style src="./catalog.css" scoped></style>
 
 <style scoped>
+.mv-installed-app-icon { width:32px; height:32px; object-fit:contain; }
+:deep(.s8n-main) { max-height:calc(88dvh - 240px); overflow-y:auto; }
+:deep(.s8n-card-id) { display:none; }
+:deep(.s8n-card-icon) { width:36px; height:36px; }
+
 .mv-role-dialog { position:fixed; z-index:100; inset:25% 25% auto; padding:1.5rem; background:Canvas; color:CanvasText; border:1px solid currentColor; border-radius:0.5rem; display:grid; gap:1rem; }
 .mv-window-list { list-style:none; margin:0; padding:0; display:grid; gap:0.5rem; max-height:40vh; overflow:auto; }
 .mv-window-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; width:100%; padding:0.75rem; border:2px solid transparent; border-radius:0.35rem; background:Canvas; color:CanvasText; font:inherit; text-align:left; cursor:pointer; }

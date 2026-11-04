@@ -99,9 +99,10 @@ describe('Electron main and preload surface security checks', () => {
     assert.throws(() => verdictReply(invalidVerdict), { message: 'OUTCOME' });
   });
 
-  it('3. Domain-wire channel closure (13 valid channels)', async () => {
+  it('3. Domain-wire channel closure (14 valid channels)', async () => {
     const validChannels = Object.values(WIRE_CHANNELS);
-    assert.equal(validChannels.length, 13);
+    assert.equal(validChannels.length, 14);
+    assert.ok(validChannels.includes('metaviewer:capsule-state.request'));
     assert.ok(validChannels.includes('metaviewer:authority.vmAvailable'));
     assert.ok(validChannels.includes('metaviewer:authority.createSurface'));
 

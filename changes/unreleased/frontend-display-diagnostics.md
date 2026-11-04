@@ -1,0 +1,1 @@
+- Record packaged display boot stages and child termination signals so startup failures retain a diagnostic witness without changing test deadlines.

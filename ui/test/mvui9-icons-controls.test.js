@@ -1,3 +1,4 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 // MVUI9 lane I: capsule action control contract audit (source level).
 // Every capsule action control across the wall, the multislot host and the
 // recording panel carries a stable id, a data-semantic-anchor and an
@@ -351,7 +352,8 @@ test('native-button inventory: unknown renderer-owned buttons fail', () => {
   }
   const found = [];
   for (const rel of scope) {
-    const { buttons } = splitControls(templateOf(readScope(rel)));
+    const raw = templateOf(readScope(rel));
+    const { buttons } = splitControls(rel === 'src/wall/SurfacePanel.vue' ? withoutPairedTerminalControl(raw) : raw);
     for (const button of buttons) {
       found.push(rel);
       assert.ok(
