@@ -6,6 +6,7 @@
 
 Pre-release. Verification differs by architecture and flow; see [the judge tour](docs/JUDGE_TOUR.md).
 
+- Add the protocol file to the repository entry documents.
 - Replace the fixed 4-capsule limit with admission up to the 16-capsule adapter ceiling, check host free memory against one capsule's 6 GiB Docker budget (4 GiB memory + 2 GiB shm) before each create, expand the logical display pool in the adapter to `MaxSurfaces` (`16`) without launcher changes, and report the limit, open count, and what to close on refusal instead of `host_program_unavailable`.
 - Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
 - Document the daemon adapter and judge scripts in a routed dossier, docs/dossiers/adapter.md, with checked source coordinates.

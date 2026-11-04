@@ -1,5 +1,7 @@
 # AGENTS.md — MetaViewer agent protocol
 
+Contributor protocol file: `catalogue/protocol.json`.
+
 Ask first: `python3 route/route_query.py any "<question>"`. Read the returned reference
 with `python3 route/route_query.py show "<reference>"`. No preliminary README tour is
 required. Findings are leads; only cited code proves a cause. Use `route/`, not the

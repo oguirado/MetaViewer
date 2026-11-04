@@ -5,3 +5,4 @@ Read the returned section or span: python3 route/route_query.py show "<reference
 Findings are leads; cited code proves a cause. Empty results mean not indexed, not absence.
 Before editing, read AGENTS.md and LAWS.md. Check: python3 route/route_query.py check
 Legacy catalogue: Status: router unavailable. Use route/. Query output labels byte coordinates explicitly.
+Contributor editing protocol: AGENTS.md and catalogue/protocol.json.
