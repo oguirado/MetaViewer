@@ -1,3 +1,4 @@
+import * as capsulePanelRouter from '../src/wall/capsulePanelRouter.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as vue from 'vue';
@@ -38,7 +39,7 @@ const Workspace = vue.defineComponent({
   },
 });
 const Wall = await compileSfc('wall/WallWorkspace.vue', {
-  'capsule-ui-kit/DockWorkspace': Workspace, './SurfacePanel.vue': SurfacePanel,
+  'capsule-ui-kit/DockWorkspace': Workspace, './SurfacePanel.vue': SurfacePanel, './capsulePanelRouter.js': capsulePanelRouter,
 });
 function mount(props) {
   const root = { children: [] };

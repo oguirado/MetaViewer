@@ -23,7 +23,8 @@ function fakeElectron() {
  const requests = {}, children = [], readiness = {ready:true,probes:0};
  class WC extends EventEmitter {
   mainFrame = {}; url=''; closed=false;
-  menuShortcuts=[]; loads=[];
+  menuShortcuts=[]; loads=[]; invalidations=0;
+  invalidate(){this.invalidations++;}
   setIgnoreMenuShortcuts(value){this.menuShortcuts.push(value);}
   setWindowOpenHandler(){} setZoomFactor(value){this.zoom=value;}
   async loadURL(url){this.loads.push(url);this.url=url;} getURL(){return this.url;} focus(){this.focused=true;}
@@ -536,4 +537,21 @@ test('F reaching the trace byte cap pauses recording and leaves the native view 
  const f=fakeElectron();const tile=await attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,trace,isActive:()=>true,writable:true,capsuleSize:()=>({width:1280,height:900}),onFailure:()=>failures++});t.after(()=>tile.close());
  const wc=tile.view.webContents;f.electron.ipcMain.emit('metaviewer:human-trace.v0.3',{sender:wc,senderFrame:wc.mainFrame},{kind:'move',x:2,y:3,width:1280,height:900});
  assert.equal(trace.paused,true);assert.equal(pauses,1);assert.equal(failures,0);assert.equal(wc.closed,false);assert.equal(tile.view.visible,true);
+});
+
+
+test('native show and resize request repaint without taking keyboard focus',async()=>{
+ const f=fakeElectron();
+ const tile=await attachXpraHumanTile({...f,bridge:{origin:'http://127.0.0.1:12345',requestHeaders:{}},bounds,
+  initiallyVisible:false,trace:{setActive(){},record(){}},isActive:()=>true,writable:true,
+  capsuleSize:()=>({width:1280,height:900}),onFailure:assert.fail});
+ const wc=tile.view.webContents;
+ try {
+  const before=wc.invalidations;assert.ok(before>0);
+  tile.setVisible(true);assert.equal(wc.invalidations,before+1);assert.notEqual(wc.focused,true);
+  tile.resize({x:20,y:30,width:202,height:300});assert.equal(wc.invalidations,before+2);
+  assert.deepEqual(tile.view.bounds,{x:20,y:30,width:202,height:300});assert.notEqual(wc.focused,true);
+  tile.setVisible(false);assert.equal(wc.invalidations,before+2);
+  await tile.close();tile.setVisible(true);assert.equal(wc.invalidations,before+2);
+ } finally {await tile.close();}
 });

@@ -3,10 +3,10 @@ export const DESKTOP_SCHEMA = 'metaviewer.desktops/v1';
 /** Maximum persistent walls per view [TARGET]. */
 export const MAX_DESKTOPS_PER_VIEW = 16;
 export const VIEWS = Object.freeze(['human', 'agent']);
-export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'focus-strip', 'floating']);
+export const PRESETS = Object.freeze(['single', 'side-by-side', 'grid', 'grid-3x2', 'focus-strip', 'floating']);
 
-/** @typedef {{id:number,preset:string|null,layout:any}} Desktop */
-/** @typedef {{schema:string,activeView:string,views:Record<string,{active:number,next:number,desktops:Desktop[]}>,assignments:Record<string,{view:string,desktop:number}>}} DesktopState */
+/** @typedef {{id:number,preset:string|null,layout:any,snapGrid?:{cols:number,rows:number},identityCells?:Record<string,{col:number,row:number}>,label?:string}} Desktop */
+/** @typedef {{schema:string,activeView:string,views:Record<string,{active:number,next:number,desktops:Desktop[]}>,assignments:Record<string,{view:string,desktop:number}>,labels?:Record<string,string>}} DesktopState */
 /** @returns {DesktopState} */
 export function createDesktopState() {
   return {schema:DESKTOP_SCHEMA, activeView:'human', views:Object.fromEntries(VIEWS.map(view =>
@@ -20,17 +20,25 @@ const keys = (value, allowed) => plain(value) && Object.keys(value).length === a
 const number = value => Number.isSafeInteger(value) && value > 0;
 /** @param {any} state @param {(layout:any)=>boolean} validateLayout */
 export function validateDesktopState(state, validateLayout = (_layout) => false) {
-  if (!keys(state,['schema','activeView','views','assignments']) || state.schema !== DESKTOP_SCHEMA ||
+  if (!keys(state,['schema','activeView','views','assignments',...(state?.labels === undefined ? [] : ['labels'])]) || state.schema !== DESKTOP_SCHEMA ||
       !VIEWS.includes(state.activeView) || !keys(state.views,VIEWS) || !plain(state.assignments)) return false;
+  if(state.labels !== undefined && (!plain(state.labels) || Object.keys(state.labels).length>256 || Object.entries(state.labels).some(([id,label])=>!displayLabelKey(id)||!validDisplayLabel(label))))return false;
   for (const view of VIEWS) {
     const group = state.views[view];
     if (!keys(group,['active','next','desktops']) || !number(group.active) || !number(group.next) ||
         !Array.isArray(group.desktops) || !group.desktops.length || group.desktops.length > MAX_DESKTOPS_PER_VIEW) return false;
     const ids = new Set();
     for (const desktop of group.desktops) {
-      if (!keys(desktop,['id','preset','layout']) || !number(desktop.id) || ids.has(desktop.id) ||
+      // [TARGET, unit decision] Optional per-desktop snap grid; legacy profiles remain valid.
+      const grid = plain(desktop) ? desktop.snapGrid : undefined;
+      if (grid !== undefined && (!keys(grid,['cols','rows']) ||
+          ![grid.cols,grid.rows].every(n => Number.isInteger(n) && n >= 1 && n <= 5))) return false;
+      const cells = desktop?.identityCells;
+      if (cells !== undefined && (!plain(cells) || Object.keys(cells).length > 256 || Object.entries(cells).some(([id,cell]) => !/^[a-z0-9][a-z0-9-]{0,63}$/.test(id) || ['__proto__','constructor','prototype'].includes(id) || !keys(cell,['col','row']) || ![cell.col,cell.row].every(n=>Number.isInteger(n) && n >= 0 && n < 5)))) return false;
+      if (!keys(desktop,['id','preset','layout',...(grid === undefined ? [] : ['snapGrid']),...(cells === undefined ? [] : ['identityCells']),...(desktop?.label === undefined ? [] : ['label'])]) || !number(desktop.id) || ids.has(desktop.id) ||
           desktop.id >= group.next || (desktop.preset !== null && !PRESETS.includes(desktop.preset)) ||
           (desktop.layout !== null && (!plain(desktop.layout) || !validateLayout(desktop.layout)))) return false;
+      if(desktop.label!==undefined && !validDisplayLabel(desktop.label))return false;
       ids.add(desktop.id);
     }
     if (!ids.has(1) || !ids.has(group.active)) return false;
@@ -146,3 +154,28 @@ export function pruneDesktopLayout(layout, keep, preserveEmpty = false) {
   if (result.savedWallPlacements) result.savedWallPlacements = Object.fromEntries(Object.entries(result.savedWallPlacements).filter(([id]) => Object.hasOwn(panels,id)));
   return result;
 }
+
+/** Bounded presentation labels; never backend or identity identifiers. @param {unknown} value */
+export function validDisplayLabel(value) {
+  return typeof value==='string' && value===value.trim() && value.length>0 && [...value].length<=80 && !/[\x00-\x1f\x7f\u202a-\u202e\u2066-\u2069]/.test(value);
+}
+/** @param {unknown} value */
+function displayLabelKey(value) {return typeof value==='string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,319}$/.test(value) && !['__proto__','constructor','prototype'].includes(value);}
+/** @param {DesktopState} state @param {string} view @param {number} id @param {unknown} value */
+export function renameDesktop(state,view,id,value) {
+  const label=typeof value==='string'?value.trim():'';
+  if(!VIEWS.includes(view))return false;
+  const desktop=state.views[view]?.desktops.find(item=>item.id===id);
+  if(!desktop || !validDisplayLabel(label))return false;
+  desktop.label=label;return true;
+}
+/** @param {DesktopState} state @param {string} id @param {unknown} value @param {string} [key] */
+export function renameCapsule(state,id,value,key=id) {
+  const label=typeof value==='string'?value.trim():'';
+  if(!Object.hasOwn(state.assignments,id) || !displayLabelKey(key) || !validDisplayLabel(label))return false;
+  if(!state.labels)state.labels={};
+  if(!Object.hasOwn(state.labels,key) && Object.keys(state.labels).length>=256)return false;
+  state.labels[key]=label;return true;
+}
+/** @param {DesktopState} state @param {{id:string,profile_id?:string}} row */
+export function capsuleDisplayLabel(state,row) {const key=row.profile_id || row.id;return state.labels && Object.hasOwn(state.labels,key)?state.labels[key]:undefined;}

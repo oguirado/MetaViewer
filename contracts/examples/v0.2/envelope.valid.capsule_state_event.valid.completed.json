@@ -1,0 +1,26 @@
+{
+  "schema": "envelope/v0.2",
+  "msg_id": "message-demo",
+  "ts_ns": 1000000,
+  "from": {
+    "component": "agent",
+    "instance": "agent-demo"
+  },
+  "to": {
+    "component": "core",
+    "instance": "core-demo"
+  },
+  "session_id": "session-demo",
+  "seq": 1,
+  "nonce": "nonce-demo",
+  "body": {
+    "schema": "capsule_state_event/v0.2",
+    "operation_id": "slot-op-1",
+    "op": "save",
+    "profile_id": "profile-demo",
+    "slot_id": "slot-demo",
+    "event": "completed",
+    "generation": 1,
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  }
+}

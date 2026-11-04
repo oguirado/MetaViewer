@@ -1,0 +1,2 @@
+- Add installed host-owned agent CLI choices to paired workflow preparation, bounded input readiness, and bracketed paste without Enter.
+- Keep plain shells copy-only and stop insertion for authentication, missing readiness, cancellation, or process exit.

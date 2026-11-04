@@ -1,0 +1,26 @@
+{
+  "schema": "capsule_envelope/v0.2",
+  "msg_id": "message-one",
+  "ts_ns": 0,
+  "from": {
+    "component": "ui",
+    "instance": "ui-one"
+  },
+  "to": {
+    "component": "core",
+    "instance": "core-one"
+  },
+  "session_id": "session-one",
+  "seq": 1,
+  "nonce": "transport-nonce",
+  "body": {
+    "schema": "rewind_request/v0.2",
+    "request_id": "request-pause",
+    "op": "pause",
+    "params": {
+      "workload_id": "workload-one",
+      "generation": 2,
+      "authority_epoch": 2
+    }
+  }
+}

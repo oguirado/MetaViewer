@@ -1,0 +1,17 @@
+{
+  "schema": "guest_command_session/v0.2",
+  "workload_id": "workload-test",
+  "generation": 1,
+  "owner_id": "actor-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile_id": "guest-command-arm64-v1",
+  "backend": "firecracker",
+  "isa": "aarch64",
+  "phase": "starting",
+  "ownership": "held",
+  "jobs_started": 0,
+  "job": null,
+  "controls": {
+    "cancel": null,
+    "stop": null
+  }
+}

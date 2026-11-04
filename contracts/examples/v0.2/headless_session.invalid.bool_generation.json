@@ -1,0 +1,12 @@
+{
+  "schema": "headless_session/v0.2",
+  "workload_id": "workload-example",
+  "generation": true,
+  "owner_id": "actor-example",
+  "profile_id": "headless-sumsq-v1",
+  "backend": "firecracker",
+  "isa": "aarch64",
+  "phase": "ready",
+  "ownership": "held",
+  "job": null
+}

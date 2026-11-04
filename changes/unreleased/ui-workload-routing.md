@@ -1,0 +1,1 @@
+- Route validated workload panels through the existing CapsulePanel registry without changing graphical capsule rendering.

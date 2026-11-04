@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import {addOperatorStubs} from './operator-stubs.mjs';
 import test from 'node:test';
@@ -64,9 +68,12 @@ function mutatedCompiler(target, mutate) {
     code = code.replace(/^import\s+['"][^'"]+['"];?\s*$/gm, '');
     code = code.replace(/import\s+([\s\S]*?)\s+from\s+(['"])(.*?)\2;?/g, (all, bindings, _q, spec) => {
       if (spec === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(import.meta.resolve('vue')));
+      if(spec==='./wall/guestWorkloadTile.js')deps[spec]=guestWorkloadTile;
+      if(spec==='../electron/guestCommandValues.js')deps[spec]=guestCommandValues;
+    if(spec==='../electron/rewindValues.js')deps[spec]=rewindValues;
       addOperatorStubs(deps);
       assert.ok(spec in deps, `Unmapped mutant dependency: ${spec}`);
-      return `const ${bindings.trim()} = globalThis.__mvui11NegativeDeps[${JSON.stringify(spec)}];`;
+      return `const ${sfcImportBinding(bindings)} = globalThis.__mvui11NegativeDeps[${JSON.stringify(spec)}];`;
     });
     globalThis.__mvui11NegativeDeps = deps;
     try {

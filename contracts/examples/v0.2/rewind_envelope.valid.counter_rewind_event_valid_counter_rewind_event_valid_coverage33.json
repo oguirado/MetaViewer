@@ -1,0 +1,64 @@
+{
+  "schema": "rewind_envelope/v0.2",
+  "msg_id": "message-one",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "ui-one"
+  },
+  "to": {
+    "component": "ui",
+    "instance": "core-one"
+  },
+  "session_id": "session-one",
+  "seq": 1,
+  "nonce": "transport-nonce",
+  "body": {
+    "schema": "rewind_event/v0.2",
+    "event_id": "event-accepted",
+    "request_id": "request-pause",
+    "owner_id": "actor-one",
+    "event": "accepted",
+    "session": {
+      "schema": "rewind_session/v0.2",
+      "workload_id": "workload-one",
+      "generation": 2,
+      "authority_epoch": 2,
+      "owner_id": "actor-one",
+      "authority": "core",
+      "guest_counter": 73,
+      "compatibility_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile_id": "rewind-arm64-v1",
+      "backend": "firecracker",
+      "isa": "aarch64",
+      "disk_scope": "immutable-boot-and-ram-workspace",
+      "external_effects_warning": "External effects are not rewound.",
+      "phase": "marking",
+      "ownership": "held",
+      "pending_request_id": "request-pause",
+      "points": [
+        {
+          "schema": "rewind_point/v0.2",
+          "point_id": "point-one",
+          "label": "Before edit",
+          "created_order": 1,
+          "created_mono_ns": 123,
+          "source_generation": 1,
+          "source_authority_epoch": 1,
+          "compatibility_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "state_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "memory_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "state_bytes": 4096,
+          "memory_bytes": 268435456,
+          "counter_value": 73,
+          "status": "usable",
+          "active_references": 0
+        }
+      ],
+      "last_good_usable": "point-one"
+    },
+    "data": {
+      "op": "mark"
+    }
+  }
+}

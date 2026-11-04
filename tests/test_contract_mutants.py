@@ -313,18 +313,69 @@ def _describe(op):
     return f"{op[0]} at {_format_path(op[1])}"
 
 
+def _boolean_const_domains(validator, schema, root, path=(), domains=None, seen=frozenset(), depth=0):
+    """Static same-path boolean alternatives; never query the DUT for acceptance."""
+    domains = {} if domains is None else domains
+    if not isinstance(schema, dict) or depth > MAX_DEPTH or id(schema) in seen:
+        return domains
+    seen = seen | {id(schema)}
+    values = None
+    if "const" in schema:
+        values = {schema["const"]} if type(schema["const"]) is bool else set()
+    elif "enum" in schema:
+        values = {x for x in schema["enum"] if type(x) is bool}
+    elif schema.get("type") == "boolean":
+        values = {True, False}
+    if values:
+        domains.setdefault(path, set()).update(values)
+    if "$ref" in schema:
+        target, target_root = validator.resolve(schema["$ref"], root)
+        _boolean_const_domains(validator, target, target_root, path, domains, seen, depth + 1)
+    for branch in schema.get("oneOf", []):
+        _boolean_const_domains(validator, branch, root, path, domains, seen, depth + 1)
+    for key, child in schema.get("properties", {}).items():
+        _boolean_const_domains(validator, child, root, path + (key,), domains, seen, depth + 1)
+    # Array indexes are normalized only for this static path lookup.
+    if isinstance(schema.get("items"), dict):
+        _boolean_const_domains(validator, schema["items"], root, path + (None,), domains, seen, depth + 1)
+    return domains
+
+
 def generate_mutants(validator, schema, valid):
     ops = []
     _collect_ops(validator, schema, schema, valid, (), ops)
+    # The current capability contract deliberately models both boolean states.
+    # Do not erase semantic const probes in unrelated tagged-union schemas.
+    boolean_domains = (_boolean_const_domains(validator, schema, schema)
+                       if schema.get("$id") == "https://metaviewer.local/contracts/v0.2/capsule_capabilities.schema.json"
+                       else {})
     seen = set()
     mutants = []
     for op in ops:
+        if op[0] == "flip_const" and type(op[2]) is bool:
+            path = tuple(None if type(part) is int else part for part in op[1])
+            if boolean_domains.get(path) == {True, False}:
+                op = (op[0], op[1], "zz_mutant_not_boolean")
         mutant = _apply_op(valid, op)
         frozen = json.dumps(mutant, sort_keys=True)
         if frozen in seen:
             continue
         seen.add(frozen)
         mutants.append((op[0], _describe(op), mutant))
+    if schema.get("$id") == "https://metaviewer.local/contracts/v0.2/capsule_capabilities.schema.json":
+        # Named cross-field rails supplement the alternate-boolean type probe.
+        # Every construction violates a canonical implication, without asking
+        # the validator whether to keep or discard the generated case.
+        for kind in ("vm", "microvm"):
+            unsupported = copy.deepcopy(valid)
+            unsupported["supported_host"] = False
+            unsupported[kind]["available"] = True
+            mutants.append(("capability_unsupported", "unsupported host advertises " + kind, unsupported))
+            for blank in ("", " "):
+                unavailable = copy.deepcopy(valid)
+                unavailable["supported_host"] = True
+                unavailable[kind].update(available=False, reason=blank)
+                mutants.append(("capability_blank_reason", "unavailable " + kind + " lacks reason", unavailable))
     mutants.sort(key=lambda item: (json.dumps(item[2], sort_keys=True), item[0]))
     return mutants
 
@@ -367,6 +418,109 @@ class ContractMutantTests(unittest.TestCase):
                                 with self.subTest(mutant=description):
                                     with self.assertRaises(ValidationError):
                                         validator.validate(mutant, schema)
+
+    def test_boolean_const_flip_is_outside_capability_boolean_branches(self):
+        validator = Validator(ROOT / "contracts/v0.2")
+        schema = validator.load("capsule_capabilities.schema.json")
+        for fixture in positive_examples(ROOT / "contracts/examples/v0.2", "capsule_capabilities"):
+            valid = json.loads(fixture.read_text())
+            validator.validate(valid, schema)
+            mutants = generate_mutants(validator, schema, valid)
+            for tag, description, mutant in mutants:
+                if tag == "flip_const" and description in {
+                    "flip_const at $.supported_host", "flip_const at $.vm.available",
+                    "flip_const at $.microvm.available",
+                }:
+                    with self.assertRaises(ValidationError):
+                        validator.validate(mutant, schema)
+        self.assertIs(_flip_const(True, True), False)
+        self.assertIs(_flip_const(False, False), True)
+
+    def test_capability_crossfield_optimism_fault_is_killed(self):
+        validator = Validator(ROOT / "contracts/v0.2")
+        schema = validator.load("capsule_capabilities.schema.json")
+        valid = json.loads((ROOT / "contracts/examples/v0.2/capsule_capabilities.valid.ready.json").read_text())
+        validator.validate(valid, schema)
+        cases = [(tag, description, mutant) for tag, description, mutant
+                 in generate_mutants(validator, schema, valid) if tag.startswith("capability_")]
+        self.assertEqual(len(cases), 6)
+        for tag, description, mutant in cases:
+            with self.subTest(description=description, mutant=mutant):
+                with self.assertRaises(ValidationError):
+                    validator.validate(mutant, schema)
+                # A validator bypassing this exact semantic rail must make the
+                # rejection assertion fail, not pass via wrong-type guards.
+                class Faulty:
+                    def validate(self, value, current):
+                        if value == mutant:
+                            return
+                        return validator.validate(value, current)
+                with self.assertRaises(AssertionError):
+                    with self.assertRaises(ValidationError):
+                        Faulty().validate(mutant, schema)
+
+    def test_unrelated_tagged_union_preserves_semantic_boolean_flip(self):
+        validator = Validator(ROOT / "contracts/v0.2")
+        schema = {"oneOf": [
+            {"type": "object", "required": ["kind", "flag"], "additionalProperties": False,
+             "properties": {"kind": {"const": "a"}, "flag": {"type": "boolean", "const": True}}},
+            {"type": "object", "required": ["kind", "flag"], "additionalProperties": False,
+             "properties": {"kind": {"const": "b"}, "flag": {"type": "boolean", "const": False}}},
+        ]}
+        valid = {"kind": "a", "flag": True}
+        validator.validate(valid, schema)
+        mutants = generate_mutants(validator, schema, valid)
+        witnesses = [m for tag, description, m in mutants
+                     if tag == "flip_const" and description == "flip_const at $.flag"]
+        self.assertEqual(witnesses, [{"kind": "a", "flag": False}])
+        with self.assertRaises(ValidationError):
+            validator.validate(witnesses[0], schema)
+
+    def test_canonical_recovery_boolean_const_removal_is_detected(self):
+        validator = Validator(ROOT / "contracts/v0.2")
+        schema = validator.load("rewind_event.schema.json")
+        valid = json.loads((ROOT / "contracts/examples/v0.2/rewind_event.valid.recovery_ready.json").read_text())
+        validator.validate(valid, schema)
+        mutants = generate_mutants(validator, schema, valid)
+        false_witness = [m for tag, description, m in mutants
+                         if tag == "flip_const" and description == "flip_const at $.data.no_active_vmm"]
+        self.assertEqual(len(false_witness), 1)
+        self.assertIs(false_witness[0]["data"]["no_active_vmm"], False)
+        with self.assertRaises(ValidationError):
+            validator.validate(false_witness[0], schema)
+        weakened = copy.deepcopy(schema)
+        nodes = [branch["properties"]["data"]["properties"]["no_active_vmm"]
+                 for branch in weakened["oneOf"]
+                 if "no_active_vmm" in branch.get("properties", {}).get("data", {}).get("properties", {})]
+        self.assertEqual(len(nodes), 1)
+        self.assertEqual(nodes[0], {"type": "boolean", "const": True})
+        del nodes[0]["const"]
+        validator.validate(false_witness[0], weakened)
+
+    def test_generator_families_have_independent_constraint_witnesses(self):
+        validator = Validator(ROOT / "contracts/v0.2")
+        schema = {
+            "type": "object", "required": ["kind", "n", "label", "items"],
+            "additionalProperties": False,
+            "properties": {
+                "kind": {"const": "kind-one"},
+                "n": {"type": "integer", "minimum": 1, "maximum": 3},
+                "label": {"type": "string", "minLength": 1, "maxLength": 3,
+                          "enum": ["a", "bb"]},
+                "items": {"type": "array", "minItems": 1, "maxItems": 2,
+                          "items": {"type": "integer"}},
+            },
+        }
+        valid = {"kind": "kind-one", "n": 2, "label": "a", "items": [1]}
+        validator.validate(valid, schema)
+        mutants = generate_mutants(validator, schema, valid)
+        self.assertTrue({"drop", "add_unknown", "wrong_type", "range_min", "range_max",
+                         "range_minlen", "range_maxlen", "range_minitems", "range_maxitems",
+                         "flip_const", "flip_enum"} <= {tag for tag, _, _ in mutants})
+        for tag, description, mutant in mutants:
+            with self.subTest(tag=tag, description=description):
+                with self.assertRaises(ValidationError):
+                    validator.validate(mutant, schema)
 
     def test_boundary_mutants_and_named_oracles(self):
         """Named boundary mutants (exact-at vs 1-over) must be killed by the validator."""

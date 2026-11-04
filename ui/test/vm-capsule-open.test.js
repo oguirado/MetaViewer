@@ -28,7 +28,8 @@ async function fixture(t,{rows={guest:profile},identities=[{id:'guest',browser:'
 test('VM facade keeps a closed create acknowledgement',async t=>{
   const f=await fixture(t);
   assert.deepEqual(Object.keys(f.api).sort(),['createSurface','intent','propose','subscribeFrames','vmAvailable']);
-  assert.equal(Object.keys(WIRE_CHANNELS).length,13);
+  assert.equal(Object.keys(WIRE_CHANNELS).length,14);
+  assert.equal(WIRE_CHANNELS.slotRequest,'metaviewer:capsule-state.request');
   assert.deepEqual(await f.api.createSurface({kind:'vm'}),{ok:true});
   assert.deepEqual(f.calls,[{schema:'surface_request/v0.2',op:'create',params:{kind:'vm',profile_id:'guest',geometry:{w:1280,h:900}}}]);
   assert.equal((await f.api.createSurface({kind:'vm'})).ok,false);assert.equal(f.calls.length,1);
@@ -213,10 +214,15 @@ test('App refreshes availability on opening and rejects stale replies; launcher 
 
   const launcher = await readFile(new URL('../src/catalog/CatalogLauncher.vue', import.meta.url), 'utf8');
   assert.match(launcher, /vmAvailable: \{ type: Boolean, default: false \}/);
-  const expression = launcher.match(/const dialogTypes = computed\(\(\) => (.+)\);/)[1];
+  const {parse,compileScript} = await import('@vue/compiler-sfc');
+  const descriptor = parse(launcher).descriptor;
+  const compiled = compileScript(descriptor,{id:'app-catalog'});
+  const declaration = compiled.scriptSetupAst.flatMap(n=>n.declarations || []).find(n=>n.id.name==='dialogTypes');
+  const arrow = declaration.init.arguments[0];
+  const expression = `(${descriptor.scriptSetup.content.slice(arrow.start,arrow.end)})()`;
   for (const vmAvailable of [undefined, false, true]) {
     for (const kinds of [CATALOG_KIND_IDS, CATALOG_KIND_IDS.map(kind=>({kind}))]) {
-      const types = vm.runInNewContext(expression, {normalized:{value:normalizeCatalogEntries(kinds)}, availableCatalogKindIds, props:{vmAvailable}});
+      const types = vm.runInNewContext(expression, {normalized:{value:normalizeCatalogEntries(kinds)},installedApps:{value:[]},recentApps:{value:[]},availableCatalogKindIds,props:{vmAvailable}});
       assert.deepEqual([...types].map(type=>type.id), [...availableCatalogKindIds(vmAvailable)]);
     }
   }

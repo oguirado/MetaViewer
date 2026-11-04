@@ -4,12 +4,13 @@ import WallWorkspace from './WallWorkspace.vue';
 import {createWallLayout} from './layout.js';
 import {decodeAndMigrateLayoutProfile} from '../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js';
 import {DESKTOP_SCHEMA, VIEWS, createDesktopState, validateDesktopState, addDesktop as appendDesktop,
-  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout, normalizeDesktopLayout, renumberDesktops, moveSurface as relocateSurface} from '../../electron/desktopLayout.js';
+  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout, normalizeDesktopLayout, renumberDesktops, moveSurface as relocateSurface, renameDesktop as setDesktopName, renameCapsule as setCapsuleName, capsuleDisplayLabel} from '../../electron/desktopLayout.js';
 import {desktopShortcut} from '../../electron/desktopShortcuts.js';
 defineOptions({inheritAttrs:false});
 const props = defineProps({
   storage:{type:Object,required:true}, scope:{type:/** @type {import('vue').PropType<import('capsule-ui-kit/layout').LayoutProfileScope>} */ (Object),required:true}, defaultProfile:{type:Object,required:true},
   projectionView:{type:Object,required:true},
+  workloadTiles:{type:/** @type {import('vue').PropType<Array<any>>} */ (Array),default:()=>[]},
   intentBuilders:{type:Object,required:true}, controlRegistry:{type:Object,required:true}, scheduler:{type:Object,required:true}, tileScheduler:{type:Object,required:true}, rows:{type:/** @type {import('vue').PropType<Array<{id:string,[key:string]:any}>>} */ (Array),default:()=>[]}, modes:{type:Object,default:()=>({})},
 });
 const emit = defineEmits(['ready','wall-settled','desktops-change','layout-error','navigate','activate-surface','panel-closed','submit-intent']);
@@ -46,7 +47,7 @@ function announce() {
 /** @param {import("../../electron/desktopLayout.js").DesktopState} value */
 function cleanLayouts(value) {
   for (const view of VIEWS) for (const desktop of value.views[view].desktops) {
-    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid');
+    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid' || desktop.preset === 'grid-3x2');
   }
   return value;
 }
@@ -67,7 +68,7 @@ function persist() {
 }
 function reconcile() {
   if (!loaded.value) return;
-  for (const row of props.rows) {
+  for (const row of [...props.rows,...props.workloadTiles]) {
     const view = props.modes[row.id] || 'agent';
     if (VIEWS.includes(view)) assignSurface(state.value,row.id,view);
   }
@@ -86,7 +87,7 @@ function adapter(view,id) {
   const key = keyOf(view,id);
   if (adapters.has(key)) return adapters.get(key);
   const owner = state.value.views[view].desktops.find(d=>d.id === id);
-  const rows = () => desktopRows(state.value,props.rows,view,owner?.id ?? -1);
+  const rows = () => desktopRows(state.value,props.rows,view,owner?.id ?? -1).map(row=>{const title=capsuleDisplayLabel(state.value,row);return title?{...row,title}:row;});
   const snapshot = () => {
     const base = props.projectionView.getSnapshot();
     return base?.envelope ? {...base,envelope:{...base.envelope,projection:{...base.envelope.projection,rows:rows()}}} : base;
@@ -102,7 +103,26 @@ function adapter(view,id) {
     },writeAtomic:async (/** @type {string} */ json) => {
       const desktop = owner;
       if (!desktop) return;
-      desktop.layout = JSON.parse(json); await persist();
+      desktop.layout = JSON.parse(json);
+      // [TARGET, unit decision] Bounded identity hints outlive stopped surface IDs.
+      const grid = desktop.snapGrid ?? {cols:2,rows:2};
+      for (const group of desktop.layout.dockview?.floatingGroups ?? []) {
+        const position = group.position;
+        if (!position) continue;
+        const layout = desktop.layout.dockview;
+        const col = Math.round(position.left*grid.cols/layout.grid.width), row = Math.round(position.top*grid.rows/layout.grid.height);
+        if (col < 0 || col >= grid.cols || row < 0 || row >= grid.rows) continue;
+        for (const panelId of group.data?.views ?? []) {
+          const surfaceId = layout.panels[panelId]?.params?.capsuleId;
+          const profile = props.rows.find(r=>r.id === surfaceId)?.profile_id;
+          if (!profile || ['__proto__','constructor','prototype'].includes(profile) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(profile)) continue;
+          desktop.identityCells ??= {};
+          delete desktop.identityCells[profile];
+          desktop.identityCells[profile] = {col,row};
+          while (Object.keys(desktop.identityCells).length > 256) delete desktop.identityCells[Object.keys(desktop.identityCells)[0]];
+        }
+      }
+      await persist();
     }},
     defaultProfile:createWallLayout(props.scope),
   });
@@ -180,6 +200,8 @@ function setPreset(preset) {
   const result = walls.get(activeKey())?.setPreset(preset);
   if (!desktop || !result?.ok) return result ?? {ok:false,code:'ERR_NOT_READY'};
   desktop.preset = preset;
+  if (preset === 'grid-3x2') desktop.snapGrid = {cols:3,rows:2};
+  if (preset === 'grid') desktop.snapGrid = {cols:2,rows:2};
   return result;
 }
 // Transfer tokens are local ownership handoffs, never backend lifecycle verbs.
@@ -236,7 +258,7 @@ function onKey(event) {
 }
 /** @param {Event} event */
 const onNativeShortcut = event => shortcut(/** @type {CustomEvent} */(event).detail);
-watch(() => [props.rows,props.modes], () => {reconcile(); announce(); for (const key of ready) revealAll(key);}, {deep:true});
+watch(() => [props.rows,props.modes,props.workloadTiles], () => {reconcile(); announce(); for (const key of ready) revealAll(key);}, {deep:true});
 watch(state, () => {announce(); void persist().catch(() => {});}, {deep:true});
 onMounted(async () => {
   try {
@@ -277,6 +299,7 @@ onMounted(async () => {
       projectionSince ??= Date.now();
       if (Date.now() - projectionSince >= 5000) {
         const ids = new Set(projection.rows.filter((/** @type {any} */ row)=>row.backendLifecycle !== 'destroyed').map((/** @type {any} */ row)=>row.id));
+        for(const row of props.workloadTiles)ids.add(row.id);
         for (const id of Object.keys(state.value.assignments)) if (!ids.has(id)) {
           delete state.value.assignments[id];
           for (const seen of revealed.values()) seen.delete(id);
@@ -301,7 +324,31 @@ function forgetSurface(/** @type {string} */ id) {
   for (const seen of revealed.values()) seen.delete(id);
   cleanLayouts(state.value);
 }
-defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
+/** @param {string} id */
+function revealWorkload(id){const home=homeOf(id);if(!home)return;state.value.activeView=home.view;state.value.views[home.view].active=home.desktop;announce();return walls.get(keyOf(home.view,home.desktop))?.revealWorkload?.(id);}
+const pendingNames=new Set();
+/** Save through the existing host layout owner; failed writes restore the label.
+ * @param {string} view @param {number} id @param {string} value */
+async function renameDesktop(view,id,value) {
+  const pendingKey=`desktop:${view}:${id}`;
+  if(!loaded.value || readOnly || pendingNames.has(pendingKey))return false;
+  const desktop=state.value.views[view]?.desktops.find(item=>item.id===id),previous=desktop?.label;
+  if(!setDesktopName(state.value,view,id,value))return false;
+  pendingNames.add(pendingKey);
+  try {await persist();announce();return true;} catch {if(desktop){if(previous===undefined)delete desktop.label;else desktop.label=previous;}announce();return false;} finally {pendingNames.delete(pendingKey);}
+}
+/** @param {string} id @param {string} value */
+async function renameCapsule(id,value) {
+  if(!loaded.value || readOnly)return false;
+  const row=props.rows.find(item=>item.id===id) ?? props.workloadTiles.find(item=>item.id===id);
+  if(!row)return false;
+  const key=row.profile_id || row.id,previous=capsuleDisplayLabel(state.value,row),pendingKey=`capsule:${key}`;
+  if(pendingNames.has(pendingKey))return false;
+  if(!setCapsuleName(state.value,id,value,key))return false;
+  pendingNames.add(pendingKey);
+  try {await persist();announce();return true;} catch {if(previous===undefined)delete state.value.labels?.[key];else if(state.value.labels)state.value.labels[key]=previous;announce();return false;} finally {pendingNames.delete(pendingKey);}
+}
+defineExpose({renameDesktop,renameCapsule,revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
 </script>
 <template>
   <div class="mv-desktop-workspace" :hidden="$attrs.hidden === true">
@@ -310,10 +357,12 @@ defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,appl
         v-bind="$attrs" :hidden="!isActive(view,desktop.id)" :data-desktop="key"
         :intent-builders="/** @type {any} */ (intentBuilders)" :control-registry="controlRegistry" :scheduler="scheduler" :tile-scheduler="/** @type {any} */ (tileScheduler)"
         :scope="scope" :default-profile="adapter(view,desktop.id).defaultProfile" :storage="adapter(view,desktop.id).storage"
-        :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
+        :identity-cells="desktop.identityCells" :snap-grid="desktop.snapGrid" @custom-layout="desktop.preset = $event ?? null" @snap-grid-change="desktop.snapGrid = $event"
+        :workload-tiles="props.workloadTiles.filter(row=>homeOf(row.id)?.view===view&&homeOf(row.id)?.desktop===desktop.id)" :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
         @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">
         <template #surface="slotProps"><slot name="surface" v-bind="slotProps" :desktop-active="isActive(view,desktop.id)" /></template>
+        <template #workload="slotProps"><slot name="workload" v-bind="slotProps" /></template>
       </WallWorkspace>
     </template>
   </div>

@@ -1,0 +1,9 @@
+{
+  "kind": "hello",
+  "workload_id": "workload-test",
+  "generation": 1,
+  "reservation_id": "reservation-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "nonce": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "owner_id": "actor-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "profile_id": "guest-command-arm64-v1"
+}
