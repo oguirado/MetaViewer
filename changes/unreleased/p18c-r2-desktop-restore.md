@@ -1,1 +1,0 @@
-- Restore saved empty desktops with Dockview-compatible branch roots, normalize historical leaf roots without discarding layout state, and keep quarantine reason codes visible.

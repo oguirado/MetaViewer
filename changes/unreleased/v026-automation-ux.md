@@ -1,1 +1,0 @@
-- Update terminal automation prompts and the operator guide for browser goal runs, app attachment sourcing and Host program limits. Document that role switching currently recreates the browser capsule.

@@ -535,7 +535,9 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		markLost := false
 		transientFailure := false
 		resized := capsule.IsHostWindowResize(e)
-		if resized || capsule.IsHostWindowWaiting(e) {
+		var nativeFault *cli.Fault
+		nativeBusy := errors.As(e, &nativeFault) && nativeFault.Code == "native_busy"
+		if nativeBusy || resized || capsule.IsHostWindowWaiting(e) {
 			// Resize proves a live window. Reset loss evidence and retry only
 			// at the next scheduled poll, including through a continuous drag.
 			consecutiveFailures = 0
@@ -566,7 +568,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			return
 		}
 		if transientFailure {
-			if !resized {
+			if !resized && !nativeBusy {
 				s.recordDiagnosticWarning(id, fmt.Sprintf("transient capture failure (%d/%d): %v", consecutiveFailures, confirmedLossCaptureFailures, e))
 			}
 			next = next.Add(s.cfg.PollInterval)
@@ -806,6 +808,14 @@ func captureFailure(id string, skippedPolls uint64) (json.RawMessage, error) {
 	}
 	event.Schema = "surface_event/v0.2"
 	return json.Marshal(event)
+}
+
+// IsSubscribed reports retained capture ownership under the subscription lock.
+func (s *Subscriptions) IsSubscribed(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.tasks[id]
+	return ok
 }
 
 func (s *Subscriptions) Unsubscribe(ctx context.Context, id string) error {

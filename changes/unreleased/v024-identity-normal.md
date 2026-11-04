@@ -1,1 +1,0 @@
-- Allow `cuentas-*` and `perplexity-*` identities to open as human or agent capsules and be deleted like any other browser identity, while keeping container and holder names (`srf-id-cuentas-*`, `srf-id-perplexity-*`, `srf-pg-*`, and `PROTECTED_HOLDERS`) protected.

@@ -1,4 +1,0 @@
-- Add ordered Agent browser, Human browser, Host program and Program journeys through the real role host, private opening-mode staging and host socket bindings; unrelated create events and nonterminal stop events cannot release pending custody.
-- Add a kit install/run/stop journey with a blocked native proxy startup and a late partial-start failure, reusing the judge sandbox and source-mutant pair harness without running a live capsule.
-- Add browser/program mw_run attachment and settlement journeys through a real Unix socket, fragmented envelopes, an early asynchronous receipt, pending verification and backend receipt binding; stale generations must refuse verification.
-- Prove the added seams reject source mutations to opening roles, host-Xpra staging, stop acknowledgement completion, native proxy outcome and receipt freshness; reuse existing mounted catalog, production frame/control/input and native adapter coverage rather than duplicating those journeys.

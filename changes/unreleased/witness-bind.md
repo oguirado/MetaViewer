@@ -1,1 +1,0 @@
-- Bind egress start witnesses and allowlist policy keys to the validated native container; refuse malformed readiness without publishing a witness.

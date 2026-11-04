@@ -1,0 +1,593 @@
+{
+  "measurement": "MEASURED",
+  "base": "e26c00eca6",
+  "sha256": {
+    "route/route_query.py": "e8fb7780f478df3a42652f29b8244f802b446198523cf0f5c6c2c181d3d12eac",
+    "tools/route_eval.py": "09cd3a24becd7da4bc8eb6cbd879f8efdd21b5487d18079a875ffb9bb5aad46b",
+    "route/docs.jsonl": "70ba832e25b1170de64fbe510301f3c3ce5ed05d43f0e7663ae41cb677a968aa",
+    "route/manifest.json": "87ffa080683c314e24368c51107a1013d963d7cfae5f0eb1a029e4def52126b9",
+    "route/eval/review-r2.jsonl": "7621ea19555d9bc3692687730f082ad04c05e08a145812494b8982eefb32882e",
+    "route/eval/holdout.jsonl": "b3d68ae52e29ce7f4126b9f8e743153db3c2e00a139955175ff7e703c025683d",
+    "route/eval/confirmation.jsonl": "5f0956b3b74e5279e6211a743f46ce0a936ddd3bdddce9540a0678ce23700c9c"
+  },
+  "runs": {
+    "review-r2": {
+      "unit": "bytes",
+      "results": [
+        {
+          "id": "I1",
+          "q": "Which Node version is required?",
+          "any": {
+            "rank": 3,
+            "abstained": false
+          }
+        },
+        {
+          "id": "I2",
+          "q": "Which Python version is required?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "I3",
+          "q": "How do I build offline?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        },
+        {
+          "id": "I4",
+          "q": "How are missing system packages installed?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "I5",
+          "q": "Which release architecture should I install?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        },
+        {
+          "id": "I6",
+          "q": "How are browser profile permissions provisioned?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S1",
+          "q": "Why does JUDGE_DISPLAY reject Wayland?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S2",
+          "q": "What causes JUDGE_USERNS?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S3",
+          "q": "What causes JUDGE_DOCKER_HOST?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S4",
+          "q": "Why does sequence does not match occur?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S5",
+          "q": "Why does sender identity changed occur?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S6",
+          "q": "Why does reply exceeds byte limit occur?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S7",
+          "q": "Why is the registered agent lane busy?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "S8",
+          "q": "Why does MCP say Initialize first?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "D1",
+          "q": "Why are capsule launch targets constrained?",
+          "any": {
+            "rank": 4,
+            "abstained": false
+          }
+        },
+        {
+          "id": "D2",
+          "q": "Why reserve sequence numbers before sending?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "D3",
+          "q": "Why verify socket peer ownership?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "D4",
+          "q": "Why bound mailbox reply bytes?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "D5",
+          "q": "Why reject booleans as observation integers?",
+          "any": {
+            "rank": 4,
+            "abstained": false
+          }
+        },
+        {
+          "id": "D6",
+          "q": "Why validate observations before copying?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "A1",
+          "q": "How do I drive mvctl?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "A2",
+          "q": "How do I list surfaces through MCP?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "A3",
+          "q": "How do I propose actions through MCP?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "A4",
+          "q": "How do I await verified receipts through MCP?",
+          "any": {
+            "rank": 3,
+            "abstained": false
+          }
+        },
+        {
+          "id": "P1",
+          "q": "Which tests prove MCP frame bounds?",
+          "any": {
+            "rank": 5,
+            "abstained": false
+          }
+        },
+        {
+          "id": "P2",
+          "q": "Which tests prove silent MCP notifications?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "P3",
+          "q": "Does MCP conformance exercise the real core?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "P4",
+          "q": "Which tests reject wrong sequence numbers?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        },
+        {
+          "id": "P5",
+          "q": "Does observation validation prove pixel freshness?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "P6",
+          "q": "Are package versions aligned with 0.2.6?",
+          "any": {
+            "rank": 4,
+            "abstained": false
+          }
+        },
+        {
+          "id": "N1",
+          "q": "How do I schedule capsules with Kubernetes?",
+          "any": {
+            "rank": null,
+            "abstained": true
+          }
+        },
+        {
+          "id": "N2",
+          "q": "How do I run an iOS capsule?",
+          "any": {
+            "rank": null,
+            "abstained": true
+          }
+        },
+        {
+          "id": "N3",
+          "q": "How do I configure Stripe billing?",
+          "any": {
+            "rank": null,
+            "abstained": true
+          }
+        },
+        {
+          "id": "N4",
+          "q": "How do I enable LDAP single sign-on?",
+          "any": {
+            "rank": null,
+            "abstained": true
+          }
+        },
+        {
+          "id": "N5",
+          "q": "How do I enable CUDA video encoding?",
+          "any": {
+            "rank": null,
+            "abstained": true
+          }
+        }
+      ],
+      "totals": {
+        "any": {
+          "positive": 30,
+          "top1": 19,
+          "top5": 26,
+          "negative": 5,
+          "abstained": 5,
+          "max_bytes": 1896
+        }
+      }
+    },
+    "holdout": {
+      "unit": "bytes",
+      "results": [
+        {
+          "id": "H01",
+          "q": "When a tile binds before its display stream arrives, how does the router keep trying to obtain the handoff, and what makes it stop?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H02",
+          "q": "What does the display router do when frames stop arriving, and how can a tile learn that the stream is stale?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H03",
+          "q": "If a tile becomes hidden, how does the router avoid wasting work on frames, and what happens when the tile becomes visible again?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H04",
+          "q": "How does the capsule panel decide whether presentation parameters refer to a graphical workload or a microVM, and what is shown when they are invalid?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H05",
+          "q": "Why does the panel router reject accessor-backed or inherited presentation parameters instead of reading them?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H06",
+          "q": "What conditions must hold before a microVM workload is rendered, including how ambiguous matches are handled?",
+          "any": {
+            "rank": 5,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H07",
+          "q": "How does the embedded browser preserve a consistent desktop viewport when its tile is resized, and why does it use visual scaling rather than page zoom?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H08",
+          "q": "What does the readiness check require before considering the embedded desktop usable, beyond the remote connection being established?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H09",
+          "q": "Under what conditions does waiting for the embedded client stop with an error, including if the renderer stops responding?",
+          "any": {
+            "rank": 3,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H10",
+          "q": "When a sender reconnects, how can its sequence rail restart without allowing a previously used nonce, and what connection condition must the caller enforce first?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H11",
+          "q": "What identity and sequence conditions cause recording replay evidence to fail before it is stored?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H12",
+          "q": "How does the replay table behave when its configured storage limit is reached, and what state can callers inspect afterward?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H13",
+          "q": "What commit-message rules are checked, and which allowed scopes and imperative verbs can satisfy the subject format?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H14",
+          "q": "When does a product-code change require an unreleased note, and what transition exception can permit a direct changelog edit?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "H15",
+          "q": "How are malformed or unsafe unreleased note files detected, and which content and filename requirements are enforced?",
+          "any": {
+            "rank": 6,
+            "abstained": false
+          }
+        }
+      ],
+      "totals": {
+        "any": {
+          "positive": 15,
+          "top1": 7,
+          "top5": 13,
+          "negative": 0,
+          "abstained": 0,
+          "max_bytes": 1814
+        }
+      }
+    },
+    "confirmation": {
+      "unit": "bytes",
+      "results": [
+        {
+          "id": "C01",
+          "q": "How does the host reject a create request when another surface creation is already pending?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C02",
+          "q": "Which event can settle a pending create, and how are errors from a still-live surface kept from settling it?",
+          "any": {
+            "rank": 3,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C03",
+          "q": "How does the host prevent an older frame generation arriving late from replacing a newer pending frame?",
+          "any": {
+            "rank": 6,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C04",
+          "q": "How are browser profile candidates ordered when a live profile is configured, and what is used when the profile map is unusable?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C05",
+          "q": "When does the picker refuse capsule creation for insufficient or unreadable host memory, and what reason does it return?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C06",
+          "q": "How does the picker treat a lost browser surface when deciding whether its profile can be reused?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C07",
+          "q": "What checks distinguish a locally malformed tool response from a core refusal, and is a refusal reason preserved?",
+          "any": {
+            "rank": 4,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C08",
+          "q": "How does a verification wait handle pending replies without resubmitting the action or sleeping beyond its deadline?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C09",
+          "q": "Which recording modes are accepted by the start operation, and what destination fields are required for disk recording?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C10",
+          "q": "Which launch target combinations are rejected when registering a browser, program, virtual machine, game, or desktop surface?",
+          "any": {
+            "rank": 1,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C11",
+          "q": "What executable and arguments are selected for a game launch, and what game-specific registration constraints apply?",
+          "any": {
+            "rank": 2,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C12",
+          "q": "How does the nested program launch differ in its inner arguments and generated surface-create request?",
+          "any": {
+            "rank": 4,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C13",
+          "q": "Which environment variables must be set before the bootstrap script proceeds, and what local Electron inputs are accepted?",
+          "any": {
+            "rank": 4,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C14",
+          "q": "Which test runs before packaging, and how does a failed test affect whether packaging starts?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        },
+        {
+          "id": "C15",
+          "q": "How does the script choose the Node executable and determine the project root used for testing and packaging?",
+          "any": {
+            "rank": null,
+            "abstained": false
+          }
+        }
+      ],
+      "totals": {
+        "any": {
+          "positive": 15,
+          "top1": 4,
+          "top5": 11,
+          "negative": 0,
+          "abstained": 0,
+          "max_bytes": 1996
+        }
+      }
+    }
+  },
+  "initial_unseen_result": "route/eval/holdout-initial-results.json",
+  "confirmation_used_for_tuning": false,
+  "tests": {
+    "command": "python3 -m unittest discover -s tests -p 'test_route*.py'",
+    "passed": 70
+  },
+  "checks": {
+    "route": "ROUTE_OK",
+    "commit_message_and_identity": "passed",
+    "legacy_catalogue": "fails: dangling params catalogue/router/params.json; not regenerated",
+    "full_history_laws": "fails on pre-existing historical commits; commit-scoped checks passed"
+  },
+  "pending": "Entry-document simplification patch prepared outside the tree; generated documentation index requires owner coordination."
+}

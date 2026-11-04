@@ -1,1 +1,0 @@
-- Release v0.2.2: terminals in the packaged app and hosted CI for the Humans and Agents interface.

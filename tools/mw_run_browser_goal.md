@@ -8,12 +8,15 @@ outcome. `--planner rules` is the default and requires no Muse account; it uses
 the locked Wender rules CLI, without constructing the Muse backend. It still
 requires a verified dependency and the running app attachment.
 
-Use **Copy env path** (also printed as `METAVIEWER_ATTACH`). Replace the copied
-absolute path and identity placeholders below. Source in a subshell because the
-file changes `XDG_RUNTIME_DIR`. Never copy credentials into prompts. The attachment
-supplies `MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`, `MV_SRF_STATE_DIR`, `MV_SRF_BIN_DIR`,
-`SRF_IDENTITY_STORE_ROOT`, and `MV_WENDER_ROOT` when configured. Missing values
-must come from the running app/operator, not a guessed path.
+Resolve `ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env`
+from the terminal's original runtime directory. Source it in a subshell because
+the file changes `XDG_RUNTIME_DIR`; stop if its recorded app PID is no longer
+live. `METAVIEWER_ATTACH` is a launcher stdout prefix naming this file, not a UI
+control. The attachment supplies `MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`,
+`MV_SRF_STATE_DIR`, `MV_SRF_BIN_DIR`, `SRF_IDENTITY_STORE_ROOT`, and
+`MV_WENDER_ROOT` when configured. Missing values must come from the running
+app/operator, not a guessed path. Read `docs/AGENT_ENTRY.md` for the read-only
+initial observation and exact capsule/identity check.
 
 Agent programs start agent controlled. If you used **Take control** on the
 selected tile, press **Release control** before running a command and verify
@@ -21,7 +24,8 @@ selected tile, press **Release control** before running a command and verify
 
 ```sh
 (
-  set -a; . "<copied-current.env-path>"; set +a
+  ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env
+  set -a; . "$ENV"; set +a
   export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-goal.XXXXXX)"
   PYTHONPATH=agents python3 -m metaviewer_agents.mw_run \
     --surface-kind browser --identity '<browser-profile>' --planner rules \

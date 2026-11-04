@@ -19,6 +19,7 @@ const hint=computed(()=>{
   return '';
 });
 const PUBLIC={
+  ACTING_STEP_LOCATE_WAIT_REQUIRED:'Set locate_wait_ms to 5000 on every interactive step, then check the site again.',
   DEMO_BUSY:'Another demo operation is still running.',
   DEMO_NOT_RECORDING:'No recording is running.',
   BUTTON_UNAVAILABLE:'The demo tool is unavailable: check that MV_OPERATOR_REPO points to the operator checkout.',
@@ -64,8 +65,8 @@ async function invoke(verb) {
     <p><label>Identity
       <select id="demo-identity" data-semantic-anchor="demo/identity" v-model="identity" :disabled="busy || recording" aria-label="Identity"><option value="" disabled>Choose an identity</option><option v-for="row in rows" :key="row.id" :value="row.id">{{ row.label }} ({{ row.id }})</option></select>
     </label></p>
-    <p><label>Demo id<UiTextInput v-model="demo" label="Demo id" placeholder="pplx-ask-1" :disabled="busy || recording" /></label></p>
-    <p><label>Site<UiTextInput v-model="site" label="Site name" placeholder="perplexity" :disabled="busy || recording" /></label></p>
+    <p><label>Demo id<UiTextInput v-model="demo" label="Demo id" placeholder="sample-ask-1" :disabled="busy || recording" /></label></p>
+    <p><label>Site<UiTextInput v-model="site" label="Site name" placeholder="sample-chat" :disabled="busy || recording" /></label></p>
     <UiButton id="demo-start" data-semantic-anchor="demo/start" label="Start" :disabled="busy || recording || !identity || !demoOk || used.includes(demoId)" @click="invoke('start')" />
     <UiButton id="demo-stop" data-semantic-anchor="demo/stop" label="Stop" :disabled="busy || !recording" @click="invoke('stop')" />
     <p v-if="url">Viewer URL: <a :href="url" target="_blank" rel="noreferrer">{{ url }}</a></p>

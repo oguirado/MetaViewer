@@ -1,1 +1,0 @@
-- Run `ui/test/display-electron.test.js` in the hosted `package` job on `ubuntu-24.04` (`x64`) and `ubuntu-24.04-arm` (`arm64`) under the offline network namespace and `xvfb-run`, record a `package-display` gate receipt, and fail the `package` and `ci-required` jobs when the packaged DISPLAY regression is skipped (`0` [TARGET] allowed skips) or absent.

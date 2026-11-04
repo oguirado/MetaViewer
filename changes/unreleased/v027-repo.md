@@ -1,2 +1,0 @@
-- Correct judge-facing dependency pins and stale counts, distinguish the historical scaffold from the implemented assembly, add a documentation index, and state host isolation, display, asset and external permission limits without changing licence texts.
-- Replace the obsolete multi-capsule draft with maintained guide links and the source-backed admission ceiling; clarify that pending changelog fragments await conductor assembly.

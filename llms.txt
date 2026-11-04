@@ -1,4 +1,21 @@
 # MetaViewer
-Rust authority; Electron/Vue renders admitted snapshots and submits intents.
-Read first: AGENTS.md, then catalogue/protocol.json.
-Status: router unavailable.
+
+Linux desktop wall of application capsules with checked agent proposals and a verifiable journal.
+
+## How does an AI operate the app?
+Read docs/AGENT_ENTRY.md for the live attachment, capsule identity, observation and task recipes. The maintainer recommends an AI at the controls; docs/AI_AT_THE_CONTROLS.md explains the workflow and limits. Host program and Desktop window are not isolated.
+Answers: how does an AI attach and operate a capsule; why computer use.
+
+## How does an AI inspect or change the repository?
+Query the local router, then inspect the cited code before changing files.
+Answers: where is the answer; how do I find code; how do I contribute.
+
+Ask first: python3 route/route_query.py any "<question>"
+Read the returned section or span: python3 route/route_query.py show "<reference>"
+Findings are leads; cited code proves a cause. Empty results mean not retrieved, not absence. Read AGENTS.md and LAWS.md before editing. Require: python3 route/route_query.py check
+Current router: route/. Query output labels byte coordinates explicitly.
+Legacy catalogue (separate from route/): Status: router unavailable. Legacy machine record: catalogue/protocol.json.
+
+## Where do I install or evaluate MetaViewer?
+Read docs/INSTALL.md for platform-specific setup, docs/JUDGE_TOUR.md for a guided evaluation, and docs/JUDGE_TROUBLESHOOTING.md for refusals. Read docs/WHY_CAPSULES.md for the design and NOTICE-EVALUATION.md for external-component permissions.
+Answers: how do I install; how do I evaluate; why capsules; what is private.

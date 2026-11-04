@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI25 lane A: entry input-port wiring plus App gating. main.js keeps
 // its closed stub-map import surface (input names travel through the
@@ -156,14 +160,14 @@ async function loadGatingApp(captured) {
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `v-gating-${++appSerial}`, inlineTemplate: true });
   const require = createRequire(import.meta.url);
   const code = compiled.content.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm, (all, binding, _q, specifier) => {
     if (specifier === 'vue') return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
-    return `const ${binding.trim()} = globalThis.__vdeps[${JSON.stringify(specifier)}];`;
+    return `const ${sfcImportBinding(binding)} = globalThis.__vdeps[${JSON.stringify(specifier)}];`;
   });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#v-gating-${appSerial}`)).default;
 }
@@ -404,7 +408,7 @@ async function bootEntry(search, over = {}) {
       'capsule-ui-kit/theme': { installKitTheme() {}, setKitScheme() {} },
     };
     const code = main.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
-      (_all, binding, _quote, specifier) => `const ${binding.trim()} = globalThis.__mvuiBoot[${JSON.stringify(specifier)}];`)
+      (_all, binding, _quote, specifier) => `const ${sfcImportBinding(binding)} = globalThis.__mvuiBoot[${JSON.stringify(specifier)}];`)
       .replace(/^import\s+['"][^'"\n]+['"];?$/gm, '');
     bootSerial += 1;
     await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#mvui25-${bootSerial}`);

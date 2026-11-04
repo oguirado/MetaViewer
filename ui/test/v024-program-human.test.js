@@ -51,6 +51,7 @@ function createLauncherHarness(sfcSource, buildCreateIntentFn, apiMock = null) {
   const events = [];
   const ctx = {
     props: { visible: true, kinds: [...catalogModel.CATALOG_KIND_IDS] },
+    disabledArmKinds: { get value() { return catalogModel.unavailableArmCapsules(ctx.props.arm64Capabilities); } },
     api: apiMock,
     roleChoice: { value: 'agent' },
     profileChoice: { value: '' },
@@ -344,6 +345,11 @@ async function runProbes(overrides = {}) {
 
       const core = {
         getHumanSurface: (id) => states.get(id),
+        async switchRole(surfaceId, role) {
+          const surface = { ...states.get(surfaceId), control: role };
+          states.set(surfaceId, surface);
+          return { schema: 'metaviewer.role_switch_result/v0.3', request_id: 'fixture', surface_id: surfaceId, role, ok: true };
+        },
         stopSurface: async (surfaceId) => {
           const cur = states.get(surfaceId);
           const s = { ...cur, state: 'destroyed' };
@@ -428,13 +434,20 @@ async function runProbes(overrides = {}) {
 
         const switchedAgent = await rolesBridge.switchMode('surface-pg-1');
         assert.equal(switchedAgent.ok, true);
+        assert.equal(switchedAgent.surfaceId, 'surface-pg-1');
         assert.equal(switchedAgent.role, 'agent');
         assert.equal(switchedAgent.profileId, 'gedit');
+        assert.equal(states.get('surface-pg-1').state, 'active');
+        assert.equal(states.get('surface-pg-1').control, 'agent');
 
         const switchedHuman = await rolesBridge.switchMode(switchedAgent.surfaceId);
         assert.equal(switchedHuman.ok, true);
+        assert.equal(switchedHuman.surfaceId, 'surface-pg-1');
         assert.equal(switchedHuman.role, 'human');
         assert.equal(switchedHuman.profileId, 'gedit');
+        assert.equal(states.get('surface-pg-1').state, 'active');
+        assert.equal(states.get('surface-pg-1').control, 'human');
+        assert.equal(seq, 1, 'role switches must not create replacement program surfaces');
       } finally {
         await host.dispose();
       }
@@ -509,6 +522,11 @@ printf '{"schema":"srf.human-xpra/v1","container":"%s","kind":"program","ready":
 
   const core = {
     getHumanSurface: (id) => states.get(id),
+    async switchRole(surfaceId, role) {
+      const surface = { ...states.get(surfaceId), control: role };
+      states.set(surfaceId, surface);
+      return { schema: 'metaviewer.role_switch_result/v0.3', request_id: 'fixture', surface_id: surfaceId, role, ok: true };
+    },
     stopSurface: (surfaceId) =>
       core.request({ schema: 'surface_request/v0.2', op: 'destroy', params: { surface_id: surfaceId } }),
     async request(req) {
@@ -698,21 +716,28 @@ printf '{"schema":"srf.human-xpra/v1","container":"%s","kind":"program","ready":
   const st = await rolesBridge.status('surface_pg_1');
   assert.equal(st.role, 'human');
   assert.equal(st.profileId, 'gedit');
+  assert.deepEqual(st.storedData, {available:true,profileId:'gedit'});
   assert.equal(st.control, 'human');
   assert.equal(st.view.state, 'ready');
 
   // 4. Switch to agent mode and back to human mode on the same program capsule.
   const toAgent = await rolesBridge.switchMode('surface_pg_1');
   assert.equal(toAgent.ok, true);
+  assert.equal(toAgent.surfaceId, 'surface_pg_1');
   assert.equal(toAgent.role, 'agent');
   assert.equal(toAgent.profileId, 'gedit');
+  assert.equal(states.get('surface_pg_1')?.state, 'active');
   assert.equal(states.get(toAgent.surfaceId)?.control, 'agent');
 
   const toHuman = await rolesBridge.switchMode(toAgent.surfaceId);
   assert.equal(toHuman.ok, true);
+  assert.equal(toHuman.surfaceId, 'surface_pg_1');
   assert.equal(toHuman.role, 'human');
   assert.equal(toHuman.profileId, 'gedit');
+  assert.equal(states.get('surface_pg_1')?.state, 'active');
   assert.equal(states.get(toHuman.surfaceId)?.control, 'human');
+  assert.equal(seq, 1, 'role switches must not create replacement program surfaces');
+  assert.equal(activeDisplays.size, 1, 'role switches must retain the program display allocation');
 
   // 5. Stop frees profile ('gedit') and display (':111'), and a fresh create reuses both.
   const stopped = await rolesBridge.stop(toHuman.surfaceId);
@@ -827,12 +852,9 @@ test('V024-PROGRAM-HUMAN-MV: mutant suite kills every gate mutation', async (t) 
     assert.ok(failed.includes('create-program-human-and-switch-mode'), `Mutant 6 survived: ${failed}`);
   }
 
-  // Mutant 7: roleHost.js switchMode does not handle programProfiles.
+  // Mutant 7: roleHost.js ignores the requested role for an in-place program switch.
   {
-    const mutated = roleHostSrc.replace(
-      'if (program) {\n        return await createProgram({binary:program.path,role,...(program.hostXpra ? {hostXpra:true} : {})},true,profileId);\n      }',
-      'if (false) {}',
-    );
+    const mutated = roleHostSrc.replace('await core.switchRole(surfaceId,role);', "await core.switchRole(surfaceId,'human');");
     assert.notEqual(mutated, roleHostSrc);
     const mod = await importMutated(mutated, 'm7-switch');
     const failed = await runProbes({ roleHost: mod });

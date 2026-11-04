@@ -1,1 +1,0 @@
-- Provision new Program and browser identities with the installed judge image for the host architecture; x64 refused them before.

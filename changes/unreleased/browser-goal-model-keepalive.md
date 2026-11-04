@@ -1,1 +1,0 @@
-- The browser goal lane keeps its session alive during a model wait, so the Muse planner no longer stops with `MW_BROWSER_GOAL_CONFIG`.

@@ -1,0 +1,65 @@
+{"id": "I1", "q": "Which Node version is required?", "expect": ["ui/package.json"], "abstain": false}
+{"id": "I2", "q": "Which Python version is required?", "expect": ["agents/pyproject.toml"], "abstain": false}
+{"id": "I3", "q": "How do I build offline?", "expect": ["scripts/bootstrap.sh"], "abstain": false}
+{"id": "I4", "q": "How are missing system packages installed?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "I5", "q": "Which release architecture should I install?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "I6", "q": "How are browser profile permissions provisioned?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S1", "q": "Why does JUDGE_DISPLAY reject Wayland?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S2", "q": "What causes JUDGE_USERNS?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S3", "q": "What causes JUDGE_DOCKER_HOST?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S4", "q": "Why does sequence does not match occur?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S5", "q": "Why does sender identity changed occur?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S6", "q": "Why does reply exceeds byte limit occur?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S7", "q": "Why is the registered agent lane busy?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S8", "q": "Why does MCP say Initialize first?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "D1", "q": "Why are capsule launch targets constrained?", "expect": ["core/src/catalog/launch.rs"], "abstain": false}
+{"id": "D2", "q": "Why reserve sequence numbers before sending?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "D3", "q": "Why verify socket peer ownership?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "D4", "q": "Why bound mailbox reply bytes?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "D5", "q": "Why reject booleans as observation integers?", "expect": ["agents/metaviewer_agents/observe.py"], "abstain": false}
+{"id": "D6", "q": "Why validate observations before copying?", "expect": ["agents/metaviewer_agents/observe.py"], "abstain": false}
+{"id": "A1", "q": "How do I drive mvctl?", "expect": ["agents/metaviewer_agents/mvctl.py"], "abstain": false}
+{"id": "A2", "q": "How do I list surfaces through MCP?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "A3", "q": "How do I propose actions through MCP?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "A4", "q": "How do I await verified receipts through MCP?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "P1", "q": "Which tests prove MCP frame bounds?", "expect": ["agents/tests/test_mcp_conformance.py"], "abstain": false}
+{"id": "P2", "q": "Which tests prove silent MCP notifications?", "expect": ["agents/tests/test_mcp_conformance.py"], "abstain": false}
+{"id": "P3", "q": "Does MCP conformance exercise the real core?", "expect": ["agents/tests/test_mcp_conformance.py"], "abstain": false}
+{"id": "P4", "q": "Which tests reject wrong sequence numbers?", "expect": ["agents/tests/test_client.py"], "abstain": false}
+{"id": "P5", "q": "Does observation validation prove pixel freshness?", "expect": ["agents/metaviewer_agents/observe.py"], "abstain": false}
+{"id": "P6", "q": "Are package versions aligned with 0.2.6?", "expect": ["ui/package.json"], "abstain": false}
+{"id": "N1", "q": "How do I schedule capsules with Kubernetes?", "expect": [], "abstain": true}
+{"id": "N2", "q": "How do I run an iOS capsule?", "expect": [], "abstain": true}
+{"id": "N3", "q": "How do I configure Stripe billing?", "expect": [], "abstain": true}
+{"id": "N4", "q": "How do I enable LDAP single sign-on?", "expect": [], "abstain": true}
+{"id": "N5", "q": "How do I enable CUDA video encoding?", "expect": [], "abstain": true}
+{"id": "R6-I1", "q": "How do I select an app-only install versus an install with capsules?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I2", "q": "How do I point the installer at an existing release asset cache?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I3", "q": "Where does the installer keep its state and can that directory contain whitespace?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I4", "q": "How do I check host readiness before the runtime is installed?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I5", "q": "Why can browser capsules work while Host program is disabled?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S1", "q": "Why does JUDGE_ROOT refuse to run Electron as root?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S2", "q": "What causes JUDGE_XDG_RUNTIME and how do I fix it on WSL?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S3", "q": "What causes JUDGE_IMAGE and how do I load the missing capsule image?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S4", "q": "What causes JUDGE_SHM when shared memory is not tmpfs?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S5", "q": "Why does JUDGE_ASSET say an archive does not match SHA256SUMS?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-A1", "q": "Can a model click when it reports low confidence or need_reasoning?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A2", "q": "What happens if the observed pixels change while a program action is being planned?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A3", "q": "Does a verified typing receipt prove that the requested text appeared on screen?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A4", "q": "How is the Enter key translated for native program input?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A5", "q": "What happens when model planning exceeds its time budget before dispatch?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-C1", "q": "Why give capsules separate run and frame identities even when they share a RAM root?", "expect": ["daemon-adapter/internal/capsule/shared_roots_test.go"], "abstain": false}
+{"id": "R6-C2", "q": "How does human takeover stop an AI action already in flight, and when can the AI resume?", "expect": ["daemon-adapter/internal/capsule/manager_handoff_test.go"], "abstain": false}
+{"id": "R6-C3", "q": "How does an AI turn a browser goal into an actual target rather than trusting arbitrary planner text?", "expect": ["tools/mw_run_browser_goal.py"], "abstain": false}
+{"id": "R6-C4", "q": "What should computer use do when the browser reaches a login or CAPTCHA wall?", "expect": ["tests/test_mw_browser_goal.py"], "abstain": false}
+{"id": "R6-C5", "q": "Does a browser-goal run prove that the user's goal was completed?", "expect": ["tools/mw_run_browser_goal.py"], "abstain": false}
+{"id": "R6-P1", "q": "Why can the UI save capsule state while an agent receives a policy refusal?", "expect": ["core/tests/capsule_state.rs"], "abstain": false}
+{"id": "R6-P2", "q": "Why is opening a capsule refused while a state copy involving that profile is pending?", "expect": ["core/tests/capsule_state.rs"], "abstain": false}
+{"id": "R6-P3", "q": "What proves that replayed input cannot inherit an earlier successful input's evidence?", "expect": ["daemon-adapter/internal/capsule/receipt_evidence_test.go"], "abstain": false}
+{"id": "R6-P4", "q": "Does a Holdings input timestamp prove native focus or identify a native window?", "expect": ["daemon-adapter/internal/capsule/receipt_evidence_test.go"], "abstain": false}
+{"id": "R6-P5", "q": "Why must a capsule creation fail before launching anything if durable inventory reservation is refused?", "expect": ["daemon-adapter/internal/capsule/inventory_test.go"], "abstain": false}
+{"id": "R6-N1", "q": "How do I live migrate a running capsule to another host?", "expect": [], "abstain": true}
+{"id": "R6-N2", "q": "How do I attach USB passthrough devices to a capsule?", "expect": [], "abstain": true}
+{"id": "R6-N3", "q": "How do I enable audio recording from capsules?", "expect": [], "abstain": true}
+{"id": "R6-N4", "q": "How do I run a Windows guest capsule?", "expect": [], "abstain": true}
+{"id": "R6-N5", "q": "How do I schedule cron jobs to launch capsules?", "expect": [], "abstain": true}

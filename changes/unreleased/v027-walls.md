@@ -1,3 +1,0 @@
-- Stop on exposed page-level sign-in headings or password fields paired with sign-in wording, using the existing human handoff outcome.
-- Stop on human-verification text and known challenge frame names without answering or bypassing the challenge.
-- Cover synthetic login and challenge pages, hidden cues, ordinary news pages with Sign in links, and absorbing pre-input handoff; live detection accuracy remains unmeasured.

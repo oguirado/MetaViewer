@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import signal
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -244,7 +245,7 @@ class BrowserGoalTests(unittest.TestCase):
     def test_wall_fixtures_absorb_without_input(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location('goal_wall_fixture',
-            ROOT / 'tests/e2e/test_mw_run_chatgpt_offline.py')
+            ROOT / 'tests/e2e/test_mw_run_sample_chat_offline.py')
         fixture = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(fixture)
         for page in ('login', 'captcha'):
@@ -258,6 +259,34 @@ class BrowserGoalTests(unittest.TestCase):
                     self.b.guard_wall(observed, sensed)
             self.assertTrue(self.b.handoff.path.is_file())
         self.b.propose.assert_not_called()
+
+    def test_report_deadline_after_uncertain_move_keeps_rc5(self):
+        self.b.attempts = [dict(status='dispatch_pending')]
+        real_journal = goal.atomic_journal
+        report_timers = []
+
+        def write(path, payload):
+            if path.name == 'report.json':
+                remaining = signal.getitimer(signal.ITIMER_REAL)[0]
+                report_timers.append(remaining)
+                if remaining > 0:
+                    signal.raise_signal(signal.SIGALRM)
+            return real_journal(path, payload)
+
+        with patch.object(goal, 'private_evidence_base', return_value=self.root), \
+             patch.object(goal.host, 'connect'), \
+             patch.object(goal, 'BrowserGoalBackend', return_value=self.b), \
+             patch.object(goal, 'WenderSubprocessAdapter'), \
+             patch.object(goal, 'run_moves', side_effect=RuntimeError('uncertain move')), \
+             patch.object(goal, 'atomic_journal', side_effect=write), \
+             contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+            rc = mw_run.main(['--identity', 'fixture', '--goal', 'Operator Name'],
+                             runner=goal.run_entry)
+        self.assertEqual(rc, 5)
+        result = json.loads(output.getvalue())
+        self.assertEqual(result['verdict_code'], 'INPUT_UNCERTAIN')
+        self.assertEqual(json.loads(Path(result['report']).read_text())['rc'], 5)
+        self.assertEqual(report_timers, [0])
 
     def test_wall_entry_returns_four(self):
         self.b.observe = Mock(side_effect=goal.host.OwnerRefused('MW_HANDOFF_REQUIRED'))

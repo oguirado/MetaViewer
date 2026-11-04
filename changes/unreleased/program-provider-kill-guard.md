@@ -1,1 +1,0 @@
-- Guard provider process-group cleanup with strict recorded process identifiers, refusing reserved identifiers, the caller and its own group before signalling; retain the unreaped provider leader until group cleanup prevents identifier reuse.

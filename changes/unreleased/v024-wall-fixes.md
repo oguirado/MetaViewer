@@ -1,4 +1,0 @@
-- Limit each terminal screen to 2 terminals and automatically open or switch to the next screen when launching another Shell or Custom CLI terminal.
-- Surface real terminal broker refusal codes (such as `CLASS_LIMIT`), make terminal error banners dismissible and auto-cleared on the next successful action, and ensure closing a slot frees its session cleanly without reporting an error when the session is already gone.
-- Remove `Open in multislot` and `Automate from a demo` from the `More` menu in the header while keeping their underlying features intact.
-- Add regression and mutant coverage for the `CatalogLauncher` synchronous kit close role-and-identity step.

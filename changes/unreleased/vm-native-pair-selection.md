@@ -1,1 +1,0 @@
-- Route VM guest frame pairs through the native capture validator when resident capture is selected, preserving host-window and host-xpra routing. Reject malformed, stale and foreign pairs; VM display taps remain unsupported.

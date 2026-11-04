@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/headless_event.schema.json",
+  "title": "headless_event",
+  "description": "Additive bounded headless fixed-job message; never a graphical action or arbitrary shell.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_event/v0.2"
+        },
+        "event_id": {
+          "$ref": "headless_session.schema.json#/$defs/event_id"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "event": {
+          "const": "accepted"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "headless_session.schema.json"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "create",
+                "run",
+                "stop"
+              ],
+              "maxLength": 8
+            }
+          },
+          "required": [
+            "session",
+            "op"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_event/v0.2"
+        },
+        "event_id": {
+          "$ref": "headless_session.schema.json#/$defs/event_id"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "event": {
+          "const": "state_changed"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "headless_session.schema.json"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_event/v0.2"
+        },
+        "event_id": {
+          "$ref": "headless_session.schema.json#/$defs/event_id"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "event": {
+          "const": "completed"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "headless_session.schema.json"
+            }
+          },
+          "required": [
+            "session"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_event/v0.2"
+        },
+        "event_id": {
+          "$ref": "headless_session.schema.json#/$defs/event_id"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "event": {
+          "const": "outcome_unknown"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "session": {
+              "$ref": "headless_session.schema.json"
+            },
+            "op": {
+              "type": "string",
+              "enum": [
+                "create",
+                "run",
+                "stop"
+              ],
+              "maxLength": 8
+            },
+            "code": {
+              "const": "OUTCOME_UNKNOWN"
+            }
+          },
+          "required": [
+            "session",
+            "op",
+            "code"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    },
+    {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "const": "headless_event/v0.2"
+        },
+        "event_id": {
+          "$ref": "headless_session.schema.json#/$defs/event_id"
+        },
+        "request_id": {
+          "$ref": "headless_session.schema.json#/$defs/request_id"
+        },
+        "event": {
+          "const": "refused"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "workload_id": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "headless_session.schema.json#/$defs/workload_id"
+                }
+              ]
+            },
+            "generation": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "headless_session.schema.json#/$defs/generation"
+                }
+              ]
+            },
+            "code": {
+              "type": "string",
+              "enum": [
+                "UNKNOWN_WORKLOAD",
+                "STALE_GENERATION",
+                "DUPLICATE_REQUEST",
+                "DUPLICATE_JOB",
+                "OUT_OF_ORDER",
+                "UNAVAILABLE",
+                "POLICY",
+                "OWNER_MISMATCH",
+                "BUSY",
+                "BAD_REQUEST"
+              ],
+              "maxLength": 32
+            },
+            "effect": {
+              "const": "not_dispatched"
+            }
+          },
+          "required": [
+            "workload_id",
+            "generation",
+            "code",
+            "effect"
+          ],
+          "additionalProperties": false,
+          "maxProperties": 16
+        }
+      },
+      "required": [
+        "schema",
+        "event_id",
+        "request_id",
+        "event",
+        "data"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 16
+    }
+  ]
+}

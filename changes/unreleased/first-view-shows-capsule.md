@@ -1,3 +1,0 @@
-- First startup opens Agents when all reported capsules are agents and Humans is empty.
-- Saved layouts and explicit view choices take precedence over automatic startup selection.
-- Empty views name the other view when it contains capsules and offer a button to go there.

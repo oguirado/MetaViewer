@@ -1,1 +1,0 @@
-- Add `tools/mw_ax_dump.py` and `tests/test_mw_ax_dump.py` for read-only capsule AX dumps and pre-run workflow anchor locale drift checks (`MW_AX_ANCHOR_DRIFT`), and document the pre-flight check in `docs/MW_RUN_FIRST_RUN.md`.

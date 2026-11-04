@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""[TARGET, unit decision] Fetch a selected tier from an explicit release or local directory.
+"""Fetch a selected tier from an explicit release or local directory.
 
 Remote manifests require their SHA256 supplied independently by the operator.
 Checksums detect corruption; they do not authenticate the release publisher.

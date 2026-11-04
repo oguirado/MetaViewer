@@ -83,7 +83,7 @@ test('identity first impression labels, placeholders, grammar and typed tool fai
   const view=mount(await component('identities/IdentitiesDialog.vue'),{open:true,host});t.after(view.close);await tick();
   for(const label of ['Name (required)','Display name (optional)','Allowed sites (optional)'])assert.ok(nodes(view.root).some(n=>n.tag==='label'&&text(n).startsWith(label)));
   const source=readFileSync(new URL('../src/identities/IdentitiesDialog.vue',import.meta.url),'utf8');
-  for(const example of ['work-account','Work account','perplexity.ai, example.com'])assert.ok(source.includes(example));
+  for(const example of ['work-account','Work account','example.com, example.org'])assert.ok(source.includes(example));
   assert.match(text(view.root),/The identity tool could not run: IDENTITY_UNAVAILABLE/);
   assert.match(text(view.root),/lowercase letters, numbers and dashes/);
   const field=label=>nodes(view.root).find(n=>n.props?.['aria-label']===label);

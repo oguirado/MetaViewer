@@ -1,2 +1,0 @@
-- Programs opened as Agent stay agent-controlled, selected and revealed, so agent execution can start immediately.
-- Take control remains available in the tile menu; Human programs and real desktop window capsules retain their control behavior.

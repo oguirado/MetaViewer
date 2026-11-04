@@ -1,3 +1,4 @@
+import * as agentPromptGate from '../src/terminal/agentPromptGate.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 function storage(raw) { return {getItem:()=>raw,setItem(){}}; }
@@ -5,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import * as vue from 'vue';
 import * as deckModel from '../src/terminal/terminalDeckModel.js';
+import {createPairedTerminals,pairedTargetId} from '../src/terminal/pairedTerminals.js';
 import vm from 'node:vm';
 
 let viewSerial = 0;
@@ -15,7 +17,7 @@ function loadView(mutate = source => source, model = deckModel) {
   let code = compileScript(descriptor, { id: `u5-${++viewSerial}`, inlineTemplate: true }).content;
   class MissingTerminal { constructor() { throw Error('headless terminal unavailable'); } }
   const key = `__u5deps${viewSerial}`;
-  globalThis[key] = { vue, '@xterm/xterm': { Terminal: MissingTerminal }, '@xterm/addon-fit': { FitAddon: class {} }, './terminalDeckModel.js': model,
+  globalThis[key] = { vue, '@xterm/xterm': { Terminal: MissingTerminal }, '@xterm/addon-fit': { FitAddon: class {} }, './terminalDeckModel.js': model, './pairedTerminals.js': {createPairedTerminals,pairedTargetId}, './agentPromptGate.js': agentPromptGate,
     '../../.kit/capsule-ui-kit/src/terminal/nonceDocument.js': { createTerminalDocument: () => ({}) } };
   code = code.replace(/^import\s+(['"])(.*?)\1;?\s*$/gm, '')
     .replace(/^import\s+([\s\S]+?)\s+from\s+(['"])(.*?)\2;?/gm, (_all, binding, _q, spec) => `const ${binding.replace(/\bas\b/g, ':')} = globalThis[${JSON.stringify(key)}][${JSON.stringify(spec)}];`)
@@ -30,7 +32,12 @@ function mountView(component, props) {
     focus() { globalThis.document.activeElement=this; },
     contains(node) { return node===this || this.children.some(child=>child.contains(node)); },
     getBoundingClientRect() { return {width:144,height:80}; },
-    querySelector(selector) { return this.querySelectorAll().find(n=>'#'+n.props.id===selector); },
+    querySelector(selector) {
+      if(selector.startsWith('#'))return this.querySelectorAll().find(n=>'#'+n.props.id===selector);
+      const anchor=/^\[data-semantic-anchor="([^"]+)"\]$/.exec(selector);
+      assert.ok(anchor,'unsupported selector in the test renderer: '+selector);
+      return this.querySelectorAll().find(n=>n.props['data-semantic-anchor']===anchor[1]);
+    },
     querySelectorAll() { return this.children.flatMap(child=>child.tag==='button'?[child]:child.querySelectorAll()); },
   });
   const renderer = vue.createRenderer({ createElement: make, createComment: make, createText: text => ({ ...make('#text'), text }),
@@ -51,9 +58,9 @@ function environment(t) {
   t.after(()=>{globalThis.document=doc;globalThis.window=win;});
 }
 function event(key,extra={}) { return {key,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},stopImmediatePropagation(){this.stopped=true;},...extra}; }
-function setup() {
+function setup(extraProps = {}) {
   const writes=[];
-  const view=mountView(loadView(),{storage:storage(null),terminalBroker:{open:async()=>({session:'session-k2'}),close:async()=>{}},terminalBinding:{attach:async()=>{},write:req=>writes.push(req),close(){},onData(){},onExit(){}}});
+  const view=mountView(loadView(),{storage:storage(null),terminalBroker:{open:async()=>({session:'session-k2'}),close:async()=>{}},terminalBinding:{attach:async()=>{},write:req=>writes.push(req),close(){},onData(){},onExit(){}},...extraProps});
   return {...view,writes};
 }
 test('V027 K2 Ctrl+Shift+F6 exits terminal input without bytes; Tab stays terminal input',async t=>{
@@ -67,11 +74,11 @@ test('V027 K2 Ctrl+Shift+F6 exits terminal input without bytes; Tab stays termin
   assert.equal(leave.prevented,true);assert.equal(v.writes.length,0);
 });
 test('V027 K2 busy-close focuses Cancel, contains Tab, blocks background shortcuts and restores focus',async t=>{
-  environment(t);const v=setup();t.after(()=>v.app.unmount());
+  environment(t);const v=setup({idPrefix:'surface:with.dots'});t.after(()=>v.app.unmount());
   const slot=await v.exposed.controller.launchProfile('shell');await tick();
-  const before=v.find('terminal-deck-new');document.activeElement=before;
+  const before=v.find('surface:with.dots-terminal-deck-new');document.activeElement=before;
   await v.exposed.controller.requestCloseSlot(slot.id);await tick();
-  const cancel=v.find('terminal-deck-confirm-close-no'),confirm=v.find('terminal-deck-confirm-close-yes');
+  const cancel=v.find('surface:with.dots-terminal-deck-confirm-close-no'),confirm=v.find('surface:with.dots-terminal-deck-confirm-close-yes');
   assert.ok(vue.toRaw(document.activeElement)===cancel,'Cancel receives focus');
   const tab=event('Tab',{target:cancel});v.exposed.onWindowKeyDown(tab);assert.ok(vue.toRaw(document.activeElement)===confirm,'Tab focuses confirm');assert.equal(tab.prevented,true);
   const reverse=event('Tab',{shiftKey:true,target:confirm});v.exposed.onWindowKeyDown(reverse);assert.ok(vue.toRaw(document.activeElement)===cancel,'Cancel receives focus');

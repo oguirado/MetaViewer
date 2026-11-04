@@ -196,11 +196,11 @@ class JudgeInstructionsTests(unittest.TestCase):
             mvctl.run(['--v02', 'observe'])
             self.assertEqual(current.call_args_list[0], current.call_args_list[1])
 
-    def test_b3_17_bootstrap_is_clipboard_only(self):
+    def test_b3_17_prompt_buttons_never_submit(self):
         section = doc('docs/AI_OPERATOR_GUIDE.md').split('### Launching Terminals')[1].split('## 10.')[0]
-        self.assertIn('copies', section)
-        self.assertIn('Copy unavailable', section)
-        self.assertNotIn('Bootstrap starts a shell', section)
+        self.assertIn('The app never sends Enter', section)
+        self.assertIn('never pastes', section)
+        self.assertNotIn('Bootstrap', section)
         self.assertNotIn('METAVIEWER_AGENT_ENTRY', section)
 
     def test_b3_22_release_provenance_plain_english(self):

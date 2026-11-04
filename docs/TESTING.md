@@ -1,609 +1,240 @@
 # How MetaViewer is tested
 
-## MemoryWeb home
+MetaViewer has source checks, component tests, Electron journeys and opt-in live
+capsule checks. Passing one does not establish the others. This page describes
+the shipped runners; it does not claim a new test run. The current release identity
+is in [VERSION](../VERSION), and the evidence boundary is in [EVIDENCE.md](EVIDENCE.md).
 
-Each user's sites live in the checkout's gitignored `/memoryweb/`, created with
-mode 0700 and owned by the current uid (U-DEC-0110/0111). Run
-`python3 tools/mw_home_check.py --repo <checkout> [--home <absolute-path>]` for
-one JSON admission result (exit 0 accepted, 6 refused, 2 usage). Refusal codes
-are `MW_HOME_TRACKED`, `MW_HOME_NOT_IGNORED`, `MW_HOME_MODE`, `MW_HOME_SYMLINK`,
-`MW_HOME_PROFILE`, `MW_HOME_SIZE`, `MW_HOME_CAPACITY`, `MW_HOME_PATH` and
-`MW_HOME_GIT` and `MW_HOME_NESTED_REPO`. Repository and home paths are canonicalized
-before Git admission; a symlink in the home or any ancestor is refused first.
-Browser profile names are matched with casefold, including SQLite sidecars;
-SQLite database and WAL magic are refused at any depth. Browser profile directories
-(including Default, Profile <n>, leveldb, storage and browser caches) and nested
-`.git` files or directories are refused. LevelDB directories are refused wholesale,
-including their CURRENT, LOCK, LOG, LOG.old, MANIFEST-*, *.ldb and *.log files;
-workflow files are capped at 65536 bytes and other files at 1 MiB [CITED:
-MemoryWeb ARCHITECTURE.md, byte caps/publication lint]. Traversal caps are
-10000 entries and 32 directory levels [TARGET, unit decision]. Hosted checks:
-`(cd agents && python3 -m unittest tests.test_mw_home tests.test_tg_hygiene)` and
-`python3 -m unittest discover -s tests -p test_mw_home_cli.py`, each foreground under
-`systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0`.
+## Which check should I run?
 
-I verify MetaViewer across six overlapping layers:
+Choose the check for the behavior you changed, then run the complete gate before
+integration. A passing fixture is evidence about that fixture, not a live capsule.
 
-1. **The local eleven-leg gate** (`bash tools/gate.sh`) and its **self-test** (`bash tools/gate.sh --self-test`).
-2. **Live gates** against a real running capsule (`node tests/e2e/e2e1_slice/index.js --live`, `python3 tools/gate_g_ai.py --surface mv-live-1`).
-3. **End-to-end journeys** in real headless Electron (`tests/e2e/run.py`, `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files under `tests/e2e/*.test.js`, and `6` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack suites under `tests/e2e/test_*.py`).
-4. **Hosted CI and nightly/soak workflows** (`20` jobs across `6` workflows [MEASURED: job keys below `jobs:` in `.github/workflows/*.yml`], gated by `ci-required`; assembly is a separate pinned-component smoke workflow).
-5. **Mutation proofs, budget gate, and negative controls** (`tests/test_contract_mutants.py`, `agents/tests/run_mutant_harness.py`, `tests/supervisor/check_mutations.py`, `tools/budget_gate.py --self-test`, and `tools/gate.sh --self-test`).
-6. **External testers** (two independent external testers across three adversarial rounds).
+Answers: testing guide; test commands; unit tests versus live acceptance
 
-The current candidate is **0.2.5** [CITED: `../VERSION`]. E2E source inventories
-below are measured from this tree; execution totals and pass results attributed to
-`a768a684` are historical [CITED: prior document snapshot]. Those totals do not
-establish a pass or live performance for the current assembly. Run the full gate
-and its self-test before integration; run live acceptance separately. See
-[README.md](../README.md#isolation-and-evaluation-limits) for display and runtime limits.
+| Change or question | Runner | What a pass establishes |
+| --- | --- | --- |
+| Documentation, command paths and required pages | `python3 -B -m unittest discover -s tests -p 'test_*doc*'` | The documentation assertions in the selected suites hold |
+| Complete local integration | `bash tools/gate.sh` | Every local gate leg passed for this checkout and environment |
+| The gate itself | `bash tools/gate.sh --self-test` | Its fault-injection fixtures passed |
+| Electron journeys | `python3 tests/e2e/run.py` under Xvfb | The selected wall journeys and cross-routing negative control passed |
+| Real capsule and cleanup | `node tests/e2e/e2e1_slice/index.js --live` with the live prerequisites below | The live slice report and its cleanup assertions passed |
+| Agent action and state verification | `python3 tools/gate_g_ai.py --surface mv-live-1` with the live prerequisites below | The local live gate's assertions, negative controls and cleanup passed |
 
----
+Sources: [local gate](../tools/gate.sh), [journey runner](../tests/e2e/run.py),
+[live slice](../tests/e2e/e2e1_slice/index.js), [agent gate](../tools/gate_g_ai.py).
 
-## 1. The local gate (`tools/gate.sh`)
+## What does the local gate run?
 
-I run the full local gate from the repository root:
+The local gate runs each leg listed below and prints `PASS aggregate` only when
+all selected legs return success. Use `--leg` to select a leg while iterating.
+
+Answers: local gate; gate legs; full gate; PASS aggregate
 
 ```sh
-CAPSULE_UI_KIT_REPO=/path/to/capsule-ui-kit \
-ELECTRON_OVERRIDE_DIST_PATH=/path/to/electron/dist \
-  bash tools/gate.sh
-```
-
-To run a single leg during iteration, pass `--leg <name>`:
-
-```sh
-bash tools/gate.sh --leg laws
 bash tools/gate.sh --leg contracts
-```
-
-`tools/gate.sh` executes `11` `[MEASURED: bash tools/gate.sh]` legs in order (`manifests`, `laws`, `contracts`, `unit`, `agents`, `js`, `rust`, `go`, `ui`, `ui-smoke`, `perf`). Every leg must pass (`PASS aggregate` [TARGET]) before a change is integrated.
-
-| Order | Leg (`--leg`) | What it runs | Historical result at `a768a684` |
-| ---: | :--- | :--- | :--- |
-| 1 | `manifests` | Runs `validate_manifests()` (`tools/gate.sh`): verifies `VERSION` and the `6` `[MEASURED]` manifest/ignore files in `FILES` (`Cargo.toml` with `rust-version = "1.97"`, `core/Cargo.toml`, `daemon-adapter/go.mod` with `go 1.26.0`, `agents/pyproject.toml`, `ui/package.json`, `.gitignore`), then runs `validate_frozen_dependencies()` in a disposable scratch tree against `deps.lock`, `Cargo.lock` (`cargo metadata --offline --locked`), and `ui/package-lock.json` (`npm ci --offline --ignore-scripts --dry-run`). | `PASS manifests` (`VERSION`, `6` `[MEASURED]` manifest/ignore files, and frozen offline locks validated) `[MEASURED: bash tools/gate.sh --leg manifests]` |
-| 2 | `laws` | Runs `python3 tools/check_laws.py --version` and `LAWS_CODE` (`tools/check_laws.py` excluding only `refs/stash` from `git rev-list --all`): enforces `LAWS.md` on tracked files and git history — author identity, English-only tracked files, no secrets/keys/host paths, and no third-party or model attribution strings. | `PASS laws` (`Laws check: OK` twice) `[MEASURED: bash tools/gate.sh --leg laws]` |
-| 3 | `contracts` | Runs `python3 tools/check_contracts.py`: validates every JSON Schema under `contracts/v0.1/` (`10` `[MEASURED: ls -1 contracts/v0.1/*.schema.json | wc -l]` schemas) and `contracts/v0.2/` (`21` `[MEASURED: ls -1 contracts/v0.2/*.schema.json | wc -l]` schemas) against `20` `[MEASURED: ls -1 contracts/examples/*.json | wc -l]` v0.1 example fixtures (`10` `[MEASURED]` valid + `10` `[MEASURED]` invalid) and `489` `[MEASURED: ls -1 contracts/examples/v0.2/*.json | wc -l]` v0.2 example fixtures (every schema has at least one `.valid.json` and one `.invalid.json` fixture, including `surface_request/v0.2` with `nested_depth` and `surface_input/v0.2`). | `PASS contracts` (`Contracts check: OK`) `[MEASURED: bash tools/gate.sh --leg contracts]` |
-| 4 | `unit` | Runs `UNIT_CODE` (`unittest.defaultTestLoader.discover(start_dir="tests")` plus `tests/e2e/e2e1_slice`): executes all Python unit, contract, router, packaging, and CI-policy suites under `tests/` (`tests/test_*.py`, `tests/ci/test_*.py`, `tests/e2e/test_*.py`, `tests/integration/test_*.py`, and `tests/e2e/e2e1_slice/test_*.py`). Note: `tests/test_t7r2c_reproducibility.py` imports `ui/tools/package.js` (`@electron/asar`), so `ui/node_modules` must be installed (`npm --prefix ui ci --offline`) before running `--leg unit`. | `408` `[MEASURED: bash tools/gate.sh --leg unit]` tests, `OK` (`PASS unit`) |
-| 5 | `agents` | Runs `AGENTS_UNIT_CODE` (`unittest.defaultTestLoader.discover(start_dir="agents/tests")`) followed by `python3 agents/tests/run_mutant_harness.py` (`SW-0065` mutant injection matrix `M1`–`M8`). | `584` `[MEASURED: bash tools/gate.sh --leg agents]` unit tests (`OK`) + `8` `[MEASURED: python3 agents/tests/run_mutant_harness.py]` mutants (`M1`–`M8`, `100%` conforming, `PASS agents`) |
-| 6 | `js` | Resolves `capsule-ui-kit` at locked version `0.2.1` `[MEASURED: python3 -c 'import json; print(json.load(open("ui/kit.lock.json"))["version"])']` (`MV_KIT_CHECKOUT` or `CAPSULE_UI_KIT_REPO`) and runs `node tools/sync_kit.mjs` and `node tools/sync_kit.mjs --check`. | `PASS js` (kit `0.2.1` synced and contentHash verified) `[MEASURED: bash tools/gate.sh --leg js]` |
-| 7 | `rust` | Runs `rustup run 1.92.0 cargo fmt --all --check`, `cargo clippy --locked --offline --all-targets -- -D warnings`, and `cargo test --locked --offline` across the `metaviewer-core` workspace (`core/`), covering capsule lifecycle, fold/unfold, multislot, recording/replay, IPC framing, and property tests. | `256` `[MEASURED: bash tools/gate.sh --leg rust]` tests passed (`0` failed, `0` ignored) across `42` `[MEASURED: bash tools/gate.sh --leg rust]` test binaries (`PASS rust`) |
-| 8 | `go` | Runs `go vet ./...` and `go test -race -count=1 ./...` in `daemon-adapter/`, then cross-checks `GOARCH=amd64 go vet ./...` and `GOARCH=amd64 go test -run '^$' -exec /bin/true ./...` when host `go env GOARCH` is not `amd64`. | `7` `[MEASURED: bash tools/gate.sh --leg go]` Go test packages `ok` (`capsule`, `cli`, `daemon`, `frames`, `ipc`, `record`, `view`; `cmd/mv-daemon-adapter` has `[no test files]`) across native `-race` and `GOARCH=amd64` compile/vet passes (`14` `[MEASURED: bash tools/gate.sh --leg go]` `ok` lines total, `PASS go`) |
-| 9 | `ui` | Runs `npm ci --offline --no-audit --no-fund`, `npm test` (`node --test --test-timeout=120000 test/*.test.js`), `npm run check` (`vue-tsc --noEmit -p tsconfig.json`), and `npm run build` (`vite build`) in `ui/`. | `2,829` `[MEASURED: bash tools/gate.sh --leg ui]` tests across `291` `[MEASURED: bash tools/gate.sh --leg ui]` suites (`2,828` `[MEASURED: bash tools/gate.sh --leg ui]` pass, `0` fail, `1` `[MEASURED: bash tools/gate.sh --leg ui]` skipped), `vue-tsc --noEmit -p tsconfig.json` clean, `vite build` (`430` `[MEASURED: bash tools/gate.sh --leg ui]` modules transformed, `PASS ui`) |
-| 10 | `ui-smoke` | Runs headless Electron smoke checks in `ui/`: `xvfb-run -a -s '-screen 0 1280x900x24' node test/smoke.mjs` and `xvfb-run -a -s '-screen 0 1280x900x24' node test/smoke-main.mjs`. | `2` `[MEASURED: bash tools/gate.sh --leg ui-smoke]` smoke markers (`METAVIEWER_SMOKE_OK` and `METAVIEWER_MAIN_SMOKE_OK`, `PASS ui-smoke`) |
-| 11 | `perf` | Runs offline AC-14 budget checks (`python3 -m unittest discover -s tests -p 'test_budget_gate*.py'`, `python3 tools/budget_gate.py --self-test`, `node --test tests/perf/proc_fields.test.mjs`, and positive leak control `python3 tools/budget_gate.py --receipt tests/perf/leak-renderer.json` expecting `rc=1`). When `MV_GATE_PERF_LIVE=1` is set, also runs the live Electron RSS probe (`xvfb-run -a -s '-screen 0 1280x900x24' python3 tools/budget_gate.py --probe --electron <electron>`). | `10` `[MEASURED: bash tools/gate.sh --leg perf]` Python budget unit tests (`OK`), `6` `[MEASURED: python3 tools/budget_gate.py --self-test]` budget self-tests, `2` `[MEASURED: node --test tests/perf/proc_fields.test.mjs]` proc-field tests, and `1` `[MEASURED]` rejected leak receipt (`PASS perf`; live probe skipped unless `MV_GATE_PERF_LIVE=1`) |
-
-### Gate self-test (`bash tools/gate.sh --self-test`)
-
-`bash tools/gate.sh --self-test` executes the embedded `GateTests` suite in `tools/gate.sh` (backed by unit checks in `tests/test_gate_target_isolation.py` and `tests/test_t7r2c_gate_admission.py`), verifying that the gate script rejects injected faults across every leg (manifest/lock drift, law violations, broken schemas, failing unit/agent/Rust/Go/UI/perf tests, `GOARCH=amd64` compile/vet regressions, and missing smoke markers):
-
-```sh
+bash tools/gate.sh --leg unit
 bash tools/gate.sh --self-test
+bash tools/gate.sh
 ```
 
-Historical count at `a768a684`: `30` `[MEASURED: bash tools/gate.sh --self-test]` self-tests in `GateTests`, `OK` (`PASS self-test`, `PASS aggregate`). I count `42` [MEASURED: `grep -c 'def test_' tools/gate.sh`] source lines containing `def test_`; inline synthetic fixture functions make this distinct from the executed self-test total.
+| Leg | Checks in the shipped runner |
+| --- | --- |
+| `manifests` | Release manifests, pinned dependencies, frozen offline resolution and required ignore rules |
+| `laws` | Release version and repository commit laws |
+| `contracts` | Closed schemas and their valid and invalid examples |
+| `unit` | Python suites under `tests/`, including the live-slice harness unit suites |
+| `agents` | Python agent suites and their mutation harness |
+| `js` | The pinned capsule UI kit and its content hash |
+| `rust` | Pinned formatter, Clippy and offline locked Cargo tests |
+| `go` | Vet and race tests on the host, plus vet and compile checks for the other supported Linux architecture |
+| `ui` | Offline npm installation, Node tests, Vue type checking and production build |
+| `ui-smoke` | Electron renderer and main-process smoke checks with their required success markers |
+| `perf` | Offline resource-budget assertions, a rejected leak fixture and an optional live RSS probe |
 
----
+This table describes `LEAVES`, `leaf`, `build_leg`, `go_leg`, `ui_smoke_leg` and
+`perf_leg` in [tools/gate.sh](../tools/gate.sh). A cross-architecture compile is
+not a run on that architecture. The laws leg checks [LAWS.md](../LAWS.md) through
+[check_laws.py](../tools/check_laws.py); it is not a secret scanner.
 
-## 2. Live gates on a real capsule
+## What must be installed before the local gate?
 
-Live gates run the compiled Rust core (`metaviewer-core`), Go daemon adapter (`mv-daemon-adapter`), and Electron tile against a live isolated capsule (`mv-live-1`), then verify complete teardown (owned container removed, owned processes exited, sockets, temporary state directories, and `/dev/shm` frame directories cleaned up).
+Use the pinned build prerequisites in [INSTALL.md](INSTALL.md), a local checkout
+of the pinned capsule UI kit, cached build dependencies and a local Electron
+binary. Offline resolution deliberately fails when the cache is incomplete.
 
-In the measured live End-to-End slice (`live21`), `1` `[MEASURED]` live capsule runs at `2.71` fps `[MEASURED]` (`34` `[MEASURED]` frames over `12.528` s `[MEASURED]`, `1` `[MEASURED]` `create_surface` call; a multi-capsule live wall remains `[TARGET]`), `metaviewer-core` spends `52.11` ms p50 `[MEASURED]` (`54.02` ms p95 `[MEASURED]`) per `1280x900` (`3,456,000` B `[MEASURED]`) `rgb24` frame, and `34` of `34` `[MEASURED]` frame deliveries arrive on the renderer `MessagePort` with `isTrusted=true` and `utilityVerified=true` (`0` `[MEASURED]` renderer SHA-256 fallback hashes).
+Answers: gate prerequisites; offline dependencies; missing kit; missing Electron
 
-### G-W1 (`node tests/e2e/e2e1_slice/index.js --live`)
+Set `CAPSULE_UI_KIT_REPO` or `MV_KIT_CHECKOUT` to the kit checkout. Set
+`ELECTRON_OVERRIDE_DIST_PATH` if Electron is outside `ui/node_modules/electron/dist`.
+The gate verifies the kit pin from [ui/kit.lock.json](../ui/kit.lock.json).
+It uses the formatter toolchain named in `build_leg`, which is distinct from
+the workspace compiler requirement in [Cargo.toml](../Cargo.toml).
 
-`node tests/e2e/e2e1_slice/index.js --live` (with `tests/e2e/e2e1_slice/live.py`, `electron-relay.mjs`, and `mv-replay`) exercises `11` live verification stages containing `16` `[MEASURED: grep -c 'assert' tests/e2e/e2e1_slice/live.py]` `assert` statements in `tests/e2e/e2e1_slice/live.py`:
+Install the UI dependencies before a standalone `unit` leg: some packaging
+fixtures load the package tooling. The full gate is a verifier, not an online
+dependency installer. See `validate_frozen_dependencies`, `electron_dist` and
+`build_leg` in [tools/gate.sh](../tools/gate.sh).
 
-1. Capsule frame publication, UI fan-out, and retained witness bytes (`1280x900` `rgb24`).
-2. Observe → admitted → dispatched → receipt → pixel verification (`status: "verified"`, `focus_verified: true`, `receipt.verified: true`, `method: "pixel"`).
-3. Different-surface binding negative control (`verified: false`).
-4. Generation-binding negative control (`verified: false`).
-5. Stale-generation refusal (`STALE_FRAME`) without domain state change.
-6. Pending proposal cancellation on human takeover (`SURFACE_NOT_AGENT_CONTROLLED`).
-7. Human refusal while under human control and clean control release.
-8. Fresh-frame readmission after control release (`live-readmitted` admitted and receipted).
-9. Durable journal replay equality (`mv-replay` `rc=0`) and corrupted-journal rejection (`Corrupt`, `rc=2`).
-10. Real Electron tile rendering under `xvfb-run` (`tile: "PASS"`, canvas SHA-256 equal to frame SHA-256) and nested MetaViewer capsule (`metaviewer-nested` at `nested_depth: 1`, plus `nested_depth: 2` refusal).
-11. Complete container, process, socket, temporary-tree, and RAM cleanup.
+## How do I interpret a skipped or blocked check?
 
-### G-AI (`python3 tools/gate_g_ai.py --surface mv-live-1`)
+A missing prerequisite, skipped test or unexecuted live probe is not a passing
+result for that behavior. Read the individual result as well as the aggregate.
 
-`python3 tools/gate_g_ai.py --surface mv-live-1` (backed by `tests/e2e/e2e1_slice/g_ai_stack.py` and `8` `[MEASURED: python3 -m unittest tests/test_gate_g_ai_harness.py -v]` harness unit tests in `tests/test_gate_g_ai_harness.py`) runs `8` `[MEASURED: grep -c "'A[1-8]'" tools/gate_g_ai.py]` live assertions (`A1`–`A8`) and `19` `[MEASURED]` negative controls (`14` `[MEASURED]` in `controls()` + `4` `[MEASURED]` provenance controls in `preflight()` + `1` `[MEASURED]` `A6_stale` in `tools/gate_g_ai.py`) across the AI observe-propose-admit-verify loop (`action_verdict/v0.2` → `action_receipt/v0.2`), verifying post-action pixel witnesses and runtime dependency pins in `deps.lock`.
+Answers: skipped checks; blocked checks; absent evidence; gate failure
 
----
+The `unit` and `agents` legs reject empty selections, skipped tests, expected
+failures and unexpected successes. Other runners have their own rules. In
+particular, `perf_leg` can pass its offline checks while printing that the live
+probe was skipped. Even with `MV_GATE_PERF_LIVE=1`, missing Electron or Xvfb leaves
+that probe skipped. A live resource claim requires evidence that the probe ran.
+[CITED: ../tools/gate.sh, `UNIT_CODE`, `AGENTS_UNIT_CODE`, `perf_leg`]
 
-## 3. End-to-end journeys (`tests/e2e/`)
+The assembly web runner also returns a successful process exit with
+`status: "SKIPPED"` when live mode is not enabled. Inspect its report, not just
+its exit status. [CITED: ../tests/e2e/e2e1_slice/asm_web_live.py, `main`]
 
-### Inventory of E2E suites
+## How do I run the Electron journeys?
 
-`tests/e2e/` contains `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` Node journey files (`tests/e2e/*.test.js`) and `6` `[MEASURED: ls -1 tests/e2e/test_*.py | wc -l]` Python live-stack test files (`tests/e2e/test_*.py`).
+Build the production UI, then run the journey orchestrator under Xvfb with the
+pinned kit and a local Electron distribution available.
 
-`tests/e2e/run.py` syncs `capsule-ui-kit` (`node tools/sync_kit.mjs`), builds the E2E bundle (`node tests/e2e/build.mjs`), globs all `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `sorted((ROOT / "tests/e2e").glob("*.test.js"))` files and runs them sequentially under `node --test --test-concurrency=1`, and then runs the cross-routing negative control (`MV_E2E_CROSS_ROUTE=1` on `tests/e2e/e2e1_wall.test.js`, verifying `is_cross_route_mutant_killed` on `"wall renders four tiles without cross-routing (AC-02)"` with `E2E_ROUTING`).
+Answers: Electron E2E; wall journeys; routing negative control
 
-#### Selected Node E2E journeys executed by `tests/e2e/run.py`
-
-1. `tests/e2e/ac02_oracle_regression.test.js` — AC-02 pixel oracle regression checks on rendered canvas surfaces.
-2. `tests/e2e/ac02_wall.test.js` — AC-02 wall pixel verification journey.
-3. `tests/e2e/ac03_lifecycle.test.js` — AC-03 capsule create/fold/unfold/destroy lifecycle journey.
-4. `tests/e2e/ac04_control.test.js` — AC-04 human/agent control exclusivity journey.
-5. `tests/e2e/ac05_ai.test.js` — AC-05 AI vision intent and action journey.
-6. `tests/e2e/ac06_multislot.test.js` — AC-06 multi-capsule wall isolation (`N >= 2` simultaneous capsules in harness without cross-routing).
-7. `tests/e2e/ac07_ram_first.test.js` — AC-07 RAM-first ring buffer and zero-disk-write idle discipline.
-8. `tests/e2e/e2e10_stale_settlement.test.js` — stale frame and settlement rejection after state transitions.
-9. `tests/e2e/e2e11_golden_replay.test.js` — deterministic golden recording and replay verification.
-10. `tests/e2e/e2e12_replay_purity.test.js` — replay side-effect purity (replay cannot mutate live capsules).
-11. `tests/e2e/e2e13_repeat_rung.test.js` — repeated lifecycle rung stability across create/fold/unfold/destroy cycles.
-12. `tests/e2e/e2e14_perf.test.js` — interactive frame and input latency budget checks.
-13. `tests/e2e/e2e15_conservation_ledger.test.js` — resource and session conservation ledger invariants.
-14. `tests/e2e/e2e16_electron_security.test.js` — Electron `contextIsolation`, `sandbox`, preload bridge, and CSP invariants.
-15. `tests/e2e/e2e17_arrival_registration_order.test.js` — out-of-order frame arrival vs surface registration handling.
-16. `tests/e2e/e2e18_budgets.test.js` — memory, queue depth, and frame-port backpressure budget enforcement.
-17. `tests/e2e/e2e19_nested.test.js` — AC-17 nested MetaViewer capsule (`metaviewer-nested`) with `nested_depth: 0` outer wall, `nested_depth: 1` inner capsule, and `nested_depth >= 2` deterministic refusal.
-18. `tests/e2e/e2e1_slice.test.js` — E2E-1 live slice journey.
-19. `tests/e2e/e2e1_wall.test.js` — wall shell, dockview layout, capsule creation, activity strip, and `MV_E2E_CROSS_ROUTE=1` negative-control target.
-20. `tests/e2e/e2e20_headless_discipline.test.js` — headless Xvfb discipline and clean process group teardown.
-21. `tests/e2e/e2e21_launcher.test.js` — desktop launcher and CLI entrypoint journey.
-22. `tests/e2e/e2e22_correlation_trace.test.js` — end-to-end `correlation_id` trace continuity across IPC boundaries.
-23. `tests/e2e/e2e23_unknown_vs_destroyed.test.js` — distinct refusal codes for unknown vs already-destroyed capsules.
-24. `tests/e2e/e2e24_routing_ownership.test.js` — surface routing ownership and stale-owner rejection.
-25. `tests/e2e/e2e25_production_frames.test.js` — production `ui/dist` renderer frame painting journey over `frame_port/v1` (`frame_delivery/v0.2` -> `frame_ack/v0.2`), `frame_diag/v1` diagnostics (`MV_FRAME_DIAG=1`), multislot round trip, and rotating frame publisher.
-26. `tests/e2e/e2e26_control_with_frames.test.js` — human takeover and control handoff under continuous live `frame_port/v1` delivery (`W3-CTRL-UNDER-FRAMES`).
-27. `tests/e2e/e2e27_human_input.test.js` — human keyboard and pointer input forwarding in `WRITE` mode (`W2-HUMAN-INPUT`).
-28. `tests/e2e/e2e2_scenario.test.js` — multi-step operator scenario journey.
-29. `tests/e2e/e2e3_refusals.test.js` — deterministic contract and policy refusals in the live UI.
-30. `tests/e2e/e2e4_seams.test.js` — core/daemon/UI seam integrity and correlation propagation.
-31. `tests/e2e/e2e6_slice.test.js` — live vertical slice across core, daemon-adapter, and Electron renderer.
-32. `tests/e2e/e2e7_live_slice_honesty.test.js` — verifies no synthetic or mock frame injection on the live slice path.
-33. `tests/e2e/e2e8_ac04_control_journey.test.js` — AC-04 human/agent control handoff, takeover preempt, and `"Agent acting"` / `"Agent ready"` indicator transitions.
-34. `tests/e2e/harness_fresh_build.test.js` — verifies fresh E2E harness bundle build and artifact isolation.
-35. `tests/e2e/volume_bootstrap.test.js` — volume and soak bootstrap journey.
-
-36. `tests/e2e/asm_web_hosted.test.js` — hosted web assembly harness.
-37. `tests/e2e/asm_web_live_hosted.test.js` — hosted dry-run of the opt-in live web runner.
-
-#### Python E2E suites (`3` files)
-
-- `tests/e2e/test_asm_web_live_harden.py` — live web runner hardening and negative controls.
-- `tests/e2e/test_live_stack.py` — live stack integration tests across the Rust core, Go daemon-adapter, and headless Electron harness.
-- `tests/e2e/test_volume_bootstrap.py` — volume and soak bootstrap harness verification (`29` `[MEASURED: python3 -m unittest tests/e2e/test_live_stack.py tests/e2e/test_volume_bootstrap.py -v]` historical tests across these two Python E2E files, `OK`).
-
-### Running the E2E suite and individual journeys locally
-
-#### Step 1: Build the production UI (`ui/dist/`) and E2E bundle
-
-Sync `capsule-ui-kit` and build `ui/dist/` in `ui/` first (required by production-bundle journeys such as `tests/e2e/e2e25_production_frames.test.js` and `ui-smoke`):
+From the repository root, after setting the prerequisite environment variables:
 
 ```sh
-node tools/sync_kit.mjs /path/to/capsule-ui-kit
+node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO"
 (cd ui && npm ci --offline && npm run build)
+xvfb-run -a python3 tests/e2e/run.py
 ```
 
-#### Step 2: Run the full E2E orchestrator (`tests/e2e/run.py`)
+The runner builds a fresh temporary E2E bundle, discovers the existing Node
+journey files and runs them serially. It then enables `MV_E2E_CROSS_ROUTE` for
+the wall test. Success requires that the changed route fail the intended wall
+assertion with `E2E_ROUTING`; a prerequisite failure does not count as detecting
+the mutation. [CITED: ../tests/e2e/run.py, `main`, `is_cross_route_mutant_killed`]
 
-`tests/e2e/run.py` automatically syncs `capsule-ui-kit`, builds the E2E fixture bundle via `tests/e2e/build.mjs`, runs all `40` `[MEASURED: ls -1 tests/e2e/*.test.js | wc -l]` `tests/e2e/*.test.js` suites under Xvfb, and then runs the `MV_E2E_CROSS_ROUTE=1` negative control on `tests/e2e/e2e1_wall.test.js`:
+These journeys test their configured fixtures. They do not by themselves prove
+that every capsule kind, installed application or external runtime works.
+
+## How do I verify a real capsule?
+
+Use the live runners only after provisioning their named test identity and
+pinned external runtimes. The public source contains the harness; a normal
+checkout alone does not supply those runtime assets.
+
+Answers: live capsule; G-W1; G-AI; cleanup evidence
+
+The live slice requires `MV_E2E_LIVE=1`, the core, adapter and replay binaries,
+and the native runtime paths listed by `requireLive` in
+[the slice entry point](../tests/e2e/e2e1_slice/index.js). Keep the test identity
+separate from any personal browser profile. The expected environment keys are:
+
+```text
+MV_E2E_CORE_BIN       MV_E2E_ADAPTER_BIN     MV_E2E_REPLAY_BIN
+MV_SRF_BIN_DIR        MV_SRF_LIVE_PROFILE    MV_SRF_LIVE_RAM_ROOT
+MV_SRF_STATE_DIR      SRF_IDENTITY_STORE_ROOT
+SRF_PROXY_REGISTRY
+```
+
+The agent gate also requires `VQA_VE_ROOT` and `MV_WENDER_ROOT` to identify
+runtime installations whose provenance matches [deps.lock](../deps.lock).
+[CITED: ../tools/gate_g_ai.py, `preflight`;
+../agents/metaviewer_agents/perception/deps_lock.py]
+
+Once those prerequisites are verified, the commands are:
 
 ```sh
-CAPSULE_UI_KIT_REPO=/path/to/capsule-ui-kit \
-ELECTRON_OVERRIDE_DIST_PATH=/path/to/electron/dist \
-  xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py
+node tests/e2e/e2e1_slice/index.js --live
+python3 tools/gate_g_ai.py --surface mv-live-1
 ```
 
-#### Step 3: Run an individual `tests/e2e/*.test.js` journey locally
+The slice checks frame delivery, action receipts, stale-frame refusal, control
+handoff, replay, rendering and cleanup. Its `DONE` result requires the named
+assertions and cleanup fields to pass. The agent gate additionally resolves its
+pinned runtime dependencies in `preflight`; `DONE` requires all assertions,
+negative controls and cleanup. Read the full report before declaring success.
+[CITED: ../tests/e2e/e2e1_slice/index.js, `checkLiveResult`;
+../tools/gate_g_ai.py, `main`]
 
-For journeys that run against the E2E fixture bundle (`tests/e2e/build.mjs`), build `/tmp/mv-e2e-build` once and run `node --test` on the desired journey file under `xvfb-run`:
+For an evaluator's installed-package route, use [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md)
+and [JUDGE_TOUR.md](JUDGE_TOUR.md). The fixture harness and the judge tour answer
+different questions.
+
+## How are web workflows and MemoryWeb checked?
+
+The repository provides hosted fixtures and an explicit opt-in live runner.
+Start with the hosted checks; they do not need a personal browsing session.
+The MemoryWeb hosted suite still requires the pinned Wender checkout through
+`MV_MW_WENDER_ROOT` or `MV_WENDER_ROOT`; hosted does not mean dependency-free.
+
+Answers: web workflow tests; MemoryWeb home; hosted versus live web acceptance
 
 ```sh
-MV_E2E_BUILD=/tmp/mv-e2e-build node tests/e2e/build.mjs
-MV_E2E_LIVE=1 MV_E2E_BUILD=/tmp/mv-e2e-build \
-  ELECTRON_OVERRIDE_DIST_PATH=/path/to/electron/dist \
-  xvfb-run -a -s "-screen 0 1280x900x24" \
-  node --test tests/e2e/e2e19_nested.test.js
+node --test tests/e2e/asm_web_live_hosted.test.js
+node --test tests/e2e/asm_web_memoryweb_hosted.test.js
+python3 -B -m unittest discover -s tests -p 'test_mw_home_cli.py'
 ```
 
-For `tests/e2e/e2e25_production_frames.test.js`, which boots the production renderer bundle in `ui/dist/` (`npm run build` in `ui/` first) and verifies live `frame_port/v1` canvas presentation:
+[asm_web_live.py](../tests/e2e/e2e1_slice/asm_web_live.py) requires
+`MV_LIVE_WEB=1`, `MV_E2E_LIVE=1`, its dedicated profile and every `REQUIRED_ENV`
+entry before native execution. Do not infer these from a hosted pass. Workflow
+support and refusal behavior are implemented in the runner and
+[mw_owner.py](../agents/metaviewer_agents/mw_owner.py); their fixtures are in
+[the MemoryWeb hosted suite](../tests/e2e/asm_web_memoryweb_hosted.test.js).
+
+For a local MemoryWeb home check, run:
 
 ```sh
-(cd ui && npm run build)
-MV_E2E_STRICT_RENDERER=1 \
-  ELECTRON_OVERRIDE_DIST_PATH=/path/to/electron/dist \
-  xvfb-run -a -s "-screen 0 1280x900x24" \
-  node --test tests/e2e/e2e25_production_frames.test.js
+python3 tools/mw_home_check.py --repo "$PWD"
 ```
 
-Historical result at `a768a684` for `tests/e2e/e2e25_production_frames.test.js` with `MV_E2E_STRICT_RENDERER=1`: `5` `[MEASURED: MV_E2E_STRICT_RENDERER=1 xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e25_production_frames.test.js]` tests, `5` `[MEASURED]` pass, `0` fail, `0` todo.
+That command may create the private home. It emits a JSON admission result and
+checks ignored/untracked storage, home policy and optional workflow provenance.
+It does not execute a workflow or certify a website.
+[CITED: ../tools/mw_home_check.py, `main`]
 
----
+## What do hosted CI and nightly runs establish?
 
-## 4. Hosted CI and workflow jobs (`.github/workflows/*.yml`)
+Hosted CI checks the revision and environment named in its job results. A workflow
+file's existence does not prove a completed run or configured branch protection.
 
-I count `6` workflow files and `20` job definitions [MEASURED: inventory of `.github/workflows/*.yml`, counting two-space keys only below `jobs:`]. The raw `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l` returns `28` [MEASURED], including `8` trigger keys [MEASURED]; I exclude those triggers from the job total. I count `13` jobs in `ci.yml`, one each in `assembly.yml`, `secrets.yml`, `package.yml`, and `build-other.yml`, and `3` in `volume.yml` [MEASURED: keys below `jobs:`].
+Answers: ci-required; hosted CI; nightly volume; private assembly
 
-### How required status is decided
+[ci.yml](../.github/workflows/ci.yml) defines the `ci-required` aggregator,
+platform jobs and receipt validation. It rejects missing required jobs, failed
+assertions and mismatched product or revision evidence. The separate
+[secrets workflow](../.github/workflows/secrets.yml) owns secret scanning.
+[volume.yml](../.github/workflows/volume.yml) is scheduled/manual coverage, not
+a required pull-request status. [assembly.yml](../.github/workflows/assembly.yml)
+needs access to the private components and is not reproducible from public source
+alone. Evaluation permission is defined in [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
 
-In `.github/workflows/ci.yml`, the aggregate gate job `ci-required` declares:
+Read actual job output and the commit identity before quoting a CI result.
+Current-checkout test totals and live performance receipts are not supplied by
+this page: **ABSENT — do not invent**.
 
-```yaml
-needs: [ci-policy, laws-contracts, router, rust, go, python, js, e2e, novac, package]
-```
+## How are documentation and negative controls kept honest?
 
-`ci-required` runs with `if: always()` on `[x64, arm64]` and fails unless every one of those `10` [CITED: `.github/workflows/ci.yml`, `ci-required.needs`] upstream jobs succeeded and emitted valid `gate_receipt/v1` artifacts. `build-macos` and `build-windows` are excluded from `ci-required.needs`, carry `continue-on-error: true`, and emit `NOT_APPLICABLE` receipts. `.github/workflows/secrets.yml` (`Secrets / secrets`) runs as a separate workflow on every push and pull request; `.github/workflows/package.yml`, `.github/workflows/build-other.yml`, and `.github/workflows/volume.yml` are standalone packaging, reference, or scheduled/manual soak workflows.
+Documentation checks require real pages, existing command paths and matching
+index entries. A changed document needs a refreshed generated index before the
+full freshness gate can pass.
 
-### Complete workflow job inventory (`20` jobs across `6` files) [MEASURED: keys below `jobs:`]
-
-| Workflow file | Job key (`name`) | Runners / matrix | Required (`ci-required`) | What it runs |
-| :--- | :--- | :--- | :--- | :--- |
-| `.github/workflows/assembly.yml` | `pinned-assembly` | `ubuntu-24.04` | **No** (separate assembly workflow) | I verify the pinned private assembly with `--require-planner`; fork pull requests are refused [CITED: `.github/workflows/assembly.yml`]. |
-| `.github/workflows/ci.yml` | `ci-policy` (`ci-policy (x64)`) | `ubuntu-24.04` (`x64`) | **Yes** (in `ci-required.needs`) | Runs the embedded Python policy fixture verifier (`policy-fixtures`) checking workflow structure, permissions, SHA-pinned actions, and `gate_receipt/v1` compliance; the standalone CI policy suites in `tests/ci/` comprise `7` `[MEASURED: node --test tests/ci/*.test.cjs]` Node tests and `112` `[MEASURED: python3 -m unittest discover -s tests/ci -p 'test_*.py' -v]` Python tests. |
-| `.github/workflows/ci.yml` | `laws-contracts` (`laws-contracts (x64)`) | `ubuntu-24.04` (`x64`) | **Yes** (in `ci-required.needs`) | Runs `python3 tools/check_laws.py --range` (`laws-range`), `python3 tools/check_laws.py --version` (`laws-version`), `python3 tools/check_contracts.py` (`contracts`), and `python3 -m unittest discover -s tests` (`unittest-root`). |
-| `.github/workflows/ci.yml` | `router` (`router (x64)`) | `ubuntu-24.04` (`x64`) | **Yes** (in `ci-required.needs`) | Runs `python3 tools/router_index.py --check` (`router-check`). |
-| `.github/workflows/ci.yml` | `rust` (`rust (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (in `ci-required.needs`) | Runs `rustup run 1.92.0 cargo fmt --all --check` (`rust-fmt`), `cargo clippy --locked --offline --all-targets -- -D warnings` (`rust-clippy`), `cargo test --locked --offline` (`rust-test`) on Rust `1.97.0`, and `bash .github/workflows/offline.sh bash tests/supervisor/run_process_gate.sh`. |
-| `.github/workflows/ci.yml` | `go` (`go (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (in `ci-required.needs`) | Runs `go vet ./...` (`go-vet`) and `go test -race ./...` (`go-test`) in `daemon-adapter/` on Go `1.26.0`. |
-| `.github/workflows/ci.yml` | `python` (`python (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (in `ci-required.needs`) | Runs `python3 -m unittest discover -s agents/tests -v` (`python-agents`, `584` `[MEASURED: python3 -m unittest discover -s agents/tests -v]` tests). |
-| `.github/workflows/ci.yml` | `js` (`js (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (in `ci-required.needs`) | Runs `node --test tests/ci/*.test.cjs`, `node tools/sync_kit.mjs` (`js-kit`), `npm ci --offline --no-audit --no-fund` (`js-install`), `node .github/workflows/install_electron.cjs` (`js-electron`), `npm test` (`js-test`), `npm run check` (`js-check`), and `npm run build` (`js-build`) in `ui/`. |
-| `.github/workflows/ci.yml` | `e2e` (`e2e (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (in `ci-required.needs`) | Runs `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` (`e2e-xvfb`) inside `.github/workflows/offline.sh`. |
-| `.github/workflows/ci.yml` | `novac` (`novac (x64)`) | `ubuntu-24.04` (`x64`) | **Yes** (in `ci-required.needs`) | Emits a `NOT_APPLICABLE` `gate_receipt/v1` receipt (`G-NOVAC required from W1, interface ABSENT in W0`). |
-| `.github/workflows/ci.yml` | `package` (`package (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (in `ci-required.needs`) | Runs `python3 tests/ci/test_package_identity.py --build` (`package`) inside an offline network namespace. |
-| `.github/workflows/ci.yml` | `build-macos` (`build-macos (non-blocking)`) | `macos-latest` | **No** (`continue-on-error: true`, not in `ci-required.needs`) | Emits a `NOT_APPLICABLE` `gate_receipt/v1` receipt (`packager argv ABSENT in W0, build-only leg`). |
-| `.github/workflows/ci.yml` | `build-windows` (`build-windows (non-blocking)`) | `windows-latest` | **No** (`continue-on-error: true`, not in `ci-required.needs`) | Emits a `NOT_APPLICABLE` `gate_receipt/v1` receipt (`packager argv ABSENT in W0, build-only leg`). |
-| `.github/workflows/ci.yml` | `ci-required` (`ci-required (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **Yes** (aggregate required gate job) | Aggregate required check (`if: always()`); runs `python3 tests/ci/test_package_identity.py --build`, `python3 tests/ci/test_package_identity.py --distribution`, `python3 tools/budget_gate.py --self-test`, and `xvfb-run -a -s "-screen 0 1280x900x24" node --test tests/e2e/e2e18_budgets.test.js tests/e2e/e2e14_perf.test.js`, then verifies all `10` [CITED: `.github/workflows/ci.yml`, `ci-required.needs`] upstream `needs` jobs succeeded. |
-| `.github/workflows/secrets.yml` | `secrets` (`secrets (x64)`) | `ubuntu-24.04` (`x64`) | Separate branch-protection check (`Secrets / secrets`; not in `ci-required.needs`) | Downloads `gitleaks` `v8.18.4` (`checksum verified`), runs `python3 tests/fixtures/secrets/gate.py`, `gitleaks detect --config .gitleaks.toml`, `python3 tests/fixtures/secrets/gate.py controls`, and `python3 -m unittest tests/test_gitleaks_config.py`. |
-| `.github/workflows/package.yml` | `linux-package` (`linux-package (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **No** (standalone packaging workflow on `v*` tags / `push` / `pull_request` / `workflow_dispatch`) | Runs `bash scripts/bootstrap.sh`, `node ui/tools/package.js --verify-install "$MV_PKG_OUT/MetaViewer-linux-${{ matrix.arch }}.tar"`, and `node ui/tools/package.js --smoke "$MV_PKG_OUT/MetaViewer-linux-${{ matrix.arch }}.tar"`. |
-| `.github/workflows/build-other.yml` | `build-other-reference` (`build-other (${{ matrix.os }}, non-blocking)`) | `macos-latest`, `windows-latest` | **No** (`workflow_dispatch` only, `continue-on-error: true`) | Manual UI build reference check on macOS and Windows: runs `npm --prefix ui ci --offline`, `node tools/sync_kit.mjs`, `node tools/sync_kit.mjs --check`, `npm --prefix ui test`, `npm --prefix ui run check`, and `npm --prefix ui run build`. |
-| `.github/workflows/volume.yml` | `volume-property` (`volume-property (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **No** (nightly `schedule` `17 2 * * *` and `workflow_dispatch`) | Checks for the `100,000`-case `[TARGET]` property entrypoint (`.github/workflows/volume.yml`) and emits a `BLOCKED` `gate_receipt/v1` receipt until registered. |
-| `.github/workflows/volume.yml` | `volume-mutants` (`volume-mutants (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **No** (nightly `schedule` `17 2 * * *` and `workflow_dispatch`) | Runs `100` `[TARGET]` iterations of `python3 -m unittest tests.test_contract_mutants -v` (plus `python3 agents/tests/run_mutant_harness.py` and `python3 tests/test_t7r2c_reproducibility.py --flake-hunt` on `schedule` runs). |
-| `.github/workflows/volume.yml` | `volume-e2e` (`volume-e2e (${{ matrix.arch }})`) | `ubuntu-24.04` (`x64`), `ubuntu-24.04-arm` (`arm64`) | **No** (nightly `schedule` `17 2 * * *` and `workflow_dispatch`) | Runs `20` `[TARGET]` smoke repetitions and `300` `[TARGET]` qualification repetitions of `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py`, followed by the `600` s `[TARGET]` wall soak (`node tests/e2e/perf-build.mjs` and Electron on `tests/e2e/perf-main.cjs`). |
-
-### Reproducing the hosted-like environment locally
-
-Hosted Ubuntu runners differ from a developer workstation in four ways that I test explicitly:
-
-1. **No global git identity (`GIT_CONFIG_GLOBAL=/dev/null`):** hosted runners have no `~/.gitconfig` `user.name` or `user.email`. Tests that create temporary git repositories or verify receipt identities must succeed with `GIT_CONFIG_GLOBAL=/dev/null`:
-
-   ```sh
-   GIT_CONFIG_GLOBAL=/dev/null \
-     python3 -m unittest tests/ci/test_t7r2c_receipt_identity.py -v
-   ```
-
-   Historical result at `a768a684`: `10` `[MEASURED: GIT_CONFIG_GLOBAL=/dev/null python3 -m unittest tests/ci/test_t7r2c_receipt_identity.py -v]` tests, `OK`.
-
-2. **Python stdlib-only (`PyYAML` absent):** the `ci-policy`, `laws-contracts`, and `router` jobs can run on system Python 3 without `PyYAML`. All workflow parsers in `tests/ci/` must work with `yaml` blocked (`sys.modules['yaml'] = None`):
-
-   ```sh
-   GIT_CONFIG_GLOBAL=/dev/null python3 -c "import sys, unittest; sys.modules['yaml']=None; suite=unittest.defaultTestLoader.discover('tests/ci', pattern='test_t7r2c_*.py'); res=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if res.wasSuccessful() else 1)"
-   ```
-
-   Historical result at `a768a684`: `41` `[MEASURED: GIT_CONFIG_GLOBAL=/dev/null python3 -c "import sys, unittest; sys.modules['yaml']=None; suite=unittest.defaultTestLoader.discover('tests/ci', pattern='test_t7r2c_*.py'); res=unittest.TextTestRunner(verbosity=2).run(suite); sys.exit(0 if res.wasSuccessful() else 1)"]` tests across `tests/ci/test_t7r2c_*.py`, `OK`.
-
-3. **Empty npm and Electron caches (`npm_config_cache`, `ELECTRON_CACHE`, `electron_config_cache`):** offline packaging scripts must fail closed with a deterministic prerequisite diagnostic (`PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING` / `PKG_CLEAN_CI_PREREQ_ELECTRON_ZIP_MISSING`) instead of hanging or attempting network fetches when caches are empty:
-
-   ```sh
-   npm_config_cache=/tmp/mv-empty-npm-cache \
-   ELECTRON_CACHE=/tmp/mv-empty-electron-cache \
-   electron_config_cache=/tmp/mv-empty-electron-cache \
-     python3 -m unittest tests/ci/test_fx2_package.py -v
-   ```
-
-   Historical result at `a768a684`: `4` `[MEASURED: npm_config_cache=/tmp/mv-empty-npm-cache ELECTRON_CACHE=/tmp/mv-empty-electron-cache electron_config_cache=/tmp/mv-empty-electron-cache python3 -m unittest tests/ci/test_fx2_package.py -v]` tests, `OK` (emits `CLEAN_CI_REPRO_PREREQ: PKG_CLEAN_CI_PREREQ_NPM_CACHE_MISSING`).
-
-4. **Cross-architecture `GOARCH=amd64` Go vet and compile check on `arm64` hosts:** `daemon-adapter/` includes architecture-specific syscalls and struct fields (`uint64` vs `uint32`), so `tools/gate.sh --leg go` runs both native `go test -race` and `GOARCH=amd64` compilation/vetting:
-
-   ```sh
-   GOARCH=amd64 go -C daemon-adapter vet ./...
-   GOARCH=amd64 go -C daemon-adapter test -run '^$' -exec /bin/true ./...
-   ```
-
-   Historical result at `a768a684`: `0` `[MEASURED: GOARCH=amd64 go -C daemon-adapter vet ./...]` warnings (`rc=0`) and `7` `[MEASURED: GOARCH=amd64 go -C daemon-adapter test -run '^$' -exec /bin/true ./...]` packages compiled cleanly.
-
----
-
-## 5. Mutation proofs, budget gate, and negative controls
-
-To prevent vacuous green suites, I ship automated mutation and negative-control harnesses that run in the local gate and in CI:
-
-| Harness | Command | What it verifies and measured count |
-| :--- | :--- | :--- |
-| Contract schema mutants | `python3 -m unittest tests/test_contract_mutants.py -v` | Generates at least `10` `[MEASURED: grep -E '^MIN_MUTANTS_PER_SCHEMA = [0-9]+' tests/test_contract_mutants.py]` deterministic structural mutations (`MIN_MUTANTS_PER_SCHEMA = 10`) per JSON schema across `contracts/v0.1/` and `contracts/v0.2/` and asserts every mutant is rejected (`2` `[MEASURED: python3 -m unittest tests/test_contract_mutants.py -v]` tests, `OK`). |
-| Agent policy mutant harness | `python3 agents/tests/run_mutant_harness.py` | Runs in `tools/gate.sh --leg agents`; injects `8` `[MEASURED: python3 agents/tests/run_mutant_harness.py]` policy and broker mutants (`M1` through `M8`) and verifies `8` of `8` `[MEASURED]` are rejected (`100%` conforming). |
-| Process supervisor mutation controls | `python3 tests/supervisor/check_mutations.py` and `python3 tests/supervisor/test_mutations.py -v` | Rejects `13` `[MEASURED: python3 tests/supervisor/check_mutations.py]` permissive reaper mutations (`13` of `13` `[MEASURED]` rejected) and verifies unique mutation anchors (`1` `[MEASURED: python3 tests/supervisor/test_mutations.py -v]` unit test, `OK`). |
-| Performance & resource budget gate | `python3 tools/budget_gate.py --self-test` | Runs in `tools/gate.sh --leg perf`; verifies the metric budget evaluator against synthetic passing and failing latency/memory/drop fixtures (`6` `[MEASURED: python3 tools/budget_gate.py --self-test]` self-test checks passed, `0` failed). |
-| E2E cross-routing negative control | `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` | Runs `tests/e2e/e2e1_wall.test.js` with `MV_E2E_CROSS_ROUTE=1` and asserts that `LIVE_WALL_TEST_NAME` (`"wall renders four tiles without cross-routing (AC-02)"`) fails with `E2E_ROUTING`. |
-| Gate fault-injection self-test | `bash tools/gate.sh --self-test` | Injects synthetic failures into each leg of `tools/gate.sh` and asserts the gate exits non-zero (`30` `[MEASURED: bash tools/gate.sh --self-test]` tests in `tools/gate.sh` `GateTests`, `OK`). |
-
-In the historical `a768a684` full `bash tools/gate.sh` run, `56` `[MEASURED: bash tools/gate.sh]` mutant-named test cases execute and pass inside the standard legs in addition to the standalone harnesses above.
-
----
-
-## 6. External testers
-
-Two independent external testers reviewed the repository across three adversarial rounds (documented in [`META_AI_USAGE.md`](../META_AI_USAGE.md)):
-
-- **Round 1:** audited early contract schemas, daemon-adapter process lifecycle, and local gate coverage; surfaced missing negative controls and cross-architecture `GOARCH=amd64` build checks.
-- **Round 2:** audited hosted-CI parity (`GIT_CONFIG_GLOBAL=/dev/null`, stdlib-only Python without `PyYAML`, offline packaging prerequisites), Electron security (`contextIsolation`, `sandbox`, preload surface), and multi-slot isolation (`ac06_multislot.test.js`).
-- **Round 3:** audited production renderer frame delivery (`frame_port/v1`, `frame_delivery/v0.2`, and `frame_ack/v0.2`), `nested_depth` (`0` / `1` / `>= 2` refusal) on `surface_request/v0.2`, QA anchors retail gating (`MV_E2E_LIVE=1` in `ui/electron/qaAnchors.js`), capture state refresh (`MvRecordingPanel.vue`), and documentation/test-count parity (`tests/test_docs_presence.py`).
-
-## Opt-in assembly web acceptance
-
-On AX proof failure, the web runner retains redacted AX, vision and Wender JSON tables and the observed PNG (or RGB24 with width/height when PIL is absent), listing filenames and expected tokens in the task report.
-
-The web runner launches its adapter with `MV_SRF_LIVE_TEXT_INPUT=paste`, using
-capsule clipboard input while retaining the native text chunk cap. After agent
-text or key input drains, the adapter captures at least 50 ms apart for at most
-1500 ms until pixels change; on timeout it publishes the last unchanged frame
-so core verification still fails closed instead of racing Chromium repaint.
-
-Run `node --test tests/e2e/asm_web_live_hosted.test.js` for the hosted dry-run
-and AX-skip mutation control. The native runner is Python beside `g_ai_stack.py`
-to reuse its ownership and wire harness. It stays inert unless `MV_LIVE_WEB=1`,
-`MV_E2E_LIVE=1`, and `MV_SRF_LIVE_PROFILE=mv-live-1` are explicit. Supply all
-`requireLive` environment keys documented by `tests/e2e/e2e1_slice/index.js`,
-plus the pinned `MV_WENDER_ROOT` and `VQA_VE_ROOT` checkouts. With the identity
-unallocated, run `python3 tests/e2e/e2e1_slice/asm_web_live.py`. The conductor
-runs this live command; hosted CI must leave `MV_LIVE_WEB` unset.
-
-MemoryWeb replay uses `--mw-root "$MEMORYWEB_ROOT" --mw-workflow '<site>/<workflow>'`
-on the same Python entry point. The checkout is read-only; workflows are loaded
-from `sites/<site>/workflows/<workflow>.json` alongside `site.json`. Its schema
-projections must match Wender's pinned bundle, and the real MemoryWeb gate checks
-canonical bytes, provenance and supported capabilities before backend startup.
-`evaluation_profile.fixture_ids` names one built-in offline fixture. This unit
-supports draft replay with T1 element anchors (`ax:<exact name>`) and registered
-`mv.ax.present.v1` / `mv.ax.focus.v1` boolean predicates. Bind exactly one string
-named `name`; comparisons use `truth` with no snapshot or evidence references.
-AX absence refuses. No site or workflow bytes grant authorization.
-
-The transport translates click, key, type and point-free scroll through the
-existing core admission and AdmittedExecutor path, checks the exact proposal,
-surface and input-clock receipt binding, and never retries a send. Drag, double
-click, point scroll, pixel-template targets, masked visual verifiers and
-shadow/promoted/repair modes refuse. [TARGET, unit decision] Trusted Python callers
-supply `ReplayOwner(..., slot_values={slot_id: value})` in process; corpus JSON,
-argv and environment never provision values. Wender `paste` requires a declared
-slot and focused precondition, then `private_pipe` maps it to one admitted `type`
-proposal with a verified receipt. Fresh focused AX `value` (or `text`) measures
-initial and accepted Unicode code-point lengths. Missing length evidence refuses.
-No clipboard transport or native paste is used. Slot max_length, Wender slot-byte
-limits and core type limits apply before propose; controls (including tabs and
-newlines), bidi controls, surrogates and empty text refuse. The core disallows
-empty type proposals even when slot metadata permits an empty editor. A nonempty
-editor with clear_first refuses because this owner has no clearing action.
-Receipts retain only binding metadata; summary/evidence never include the input.
-The hosted text fixture supplies values on a private stdin pipe to a trusted test
-composition, asserts click/type/Return, and verifies an answer marker via existing
-state_signal/truth predicates. The public runner CLI has no secret provisioning
-flag; production callers must compose the in-process owner.
-The hosted workflow exercises click, click, focused key, then point-free scroll,
-asserting the exact proposal sequence and validating the emitted run schema.
-[TARGET, unit decision] Text entry uses the existing schemas without extension.
-
-`memoryweb-run.json` (MemoryWeb `mw.run.v1`), the private offline operator notice,
-and an authenticated metadata event journal are retained beside the runner's
-receipts in its private evidence directory. Uncertain input keeps the intent
-journal and produces no successful run summary, following Wender's fence.
-[TARGET, unit decision] Delivery budgets must be in 1–60000 ms and policy pacing
-must be in 0–5000 ms; larger values refuse at admission. Chord parts are checked
-individually against Escape/Esc and both forbidden-key policies; empty parts
-refuse. Pacing never sleeps to or beyond the run deadline. Static target, action,
-focus and predicate support is checked before any input.
-Policies requiring write go-ahead refuse; advance notice must have actually
-elapsed. Core admission checks the held injection lease for every action.
-
-With the existing live-run prerequisites and executable pins supplied by the
-operator, a later **offline replay using the native backend** is:
+Answers: documentation tests; stale index; missing suite; non-vacuity
 
 ```sh
-MV_LIVE_WEB=1 MV_E2E_LIVE=1 MV_SRF_LIVE_PROFILE=mv-live-1 \
-  python3 tests/e2e/e2e1_slice/asm_web_live.py \
-  --mw-root "$MEMORYWEB_ROOT" --mw-workflow "$MW_WORKFLOW"
+python3 -B -m unittest discover -s tests -p 'test_*doc*'
+python3 route/route_query.py check
+python3 tools/router_index.py --check
 ```
 
-Fixture replay requires offline proof before startup and every input. Real-site
-owners require a declared capsule network mode (open, allowlisted/proxied, or
-legacy); open network is the default operator policy and proxy/allowlist use is
-optional per capsule. [TARGET, unit decision] The read-only backend seam is
-`network_context` returning `{mode: "open" | "allowlisted/proxied" | "legacy"}`.
-Missing, unknown or changed declarations refuse with `MW_NETWORK`; the operator
-notice must match the declaration and verified owner receipts retain it. The
-pinned Wender runner uses its replay execution lane for both owner contexts;
-this does not declare or alter the capsule network policy. `MUT-OWNER-NET-DOWN`
-scans owner/runner sources and proves forbidden-call injection is detected;
-`MUT-SITE-MODE-MISSING` and `MUT-REPLAY-NO-PROOF` refuse missing declarations
-and absent/revoked fixture proofs before input. Hosted verification
-uses `node --test tests/e2e/asm_web_memoryweb_hosted.test.js`; provide the locked
-Wender checkout through `MV_WENDER_ROOT`. The fixture builder derives a temporary
-MemoryWeb checkout from the pinned schemas and exercises the real Wender runner
-and state shim. Negative controls cover schema rejection before backend startup,
-unsupported actions before input, receipt mismatch without retry, and absence
-of any native input import or process launcher in the owner.
-For the aggregate test suite, set `MV_MW_WENDER_ROOT` to that same checkout and
-leave `MV_WENDER_ROOT` unset globally. The new tests scope `MV_WENDER_ROOT` to
-their owners and child runners; setting it globally opts older planner tests
-into a different execution mode. This alias is test configuration only.
+[The presence gate](../tests/test_docs_presence.py) rejects missing pages,
+wrong required headings, nonexistent test-suite names and stale document digests.
+[The command-path checks](../tests/test_router_docs.py) reject Python commands
+that name missing files. [The non-vacuity matrix](../tests/test_novac_matrix.py)
+checks that its gates accept intended inputs and reject altered ones.
 
-
-The runner creates one owned browser capsule, revalidates the read-only offline
-fixture proof before every action attempt and navigation, and retains one perception
-client across tasks. The proof checks immutable fixture hashes, CSP, and pinned
-local data/blob navigation; it does not attest native capsule egress isolation.
-The pinned OpenSuperficies CLI has no read-only capsule network-state query
-(`a9ac1ac8`, `cmd/srf-identity-surface/main.go:137-149`); its policy path is
-operator-supplied (`:174-185`). Reports state
-`network: not altered (read-only check unavailable at pin)`.
-`net` verbs are operator-only: the October 29 incident deleted the shared proxy
-(`src/browserid/surface/network.go:199-236` at that pin); `stack.checked` rejects
-all such subcommands with `E2E_FORBIDDEN_VERB` before spawning. Optional
-`MV_WENDER_PLANNER_CMD` is a JSON argv using the existing custody-bound click
-protocol; otherwise it uses the pinned G-AI state shim and named targets.
-Before address-bar navigation, a custody-bound, admitted click at the frame's
-quarter-width and three-quarter-height moves focus from the initially selected
-omnibox into content. A lower-left content geometry gate excludes the toolbar
-and upper-right restore bubble; the bubble is left untouched. The prelude uses
-strict full-frame `changed_region` verification: losing omnibox selection is the
-visible cue even on a blank page. No AX focus schema is assumed; if that cue is
-absent, verification fails closed. Ctrl+L, URL typing and Return retain their
-existing strict pixel expectations. URL typing uses consecutive chunks of at most
-2000 Unicode code points, matching the srf input rune cap; every chunk has its
-own admitted proposal and full-frame verification. Failed receipts or absent
-native evidence produce `VERIFICATION_FAILED` with the receipt details. Prelude and navigation receipts belong to
-`fixture_setup`, never task steps; task budgets remain unchanged. Hosted tests
-exercise the real navigation loop against a preselected omnibox and kill
-`MUT-OMNIBOX-PREFOCUSED`, `MUT-PRELUDE-ON-BUBBLE` and `MUT-PRELUDE-COUNTS`.
-This pixel focus cue still requires confirmation in the operator's live run.
-Typing is deterministic against the focused field; table reading admits no
-input. Runtime blob links bind the flow fixtures without network access
-`[TARGET, unit decision]`. Stdout reports task budgets, measured stage latencies,
-frame/state digests, AX proofs, receipts, replay and cleanup. Evidence files
-(frames, journal/archive, wire and report JSON) remain in the printed private
-temporary evidence directory outside the repository. Failure retains available
-evidence and returns nonzero. The native run reuses `MV_E2E_VERIFY_BIN` or builds
-the existing receipt verifier offline with tools from PATH and `CARGO_TARGET_DIR`;
-the `propose` latency includes admission and native input settlement. Run both
-the dry-run and full gate in foreground
-`systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0` scopes.
-
-Pack admission rejects unsafe meta directives, URL attributes and CSS URLs,
-and enforces static HTML for external packs before backend startup. The runner
-requires the read-only offline fixture proof before navigation and every action
-attempt; it never changes capsule network policy. CSP and attribute checks
-provide defense in depth for local fixture navigation, without attesting native
-egress isolation. The conservative script token scan applies only to built-in pages.
-
-Offline automation packs use the closed tooling schema
-`tests/e2e/packs/automation.schema.json` (`metaviewer.automation/v1`), outside the
-frozen wire contracts. `[TARGET, unit decision]` Each pack is one task:
-`automation.json` plus pinned `pages/<id>.html`. The built-in collection at
-`tests/e2e/packs/builtin-fixtures/{T1,T2,T3}/` copies the original fixture bytes;
-its proposal budgets remain 8/12/0 [TARGET], with the same goals and AX proofs.
-No product API is added.
-
-External offline packs are static HTML: no scripts or `on*` event handlers,
-no `<iframe>`, `<frame>`, `<object>` or `<embed>`, and no form action except an
-absent attribute or the exact inert action ruled below. Each CSP must disable
-scripts with `script-src 'none'` or the `default-src 'none'` fallback. Violations
-return `E2E_PACK_SCRIPT` before backend startup. Only packs whose realpath is
-inside `tests/e2e/packs/builtin-fixtures/` retain inline script support; copying
-a built-in page elsewhere does not grant that privilege. Interactive or real-site
-automations use live packs (WEB-NET-2, with an egress allowlist).
-
-For a minimal external pack, save these exact UTF-8 bytes (including the final
-newline) as `pages/form.html`, then write this `automation.json`:
-
-```html
-<!doctype html><meta http-equiv="Content-Security-Policy" content="default-src 'none'"><p>EMPTY</p>
-```
-
-```json
-{
-  "schema": "metaviewer.automation/v1",
-  "name": "form-ready",
-  "version": "1.0.0",
-  "mode": "offline",
-  "start": "form",
-  "steps": ["read:EMPTY"],
-  "budget": 0,
-  "expect": ["EMPTY"],
-  "fixtures": {
-    "form": "04915b5187699f82191ffb79041a4568b053a42b551490919b46661ab00e9901"
-  }
-}
-```
-
-For your own HTML, require a CSP meta policy with `default-src 'none'`, include
-only source tokens `'none'`, `'self'`, or `'unsafe-inline'` in every directive
-(with only `'none'` permitted for the external script policy),
-agreeing CSP meta tags, and an expected visible marker on the start page, and replace the pin with the
-SHA-256 of the exact UTF-8 page bytes (for example, `sha256sum pages/form.html`).
-Pages must have no `<base>`, speculative resource links, navigation sinks, or
-remote/scheme URLs in URL-bearing attributes or CSS. Only CSP and content-type
-meta `http-equiv` values are admitted. URL checks trim edge C0 controls/spaces and
-refuse internal C0 controls. Per conductor ruling WEB-PACK-1-R3b, only an `action`
-value equal to `javascript:void(0)` after that trim is admitted (ASCII case-insensitive
-scheme only, exact `void(0)`, no internal whitespace or extra characters); every
-other `javascript:` occurrence, including `href="javascript:void(0)"`, is refused.
-Hash/nonce CSP tokens are not needed by built-ins and are
-not admitted. A `flow_a` start requires pinned `flow_b` for runner-generated blob links.
-Fixture ids are simple names, resolved only under `pages/`; traversal and
-symlink escapes are refused. The loader snapshots verified HTML before backend
-startup, checks every declared fixture, and refuses malformed or duplicate JSON
-keys, unknown fields, invalid steps, oversized files and mismatched pins with
-`E2E_PACK_*` errors. `mode: "live"` fails with `E2E_PACK_LIVE` naming WEB-NET-2;
-`navigate:` and live host fields are outside this schema.
-
-`--pack <directory>` is repeatable and replaces the built-ins in caller order.
-`MV_AUTOMATIONS_DIR=<directory>` appends its immediate subdirectory packs in
-sorted order to the explicit selection (or the built-ins when no `--pack` is
-supplied). Pack names must be unique. Use these options with the runner's
-existing opt-in and hosted RPC interface; they do not enable live execution.
-Hosted RPC is a test backend protocol, not a standalone browser command.
-
-Steps are named `click:`, nonempty `type:`, `key:` chords separated by `+`,
-`scroll:up|down|left|right`, and `read:` checkpoints. Admitted keys are Return,
-Enter, Tab, shift+Tab, Escape, Space, Backspace, Left/Right/Up/Down, Home, End,
-PageUp and PageDown; other modifiers and function keys are refused at admission. Typing requires a prior
-verified named click. `[TARGET, unit decision]` A read region is an exact marker
-in `expect`, or `table`. A sole read names the first expected marker (or
-`table`) and proves all expected markers in AX document
-order and reports `reported_values`; multiple checkpoints prove their respective
-markers in order. Optional closed `report_cell: {row, col, index}` selects a
-reported value by zero-based marker index. T3 declares row 1, col 2, index 5
-[TARGET] and retains its historical ordered proof and value `27`. Reads must cover `expect` exactly once in order and the
-last step must be a read; reads consume no proposals. Each marker is independently
-proved in both AX and perceived state, and the final seal requires all proofs.
-Inputs retain custody, offline-fixture proof, budget and verified-receipt gates.
-
-Admission caps [TARGET]: metadata 64 KiB, each page 1 MiB, total page bytes 8 MiB,
-64 fixtures, 256 steps/markers, 32 selected packs, and budget at most 10000.
-Run the pack mutation and external-pack hosted checks alongside the unchanged
-suite:
-
-```sh
-systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 \
-  node --test tests/e2e/asm_web_live_hosted.test.js tests/e2e/asm_web_packs_hosted.test.js
-```
-
-CAPTCHA-HANDOFF: the offline owner invokes the pinned Wender STOP detector
-(`wender/perceive/stopstate.py:89–176`) on a fresh observation after pacing in the pre-intent `check('send')` phase,
-immediately before returning authorization. The transport consumes that observation
-without another STOP check after intent. `HUMAN_HANDOFF` uses the pinned MemoryWeb protocol's human
-handoff return code (`docs/spec/MEMORYWEB_PROTOCOL.md:555`).
-[TARGET, unit decision] The minimal observed-wall seam is an observation
-`observed_wall: {kind: "login_wall" | "captcha_wall", observed: true}`; login
-controls alone remain negative. Extra marker metadata is allowed. Marker walls
-report evidence kind `ax_role_name` synthetically, without claiming an AX cue. STOP is absorbing for that owner: no input,
-retry, reset, or observation polling. A private `metaviewer.handoff/v1` JSON
-file beside the summary contains only surface identity, step index, reason,
-confidence and evidence kinds. `result.handoff_path` and the summary's
-`evidence_refs` expose its path without changing the closed run schema.
-The operator uses existing `take_control` and solves by hand. Continuing
-requires an explicitly authorized new run; already-satisfied steps retain the
-runner's skip behavior. Run `python3 -m unittest tests.test_mw_owner
-tests.test_mw_handoff` from `agents` with `MV_MW_WENDER_ROOT` set to the pinned
-checkout, and run the Node hosted MemoryWeb suite with that dependency scoped
-to the command. The tests cover MUT-RETRY-LOOP, MUT-AUTO-SOLVE, MUT-NO-NOTIFY,
-MUT-LEAK, every pinned STOP reason, and consent/generic-Verify negatives.
-
-The hosted Python agent suite checks out Wender at the `deps.lock` pin using `ASSEMBLY_READ_TOKEN`, verifies HEAD, and scopes `MV_MW_WENDER_ROOT` to the agent step; a missing token fails closed with `ASSEMBLY_READ_TOKEN_MISSING`.
-
-The Use MetaViewer entry is covered by `agents/tests/test_mw_run.py`,
-`tests/test_mw_run_backend.py`, and `tests/test_agent_entry_prompt.py`. These
-hosted fakes check prompt drift, extra flags, private home admission, summary
-publication, CAPTCHA handoff, ownership ambiguity, undeclared network mode,
-and refusal of native network/input verbs; no live capsule or network is used.
-Run the agent suite with `python3 -m unittest tests.test_mw_run` from `agents`
-and the host suites with `python3 -m unittest discover -s tests -p "test_*entry*.py"`
-and `python3 -m unittest discover -s tests -p test_mw_run_backend.py`.
-
-DEMO-TO-MW uses hosted `unittest` fakes only: run
-`python3 -m unittest discover -s tests -p test_mv_demo.py`. Mutation controls
-cover fixed argv and shared network refusal before spawn, raw text rejection,
-evidence digest tampering, prompt template paths, and invalid-site refusal.
-`MV_MEMORYWEB_REPO` selects an existing offline MemoryWeb authoring checkout;
-validation builds and checks a disposable copy after the complete home gate.
-No test opens a capsule, records operator input, or performs network access.
-The argv refusal cases use a complete recording context and assert no identity
-lookup, network guard, or subprocess call; a valid-id control reaches the guard
-and the exact fixed viewer argv. Prompt/check ids, interpreter selection and
-interrupted-check JSON refusal are covered too. The operator stops recording;
-the host wait has no deadline by design.
-
-Live perception uses a private RAM marks directory under `/dev/shm/vqa-cu`, removed at cleanup; the mark count per tick is in the report.
+The index owner refreshes generated indexes after documentation changes. Report
+index drift separately; do not edit a stored digest or weaken a test to obtain
+a pass. For bug evidence and safe recovery, use [DEBUG.md](DEBUG.md).

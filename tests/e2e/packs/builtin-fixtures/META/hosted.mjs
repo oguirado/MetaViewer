@@ -64,7 +64,7 @@ sys.exit(runtime['main']())
   const axControl = ['MUT-META-OUTPUT-NO-SYNC', 'AX-META-BASELINE'].includes(mutation);
   const child = spawn(process.env.PYTHON || 'python3', [...prefix, '--hosted-rpc',
     '--pack', fileURLToPath(new URL('./', import.meta.url)),
-    ...(axControl ? [] : ['--mw-root', path.join(root, 'memoryweb-builtin'), '--mw-workflow', mutation === 'draft-new-chat' ? 'meta-ai/new-chat' : mutation === 'draft-ask' ? 'meta-ai/ask' : 'meta-ai/ask-fixture'])], {
+    ...(axControl ? [] : ['--mw-root', path.join(root, 'memoryweb-builtin'), '--mw-workflow', mutation === 'draft-new-chat' ? 'sample-chat/new-chat' : mutation === 'draft-ask' ? 'sample-chat/ask' : 'sample-chat/ask-fixture'])], {
     env: { ...environment, MV_LIVE_WEB: '', TMPDIR: checkout },
     stdio: ['pipe', 'pipe', 'pipe'],
   });

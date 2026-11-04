@@ -98,3 +98,16 @@ test('overlay null-facade matcher detects the legacy path (negative control)', (
   const legacy = 'function rebind() { facadeRef.value = null; return; }';
   assert.ok(legacy.includes('facadeRef.value = null'));
 });
+
+test('active side terminal binding does not mount the access banner over output',async()=>{
+ const children={};
+ const Overlay=await compileSfc('terminal/SideTerminalOverlay.vue',{
+  '/.kit/capsule-ui-kit/src/side-terminal/SideTerminalPanel.vue':childStub('terminal',children),
+  './BrokerLaunchControls.vue':childStub('launch',children),
+  './sideTerminalFacade.js':sideTerminal,
+  '../multislot/multislotProviders.js':multislotProviders,
+ });
+ const f=mountComponent(Overlay,{open:true,terminalBroker:{},terminalBinding:{session:'banner-session',port:{postMessage(){},addEventListener(){},removeEventListener(){},start(){}}}});
+ try {await flush();assert.ok(children.terminal);assert.equal(children.launch,undefined,'active output cannot be covered by Enable terminal access');}
+ finally {f.app.unmount();}
+});

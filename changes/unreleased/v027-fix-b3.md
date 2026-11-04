@@ -1,3 +1,0 @@
-- Discover browser login handoffs in configured and documented private RAM evidence roots while preserving private-file and acknowledgement checks.
-- Translate browser control, native timeout, core, dependency and model failures into typed remedies without losing uncertain-input verdicts.
-- Preserve literal spacing in focused program OCR verification, label dispatch baselines with settlement references, and omit expired marks image paths from retained reports.

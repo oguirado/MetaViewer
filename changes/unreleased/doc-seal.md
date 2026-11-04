@@ -1,0 +1,1 @@
+- Seal the entry, install, design, operator and debugging documents and rebuild the documentation route.

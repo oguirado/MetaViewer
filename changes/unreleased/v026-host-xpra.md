@@ -1,1 +1,0 @@
-- Add Host program capsules with a private host Xvfb/xpra desktop, temporary browser profiles in RAM, Human/Agent roles, private-display capture/input, loopback transport, and witnessed process-group cleanup. The tile labels host execution as not isolated.

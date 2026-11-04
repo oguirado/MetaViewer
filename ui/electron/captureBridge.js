@@ -9,6 +9,7 @@
  * Native bindings must dispatch export via record_request disk_start for the
  * sealed ID, with the main-only configured grant. Core inherits that setting.
  */
+import { randomUUID } from 'node:crypto';
 import { ContractError } from './preload.js';
 export const CAPTURE_CHANNELS = Object.freeze({screenshot:'capture.screenshot',
   recordStart:'capture.record.start',recordStop:'capture.record.stop',export:'capture.export',list:'capture.list',
@@ -105,7 +106,7 @@ export async function requestCapture(core,method,request) {
 }
 
 /** @param {any} options */
-export function installCaptureBridge({ipcMain,contents,core,nested=false,env=process.env}) {
+export function installCaptureBridge({ipcMain,contents,core,nested=false,env=process.env,capturePreferences=null}) {
   if(nested) return {async dispose(){}};
   // [TARGET, unit decision] Validate the same main-only grant as authorityWire.
   // Core inherits MV_RECORDING_DESTINATION; no path is supplied by the renderer.
@@ -126,7 +127,25 @@ export function installCaptureBridge({ipcMain,contents,core,nested=false,env=pro
         if(method==='export' && (destination===null || args[0].destination===null)) {
           return {ok:false,code:'DESTINATION_UNSET',request_id:args[0].request_id};
         }
-        return requestCapture(core,method,args[0]);
+        const reply=await requestCapture(core,method,args[0]);
+        if((method==='recordStop'||method==='screenshot')&&reply.ok&&capturePreferences?.shouldSave()) {
+          const id=method==='screenshot'?reply.shot.id:reply.recording.id;
+          try {
+            const saved=await requestCapture(core,'export',{schema:'capture_request/v1',request_id:randomUUID(),capture_id:id,destination:'recording:configured'});
+            if(saved.ok&&method==='screenshot')await capturePreferences.routeExport(saved,'shot');
+            capturePreferences.saved(id,saved.ok,saved.ok?'':saved.code);
+          }catch{capturePreferences.saved(id,false,'CAPTURE_UNAVAILABLE');}
+        }
+        if(method==='export'&&reply.ok&&capturePreferences) {
+          try {
+            const rows=await requestCapture(core,'list',undefined);
+            const kind=rows.ok?rows.rows.find((/** @type {any} */ row)=>row.id===args[0].capture_id)?.kind:null;
+            if(!kind)throw Error('CAPTURE_METADATA_UNAVAILABLE');
+            await capturePreferences.routeExport(reply,kind);
+            capturePreferences.saved(args[0].capture_id,true);
+          }catch{capturePreferences.saved(args[0].capture_id,false,'DESTINATION_UNAVAILABLE');return {ok:false,code:'DESTINATION_UNAVAILABLE',request_id:args[0].request_id};}
+        }
+        return reply;
       });
       installed.push(channel);
     }

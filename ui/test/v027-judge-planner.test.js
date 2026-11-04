@@ -17,8 +17,8 @@ test('V027 documented goal commands pass the public CLI without connecting or re
     const source = select(readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8'));
     return [...source.matchAll(/```sh\n([\s\S]*?)```/g)].map(match => match[1]);
   });
-  blocks.push(workflowPrompt('no-automation').split('\n').find(line => line.startsWith('PYTHONPATH=agents python3')));
-  assert.equal(blocks.length, 8, 'all goal command examples and the Terminal command are covered');
+  blocks.push(readFileSync(new URL('../../docs/AGENT_ENTRY.md',import.meta.url),'utf8').split('## Direct task')[1].split('## Run automation')[0].split('\n').find(line => line.startsWith('PYTHONPATH=agents python3')));
+  assert.equal(blocks.length, 9, 'all goal command examples and the Terminal command are covered');
   for (const block of blocks) {
     const syntax = spawnSync('bash', ['-n'], { input: block, encoding: 'utf8' });
     assert.equal(syntax.status, 0, syntax.stderr);
@@ -40,10 +40,21 @@ for block in blocks:
     assert len(calls) == 1 and calls[0].planner == 'rules'
     assert calls[0].goal and not calls[0].site and not calls[0].workflow
     assert calls[0].surface_kind in ('browser', 'program')
-    # The documented explicit Muse opt-in is syntactically valid too; never launch it.
+    # Navigation is explicit rules-only input; other documented goals retain Muse opt-in.
     muse = argv.copy()
     muse[muse.index('rules')] = 'muse'
-    assert main(muse + ['--model-timeout-ms', '60000'], runner=runner) == 0
+    if calls[0].goal == 'focused-key':
+        assert calls[0].key == 'Right' and calls[0].steps == 1 and calls[0].text is None
+        with contextlib.redirect_stderr(io.StringIO()):
+            try:
+                main(muse + ['--model-timeout-ms', '60000'], runner=runner)
+            except SystemExit as error:
+                assert error.code == 2
+            else:
+                raise AssertionError('model navigation accepted')
+        assert len(calls) == 1
+    else:
+        assert main(muse + ['--model-timeout-ms', '60000'], runner=runner) == 0
     # Invalid mixed stored/goal mode must fail before the injected runner.
     before = len(calls)
     with contextlib.redirect_stderr(io.StringIO()):
@@ -54,7 +65,7 @@ for block in blocks:
         else:
             raise AssertionError('mixed goal/workflow command accepted')
     assert len(calls) == before
-# Program text is approved and tested in agents/tests/test_mw_run.py; a key stays browser only.
+# Keys outside the explicit Host navigation goal still refuse before dispatch.
 for extra in (['--key', 'Enter'], ['--text', 'value', '--key', 'Enter']):
     with contextlib.redirect_stderr(io.StringIO()):
         try:

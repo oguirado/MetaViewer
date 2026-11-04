@@ -6,7 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::time::Duration;
+pub mod command_observation;
+pub mod guest_command;
+pub mod headless;
 pub mod payload;
+pub mod rewind;
+pub mod role_switch;
+#[cfg(test)]
+mod role_switch_tests;
 mod schemas;
 pub use payload::Command;
 
@@ -246,6 +253,21 @@ fn preflight(raw: &str, limits: &WireLimits) -> Result<(), DecodeError> {
     Ok(())
 }
 
+/// The additive capsule transport never changes the legacy envelope union.
+/// Authentication, sequence and replay state remain shared on one connection.
+pub fn envelope_schema(body: &Command) -> &'static str {
+    match body {
+        Command::RoleSwitchRequest(_) | Command::RoleSwitchResult(_) => "role_switch_envelope/v0.3",
+        Command::GuestCommandObservation(_) => "guest_command_observation_envelope/v0.2",
+        Command::RewindRequest(_) | Command::RewindEvent(_) => "rewind_envelope/v0.2",
+        Command::HeadlessRequest(_)
+        | Command::HeadlessEvent(_)
+        | Command::GuestCommandRequest(_)
+        | Command::GuestCommandEvent(_) => "capsule_envelope/v0.2",
+        _ => "envelope/v0.2",
+    }
+}
+
 pub fn decode_envelope(raw: &str) -> Result<Envelope, DecodeError> {
     decode_envelope_with_limits(raw, &WireLimits::default())
 }
@@ -264,10 +286,16 @@ pub fn decode_envelope_with_limits(
     let value: Value = serde_json::from_str(raw).map_err(|_| DecodeError::Malformed)?;
     check_integer_rails(&value)?;
     // Diagnose version refusal before the closed typed enum rejects it as shape.
-    if value["schema"]
-        .as_str()
-        .is_some_and(|v| v != "envelope/v0.2")
-        || is_unknown_body_version(value["body"]["schema"].as_str())
+    if value["schema"].as_str().is_some_and(|v| {
+        !matches!(
+            v,
+            "envelope/v0.2"
+                | "capsule_envelope/v0.2"
+                | "rewind_envelope/v0.2"
+                | "guest_command_observation_envelope/v0.2"
+                | "role_switch_envelope/v0.3"
+        )
+    }) || is_unknown_body_version(value["body"]["schema"].as_str())
         || value["body"]["schema"] == "hello/v0.2"
             && value["body"]["contract_version"]
                 .as_str()
@@ -276,11 +304,21 @@ pub fn decode_envelope_with_limits(
         return Err(DecodeError::UnknownVersion);
     }
     let envelope: Envelope = serde_json::from_str(raw).map_err(|_| DecodeError::Malformed)?;
-    if envelope.schema != "envelope/v0.2" {
-        return Err(DecodeError::UnknownVersion);
+    if envelope.schema != envelope_schema(&envelope.body) {
+        return Err(DecodeError::InvalidField);
     }
+    let schema_name = match envelope.schema.as_str() {
+        "role_switch_envelope/v0.3" => "role_switch_envelope.schema.json",
+        "guest_command_observation_envelope/v0.2" => {
+            "guest_command_observation_envelope.schema.json"
+        }
+        "envelope/v0.2" => "envelope.schema.json",
+        "capsule_envelope/v0.2" => "capsule_envelope.schema.json",
+        "rewind_envelope/v0.2" => "rewind_envelope.schema.json",
+        _ => return Err(DecodeError::UnknownVersion),
+    };
     let value = serde_json::to_value(&envelope).map_err(|_| DecodeError::InvalidField)?;
-    let schema = schemas::schema("envelope.schema.json").ok_or(DecodeError::InvalidField)?;
+    let schema = schemas::schema(schema_name).ok_or(DecodeError::InvalidField)?;
     if !valid(&value, &schema, &schema) || !terminal_lengths(&value) {
         return Err(DecodeError::InvalidField);
     }
@@ -366,8 +404,53 @@ fn ramws_path_ok(s: &str) -> bool {
 }
 
 fn pattern_ok(s: &str, pattern: &str) -> bool {
+    if pattern == r"^[^\x00-\x1f\x7f/\\]*$" {
+        return !s
+            .chars()
+            .any(|c| c < ' ' || c == '\u{7f}' || c == '/' || c == '\\');
+    }
+    if pattern == "^[^\\x00-\\x1f\\x7f]*$" {
+        return !s.chars().any(|c| c < ' ' || c == '\u{7f}');
+    }
+
+    for prefix in [
+        "workload-",
+        "request-",
+        "event-",
+        "job-",
+        "actor-",
+        "reservation-",
+        "point-",
+    ] {
+        let expected = format!("^{prefix}[a-z0-9][a-z0-9._-]{{0,63}}$");
+        if pattern == expected {
+            return s.strip_prefix(prefix).is_some_and(|tail| {
+                (1..=64).contains(&tail.len())
+                    && tail
+                        .bytes()
+                        .next()
+                        .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+                    && tail.bytes().all(|b| {
+                        b.is_ascii_lowercase() || b.is_ascii_digit() || b"._-".contains(&b)
+                    })
+            });
+        }
+    }
     if pattern == "^/dev/shm(/[A-Za-z0-9_][A-Za-z0-9._-]{0,127}){1,8}$" {
         return ramws_path_ok(s);
+    }
+    if pattern == "^[a-z0-9][a-z0-9-]*$" {
+        return s
+            .as_bytes()
+            .first()
+            .is_some_and(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+    }
+    if pattern == "^[A-Z][A-Z0-9_]*$" {
+        return s.as_bytes().first().is_some_and(u8::is_ascii_uppercase)
+            && s.bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_');
     }
     if pattern == "^[A-Za-z0-9][A-Za-z0-9._:-]*$" {
         return s.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)

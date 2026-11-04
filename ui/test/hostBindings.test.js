@@ -9,10 +9,32 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { createMainBindings, readPeerCredentials, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
+import { createMainBindings, readPeerCredentials, envelopeTagForBody, INTENT_OPS as HOST_INTENT_OPS } from '../electron/hostBindings.js';
 import { loadMainBindings, bootProductionMain, ELECTRON_PIN, CHANNELS } from '../electron/main.js';
 import { deliverAuthorityFrame, WIRE_CHANNELS, INTENT_OPS as WIRE_INTENT_OPS, validateIntentBody } from '../electron/authorityWire.js';
 import { installPreload } from '../electron/preload.js';
+
+
+function isKnownStartupObservation(args, observations) {
+  if (args[0] === 'metaviewer:guest-command.observation') {
+    assert.deepEqual(args, ['metaviewer:guest-command.observation',
+      {staged:null,active:null,history:[],uncertain:false,generation:null}]);
+    assert.equal(observations.length, 0, 'only one initial observation is expected');
+    observations.push(args);
+    return true;
+  }
+  assert.equal(args[0], 'metaviewer:authority.frames', 'unknown notification must not be filtered');
+  return false;
+}
+
+test('startup observation classification refuses unknown channels and authority fields', () => {
+  const snapshot={staged:null,active:null,history:[],uncertain:false,generation:null};
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:unknown',snapshot],[]),assert.AssertionError);
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:guest-command.observation',{...snapshot,canRun:true}],[]),assert.AssertionError);
+  const seen=[];
+  assert.equal(isKnownStartupObservation(['metaviewer:guest-command.observation',snapshot],seen),true);
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:guest-command.observation',snapshot],seen),assert.AssertionError);
+});
 
 const surface = {schema:'surface/v0.2',surface_id:'s1',kind:'browser',display:':1',geometry:{w:1,h:1},state:'active',visibility:'unfolded',control:'agent',profile_id:'test'};
 const registration = component => ({endpoint:{component,instance:component+'-test'},hello:{schema:'hello/v0.2',contract_version:'v0.2',component,component_version:'0.1.1',component_commit:'a'.repeat(40),dependencies:[]}});
@@ -27,7 +49,7 @@ async function waitForCondition(predicate, description = 'condition', timeoutMs 
     await new Promise(resolve => setTimeout(resolve, 5));
   }
 }
-async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=null}={}) {
+async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=null,roleSwitchState=true}={}) {
   const root=await mkdtemp(join(tmpdir(),'mv-host-'));
   const ram=await mkdtemp('/dev/shm/mv-host-');
   const config={session_id:'host-test',core:registration('core'),peers:[registration('ui')]};
@@ -36,10 +58,14 @@ async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=n
   const bytes=Buffer.from([1,2,3]);const path=join(ram,'frame.rgb');await writeFile(path,bytes,{mode:0o600});
   const frame={schema:'frame_ref/v0.2',surface_id:'s1',generation:1,tick:1,ts_ns:1,width:1,height:1,format:'rgb24',ramws_path:path,sha256:createHash('sha256').update(bytes).digest('hex'),capture_us:1};
   const requests=[],sockets=new Set();let peer,seq=0;
-  const send=body=>peer.write(JSON.stringify({schema:'envelope/v0.2',msg_id:'reply-'+(++seq),ts_ns:0,from:config.core.endpoint,to:config.peers[0].endpoint,session_id:config.session_id,seq,nonce:'nonce-'+seq,body})+'\n');
+  const send=body=>peer.write(JSON.stringify({schema:envelopeTagForBody(body),msg_id:'reply-'+(++seq),ts_ns:0,from:config.core.endpoint,to:config.peers[0].endpoint,session_id:config.session_id,seq,nonce:'nonce-'+seq,body})+'\n');
   const server=createServer(socket=>{peer=socket;sockets.add(socket);socket.on('close',()=>sockets.delete(socket));let buffer='';socket.on('data',data=>{
     buffer+=data;let offset;while((offset=buffer.indexOf('\n'))>=0){const env=JSON.parse(buffer.slice(0,offset));buffer=buffer.slice(offset+1);requests.push(env);
       if(env.body.schema==='hello/v0.2')send({...config.core.hello,...(badHello?{component_commit:'b'.repeat(40)}:{})});
+      else if(env.body.schema==='metaviewer.role_switch/v0.3') {
+        if(roleSwitchState) send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,control:env.body.role}}});
+        send({schema:'metaviewer.role_switch_result/v0.3',request_id:env.body.request_id,surface_id:env.body.surface_id,role:env.body.role,ok:true});
+      }
       else if(env.body.schema==='surface_request/v0.2') { /* subscription has no reply */ }
       else if(env.body.schema==='ui_intent/v0.2') {
         const extended=['move','tab','float','hide','show'].includes(env.body.op);
@@ -49,6 +75,7 @@ async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=n
         } else if(extended) send(env.body);
         else send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,control:env.body.op==='take_control'?'human':'agent',visibility:env.body.op==='fold'?'folded':'unfolded'}}});
       }
+      else if(env.body.schema==='capsule_state_request/v0.2') {const {credential_copy_confirmed,...body}=env.body;send({...body,schema:'capsule_state_event/v0.2',event:'accepted'});}
       else send({schema:'action_verdict/v0.2',proposal_id:env.body.proposal_id,decision:'refused',reason_code:'POLICY',core_seq:1});
     }
   });});
@@ -59,6 +86,22 @@ async function fixture(t, {badHello=false,refuseIntent=false,layoutRefusalCode=n
   const env={MV_CORE_CONFIG:configPath,XDG_RUNTIME_DIR:root};
   return {env,root,frame,send,requests,messages,channels,createMessageChannel,disconnect:()=>peer.destroy()};
 }
+test('role switch uses its additive envelope and requires authoritative control before success',async t=>{
+  for(const roleSwitchState of [true,false]) {
+    const f=await fixture(t,{roleSwitchState});
+    const bindings=await createMainBindings({env:f.env,createMessageChannel:f.createMessageChannel});t.after(()=>bindings.core.dispose());
+    await bindings.core.start();
+    f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+    await waitForCondition(()=>bindings.core.getHumanSurface('s1'),'initial surface');
+    const pending=bindings.core.switchRole('s1','human');
+    if(roleSwitchState) {
+      const reply=await pending;assert.equal(reply.ok,true);assert.equal(bindings.core.getHumanSurface('s1').control,'human');
+    } else await assert.rejects(pending,/CAPSULE_MODE_UNPROVEN/);
+    const request=f.requests.find(item=>item.body.schema==='metaviewer.role_switch/v0.3');
+    assert.equal(request.schema,'role_switch_envelope/v0.3');
+    assert.deepEqual(Object.keys(request.body).sort(),['request_id','role','schema','surface_id']);
+  }
+});
 test('default bootstrap connects, pins hello, delivers real bytes and routes intents/proposals',async t=>{
   const f=await fixture(t);
   const bindings=await loadMainBindings(f.env,{createMessageChannel:f.createMessageChannel});t.after(()=>bindings.core.dispose());
@@ -147,8 +190,9 @@ test('production boot installs the default socket wire and delivers a subscribed
   await writeFile(join(shell,'dist/preload/preload.cjs'),'');
   const session={setPermissionRequestHandler(){},setPermissionCheckHandler(){}};
   const frame={origin:'app://metaviewer',url:'app://metaviewer/index.html'};
+  const observations=[];
   let resolveNotice;const notice=new Promise(resolve=>{resolveNotice=resolve;});
-  const contents={id:17,mainFrame:frame,session,isDestroyed:()=>false,setWindowOpenHandler(){},on(){},loadURL:async()=>{},postMessage:(...args)=>resolveNotice(args)};
+  const contents={id:17,mainFrame:frame,session,isDestroyed:()=>false,setWindowOpenHandler(){},on(){},loadURL:async()=>{},postMessage:(...args)=>{if(!isKnownStartupObservation(args,observations))resolveNotice(args);}};
   let windows=0;
   class Window {
     constructor(){windows++;this.webContents=contents;}
@@ -160,6 +204,7 @@ test('production boot installs the default socket wire and delivers a subscribed
     electronVersion:ELECTRON_PIN,shellRoot:shell,argv:['metaviewer'],env:f.env,
     runtime:{xdgRuntimeDir:f.root,uid:process.getuid()},geometry:{width:1280,height:720},bridge:[CHANNELS.load,CHANNELS.save].map(channel=>({channel,decode:value=>value,invoke:async()=>null}))});
   t.after(()=>booted.dispose());assert.equal(windows,1);
+  assert.equal(observations.length,1);
   await handlers.get(WIRE_CHANNELS.subscribeFrames)({sender:contents,senderFrame:frame});
   f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
   f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:f.frame}});
@@ -284,7 +329,7 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
   await writeFile(join(shell, 'dist/preload/preload.cjs'), '');
   const session = { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} };
   const frame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
-  const notices = [];
+  const notices = [], observations = [];
   let onNotice = () => {};
   const contents = {
     id: 23,
@@ -294,7 +339,7 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
     setWindowOpenHandler() {},
     on() {},
     loadURL: async () => {},
-    postMessage: (...args) => { notices.push(args); onNotice(args); },
+    postMessage: (...args) => { if(!isKnownStartupObservation(args,observations)){notices.push(args); onNotice(args);} },
   };
   class Window {
     constructor() { this.webContents = contents; }
@@ -316,6 +361,7 @@ test('W2-REALAPP regression: sustained multi-frame delivery, pre-subscribe repla
     bridge: [CHANNELS.load, CHANNELS.save].map(channel => ({ channel, decode: value => value, invoke: async () => null })),
   });
   t.after(() => booted.dispose());
+  assert.equal(observations.length,1);
 
   // 1. L1 pre-subscribe race: frame_ready (generation 1) arrives BEFORE renderer calls subscribeFrames.
   f.send({ schema: 'surface_event/v0.2', event: 'created', data: { surface } });
@@ -2027,4 +2073,101 @@ test('V027 socket outage publishes lost state before clearing the session', asyn
  assert.equal(entries.at(-1).state.state,'lost');
  assert.equal(bindings.core.getHumanSurface('s1'),null);
  await assert.rejects(bindings.core.stopSurface('s1'),/CAPSULE_STOP_REFUSED/);
+});
+
+test('capsule slot host waits through accepted and correlates completed while other requests proceed',async t=>{
+ const f=await fixture(t);const bindings=await loadMainBindings(f.env,{createMessageChannel:f.createMessageChannel});t.after(()=>bindings.core.dispose());
+ await bindings.core.start();
+ const request={schema:'capsule_state_request/v0.2',operation_id:'slot-op-1',op:'list',profile_id:'test-profile',slot_id:'list',credential_copy_confirmed:true};
+ let done=false;const result=bindings.core.request({op:'capsule-state',request}).then(value=>{done=true;return value;});
+ await waitForCondition(()=>f.requests.some(env=>env.body.operation_id===request.operation_id));
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(done,false);
+ f.send({schema:'capsule_state_event/v0.2',operation_id:'unrelated-op',op:'list',profile_id:'test-profile',slot_id:'list',event:'completed',slots:[]});
+ assert.equal(await bindings.core.request({op:'intent',json:JSON.stringify({schema:'ui_intent/v0.2',request_id:'other-op',op:'fold',params:{slot_id:'s1'}})}),true);
+ assert.equal(done,false);
+ const event={schema:'capsule_state_event/v0.2',operation_id:request.operation_id,op:'list',profile_id:'test-profile',slot_id:'list',event:'completed',slots:[{slot_id:'slot-one',name:'slot-one',saved_at:'2026-11-03T20:14:34Z',generation:1,size_bytes:2140160}]};f.send(event);
+ assert.deepEqual(await result,event);
+ assert.ok(!JSON.stringify(await result).includes('/dev/'));
+});
+
+test('journal capacity reports a closed notice and refuses new work without disposing peers', async t => {
+  const f = await fixture(t);
+  const notices = [];
+  const bindings = await createMainBindings({...f, onSessionEnd: code => notices.push(code)});
+  t.after(() => bindings.core.dispose());
+  const notice = code => ({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code,detail:'ignored foreign detail'}});
+  f.send(notice('UNRELATED'));
+  f.send({...notice('JOURNAL_FULL'),data:{...notice('JOURNAL_FULL').data,surface_id:'s1'}});
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(notices, [], 'negative control: unrelated errors do not end admission');
+  f.send(notice('JOURNAL_FULL'));
+  await waitForCondition(() => notices.length === 1);
+  f.send(notice('JOURNAL_FULL'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(notices, ['JOURNAL_FULL']);
+  assert.equal(bindings.core.getStatus().availability, 'live');
+  const before = f.requests.length;
+  const proposal = {schema:'action_proposal/v0.2',proposal_id:'after-full',surface_id:'s1',
+    based_on_frame:{generation:1,sha256:'a'.repeat(64)},action:{type:'click',x:1,y:1,button:'left'},
+    expectation:{type:'state_sha256_change'},budget:{max_ms:1000,max_retries:0}};
+  await assert.rejects(bindings.core.request({op:'propose',json:JSON.stringify(proposal)}), {code:'JOURNAL_FULL'});
+  assert.equal(f.requests.length, before);
+  assert.equal(bindings.core.getStatus().availability, 'live');
+  f.send(notice('JOURNAL_STOP_FAILED'));
+  await waitForCondition(() => notices.length === 2);
+  assert.deepEqual(notices, ['JOURNAL_FULL','JOURNAL_STOP_FAILED']);
+});
+
+
+test('journal end disconnects the guest hosts once', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
+  const seen = {headless:0,guestCommand:0,rewind:0};
+  for (const name of Object.keys(seen)) { bindings.core[name].subscribe(()=>{seen[name]+=1;}); seen[name]=0; }
+  const notice = {schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'closed'}};
+  f.send(notice);
+  await waitForCondition(() => seen.headless === 1 && seen.guestCommand === 1 && seen.rewind === 1);
+  f.send(notice);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(seen, {headless:1,guestCommand:1,rewind:1});
+});
+
+
+test('journal ended surfaces lose live presentation while stop is unconfirmed', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
+  const states=[], entries=[]; bindings.wire.frames.subscribe(value=>{entries.push(value);states.push(value.state);});
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:f.frame}});
+  await waitForCondition(()=>states.length > 0);
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'closed'}});
+  await waitForCondition(()=>states.some(value=>value.surface_id==='s1' && value.state==='lost'));
+  const count=entries.length;
+  f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:{...f.frame,generation:2}}});
+  await new Promise(resolve=>setTimeout(resolve,25));
+  assert.equal(entries.length,count,'late frames cannot restore live presentation');
+  assert.equal(entries.at(-1).stateOnly,true);
+  assert.equal(bindings.core.getStatus().availability,'live');
+});
+
+test('journal end withdraws creating capsules and preserves terminal presentation', async t => {
+  const f = await fixture(t), notices=[];
+  const bindings = await createMainBindings({...f,onSessionEnd:code=>notices.push(code)});
+  t.after(()=>bindings.core.dispose());
+  for (const state of ['creating','active','destroyed','lost']) {
+    f.send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,surface_id:'end-'+state,state}}});
+  }
+  await waitForCondition(()=>bindings.core.getHumanSurface('end-lost')?.state==='lost');
+  assert.equal(bindings.core.getHumanSurface('end-creating').state,'creating');
+  assert.equal(bindings.core.getHumanSurface('end-active').state,'active');
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'closed'}});
+  await waitForCondition(()=>notices.length===1);
+  assert.equal(bindings.core.getHumanSurface('end-creating').state,'lost','creating capsules cannot remain live');
+  assert.equal(bindings.core.getHumanSurface('end-active').state,'lost');
+  assert.equal(bindings.core.getHumanSurface('end-destroyed'),null,'negative control: preserve terminal absence');
+  assert.equal(bindings.core.getHumanSurface('end-lost').state,'lost');
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'duplicate'}});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.deepEqual(notices,['JOURNAL_FULL']);
+  assert.equal(bindings.core.getHumanSurface('end-creating').state,'lost');
 });

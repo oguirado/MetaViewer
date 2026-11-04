@@ -1,1 +1,0 @@
-- The judge kit `stop` command removes the RAM directory of a capsule whose container is gone, so a normal session no longer ends in `JUDGE_STOP_LEAK`.

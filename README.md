@@ -1,263 +1,270 @@
 # MetaViewer
 
-For current VM/MicroVM limits and the proposed launch flow, see the [VM and MicroVM roadmap](VM_MICROVM_ROADMAP.md).
+<a id="metaviewer-a-live-wall-of-capsules-where-a-human-and-an-ai-share-one-desktop-under-one-authority"></a>
 
-For refusal codes and source-backed next steps, see [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
+MetaViewer is a Linux desktop wall of application capsules that a person and an AI agent can operate under explicit control. It gives agent input a named target, checks the frame the agent saw, and records decisions in a verifiable journal.
 
-After installation, follow the [Judge tour](docs/JUDGE_TOUR.md) with your AI.
+Version `0.2.6` [CITED: `VERSION`] · `AGPL-3.0-only` [CITED: `LICENSE`] · [Release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6)
 
-Start with the [documentation index](docs/README.md), the
-[pre-existing work declaration](docs/PREEXISTING.md), and the
-[licensing and external component notice](NOTICE-EVALUATION.md). MetaViewer is
-licensed under [AGPL-3.0-only](LICENSE); `wender-agent`, `vision-engine` and `OpenSuperficies` are fully private.
+**Choose an install:** [x64 packaged kit](#quick-start), with or without Docker capsules; [ARM64 source setup](docs/INSTALL.md#3-building-from-source-and-running-the-gate), with [additional KVM setup for VM and MicroVM](docs/ARM64_CAPSULE_SETUP.md).
 
-For a fresh Linux judge machine, follow [Judge Quickstart](docs/JUDGE_QUICKSTART.md).
-Fetch verified assets with `python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_DIRECTORY" --capsules`,
-then preserve the capsule tier through the launcher:
+**Find an answer:** [judge tour](docs/JUDGE_TOUR.md) · [operate with an AI](docs/AGENT_ENTRY.md) · [capsule design](docs/WHY_CAPSULES.md) · [troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
 
-```bash
-bash scripts/judge/metaviewer-judge.sh doctor --before-install --capsules
-bash scripts/judge/metaviewer-judge.sh install --capsules
-bash scripts/judge/metaviewer-judge.sh doctor --capsules
+<!-- MV:BEGIN mv.node.v1 -->
+```json
+{
+  "schema": "mv.node.v1",
+  "version": "0.2.6",
+  "repository": "https://github.com/oguirado/MetaViewer",
+  "release": "https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6",
+  "setup": "bash scripts/judge/metaviewer-judge.sh install",
+  "setup_capsules": "bash scripts/judge/metaviewer-judge.sh install --capsules",
+  "preflight": "bash scripts/judge/metaviewer-judge.sh doctor --before-install",
+  "success_marker": "JUDGE_INSTALL_OK",
+  "doctor_marker": "JUDGE_DOCTOR_OK",
+  "stop_marker": "JUDGE_STOP_CLEAN",
+  "tiers": {
+    "T1": "app only; no Docker capsules",
+    "T2": "app plus browser and program containers; rootful Docker required",
+    "ARM64-dev": "source setup; graphical VM, MicroVM and Rewind need KVM",
+    "source": "build with the repository's pinned toolchains"
+  },
+  "router": "python3 route/route_query.py any \"<question>\"",
+  "router_read": "python3 route/route_query.py show \"<reference>\"",
+  "router_check": "python3 route/route_query.py check",
+  "router_check_marker": "ROUTE_OK",
+  "laws_check": "python3 tools/check_laws.py",
+  "offline_gate": "bash tools/gate.sh",
+  "licence": "AGPL-3.0-only; external components under NOTICE-EVALUATION.md"
+}
 ```
+<!-- MV:END mv.node.v1 -->
 
-For the app-only tier, deliberately omit `--capsules` from fetch, doctor and install.
-A complete public release URL is not established here; obtain the asset directory or
-release URL and checksum digest from the maintainer. Legacy networking reaches no
-public site today; public browsing requires a compatible Open image and firewall.
+<a id="0-reading-map"></a>
+## See it work
 
-I build MetaViewer as a Linux-first desktop wall of live application surfaces. I fold, unfold, move, tab, float, hide, show, and take control of surfaces through closed intents admitted and journaled by a Rust authority core (`core/`, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)), while `pin` stays a UI-local presentation state and an agent observes, proposes, and verifies actions through the same core; the Electron renderer paints frames and submits intents, and never injects input directly. I have not measured live wall fps or latency after the current assembly changes; I keep the earlier results in [historical live evidence](#historical-live-evidence). Multi-capsule soak to `>= 4` [TARGET] capsules at `>= 10` [TARGET] fps for `10` [TARGET] min remains a target.
+Answers: what does it look like, show me a demo, GIF, video of MetaViewer
 
-## Status
+Real recordings, sped up, waits cut. An AI drives the app in the first and last; Muse Spark 1.3 chooses the keys in the games through a script loop, and the core checks each one. Results are maintainer-reported; the takes are not published in this repository.
 
-`VERSION` is **0.2.5** [CITED: `VERSION`], the release candidate. Changes after the candidate are recorded in [Unreleased](CHANGELOG.md#unreleased) and [pending fragments](changes/unreleased/), assembled by the conductor using [the fragment workflow](changes/README.md).
+![Six real desktop applications on one MetaViewer wall, opened by an AI through the interface](docs/media/01_hero_wall_3x2.gif)
 
-I verify this assembly with `bash tools/gate.sh` and `bash tools/gate.sh --self-test`; I do not carry forward suite pass totals from an earlier head. The gate covers manifests, laws, contracts, Python units and agents, kit/JavaScript checks, Rust, Go, UI, Electron smoke, and performance budgets [CITED: `tools/gate.sh`]. I run live acceptance separately; an offline pass does not establish live frame rate.
+*An AI opens six real applications as capsules, using the mouse and keyboard, and arranges the wall.*
 
-- **Contracts.** I maintain `10` v0.1 schemas, `21` v0.2 schemas, `20` v0.1 fixtures and `489` v0.2 fixtures [MEASURED: Python `Path.glob` over `contracts/v0.1/*.schema.json`, `contracts/v0.2/*.schema.json`, `contracts/examples/*.json`, `contracts/examples/v0.2/*.json`].
-- **End-to-end journeys.** I keep `40` Node journey files and `6` Python E2E suites [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`; `ls -1 tests/e2e/test_*.py | wc -l`]. I run `xvfb-run -a -s "-screen 0 1280x900x24" python3 tests/e2e/run.py` separately from the default gate [CITED: `tests/e2e/run.py`].
-- **CI workflows (`.github/workflows/`).** `6` workflow files [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] define `20` job definitions [MEASURED: job keys below `jobs:` in each workflow] (`28` raw two-space keys, including triggers) [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/*.yml | wc -l`], with `13` job definitions [MEASURED: job keys below `jobs:`] (`15` raw two-space keys) in `.github/workflows/ci.yml` [MEASURED: `grep -E '^  [a-z0-9-]+:$' .github/workflows/ci.yml | wc -l`] where `ci-required` aggregates `10` required `needs` jobs across `x64` (`ubuntu-24.04`) and `arm64` (`ubuntu-24.04-arm`) [CITED: `.github/workflows/ci.yml`]. See [docs/TESTING.md](docs/TESTING.md) for the full job matrix and local commands.
+![Two Connect Four boards with Muse Spark 1.3 terminals explaining each move](docs/media/02_connect4_multiagent.gif)
 
-## Isolation and evaluation limits
+*Two Muse Spark 1.3 players, each with its own capsule and terminal.*
 
-Browser capsules and container program capsules use the OpenSuperficies backend.
-**Host program** runs a local executable on your computer and is **not isolated**;
-its separate display and temporary browser profile do not create a sandbox.
-Desktop window tiles attach to an existing X11 window and are also **not isolated**.
-[CITED: `ui/src/catalog/CatalogLauncher.vue`, `daemon-adapter/internal/capsule/host_xpra.go`,
-`daemon-adapter/internal/capsule/host_window.go`]
+![Tuxemon with a terminal where the core refuses one key](docs/media/03_tuxemon_input_guard.gif)
 
-The live wall and host-window attachment need a graphical session; Electron smoke
-uses a private Xvfb display. Offline contracts and hosted fakes do not demonstrate
-live capsule operation. The [offline conversation fixture](docs/JUDGES.md) needs
-Node and the locked Wender checkout already available locally. A fresh clone alone
-does not supply that dependency or the release assets. Current live performance
-and clean-host capsule acceptance remain unmeasured here.
+*Muse Spark 1.3 plays Tuxemon. When delivery cannot be confirmed, the core says so and the model looks again.*
 
-## Accounts, automation, and capsule resources
+![Chess and tic-tac-toe between AI models in capsules](docs/media/04_chess_tictactoe.gif)
 
-Use **Identities** to manage separate accounts for the same site. Choose **Log in**
-and type credentials yourself only in the operator login view. Each capsule's
-**Network** action offers **Open (default)** or an opt-in dedicated proxy with an
-exact hostname allowlist, applied on its next start. The interim OpenSuperficies
-pin still shows **legacy** where Open is unavailable. Open requires identity image
-`0.2.0` [CITED: `docs/INSTALL.md`], the operator firewall witness, and the final
-Open-ready native pin; selecting Open does not bypass those prerequisites.
+*Boards written for the demo, with legal moves given to the players.*
 
-**Use MetaViewer** copies the exact prompt in [AGENT_ENTRY.md](docs/AGENT_ENTRY.md)
-for your chosen agent to run a stored workflow on an already running identity.
-**Automate from a demo** opens manual recording controls, then copies an authoring
-prompt and checks the resulting site; see the [user guide](docs/USER_GUIDE.md#accounts-and-automation).
-A CAPTCHA or bot check stops execution. Its notice persists until acknowledged;
-solve it yourself, then explicitly re-run the workflow. Acknowledgement does not resume it.
+![Four AI models drawing at once while an AI comments in a conversation beside the wall](docs/media/05_blind_draw_guess.gif)
 
-Multiple capsules are admitted against host RAM. The free-memory floor is
-`min(20 GiB, MemTotal / 4)` [TARGET; CITED: `docs/INSTALL.md#concurrent-identities-and-ram-admission`],
-with an additional reserve for incumbent capsules. Use the documented explicit
-[reclaim command](docs/INSTALL.md#concurrent-identities-and-ram-admission) for stale reservations.
-The gitignored, private `memoryweb/` home stores site/workflow data separately
-from browser profiles; `MV_MW_HOME` selects an admitted alternative.
-Setup and restrictions are in [INSTALL.md](docs/INSTALL.md).
-[CITED: `ui/src/identities/IdentitiesDialog.vue`, `ui/src/netmode/NetworkPanel.vue`,
-`ui/electron/buttonBridge.js`, `agents/metaviewer_agents/mw_home.py`]
+*Four models draw at once by writing SVG. The AI running the contest guesses each drawing before the answers are revealed.*
 
-## Features
+![ARM64 MicroVM: files deleted, Back restores them in 387.5 ms](docs/media/06_arm64_microvm_rewind.gif)
 
-- **Renderer frame painting through the frame port (`frame_port/v1`, `frame_ack/v0.2`).** When the main process announces a surface stream on the live wall, the preload forwards the stream's `MessagePort` once per stream to the renderer with a closed `frame_port/v1` notice (`type`, `schema`, `surface_id`, `surface_generation`) (`ui/electron/preload.js`). The renderer (`ui/src/frames/framePortRouter.js`, `ui/src/surfaces/SurfaceCanvas.vue`, `ui/src/surfaces/tileScheduler.js`) validates each delivery's closed shape, byte length, and SHA-256 digest, attaches the tile canvas with the registered delivery identity, retains the last painted frame across generation ticks, paints RGB24 pixels onto the canvas, and replies with exactly one `frame_ack/v0.2` (`PRESENTED`, `SUPERSEDED`, `FOLD_DRAIN`, `HIDDEN`, `CONTEXT_LOST`, `SURFACE_DESTROYED`, or `REFUSED`) [CITED: `ui/src/frames/framePortRouter.js`, `ui/electron/framePort.js`]. I scope earlier live frame results to the dated evidence below; I have not rerun live acceptance at these pins. Optional frame diagnostics (`MV_FRAME_DIAG=1`, `ui/electron/frameDiag.js`) and live QA anchor collection (`MV_QA_ANCHORS=1`, `ui/electron/qaAnchors.js`, `ui/src/qa/anchorCollector.js`) are off by default and refused in packaged retail runs [CITED: `ui/electron/frameDiag.js`, `ui/electron/qaAnchors.js`].
-- **Wall layout, fold, and nested depth.** I fold, unfold, move, tab, float, hide, and show tiles through closed `ui_intent/v0.2` layout intents (`7` [MEASURED] operations) admitted and journaled by the Rust core (`core/src/serve/layout.rs`, `ui/electron/authorityWire.js`, `ui/src/wall/SurfacePanel.vue`); `pin` stays a UI-local presentation state. Folding a tile stops canvas draw submissions while capture continues behind it; fold/unfold of a hidden surface is refused rather than dropped, float honours the committed placement echo, and dock-back after float returns the tile to its previous group and position [CITED: `ui/src/App.vue`, `ui/src/wall/WallWorkspace.vue`, `ui/src/wall/SurfacePanel.vue`]. For nested capsules (AC-17), `surface_request/v0.2` `create` carries an optional `nested_depth` of `0` or `1`, admitted only for the `metaviewer-nested` program entry at depth `1` and refused at depth `>= 2` or for non-program kinds [CITED: `contracts/v0.2/surface_request.schema.json`, `core/src/catalog/mod.rs`, `daemon-adapter/internal/capsule/manager.go`].
-- **Human and agent control.** I take and release control of any surface through `take_control` and `release_control` (`ui_intent/v0.2`). Human takeover cancels pending agent proposals for that surface with `SURFACE_NOT_AGENT_CONTROLLED` and blocks new agent admission until `release_control` and a fresh frame generation [CITED: `core/src/admission/mod.rs`, `core/src/serve/mod.rs`]. Tile titles use `profile_id` when present (`ui/src/core/hostAdapters.js`), and agent-controlled tiles display `"Agent acting"` only when there is live evidence of an acting agent (`"Agent ready"` otherwise) [CITED: `ui/src/wall/SurfacePanel.vue`, `ui/src/wall/tileStates.js`]. The agent loop (`agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/wender_bridge.py`, `agents/metaviewer_agents/planner.py`) can use `wender-agent` as planner via `MV_WENDER_PLANNER_CMD`, resolving the checkout through `deps.lock` (`resolve_locked_component("wender-agent")`) and refusing `commit_mismatch` before spawn [CITED: `agents/metaviewer_agents/verify.py`, `agents/metaviewer_agents/wender_bridge.py`, `agents/metaviewer_agents/planner.py`]. I verify the narrated agent loop with `tests/e2e/e2e1_slice/demo_agent_drive.py`, including a deliberate `STALE_FRAME` refusal; current-pin live results remain unmeasured [CITED: `docs/DEMO_AGENT_SCRIPT.md`].
-- **Capture, recording list, and disk export.** The `metaviewer.capture` namespace provides per-tile screenshot capture and RAM-first recording (`idle` → `starting` → `recording` → `stopping` → `sealed` / `error`) with RAM and journal accounting, reactive per-tile recording chrome on the wall, coalesced per-surface recording list refresh in the UI (`listRecordings` on mount, after `sealed`, `stopped`, and `screenshot` events, and on capsule switch), and write-ahead journaled disk export (`capture_request/v1`) of sealed recordings as deterministic PNG tars under `MV_RECORDING_DESTINATION` (`core/src/serve/capture.rs`, `core/src/record/capture/export.rs`, `ui/src/capture/capturePort.js`, `ui/src/recording/MvRecordingPanel.vue`). Independently of the live wall cadence, recordings default to `3` [CITED] fps, accept `max_fps` `1..120` [CITED] with values above `60` [CITED] refused as `BUDGET_EXCEEDED`, keep one frame per `1000/fps` [CITED] ms, and journal `dropped_frames` (`core/src/record/capture.rs`, `core/src/serve/capture.rs`, `contracts/v0.2/record_request.schema.json`, `contracts/v0.2/record_event.schema.json`).
-- **Multislot and built-in side terminal.** I open a selected surface in the multislot view (`ui/src/multislot/MultislotHost.vue`) with a closed `read` / `write` operator input mode (`read` by default; `read` blocks keystrokes, `write` forwards them) and embedded recording controls. The side terminal overlay (`@xterm/xterm` `6.0.0` and `node-pty` `1.1.0` [CITED: `ui/package.json`]) runs over a dedicated `MessagePort` byte plane (`ui/src/terminal/SideTerminalOverlay.vue`, `ui/electron/terminalHost.js`, `ui/electron/ptyBroker.js`, `ui/electron/ptyUtility.js`) with PTY sizes capped at `500x300` [CITED] (`MAX_COLS = 500`, `MAX_ROWS = 300`) and fixpoint descendant reaping; the overlay, broker, and PTY utility are wired in code while live login-shell session proof remains open.
-- **Journal and replay (`mv-replay`).** The Rust core records every admitted or refused session event in a hash-chained JSONL journal (`metaviewer.journal/v1`); `mv-replay` verifies the chain and reproduces the state digest (`rc 0`), refusing corrupted input (`rc 2`), duplicate records (`rc 3`), and witness mismatches (`rc 4`) [CITED: `core/src/bin/mv-replay.rs`].
-- **Theme and settings.** XDG settings are closed and validated (`ui/src/settings/settingsModel.js`, `ui/src/settings/settingsHost.js`), switching between `mv-light` and `mv-dark` with AA contrast checked and zero bundled fonts (`tests/test_theme.py`).
-- **Contracts first.** `21` versioned JSON schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] in `contracts/v0.2/` and `10` closed schemas [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] in `contracts/v0.1/`; a new message type requires its schema and valid/invalid examples before any producer or consumer code [CITED: `LAWS.md` L3].
-- **Not available yet.** Features not wired end to end report explicit refusal states rather than faking behavior:
-  - The Storyboard / creative screen (`ui/src/creative/CreativeCapsule.vue`) has no wire schema yet and reports `Creative service unavailable.` (`CREATIVE_SERVICE_UNAVAILABLE`) [CITED: `ui/src/App.vue`].
-  - Catalog management in the UI beyond the launcher set (`identity-browser`, `program`, `host-program`, `desktop-window`) is not available yet.
-  - Direct agent `observation` envelope intake on the core (outside `mv_tool_call`) is not available yet and returns a journaled `POLICY` verdict [CITED: `docs/ARCHITECTURE.md`].
-  - The `100,000`-case nightly property entrypoint in `.github/workflows/volume.yml` and the `G-NOVAC` meta-oracle interface in `.github/workflows/ci.yml` are not available yet (`ABSENT — do not invent`) and emit `BLOCKED` / `NOT_APPLICABLE` receipts [CITED: `.github/workflows/volume.yml`, `.github/workflows/ci.yml`].
-  - OS-level desktop installers (`.deb`, `.rpm`, Flatpak, AppImage) and macOS/Windows builds are not available [CITED: `docs/INSTALL.md`, `.github/workflows/ci.yml`].
+*Rewind on an ARM64 MicroVM: three files, deleted, restored by Back. Guest memory only; external effects are not rewound.*
 
+## Where should I start?
 
-## Historical live evidence
+Install through [Quickstart](#quick-start), or go directly to the guide for your task below.
 
-I recorded these results before the current assembly pins; they do not measure tonight's changes. My dated sources are the operator's `holdings-e1/design/vision/live21_NOTE.md` and `live22_NOTE.md` (both dated 2026-10-28), outside this repository. I have not measured live wall fps or latency after the new pins, persistent vision transport, and native kernels; I rerun live acceptance before claiming a new result.
+Answers: where do I start; which document answers my question.
 
-| Run | Core | Wall cadence | Core processing | Limiting stage |
-| --- | --- | --- | --- | --- |
-| live21 | debug | `2.71` fps over `61.0` s; `192` PRESENTED [MEASURED: live21_NOTE.md, Frame cadence] | `52.11` ms p50, `58.67` ms p95 [MEASURED: live21_NOTE.md, frame timings] | Historical capsule/adapter path |
-| live22 | release | `2.58` fps over `61.2` s; `188` PRESENTED [MEASURED: live22_NOTE.md, Cadence and stages] | `15.51` ms p50 [MEASURED: live22_NOTE.md, core stage table] | Capsule capture about `320` ms p50 [MEASURED: live22_NOTE.md, adapter stage summaries] |
+| Task | Read next |
+|---|---|
+| Evaluate the app as a judge | [Judge tour](docs/JUDGE_TOUR.md), with expected observations |
+| Install or build on my platform | [docs/INSTALL.md](docs/INSTALL.md) |
+| Let an AI operate a running capsule | [Executable agent entry](docs/AGENT_ENTRY.md) |
+| Understand why capsules exist | [Why capsules](docs/WHY_CAPSULES.md) |
+| Understand the computer-use workflow | [AI at the controls](docs/AI_AT_THE_CONTROLS.md) |
+| Resolve a failure | [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md), then [exact errors](docs/ERRORS.md) |
+| Inspect architecture or a message | [Architecture](docs/ARCHITECTURE.md), [reference](docs/REFERENCE.md), `contracts/v0.2/` |
+| Find code or change the repository | [Agent protocol](AGENTS.md), then [router commands](route/README.md) |
+| Assess evidence and limits | [Evidence](docs/EVIDENCE.md), then [limits below](#isolation-and-evaluation-limits) |
 
-## Platform
-
-I build Linux-first: I develop and test on Linux [CITED: `docs/USER_GUIDE.md`]. The packaged product targets **`linux-arm64`** (`aarch64`) as primary and supports **`linux-x64`** (`x86_64`) [CITED: `ui/tools/package.js`, `.github/workflows/ci.yml`]. macOS and Windows are **not supported**: `build-macos` and `build-windows` in `.github/workflows/ci.yml` only emit `NOT_APPLICABLE` receipts and are never required statuses [CITED: `.github/workflows/ci.yml`].
-
-## Architecture
-
-```text
-Electron wall + terminal          Rust authority core           Go daemon adapter
-(snapshots in, intents out)       (admits, journals, serves)    (capsule bridge)
-        |                                  |                            |
-        +--- envelope/v0.2 over NDJSON ----+--- surface_request/event --+
-        |     core.sock + frame_port/v1    |        core.sock           |
-        |                                  |                            v
-        |                                  |                    OpenSuperficies
-        |                                  |                    capsules (rgb24,
-        |                                  |                     /dev/shm ramws)
-        |                                  |
-        |                          Python agents (observe/propose/verify)
-        |                          vision-engine + wender-agent behind core admission
-```
-
-Electron renders state and submits intents; it never injects input [CITED: `docs/ARCHITECTURE.md`]. I can take control from an agent at any time; every action is admitted by the core and journaled.
-
+<a id="quick-start"></a>
 ## Quickstart
 
-### Prerequisites
+Use the packaged x64 judge kit after obtaining the release assets and the publisher's manifest digest; use the [source-build instructions](docs/INSTALL.md#3-building-from-source-and-running-the-gate) for ARM64.
 
-| Tool | Required |
-| --- | --- |
-| Rust | `1.97` [CITED: `Cargo.toml` `rust-version`] |
-| Rust formatter | `1.92.0` [CITED: `tools/gate.sh`] |
-| Go | `1.26.0` [CITED: `daemon-adapter/go.mod`] |
-| Node | `>=24` [CITED: `ui/package.json` `engines.node`] |
-| Python | `>=3.11` [CITED: `agents/pyproject.toml`] |
-| Capsule UI kit | `0.2.1`, commit `aaada9dedc177b096e8b4764959e258e76c1ef02` [CITED: `ui/kit.lock.json`]; set `CAPSULE_UI_KIT_REPO` |
-| Electron dist | `44.9.2` [CITED: `ui/package.json`]; set `ELECTRON_OVERRIDE_DIST_PATH` |
+Answers: how do I install MetaViewer; what commands do I run; how do I know installation succeeded.
 
-External components stay in their own repositories, pinned in `deps.lock` (`3` components [MEASURED: `python3 -c 'import json; print(len(json.load(open("deps.lock"))["components"]))'`]) with source kept separate: `vision-engine` `v0.2.0` (`3bb54835db8a2e545311cfcc45185a0dfbd9313a`), `wender-agent` `v0.3.0` (`96120967b435b72fc6d29635f3844dae140388a9`), and `opensuperficies` `os-cu-w9-mv1` (`3cb86d752f38457b6730eefd235d4da4c4039721`) [CITED: `deps.lock`].
+The example selects Docker capsules (tier T2). Obtain the `SHA256SUMS` digest independently from the release publisher and replace the placeholder. If that digest or a required asset is unavailable, stop; do not substitute a digest computed from the downloaded manifest. The fetcher verifies the manifest and selected assets [CITED: `scripts/judge/fetch_assets.py`, `docs/JUDGE_QUICKSTART.md`].
 
-
-I assemble MetaViewer, OpenSuperficies, vision-engine, and wender-agent from separate repositories; I keep external component commits in `deps.lock`. Its version fields are release labels, while the exact commit is the checkout authority; I do not imply that a pin equals its release tag. I use persistent `vadapt.vserve` when the pinned checkout supplies it and the `frame_raw`/`raw_shm` handshake succeeds with a typed `ring` capability; otherwise the adapter uses one-shot `vadapt.cu_describe` [CITED: `agents/metaviewer_agents/perception/vcore.py`]. I plan through `wender.plan.cli` over the pipe-only observation/element-table/goal boundary; MetaViewer retains admission and execution authority [CITED: `agents/metaviewer_agents/wender_bridge.py`]. Assembly CI requires the real planner with `--require-planner` [CITED: `.github/workflows/assembly.yml`].
-
-See [docs/INSTALL.md](docs/INSTALL.md) for the full Linux (`arm64` and `x64`) installation, deterministic tarball packaging (`scripts/bootstrap.sh` and `ui/tools/package.js`), and troubleshooting guide.
-
-### Build
-
-I run these commands from my clone root, with the kit and Electron paths from the prerequisites exported. I replace path and input-file placeholders before running the examples.
-
-```sh
-export CARGO_TARGET_DIR=$HOME/.cache/cargo-target/metaviewer
-cargo build --offline -p metaviewer-core
-go -C daemon-adapter build ./...
-node tools/sync_kit.mjs "$CAPSULE_UI_KIT_REPO"
-(cd ui && npm ci --offline && npm test && npm run check && npm run build)
+```bash
+git clone --branch v0.2.6 --depth 1 https://github.com/oguirado/MetaViewer.git
+cd MetaViewer
+export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.6
+SHA256SUMS_DIGEST='<publisher-provided SHA256SUMS digest>'
+python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --arch x64 --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
+bash scripts/judge/metaviewer-judge.sh doctor --before-install --capsules   # JUDGE_DOCTOR_OK
+bash scripts/judge/metaviewer-judge.sh install --capsules                   # JUDGE_INSTALL_OK
+bash scripts/judge/metaviewer-judge.sh doctor --capsules                    # JUDGE_DOCTOR_OK
+bash scripts/judge/metaviewer-judge.sh run
+bash scripts/judge/metaviewer-judge.sh stop                                 # JUDGE_STOP_CLEAN
 ```
 
-### Run
+For the app without Docker capsules (tier T1), remove `--capsules` from fetch, doctor and install. Keep the tier consistent throughout. A graphical Linux session is required; full prerequisites and the Windows WSL route are in [docs/INSTALL.md](docs/INSTALL.md).
 
-```sh
-# Core: config + runtime dir are mandatory (see core/src/bin/metaviewer-core.rs)
-MV_CORE_CONFIG=/path/to/core.json XDG_RUNTIME_DIR=/run/user/$UID "$CARGO_TARGET_DIR/debug/metaviewer-core"
-# Adapter: takes no arguments; configuration comes from the environment
-go -C daemon-adapter run ./cmd/mv-daemon-adapter
-# UI smoke (needs ELECTRON_OVERRIDE_DIST_PATH + xvfb-run)
-(cd ui && npm run smoke)
-# CLI probe: FILE is an action_proposal/v0.2 JSON object.
-# Source the live attachment first. Select registered agent/core instances from
-# MV_CORE_CONFIG and set MV_AGENT_INSTANCE, MV_CORE_INSTANCE, MV_CORE_SOCKET.
-# MV_CORE_SOCKET is current.json's core_socket.
-PYTHONPATH=agents python3 -m metaviewer_agents.mvctl propose --json-arg FILE --timeout-ms 5000 \
+An operational failure in the judge script prints `CODE: problem -- fix: remedy` and exits `2` [CITED: `scripts/judge/metaviewer-judge.sh:48`]; a usage error exits `64` [CITED: `scripts/judge/metaviewer-judge.sh:55`]. Follow the remedy before continuing. After installation, use the [Judge tour](docs/JUDGE_TOUR.md); for a refusal, use [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md).
+
+<a id="1-abstract-and-result-contract"></a>
+<a id="3-how-it-works"></a>
+## Why capsules?
+
+A capsule gives each task an addressable application surface with its own control state, so an agent can name what it intends to operate [CITED: `core/src/admission/mod.rs:96`, `core/src/admission/mod.rs:1297`]. Browser and Program capsules use container boundaries, while Host program and Desktop window expose host applications without isolation [CITED: `daemon-adapter/internal/capsule/manager.go`, `ui/src/surfaces/RoleSurface.vue`]. This separates the choice of execution boundary from the human-or-agent control protocol; the tradeoffs and alternatives are in [Why capsules](docs/WHY_CAPSULES.md).
+
+Answers: why does MetaViewer use capsules; what does a capsule provide.
+
+<a id="2-definitions-and-gates"></a>
+### What do surface, frame and journal mean?
+
+A **surface** is the target tracked by the core; a **frame** is an observed image with a generation and digest; the **journal** records core events for verification.
+
+Answers: what is a surface; what is a frame generation; what does the journal record.
+
+The Electron wall presents surfaces, the Rust core decides whether input may proceed, and the Go adapter runs capsules and exchanges frames and input. An agent proposal includes `surface_id` and `based_on_frame`; the core checks ownership, liveness, generation and digest before dispatch [CITED: `core/src/admission/mod.rs:1297`]. `mv-replay` checks the saved journal and frame witnesses; it is a verifier, not a command to repeat application actions [CITED: `core/src/bin/mv-replay.rs`]. Process and wire details: [Architecture](docs/ARCHITECTURE.md) and [Reference](docs/REFERENCE.md).
+
+<a id="6-agent-operating-protocol"></a>
+## Why computer use with an AI at the controls?
+
+The maintainer recommends an AI at the controls because MetaViewer routes its proposals through frame and ownership checks, giving the agent feedback about whether an action may proceed [CITED: `core/src/admission/mod.rs:1297`]. A person can take control of a live surface, cancelling pending agent work; agent work requires explicit release of control and a fresh frame before it resumes [CITED: `core/src/admission/mod.rs:1136`, `core/src/admission/mod.rs:1159`]. The intended workflow is observe, propose, inspect the result, and hand back to the person when needed; [AI at the controls](docs/AI_AT_THE_CONTROLS.md) explains it and [Agent entry](docs/AGENT_ENTRY.md) provides the executable recipes.
+
+Answers: why is MetaViewer focused on computer use; should I put an AI at the controls.
+
+### How does an AI operate a running capsule?
+
+Use the running app's attachment and copied capsule identity, then follow [docs/AGENT_ENTRY.md](docs/AGENT_ENTRY.md) for the selected task.
+
+Answers: how does an AI attach; what is Direct task; how do I drive a capsule.
+
+1. Open a capsule and its paired terminal. Choose an installed agent CLI or a shell.
+2. Use **Copy ID for AI** and **Direct task**. Complete the task text, review it, and submit it yourself. The app prepares text without pressing Enter [CITED: `ui/src/terminal/workflowPrompts.js`, `ui/src/terminal/terminalDeckModel.js:1751`].
+3. Follow the attachment and observation recipe in [Agent entry](docs/AGENT_ENTRY.md). Confirm the live capsule identity and control state; do not guess missing values.
+4. Execute a supported, bounded step, inspect its verdict and observe the resulting state. Stop on a refusal. After `INPUT_UNCERTAIN`, inspect before considering any further input [CITED: `agents/metaviewer_agents/mw_refusals.py`].
+5. At a login or challenge, hand control to the person. Acknowledge only hides the notice; it does not resume the run [CITED: `ui/src/handoff/handoffModel.js`].
+
+Browser and program tasks, authored workflows, and ARM64 MicroVM commands have different recipes. The limits of `mw_run` are specific to that runner and mode; they are not a list of every action supported by the core [CITED: `agents/metaviewer_agents/mw_run.py:339`]. See [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) for the full workflow.
+
+### How do I submit a reviewed proposal from the CLI?
+
+Use `mvctl propose` with a reviewed proposal file and the registered values from the running app.
+
+Answers: how do I send an action proposal; which CLI submits a proposal.
+
+This command can dispatch input to the authorized capsule. `FILE` is the action-proposal JSON you reviewed; the variables must come from the app attachment. The transport bounds are explicit limits [TARGET], and argument validation is defined in the CLI [CITED: `agents/metaviewer_agents/mvctl.py`].
+
+```bash
+PYTHONPATH=agents python3 -m metaviewer_agents.mvctl propose --json-arg FILE \
   --socket "$MV_CORE_SOCKET" --session-id "$MV_SESSION_ID" \
   --agent-instance "$MV_AGENT_INSTANCE" --core-instance "$MV_CORE_INSTANCE" \
-  --max-line-bytes 65536 --max-reply-bytes 65536
-# Hosted slice (no devices needed); --live needs the admitted capsule profile + env in tests/e2e/e2e1_slice/README.md
-node tests/e2e/e2e1_slice/index.js
+  --timeout-ms 5000 --max-line-bytes 65536 --max-reply-bytes 65536
+# Inspect the returned verdict and verify the resulting capsule state.
 ```
 
-`mvctl observe` uses the current tool protocol by default; the optional leading
-`--v02` spelling selects the same protocol and is not a legacy repair. Observe
-also requires the registered bindings and `--surface-id`.
+<a id="status"></a>
+<a id="5-coverage-and-domain-contracts"></a>
+## Which capsule should I choose?
 
-I leave `MV_CAPTURE_RING` unset until the OpenSuperficies ring pin and host mount are ready; `MV_CAPTURE_RING=1` opts into the validated resident reader [CITED: `daemon-adapter/internal/frames/ringsource.go`].
-I use `MV_LIVE_WEB=1` only for the opt-in live web runner; I leave it unset in hosted CI [CITED: `tests/e2e/e2e1_slice/asm_web_live.py`].
+Choose Browser or Program for a container boundary, a host route for an existing application, or the ARM64 developer setup for a guest.
 
-### Checks
+Answers: which capsule kinds exist; which are isolated; what runs on x64 or ARM64.
 
-```sh
+| Kind | Execution boundary | Platform and setup |
+|---|---|---|
+| Browser (`identity-browser`) | Container per identity | Docker capsule tier; [install](docs/INSTALL.md) |
+| Program (`program`) | Container | Docker capsule tier; [install](docs/INSTALL.md) |
+| Host program (`host-program`) | **Not isolated**; runs on the host | Host application and Xpra; [operator guide](docs/AI_OPERATOR_GUIDE.md) |
+| Desktop window (`desktop-window`) | **Not isolated**; attaches a host window | X11 window; [operator guide](docs/AI_OPERATOR_GUIDE.md) |
+| Graphical VM | Guest | ARM64 with KVM; [setup](docs/ARM64_CAPSULE_SETUP.md) |
+| MicroVM and Rewind | Guest; Rewind restores guest RAM | ARM64 with KVM; [setup and limits](docs/ARM64_MICROVM_REWIND.md) |
+
+The host routes and container routes are distinguished in the adapter and launcher [CITED: `daemon-adapter/internal/capsule/manager.go`, `ui/src/catalog/catalogModel.js`]. The guest capability check disables VM and MicroVM on non-ARM64 hosts [CITED: `ui/electron/guestCommandProfile.js:47`]. Rewind does not undo external network effects, host files or the journal; inspect the [Rewind contract](docs/ARM64_MICROVM_REWIND.md).
+
+<a id="4-engineering-triptych"></a>
+<a id="7-measured-results"></a>
+## What evidence can I check?
+
+Public code and tests support interface and refusal claims; live demonstrations remain maintainer-reported unless their receipts are published.
+
+Answers: what is verified; where is the evidence; what does replay prove.
+
+| Claim | Inspect | Limit |
+|---|---|---|
+| Stale frames and invalid ownership are refused | `core/src/admission/mod.rs`, `core/tests/admission_matrix.rs` | A refusal test does not certify every application workflow |
+| Take control cancels pending agent work | `core/src/admission/mod.rs`, `core/src/journal/mod.rs` | Inspect the pending and already-dispatched cases separately |
+| Journal and witnesses can be checked | `core/src/bin/mv-replay.rs`, `core/tests/t1_journal_verify.rs` | Verification does not prove a task was useful or correct |
+| Wire messages match their schemas | `contracts/v0.2/`, `python3 tools/check_contracts.py` | Shape validation is not live execution |
+| Installation checks have explicit markers | `scripts/judge/metaviewer-judge.sh` | A source test is not an installation on your machine |
+
+`mv-replay` exits `0` on successful verification, `2` for invalid or corrupt input, `3` for a duplicate and `4` for a witness error [CITED: `core/src/bin/mv-replay.rs:41`]. Use the original session's journal and witnesses according to [Evidence](docs/EVIDENCE.md).
+
+<a id="historical-live-evidence"></a>
+<a id="live-on-the-026-candidate-measured-live-by-the-maintainer"></a>
+### Where are the live demonstrations and receipts?
+
+[AI at the controls](docs/AI_AT_THE_CONTROLS.md) records the maintainer's game and ARM64 Rewind reports; [Evidence](docs/EVIDENCE.md) distinguishes those reports from public test evidence.
+
+Answers: has an AI driven MetaViewer; are the live results independently reproducible.
+
+The reports are not measurements reproduced by this documentation review. Public raw receipts and a published location for the referenced game and Rewind recordings are `ABSENT — do not invent`. Live frame rate and latency at the current pins are also `ABSENT — do not invent`; older observations do not establish current performance.
+
+<a id="isolation-and-evaluation-limits"></a>
+<a id="8-rejected-levers-and-negative-results"></a>
+<a id="9-limitations"></a>
+<a id="11-pending-measurements"></a>
+## What are the limits and known problems?
+
+Host routes are not isolated, guest features require ARM64 setup, and a passing offline test suite does not establish live application acceptance.
+
+Answers: what is unsupported; what remains unverified; where are known bugs.
+
+- VM and MicroVM are unavailable on non-ARM64 hosts [CITED: `ui/electron/guestCommandProfile.js:47`]; Rewind profiles also require ARM64 [CITED: `ui/electron/guestCommandProfile.js:11`].
+- A stale frame or missing ownership blocks admission [CITED: `core/src/admission/mod.rs:1297`]. After a runner reports `INPUT_UNCERTAIN`, inspect the resulting state before further input [CITED: `agents/metaviewer_agents/mw_refusals.py`]. A successful proposal is not proof of task completion.
+- Known maintainer-reported issues, including package bytecode inventory and a terminal exit after a long line, are tracked in [Debug](docs/DEBUG.md) and [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md). Their causes must not be inferred from the symptoms.
+- Screenshot and walkthrough publication for this entry page remains pending. Independent live receipts and current performance measurements remain absent.
+
+<a id="10-reproducibility"></a>
+## How do I find code or contribute?
+
+Ask the local router, read the cited source, and follow [AGENTS.md](AGENTS.md) and [LAWS.md](LAWS.md) before editing.
+
+Answers: how do I find an implementation; how do I verify a change; how do I build from source.
+
+```bash
+python3 route/route_query.py any "<question>"
+python3 route/route_query.py show "<reference returned above>"
+python3 route/route_query.py check
+```
+
+A finding tells you where to look. Only the code proves it. An empty result means retrieval found no answer, not that the feature is absent. Use [router commands](route/README.md) for exact symbols, error text and tests.
+
+The build instructions and pinned toolchains are in [docs/INSTALL.md](docs/INSTALL.md); check coverage is in [Testing](docs/TESTING.md). Run the checks appropriate to your change:
+
+```bash
 python3 tools/check_laws.py
 python3 tools/check_laws.py --version
 python3 tools/check_contracts.py
-python3 -m unittest discover -s tests -v
-bash tools/gate.sh                   # all 11 legs: manifests, laws, contracts, unit, agents, js, rust, go, ui, ui-smoke, perf
-bash tools/gate.sh --leg contracts   # single leg
-bash tools/gate.sh --self-test       # harness positive and negative controls
+python3 -B -m unittest discover -s tests -p 'test_*doc*'
+bash tools/gate.sh
 ```
 
-Secret scanning runs in `.github/workflows/secrets.yml` (pinned `gitleaks` `v8.18.4` history scan plus controls).
+`check_laws.py` validates commit metadata and applicable changelog requirements; it does not scan all prose for privacy or factual accuracy [CITED: `tools/check_laws.py`]. After document changes, the index owner regenerates the docs index and checks `ROUTE_OK`. Contributor catalogue checks are separate; see [AGENTS.md](AGENTS.md).
 
-Enable the local commit hook before contributing:
+<a id="12-licence-and-provenance"></a>
+## What licence and evaluation permission apply?
 
-```sh
-git config core.hooksPath .githooks
-```
+MetaViewer's own source is `AGPL-3.0-only`; the external components have the separate evaluation permission in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md).
 
-## Repo map
+Answers: what is the licence; what is private; what may judges evaluate.
 
-| Path | Purpose |
-| --- | --- |
-| `README.md`, [docs/README.md](docs/README.md) | Project overview and ordered documentation index |
-| `route/` | Read-only generated code map; coordinates require source verification |
-| `router/`, `catalogue/` | Context-router tooling and identity data; entry routing remains declared unavailable in `AGENTS.md` |
-| `changes/` | Pending release fragments and conductor assembly instructions |
-| `memoryweb-builtin/` | Built-in workflow/site data; private operator data lives separately |
-| `LAWS.md`, [docs/COMMIT_LAWS.md](docs/COMMIT_LAWS.md) | Repository and commit policy |
-| `VERSION`, `CHANGELOG.md`, `deps.lock` | Release identity and external component pins |
-| [contracts/v0.2/](contracts/v0.2/) | `21` versioned v0.2 JSON wire schemas [MEASURED: `ls -1 contracts/v0.2/*.schema.json | wc -l`] |
-| `contracts/v0.1/`, `contracts/examples/` | `10` closed v0.1 schemas [MEASURED: `ls -1 contracts/v0.1/*.schema.json | wc -l`] and valid/invalid fixtures |
-| `core/` | Rust authority core (`metaviewer-core`, `mv-replay`) |
-| `daemon-adapter/` | Go surface-daemon bridge (`mv-daemon-adapter`) |
-| `agents/` | Python agent adapters, `mvctl`, MCP server |
-| `ui/` | Electron `44.9.2` + Vue `3.5.43` wall, frame port router, terminal, multislot, capture |
-| `tests/e2e/` | `40` Node E2E journeys [MEASURED: `ls -1 tests/e2e/*.test.js | wc -l`], `6` Python E2E suites [MEASURED: `ls -1 tests/e2e/test_*.py | wc -l`], and `e2e1_slice/` |
-| `tools/gate.sh` | Unified `11`-leg offline gate and harness self-test [CITED: `tools/gate.sh`] |
-| `tools/`, `tests/`, `.githooks/` | Checkers, unit suites, budget gate (`tools/budget_gate.py`), commit hook |
-| `.github/workflows/` | `6` CI workflow files (`ci.yml`, `secrets.yml`, `package.yml`, `build-other.yml`, `volume.yml`, `assembly.yml`) [MEASURED: `ls -1 .github/workflows/*.yml | wc -l`] |
-| `scripts/bootstrap.sh` | Deterministic Linux packaging bootstrap |
-| [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) | Complete AI and human operator guide for installing, configuring, and operating every MetaViewer feature |
-| [docs/JUDGE_QUICKSTART.md](docs/JUDGE_QUICKSTART.md) | Laptop-ready judge quickstart (`doctor`, `install`, `run`, `stop`) |
-| [docs/INSTALL.md](docs/INSTALL.md) | Linux (`arm64` and `x64`) installation, packaging, and troubleshooting guide |
-| [docs/USER_GUIDE.md](docs/USER_GUIDE.md) | Operator guide for the wall, control handoff, multislot, recording, `mvctl`, and replay |
-| [docs/DEMO_RUNBOOK.md](docs/DEMO_RUNBOOK.md) | Live demo launch, screen recording, stop and known issues |
-| [docs/TESTING.md](docs/TESTING.md) | Gate legs, live gates, E2E journeys, CI job table, hosted-like checks, and mutation proofs |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Authority, IPC, capture, and replay design |
-| [docs/UI_ARCHITECTURE.md](docs/UI_ARCHITECTURE.md) | Shared capsule visual architecture |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Historical hackathon plan and target gates |
-| [docs/PREEXISTING.md](docs/PREEXISTING.md) | Pre-existing work declaration |
-| [META_AI_USAGE.md](META_AI_USAGE.md) | Meta model usage ledger (`3538` lanes across `136` rooms [MEASURED: `python3 -c 'import json; d=json.load(open("docs/meta-ai/muse_lanes.json")); print(len(d["lanes"]), len({x["room"] for x in d["lanes"]}))'`]) |
+`wender-agent`, `vision-engine` and `OpenSuperficies` are separate proprietary programs whose source is not published. The notice permits hackathon judges to install, run and evaluate the supplied compiled forms for judging; it grants no redistribution, modification, reverse engineering or other use. Public source here describes the interfaces, not private implementation. `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only` [CITED: `NOTICE-EVALUATION.md`].
 
-## Contributing
-
-Set both author and committer to the maintainer identity in [docs/COMMIT_LAWS.md](docs/COMMIT_LAWS.md) before committing. CI repeats the checks independently of the local hook. Components talk only through versioned JSON contracts: a new message type needs its schema before the code that sends or reads it [CITED: `LAWS.md` L3].
-
-## Pre-existing vs built during the event
-
-The runtime product assembly was built during the event; the v0.1 scaffold (including schema tooling and tests), design notes, and external component projects predate it. See [docs/PREEXISTING.md](docs/PREEXISTING.md) for the item-by-item declaration.
-
-## Evaluation by hackathon judges
-
-MetaViewer may be used, modified and redistributed under [AGPL-3.0-only](LICENSE). The licensor (the maintainer, `oguirado`) separately permits hackathon judges to install, run and evaluate the supplied compiled external components for judging, as stated in [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md); this grants no redistribution rights in those components. Judges can follow the [judge quickstart](docs/JUDGE_QUICKSTART.md) and give [docs/AI_OPERATOR_GUIDE.md](docs/AI_OPERATOR_GUIDE.md) to their own AI to configure and explain the full program.
-
-## License
-
-MetaViewer is licensed under the [GNU Affero General Public License, version 3 only](LICENSE) (`AGPL-3.0-only`). The separate proprietary programs `wender-agent`, `vision-engine` and `OpenSuperficies` are fully private and are not covered by this license; `capsule-ui-kit` is a separate public repository under `AGPL-3.0-only`. See [NOTICE-EVALUATION.md](NOTICE-EVALUATION.md) for the additional permission to run and convey MetaViewer with external components and the limited evaluation permission for their compiled forms.
+Pre-existing work and event work: [Provenance](docs/PREEXISTING.md). Release history: [CHANGELOG.md](CHANGELOG.md).

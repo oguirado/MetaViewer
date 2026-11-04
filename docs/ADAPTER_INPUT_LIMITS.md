@@ -1,47 +1,52 @@
 # Adapter text input limits
 
-The adapter delivers printable text with `--type-stdin`. The native call cap is
-2000 runes [CITED: OpenSuperficies `src/browserid/inject/inject.go:279–281`,
-historical source commit `a9ac1ac8543872b428990ea23fa2629cd0a6d1d5`, not the current `deps.lock` pin]. Native validation
-also rejects non-printable runes [CITED: the same source, lines 284–287]; the
-adapter refuses those at admission with `input`, including trailing newlines
-which the CLI would otherwise remove.
+Text admission is bounded, and a failed delivery can leave a visible prefix.
+Observe the capsule before retrying. This page describes the public adapter;
+it does not certify the implementation of the separately supplied runtime.
 
-The per-proposal cap is 16384 runes [TARGET, unit decision]. Text above that cap
-is refused with stable fault code `TEXT_TOO_LONG` before consuming a permit or
-calling the native CLI. Existing JSON transport byte/string caps still apply
-before action admission. The cap counts Unicode runes, not bytes; each native
-chunk is at most 8000 UTF-8 bytes [CITED: native rune cap and UTF-8 encoding],
-below the CLI stdin cap of 16 KiB [CITED: pinned OpenSuperficies
-`docs/CONTRACT_IDENTITY_SURFACE.md:73`].
+## How much text can an action carry?
 
-Text within the native cap keeps the existing call path and evidence fields.
-Longer admitted text is split at rune boundaries and delivered in order under
-one proposal, pending permit and public `input_applied` event. Each native call
-must pass the existing window, action, focus, result and clock checks before the
-next call starts. Control takeover, cancellation, binding loss, native errors or
-invalid receipts stop the sequence; no success event or success evidence is
-returned. A delivered prefix cannot be rolled back; the consumed proposal must
-not be replayed automatically.
+The adapter accepts at most `16384` Unicode runes per text action and splits
+them into native calls of at most `2000` runes [CITED:
+`daemon-adapter/internal/capsule/manager.go`, `AdapterTextMaxRunes`,
+`NativeTextMaxRunes`]. The text must be nonempty and printable. Newlines and
+other non-printable characters are refused. Transport limits can reject a
+message before this text check.
 
-Successful long-text `InputEvidence` includes adapter-local `TextSequence.Chunks`, ordered by
-delivery. Each entry contains the validated native receipt, rune count and SHA256
-of the exact stdin bytes. The existing top-level evidence identifies the final
-verified call; sequence evidence is returned only after every chunk succeeds.
-This adapter-local evidence interface is [TARGET, unit decision]. The public
-receipt keeps the final native receipt as an aggregate success witness, emitted
-only after all calls verify. Per-chunk evidence is excluded from JSON because
-`contracts/v0.2/action_receipt.schema.json:107` forbids extra native evidence
-fields; the public contracts are unchanged.
+Answers: text length; Unicode limits; TEXT_TOO_LONG; newline refusal
 
-The adapter never selects paste for agent text. The pinned contract describes
-`input --paste` at line 73 without an explicit non-operator admission guarantee;
-`paste-text` at lines 96–97 explicitly requires an operator login view [CITED:
-OpenSuperficies `docs/CONTRACT_IDENTITY_SURFACE.md` at the pinned commit above].
-No paste permission is inferred from either interface.
+An over-limit action returns `TEXT_TOO_LONG`. Invalid text returns `input`.
+These checks precede native delivery. The limits describe this adapter's code,
+not a newly measured limit of an external backend. Boundary and Unicode cases
+are covered by [textcap_test.go](../daemon-adapter/internal/capsule/textcap_test.go).
 
-The runner's NAV-TEXTCAP chunking remains: its bounded proposals are compatible
-with adapter chunking [TARGET, unit decision]. No runner changes are required.
+## What happens if a later chunk fails?
 
-This mandate is scoped to the supplied MetaViewer worktree and pinned
-OpenSuperficies source corpus.
+The sequence stops without reporting aggregate success. Earlier chunks may
+already have arrived, so resending the whole action can duplicate input.
+
+Answers: partial text; interrupted typing; safe retry; chunk evidence
+
+Each chunk must pass the adapter's receipt, clock, binding and control checks;
+focus is also checked when a native window is bound. Cancellation, takeover or a changed binding interrupts the sequence.
+On complete success, the public receipt carries the final native result.
+Per-chunk evidence stays in the adapter's `TextSequence` field, which is excluded
+from JSON. See [manager.go](../daemon-adapter/internal/capsule/manager.go),
+`InputEvidence` and the input loop, and
+[textcap_test.go](../daemon-adapter/internal/capsule/textcap_test.go).
+
+## Does text delivery use the clipboard?
+
+It can. Agent text adds `--paste` when the selected profile has
+`text_input: "paste"`; human text adds it when the text contains characters
+outside printable ASCII. Both paths still use `--type-stdin` in the browser
+input branch [CITED: `daemon-adapter/internal/capsule/manager.go`, `needsPaste`
+and the `type` action branch].
+
+Answers: clipboard use; paste profile; human Unicode input
+
+Do not infer runtime permission from a flag name. The adapter's selection is
+public source behavior; backend permission and refusal remain part of the
+external runtime boundary described in [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md).
+Host-window input has its own implementation in
+[host_window.go](../daemon-adapter/internal/capsule/host_window.go).

@@ -1,1 +1,0 @@
-- Add `route/`, a queryable map of the repository for workers and orchestrators: symbols, string literals and findings cited to code. Findings are model output with no human review, pinned to a commit; each answer marks them FRESH, SHIFT or STALE against the tree. Start with `python3 route/route_query.py stats`.

@@ -1,3 +1,0 @@
-- Add immutable human and agent capsule roles, isolated native xpra tiles, readonly agent watch, and continuous redacted human traces.
-- Preserve the native xpra client viewport when fitting role tiles, require a healthy role-matched connection before input, and show a typed retryable startup failure.
-- Recover lost role views through the authenticated bridge, preserve sessions across focus and layout changes, contain child crashes with Reopen, and forward human shortcuts to the capsule.

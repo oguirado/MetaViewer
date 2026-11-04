@@ -15,7 +15,7 @@ import unittest
 from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
-FIXTURE = REPO / 'tests' / 'e2e' / 'fixtures' / 'mw_perplexity'
+FIXTURE = REPO / 'tests' / 'e2e' / 'fixtures' / 'mw_sample_chat'
 for _entry in (str(REPO / 'agents'), str(REPO / 'tools'), str(REPO)):
     if _entry not in sys.path:
         sys.path.insert(0, _entry)
@@ -80,8 +80,8 @@ def _make_row(
 def _make_tree(
     rows: list[dict],
     *,
-    url: str = 'https://www.perplexity.ai/',
-    title: str = 'Perplexity',
+    url: str = 'https://chat.example.com/',
+    title: str = 'Sample chat',
 ) -> dict:
     return {
         'elements': rows,
@@ -118,10 +118,10 @@ class MwAxDumpTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix='mv-ax-dump-'))
         os.chmod(self.tmp, 0o700)
         self.home = self.tmp / 'memoryweb'
-        shutil.copytree(FIXTURE / 'site', self.home / 'sites' / 'perplexity')
+        shutil.copytree(FIXTURE / 'site', self.home / 'sites' / 'sample-chat')
         for directory in (self.home, self.home / 'sites'):
             directory.chmod(0o700)
-        _repair_provenance(self.home / 'sites' / 'perplexity')
+        _repair_provenance(self.home / 'sites' / 'sample-chat')
 
         self.bin_dir = self.tmp / 'bin'
         self.bin_dir.mkdir(mode=0o700)
@@ -164,7 +164,7 @@ class MwAxDumpTest(unittest.TestCase):
         tree: dict,
         *,
         capsule: str = 'mv-live-1',
-        site: str = 'perplexity',
+        site: str = 'sample-chat',
         workflow: str | None = 'ask',
         surfaces: list[dict] | None = None,
         admin_doc: dict | None = None,
@@ -174,7 +174,7 @@ class MwAxDumpTest(unittest.TestCase):
         if surfaces is None:
             surfaces = [
                 {
-                    'surface_id': 'surface-perplexity-1',
+                    'surface_id': 'surface-sample-chat-1',
                     'profile_id': 'mv-live-1',
                     'state': 'active',
                     'kind': 'browser',
@@ -251,7 +251,7 @@ class MwAxDumpTest(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertEqual(summary['marker'], 'MW_AX_DUMP')
         self.assertEqual(summary['rows'], 4)
-        self.assertEqual(summary['window_url'], 'https://www.perplexity.ai/')
+        self.assertEqual(summary['window_url'], 'https://chat.example.com/')
         self.assertEqual(summary['focused'], {'role': 'button', 'name': 'GPT-6.1 Sol'})
         self.assertTrue(all(item['present'] for item in summary['anchors']))
         anchor_names = [item['anchor_name'] for item in summary['anchors']]

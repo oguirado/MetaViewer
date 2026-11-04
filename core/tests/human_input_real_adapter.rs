@@ -748,6 +748,53 @@ fn real_core_and_real_daemon_adapter_accept_human_input_and_settle_outcomes() {
             .count();
         assert_eq!(scrolls_before, scrolls_after);
 
+        // [TARGET, unit decision] Static-page handoff crosses the real adapter/core
+        // seam: identical pixels still require a new native capture after release.
+        fs::remove_file(paths.shm_root.join("frame_delay_ms")).unwrap();
+        ui.send(json!({
+            "schema": "ui_intent/v0.2", "request_id": "release-static",
+            "op": "release_control", "params": { "surface_id": surface_id }
+        }))
+        .await;
+        let released = ui.receive_json().await;
+        assert_eq!(released["event"], "state_changed");
+        assert_eq!(released["data"]["surface"]["control"], "agent");
+        let ready = ui.receive_json().await;
+        assert_eq!(ready["event"], "frame_ready", "release must force capture");
+        let fresh = &ready["data"]["frame_ref"];
+        assert_eq!(fresh["sha256"], frame_sha, "fixture must stay static");
+        assert!(fresh["generation"].as_u64().unwrap() > frame_gen);
+        let frame_calls = fs::read_to_string(paths.shm_root.join("srf-calls.jsonl"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|call| call["op"] == "frame")
+            .count();
+        assert_eq!(frame_calls, 2, "release needs a real second CLI capture");
+        let proposal = |id: &str, generation: Value| {
+            json!({
+                "schema": "action_proposal/v0.2", "proposal_id": id,
+                "surface_id": surface_id,
+                "based_on_frame": { "sha256": frame_sha, "generation": generation },
+                "action": { "type": "key", "keys": ["Return"] },
+                "expectation": { "type": "changed_region",
+                    "bbox": { "x": 0, "y": 0, "w": 1, "h": 1 } },
+                "budget": { "max_ms": 1000, "max_retries": 0 }
+            })
+        };
+        // Same SHA is insufficient: the pre-release generation remains refused.
+        agent.send(proposal("static-old", frame_gen.into())).await;
+        let refused = agent.receive_json().await;
+        assert_eq!(refused["proposal_id"], "static-old");
+        assert_eq!(refused["decision"], "refused");
+        assert_eq!(refused["reason_code"], "STALE_FRAME");
+        agent
+            .send(proposal("static-fresh", fresh["generation"].clone()))
+            .await;
+        let admitted = agent.receive_json().await;
+        assert_eq!(admitted["proposal_id"], "static-fresh");
+        assert_eq!(admitted["decision"], "admitted", "{admitted}");
+
         drop(agent);
         drop(ui);
         server_task.abort();

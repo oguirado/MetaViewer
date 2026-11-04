@@ -1,1 +1,0 @@
-- Fix stale dialog completions, late identity alerts, panel closures, missed reveal notices, pointer presses across stream replacement, stuck role recovery and silent view close retries.

@@ -8,8 +8,160 @@
  * which the kit emits after its cold restore settles.
  */
 import { defineComponent, h } from 'vue';
+/** [TARGET, unit decision] Presentation-only free drag, Control-held cell snap.
+ * Grid counts are per desktop; geometry never dispatches backend intents.
+ * @param {any} start @param {any} origin @param {any} pointer
+ * @param {number} width @param {number} height @param {{cols:number,rows:number}} grid */
+export function floatDragBounds(start, origin, pointer, width, height, grid) {
+  if (![grid?.cols,grid?.rows].every(n=>Number.isInteger(n) && n >= 1 && n <= 5) ||
+      ![width,height].every(n=>Number.isFinite(n) && n > 0)) throw Error('SNAP_GRID_INVALID');
+  if (!pointer.ctrlKey) return {x:Math.max(0,Math.min(width-start.width,start.x+pointer.x-origin.x)),
+    y:Math.max(0,Math.min(height-start.height,start.y+pointer.y-origin.y)),width:start.width,height:start.height};
+  const col = Math.max(0,Math.min(grid.cols-1,Math.floor(pointer.x*grid.cols/width)));
+  const row = Math.max(0,Math.min(grid.rows-1,Math.floor(pointer.y*grid.rows/height)));
+  const x = Math.floor(col*width/grid.cols), y = Math.floor(row*height/grid.rows);
+  return {x,y,width:Math.floor((col+1)*width/grid.cols)-x,height:Math.floor((row+1)*height/grid.rows)-y};
+}
+
+/** [TARGET, unit decision] Row-major placement shares the snap arithmetic.
+ * Occupied rectangles reserve every cell they intersect; saved cells are hints.
+ * @param {number} width @param {number} height @param {{cols:number,rows:number}} grid
+ * @param {any[]} occupied @param {{col:number,row:number}|null} [preferred] */
+export function nextFloatingCell(width,height,grid,occupied,preferred = null) {
+  floatDragBounds({}, {}, {x:0,y:0,ctrlKey:true},width,height,grid);
+  const cells = Array.from({length:grid.cols*grid.rows},(_,index)=>({col:index%grid.cols,row:Math.floor(index/grid.cols)}));
+  if (preferred && cells.some(c=>c.col === preferred.col && c.row === preferred.row)) cells.unshift(preferred);
+  for (const cell of cells) {
+    const rect = floatDragBounds({}, {}, {x:(cell.col+.5)*width/grid.cols,y:(cell.row+.5)*height/grid.rows,ctrlKey:true},width,height,grid);
+    if (!occupied.some(o=>o.x < rect.x+rect.width && o.x+o.width > rect.x && o.y < rect.y+rect.height && o.y+o.height > rect.y)) return rect;
+  }
+  const w = Math.floor(width*.9), h = height;
+  return {x:Math.min(24*occupied.length,width-w),y:Math.min(24*occupied.length,height-h),width:w,height:h};
+}
+
+/** Keep cell coordinates exact and free windows proportional across wall resizes.
+ * @param {{left:number,top:number,width:number,height:number}} rect
+ * @param {{width:number,height:number}} from @param {{width:number,height:number}} to
+ * @param {{cols:number,rows:number}} grid */
+export function reflowFloatingRect(rect, from, to, grid) {
+  const col=Math.round(rect.left*grid.cols/from.width), row=Math.round(rect.top*grid.rows/from.height);
+  if(col>=0 && col<grid.cols && row>=0 && row<grid.rows) {
+    const old=floatDragBounds({}, {}, {x:(col+.5)*from.width/grid.cols,y:(row+.5)*from.height/grid.rows,ctrlKey:true},from.width,from.height,grid);
+    if(rect.left===old.x && rect.top===old.y && rect.width===old.width && rect.height===old.height) {
+      const cell=floatDragBounds({}, {}, {x:(col+.5)*to.width/grid.cols,y:(row+.5)*to.height/grid.rows,ctrlKey:true},to.width,to.height,grid);
+      return {left:cell.x,top:cell.y,width:cell.width,height:cell.height};
+    }
+  }
+  const left=Math.max(0,Math.min(to.width-1,Math.floor(rect.left*to.width/from.width)));
+  const top=Math.max(0,Math.min(to.height-1,Math.floor(rect.top*to.height/from.height)));
+  return {left,top,width:Math.max(1,Math.min(to.width-left,Math.floor((rect.left+rect.width)*to.width/from.width)-left)),
+    height:Math.max(1,Math.min(to.height-top,Math.floor((rect.top+rect.height)*to.height/from.height)-top))};
+}
+
+/** Floating windows need one empty grid home, not the previous preset's dividers.
+ * Populated and hidden groups retain their panels and identity.
+ * @param {any} api */
+export function retainFloatingHome(api) {
+  const grids=(api.groups ?? []).filter((/** @type {any} */ group)=>group.api.location.type==='grid');
+  let kept=false;
+  for (const group of grids) if (group.size===0) {
+    if (kept) api.removeGroup(group);
+    else kept=true;
+  }
+  if (!grids.length) api.addGroup({direction:'right',skipSetActive:true});
+}
+
+let floatingDragSerial = 0;
+/** Capture floating title drags before Dockview can start native docking.
+ * Live movement uses a temporary transform; release commits through the public
+ * floating-group API, retaining panel instances and the kit persistence gate.
+ * @param {any} root @param {any} api @param {()=>{cols:number,rows:number}} grid
+ * @param {()=>void} custom @param {()=>void} complete */
+export function installFloatingDrag(root, api, grid, custom, complete) {
+  const doc = root.ownerDocument;
+  let cancel = () => {};
+  const down = (/** @type {any} */ event) => {
+    if (event.button !== 0 || event.target.closest('button,input,select,textarea,a,[role="button"],dialog,[aria-modal="true"],.xterm,[contenteditable="true"]')) return;
+    const header = event.target.closest('.dv-floating-titlebar,.dv-tabs-and-actions-container,.cuk-capsule-panel__header');
+    // Dockview renders panel content in a sibling overlay, outside the group's
+    // resize container. Resolve that header through the public panel model.
+    const panel = header && api.panels?.find((/** @type {any} */ p)=>p.view?.content?.element?.contains(header));
+    const overlay = header?.closest('.dv-resize-container') ?? panel?.group?.element?.closest('.dv-resize-container');
+    if (!overlay || !root.contains(overlay)) return;
+    const group = api.groups.find((/** @type {any} */ g)=>g.api.location.type === 'floating' && overlay.contains(g.element));
+    if (!group) return;
+    cancel();
+    event.preventDefault(); event.stopPropagation();
+    const nonce = doc.querySelector('meta[name$="-style-nonce"]')?.getAttribute('content');
+    // Refuse the gesture if the authenticated stylesheet channel is unavailable.
+    if (!nonce) return;
+    group.api.setActive();
+    const sheet = doc.createElement('style'); sheet.setAttribute('nonce',nonce);
+    doc.head.appendChild(sheet);
+    const token = String(++floatingDragSerial);
+    overlay.setAttribute('data-wall-drag',token);
+    const content = (panel ?? group.activePanel)?.view?.content?.element?.closest('.dv-render-overlay');
+    content?.setAttribute('data-wall-drag',token);
+    const wall = overlay.parentElement.getBoundingClientRect(), box = overlay.getBoundingClientRect();
+    const start = {x:box.left-wall.left,y:box.top-wall.top,width:box.width,height:box.height};
+    const origin = {x:event.clientX-wall.left,y:event.clientY-wall.top};
+    let control = event.ctrlKey;
+    let moved = false;
+    const preview = doc.createElement('div');
+    preview.className = 'wall-snap-preview'; preview.setAttribute('aria-hidden','true');
+    preview.hidden = true;
+    preview.setAttribute('data-wall-snap',token);
+    overlay.parentElement.appendChild(preview);
+    const bounds = (/** @type {any} */ e) => floatDragBounds(start,origin,{x:e.clientX-wall.left,y:e.clientY-wall.top,ctrlKey:control},wall.width,wall.height,grid());
+    const paint = (/** @type {any} */ e) => {
+      const rect = bounds(e);
+      preview.hidden = !control;
+      sheet.textContent = `[data-wall-snap="${token}"]{left:${rect.x}px;top:${rect.y}px;width:${rect.width}px;height:${rect.height}px}
+[data-wall-drag="${token}"]{transform:translate(${e.clientX-event.clientX}px,${e.clientY-event.clientY}px)}`;
+    };
+    const preventSelection = (/** @type {any} */ e) => e.preventDefault();
+    doc.addEventListener('selectstart',preventSelection,true);
+    const move = (/** @type {any} */ e) => {
+      if (e.pointerId !== event.pointerId) return;
+      e.preventDefault();
+      if (!moved && Math.abs(e.clientX-event.clientX)+Math.abs(e.clientY-event.clientY) > 3) {moved = true; custom();}
+      if (moved) paint(e);
+    };
+    const key = (/** @type {any} */ e) => {
+      if (e.key !== 'Control') return;
+      control = e.type === 'keydown';
+      if (moved) paint({clientX:point.x,clientY:point.y});
+    };
+    let point = {x:event.clientX,y:event.clientY};
+    const track = (/** @type {any} */ e) => {if(e.pointerId === event.pointerId) {control=e.ctrlKey; point={x:e.clientX,y:e.clientY}; move(e);}};
+    const cleanup = () => {
+      doc.removeEventListener('selectstart',preventSelection,true);
+      overlay.removeAttribute('data-wall-drag'); content?.removeAttribute('data-wall-drag'); preview.remove(); sheet.remove();
+      for (const [name,fn] of /** @type {Array<[string,EventListener]>} */ ([['pointermove',track],['pointerup',up],['pointercancel',abort],['keydown',key],['keyup',key],['visibilitychange',abort]])) doc.removeEventListener(name,fn,true);
+      doc.defaultView?.removeEventListener('blur',abort);
+      cancel = () => {};
+    };
+    const abort = () => cleanup();
+    const up = (/** @type {any} */ e) => {
+      if (e.pointerId !== event.pointerId) return;
+      control = e.ctrlKey;
+      const rect = bounds(e); cleanup();
+      if (moved) {api.addFloatingGroup(group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true}); complete();}
+      else group.api.setActive();
+    };
+    cancel = cleanup;
+    for (const [name,fn] of /** @type {Array<[string,EventListener]>} */ ([['pointermove',track],['pointerup',up],['pointercancel',abort],['keydown',key],['keyup',key],['visibilitychange',abort]])) doc.addEventListener(name,fn,true);
+    doc.defaultView?.addEventListener('blur',abort);
+  };
+  // Dockview installs its own overlay handlers. Capture on the document before
+  // those handlers, while keeping ownership restricted to this wall's floats.
+  doc.addEventListener('pointerdown',down,true);
+  return () => {cancel(); doc.removeEventListener('pointerdown',down,true);};
+}
+
 // Presentation only: no capsule geometry, ownership, or lifecycle operations.
-export const TILE_PRESETS = Object.freeze(['single','side-by-side','grid','focus-strip','floating']);
+const WORKLOAD_PANEL_PREFIX='workload-panel:';
+export const TILE_PRESETS = Object.freeze(['single','side-by-side','grid','grid-3x2','focus-strip','floating']);
 
 /** Exact cell geometry; equal rectangles denote tabs in the same cell.
  * Floating presentation is included so switching presets also docks floats.
@@ -22,7 +174,9 @@ export function presetRectangles(preset, tiles, width, height) {
   const count = visible.length;
   return visible.map((tile, index) => {
     if (preset === 'floating') {
-      const w = Math.min(640, Math.max(240,width * .6),width), h = Math.min(480,Math.max(200,height * .65),height);
+      // [TARGET, unit decision] Preserve the full available height for chrome
+      // and the frame; avoid fixed pixel caps on large and short workspaces.
+      const w = Math.floor(width * .9), h = height;
       return {id:tile.id,x:Math.min(24 * index, Math.max(0,width-w)),y:Math.min(24 * index,Math.max(0,height-h)),width:w,height:h};
     }
     if (preset === 'single') return {id:tile.id,x:0,y:0,width,height};
@@ -33,11 +187,12 @@ export function presetRectangles(preset, tiles, width, height) {
       return {id:tile.id,x:focusWidth,y:top,width:width-focusWidth,height:Math.floor(index * height / (count - 1)) - top};
     }
     if (preset === 'focus-strip' || preset === 'side-by-side' && count === 1) return {id:tile.id,x:0,y:0,width,height};
-    const cell = preset === 'grid' ? Math.min(index,3) : Math.min(index,1);
-    const column = cell % 2, row = preset === 'grid' ? Math.floor(cell / 2) : 0;
-    const rows = preset === 'grid' ? 2 : 1;
-    const x = Math.floor(column * width / 2), y = Math.floor(row * height / rows);
-    return {id:tile.id,x,y,width:Math.floor((column + 1) * width / 2) - x,height:Math.floor((row + 1) * height / rows) - y};
+    const columns = preset === 'grid-3x2' ? 3 : 2;
+    const rows = ['grid','grid-3x2'].includes(preset) ? 2 : 1;
+    const cell = Math.min(index,columns * rows - 1);
+    const column = cell % columns, row = Math.floor(cell / columns);
+    const x = Math.floor(column * width / columns), y = Math.floor(row * height / rows);
+    return {id:tile.id,x,y,width:Math.floor((column + 1) * width / columns) - x,height:Math.floor((row + 1) * height / rows) - y};
   });
 }
 
@@ -98,9 +253,12 @@ export function arrangePreset(layout, preset, tiles, width, height) {
     if (!cells.has(key)) cells.set(key,{...rect,views:[]});
     cells.get(key).views.push(rect.id);
   }
-  if (preset === 'grid') for (const [x,y] of [[0,0],[Math.floor(width/2),0],[0,Math.floor(height/2)],[Math.floor(width/2),Math.floor(height/2)]]) {
-    const key = [x,y].join(':');
-    if (!cells.has(key)) cells.set(key,{x,y,width:x ? width-x : Math.floor(width/2),height:y ? height-y : Math.floor(height/2),views:[]});
+  if (['grid','grid-3x2'].includes(preset)) {
+    const columns=preset === 'grid-3x2' ? 3 : 2;
+    for (let row=0;row<2;row++) for(let column=0;column<columns;column++) {
+      const x=Math.floor(column*width/columns),y=Math.floor(row*height/2),key=[x,y].join(':');
+      if (!cells.has(key)) cells.set(key,{x,y,width:Math.floor((column+1)*width/columns)-x,height:Math.floor((row+1)*height/2)-y,views:[]});
+    }
   }
   const leaf = (/** @type {any} */ cell, /** @type {number} */ size) => ({type:'leaf',size,data:{id:groupId(),views:cell.views,...(cell.views.length ? {activeView:cell.views[0]} : {})}});
   let data = /** @type {any[]} */ ([]);
@@ -203,7 +361,7 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {string} id
  * @property {string} component
  * @property {string} [title]
- * @property {{ capsuleId: string }} params
+ * @property {{ capsuleId: string } | { sessionId: string }} params
  * @property {'always'} renderer
  * @property {number} minimumWidth
  * @property {number} minimumHeight
@@ -232,8 +390,12 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
 
 /**
  * @typedef {Object} WallWorkspaceControllerOptions
+ * @property {()=>{cols:number,rows:number}} [floatingGrid]
+ * @property {()=>Record<string,{col:number,row:number}>} [savedCells]
  * @property {boolean} [allowLostSurface] - Diagnostic fixture presentation only.
  * @property {(error:WallAdmissionError)=>void} [onLayoutError]
+ * @property {() => Array<any>} [workloadTiles]
+ * @property {(value:any)=>boolean} [validateWorkloadTile]
  * @property {WallProjectionView | null} [projectionView]
  */
 
@@ -254,9 +416,12 @@ export const WALL_PRESENTATION_VERBS = Object.freeze(['close', 'hide', 'show', '
  * @property {() => void} dispose
  * @property {(action:string) => WallAdmissionResult<unknown>} resizeFocused
  * @property {(id:string,action:string) => WallAdmissionResult<unknown>} resizeTile
+ * @property {()=>string|null} beginFloatingDrag
  * @property {(preset:string|null) => WallAdmissionResult<unknown>} setPreset
  * @property {() => void} refreshPreset
+ * @property {(id:string) => boolean} hasSurfacePanel
  * @property {(capsuleId:string,body:any) => WallAdmissionResult<unknown>} applyLayoutEcho
+ * @property {(id:string) => WallAdmissionResult<Readonly<{panelId:string}>>} revealWorkload
  * @property {(capsuleId: unknown, placement: unknown) => WallAdmissionResult<Readonly<{ panelId: string }>>} revealSurface
  * @property {(intent: unknown) => WallAdmissionResult<Readonly<{ panelId: string, type: string }>>} applyPresentationIntent
  * @property {(emit: WallEmitFn) => WallPanelCallbacks} createPanelCallbacks
@@ -450,11 +615,59 @@ export function describeDockTab(tabProps) {
  */
 export function createWallWorkspaceController(options = {}) {
   const projectionView = options.projectionView ?? null;
+  const floatingGrid = options.floatingGrid, savedCells = options.savedCells;
   /** @type {WallDockviewApi | null} */
   let api = null;
   /** @type {WallWindowPresentation | null} */
   let windows = null;
   let preset = /** @type {string|null} */ (null), layoutSignature = '', focusTile = '';
+  let floatingViewport = /** @type {{width:number,height:number}|null} */ (null);
+  const floatingLayout = new Map();
+  /** Grid allocations may be narrower than a free window's default minimum.
+   * Keep the minimum inside the actual cell instead of overlapping its neighbor.
+   * @param {any} target @param {number} width @param {number} height */
+  function fitAllocation(target,width,height) {
+    // DockviewPanel inherits setConstraints but does not consume its event.
+    // The group owns the nested grid's effective minimum, including floats.
+    (target.group ?? target).api?.setConstraints?.({
+      minimumWidth:Math.min(WALL_PANEL_MIN_WIDTH,width),
+      minimumHeight:Math.min(WALL_PANEL_MIN_HEIGHT,height),
+    });
+    for (const panel of target.panels ?? [target]) panel.api?.setConstraints?.({
+      minimumWidth:Math.min(WALL_PANEL_MIN_WIDTH,width),
+      minimumHeight:Math.min(WALL_PANEL_MIN_HEIGHT,height),
+    });
+  }
+  function rememberFloatingBounds() {
+    if (!api?.width || !api.height || typeof api.toJSON !== 'function') return;
+    const viewport={width:api.width,height:api.height};
+    const live=new Set();
+    for (const group of /** @type {any} */ (api).toJSON().floatingGroups ?? []) {
+      const id=group.data.id, position=group.position;
+      live.add(id);
+      const previous=floatingLayout.get(id);
+      if (!previous || JSON.stringify(previous.last)!==JSON.stringify(position)) {
+        floatingLayout.set(id,{position:{...position},viewport,last:{...position}});
+      }
+    }
+    for (const id of floatingLayout.keys()) if(!live.has(id)) floatingLayout.delete(id);
+    floatingViewport=viewport;
+  }
+  function reflowFloatingBounds() {
+    if (!api?.width || !api.height || !floatingViewport ||
+        api.width===floatingViewport.width && api.height===floatingViewport.height) return;
+    const viewport={width:api.width,height:api.height}, grid=floatingGrid?.() ?? {cols:2,rows:2};
+    for (const [id,saved] of floatingLayout) {
+      const group=/** @type {any} */ (api).groups?.find((/** @type {any} */ candidate)=>candidate.id===id && candidate.api.location.type==='floating');
+      if (!group) continue;
+      const rect=reflowFloatingRect(saved.position,saved.viewport,viewport,grid);
+      fitAllocation(group,rect.width,rect.height);
+      /** @type {any} */ (api).addFloatingGroup(group,{position:{left:rect.left,top:rect.top},width:rect.width,height:rect.height,disableSmartGuides:true});
+      saved.last={...rect};
+    }
+    floatingViewport=viewport;
+    void host?.completeUserGesture?.();
+  }
   let host = /** @type {any} */ (null);
   /** @type {Map<string, string>} */
   const panelIdentities = new Map();
@@ -492,6 +705,10 @@ export function createWallWorkspaceController(options = {}) {
     const orderIndex = panelOrder.indexOf(panelId) >= 0 ? panelOrder.indexOf(panelId) : (prev?.orderIndex ?? 0);
     if (!panel) return;
     const group = panel.group ?? null;
+    if (windows?.state(panelId).floating || group?.api?.location?.type === 'floating') {
+      rememberSlot(profileId, {panelId, groupId: null, index: 0, referencePanel: null, direction: 'left', orderIndex});
+      return;
+    }
     const groupId = asNonEmptyString(group?.id);
     const groupPanels = Array.isArray(group?.panels) ? group.panels : [];
     const index = groupPanels.indexOf(panel);
@@ -503,7 +720,7 @@ export function createWallWorkspaceController(options = {}) {
     let referencePanel = /** @type {string|null} */ (null);
     let direction = 'left';
     const candidates = [...new Set([...panelOrder, ...rows.map((/** @type {any} */ r) => `${WALL_PANEL_ID_PREFIX}${r.id}`)])]
-      .filter(id => id !== panelId && api?.getPanel(id));
+      .filter(id => id !== panelId && api?.getPanel(id) && !windows?.state(id).floating && /** @type {any} */ (api?.getPanel(id))?.group?.api?.location?.type !== 'floating');
     if (candidates.length > 0) {
       referencePanel = candidates[0];
       const refPanelObj = /** @type {any} */ (api.getPanel(referencePanel));
@@ -527,6 +744,23 @@ export function createWallWorkspaceController(options = {}) {
     }
     rememberSlot(profileId, {panelId, groupId, index: index >= 0 ? index : 0, referencePanel, direction, orderIndex});
   }
+  const workloadRows = () => {
+    const rows=options.workloadTiles?.() ?? [];
+    return Array.isArray(rows)&&typeof options.validateWorkloadTile==='function'?rows.filter(options.validateWorkloadTile):[];
+  };
+  /** Presentation only; the consumer owns row validation and slot contents. @param {string} id */
+  function revealWorkload(id) {
+    const row=workloadRows().find(row=>row.id===id);
+    if(!row)return fail('ERR_UNKNOWN_WORKLOAD','The workload panel is unavailable.');
+    if(!api||!windows)return fail('ERR_NOT_READY','The wall is not ready.');
+    const panelId=WORKLOAD_PANEL_PREFIX+id;
+    try {
+      const existing=api.getPanel(panelId);
+      if(existing){if(windows.state(panelId).hidden)windows.show(panelId);else existing.api.setActive();}
+      else {api.addPanel({id:panelId,component:'CapsulePanel',title:row.title,params:{sessionId:id},renderer:'always',minimumWidth:320,minimumHeight:240});collapseEmptyGroups();}
+      return succeed(Object.freeze({panelId}));
+    }catch{return fail('ERR_PRESENTATION_FAILED','The workload panel could not be shown.');}
+  }
   const presentationRows = () => {
     if (!api || !windows) return [];
     const list = (projectionView?.getProjection()?.rows || []).flatMap(row => {
@@ -535,6 +769,10 @@ export function createWallWorkspaceController(options = {}) {
       if (!api?.getPanel(panelId)) return [];
       return [{id:panelId,...windows?.state(panelId)}];
     });
+    for(const row of workloadRows()){
+      const panelId=WORKLOAD_PANEL_PREFIX+row.id;
+      if(api?.getPanel(panelId))list.push({id:panelId,...windows?.state(panelId)});
+    }
     if (panelOrder.length > 1) {
       list.sort((a, b) => {
         const ia = panelOrder.indexOf(a.id), ib = panelOrder.indexOf(b.id);
@@ -566,7 +804,7 @@ export function createWallWorkspaceController(options = {}) {
     }
   }
   function refreshPreset(now = Date.now()) {
-    try {trimHistory(); return applyPreset(now); }
+    try {trimHistory(); reflowFloatingBounds(); const result=applyPreset(now); rememberFloatingBounds(); return result; }
     catch {
       preset = null; layoutSignature = '';
       const error = wallError('LAYOUT_PRESET_FAILED','Tile layout is unavailable.');
@@ -596,6 +834,57 @@ export function createWallWorkspaceController(options = {}) {
     const signature = JSON.stringify([preset,api.width,api.height,tiles.map(({id,hidden})=>({id,hidden}))]);
     if (signature === layoutSignature || tiles.some(tile => tile.maximized)) return;
     if (focusTile && (preset === 'single' || preset === 'focus-strip')) tiles.sort((a,b)=>Number(b.id === focusTile)-Number(a.id === focusTile));
+    if (preset === 'floating' && floatingGrid) {
+      // Modal scrollbars can temporarily shrink the overlay host. Place only
+      // after the creator closes, so snap and insertion use the same desktop.
+      const doc = /** @type {any} */ (api.panels?.[0])?.group?.element?.ownerDocument;
+      if ([...(doc?.querySelectorAll('[aria-modal="true"]') ?? [])].some(e=>e.getBoundingClientRect().width > 0)) return;
+      const floatingGroups = /** @type {any} */ (api).toJSON?.().floatingGroups ?? [];
+      const occupied = [], inserted = [], settled = new Set();
+      for (const tile of tiles) {
+        if (!windows?.state(tile.id).floating) continue;
+        const panel = /** @type {any} */ (api.getPanel(tile.id));
+        const fg = floatingGroups.find((/** @type {any} */ g)=>g.data?.views?.includes(tile.id));
+        const shared = (panel?.group?.panels?.length ?? 0) > 1 || (fg?.data?.views?.length ?? 0) > 1;
+        const profile = panelIdentities.get(tile.id), hint = profile ? savedCells?.()[profile] : null;
+        if (!shared && !(hint && !floatingLayout.has(panel?.group?.id))) {
+          settled.add(tile.id);
+          if (fg?.position) occupied.push({x:fg.position.left,y:fg.position.top,width:fg.position.width,height:fg.position.height});
+        }
+      }
+      for (const tile of tiles) {
+        if (settled.has(tile.id)) continue;
+        const panel = /** @type {any} */ (api.getPanel(tile.id));
+        const fg = floatingGroups.find((/** @type {any} */ g)=>g.data?.views?.includes(tile.id));
+        const shared = (panel?.group?.panels?.length ?? 0) > 1 || (fg?.data?.views?.length ?? 0) > 1;
+        if (windows?.state(tile.id).floating && !shared) {
+          const profile=panelIdentities.get(tile.id), hint=profile ? savedCells?.()[profile] : null;
+          if (hint && !floatingLayout.has(panel?.group?.id)) {
+            const rect=nextFloatingCell(api.width,api.height,floatingGrid(),occupied,hint);
+            fitAllocation(panel.group,rect.width,rect.height);
+            /** @type {any} */ (api).addFloatingGroup(panel.group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+            occupied.push(rect); continue;
+          }
+          continue;
+        }
+        const profile = panelIdentities.get(tile.id);
+        const rect = nextFloatingCell(api.width,api.height,floatingGrid(),occupied,profile ? savedCells?.()[profile] : null);
+        fitAllocation(panel,rect.width,rect.height);
+        /** @type {any} */ (api).addFloatingGroup(panel,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+        fitAllocation(panel.group,rect.width,rect.height);
+        occupied.push(rect); inserted.push({id:tile.id,rect});
+      }
+      retainFloatingHome(api);
+      // Removing the last grid panel can transiently expose a scrollbar and
+      // clamp a right-edge float. Reapply only insertions after the empty grid
+      // home exists; existing/manual windows never participate in this pass.
+      for (const {id,rect} of inserted) {
+        const group = /** @type {any} */ (api.getPanel(id))?.group;
+        if (group) /** @type {any} */ (api).addFloatingGroup(group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+      }
+      layoutSignature = signature;
+      void host?.completeUserGesture?.(); return;
+    }
     const rectangles = presetRectangles(preset,tiles,api.width,api.height);
     if (!rectangles.length) return;
     if (rectangles.some(rect=>typeof api?.getPanel(rect.id)?.api?.moveTo !== 'function')) throw Error('LAYOUT_PRESET_FAILED');
@@ -616,7 +905,7 @@ export function createWallWorkspaceController(options = {}) {
     if (preset === 'floating') {
       for (const rect of rectangles) /** @type {any} */ (api).addFloatingGroup(api.getPanel(rect.id),{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height});
       // The kit decoder requires a branch root with an empty grid home.
-      if (!(api.groups || []).some((/** @type {any} */ group)=>group.api.location.type === 'grid')) /** @type {any} */ (api).addGroup({direction:'right',skipSetActive:true});
+      retainFloatingHome(api);
     } else {
       const cells = new Map();
       for (const rect of rectangles) {
@@ -624,16 +913,20 @@ export function createWallWorkspaceController(options = {}) {
         if (!cells.has(key)) cells.set(key,{...rect,ids:[]});
         cells.get(key).ids.push(rect.id);
       }
-      if (preset === 'grid') for (const [x,y] of [[0,0],[Math.floor(api.width/2),0],[0,Math.floor(api.height/2)],[Math.floor(api.width/2),Math.floor(api.height/2)]]) {
-        const key = [x,y].join(':');
-        if (!cells.has(key)) cells.set(key,{x,y,width:x ? api.width-x : Math.floor(api.width/2),height:y ? api.height-y : Math.floor(api.height/2),ids:[]});
+      if (['grid','grid-3x2'].includes(preset)) {
+        const columns = preset === 'grid-3x2' ? 3 : 2;
+        for (let row=0;row<2;row++) for (let column=0;column<columns;column++) {
+          const x=Math.floor(column*api.width/columns), y=Math.floor(row*api.height/2);
+          const key=[x,y].join(':');
+          if (!cells.has(key)) cells.set(key,{x,y,width:Math.floor((column+1)*api.width/columns)-x,height:Math.floor((row+1)*api.height/2)-y,ids:[]});
+        }
       }
       const placed = /** @type {any[]} */ ([]);
       for (const cell of [...cells.values()].sort((a,b)=>a.y-b.y || a.x-b.x)) {
         let group = first.group;
         if (placed.length) {
           const column = placed.filter(other=>other.x === cell.x);
-          const anchor = column.at(-1) || placed[0];
+          const anchor = column.at(-1) || placed.at(-1);
           const position = column.length ? 'bottom' : 'right';
           if (cell.ids.length) {
             const panel = /** @type {any} */ (api.getPanel(cell.ids[0]));
@@ -643,7 +936,10 @@ export function createWallWorkspaceController(options = {}) {
         for (const id of cell.ids.slice(1)) /** @type {any} */ (api.getPanel(id)).api.moveTo({group,position:'center'});
         placed.push({...cell,group});
       }
-      for (const cell of placed) cell.group.api.setSize({width:cell.width,height:cell.height});
+      for (const cell of placed) {
+        fitAllocation(cell.group,cell.width,cell.height);
+        cell.group.api.setSize({width:cell.width,height:cell.height});
+      }
       const priorActive = activePanelId ? api.getPanel(activePanelId) : null;
       (priorActive || first).api.setActive();
     }
@@ -662,6 +958,12 @@ export function createWallWorkspaceController(options = {}) {
       void host?.completeUserGesture?.();
       return succeed({preset});
     } catch { return fail('LAYOUT_PRESET_FAILED','Tile layout is unavailable.'); }
+  }
+
+  function beginFloatingDrag() {
+    if (preset !== 'floating') preset = null;
+    layoutSignature = '';
+    return preset;
   }
 
   function resizeFocused(/** @type {string} */ action) {
@@ -847,25 +1149,40 @@ export function createWallWorkspaceController(options = {}) {
       };
       if (placement === 'split') options.position = { direction: 'right' };
       const profileId = asNonEmptyString(/** @type {any} */ (rowCheck.value).profile_id);
+      const hint = profileId ? savedCells?.()[profileId] : null;
+      const grid = floatingGrid?.();
+      const hasCellHint = Boolean(
+        (preset === null || preset === 'floating') &&
+        hint && grid && api.width && api.height &&
+        Number.isInteger(hint.col) && Number.isInteger(hint.row) &&
+        hint.col >= 0 && hint.col < grid.cols && hint.row >= 0 && hint.row < grid.rows
+      );
       const prior = profileId ? identitySlots.get(profileId) : null;
       if (prior && prior.panelId !== panelId) {
         const stalePanel = api.getPanel(prior.panelId);
         if (stalePanel) { captureSlot(prior.panelId); stalePanel.api.close(); collapseEmptyGroups(); }
       }
       const slot = profileId ? identitySlots.get(profileId) : null;
-      if (slot && slot.panelId !== panelId) {
-        if (slot.groupId && typeof api.getGroup === 'function' && api.getGroup(slot.groupId)) {
-          if (slot.referencePanel && api.getPanel(slot.referencePanel)) {
+      if (slot && slot.panelId !== panelId && preset !== 'floating' && !hasCellHint) {
+        const refPanel = slot.referencePanel ? /** @type {any} */ (api.getPanel(slot.referencePanel)) : null;
+        const refFloating = Boolean(slot.referencePanel && (windows?.state(slot.referencePanel).floating || refPanel?.group?.api?.location?.type === 'floating'));
+        const groupObj = slot.groupId && typeof api.getGroup === 'function' ? /** @type {any} */ (api.getGroup(slot.groupId)) : null;
+        const groupFloating = groupObj?.api?.location?.type === 'floating';
+        if (groupObj && !groupFloating) {
+          if (slot.referencePanel && refPanel && !refFloating) {
             options.position = { referencePanel: slot.referencePanel, direction: /** @type {any} */ ('within') };
           }
-        } else if (slot.referencePanel && api.getPanel(slot.referencePanel)) {
+        } else if (slot.referencePanel && refPanel && !refFloating) {
           options.position = { referencePanel: slot.referencePanel, direction: /** @type {any} */ (slot.direction) };
         }
       }
+      if (!options.position && (/** @type {any} */ (api).activeGroup?.api?.location?.type === 'floating' || /** @type {any} */ (api).activePanel?.group?.api?.location?.type === 'floating')) {
+        options.position = { direction: 'right' };
+      }
       const panel = api.addPanel(options);
-      if (slot && slot.panelId !== panelId && slot.groupId && typeof api.getGroup === 'function') {
-        const targetGroup = api.getGroup(slot.groupId);
-        if (targetGroup && typeof /** @type {any} */ (panel)?.api?.moveTo === 'function') {
+      if (slot && slot.panelId !== panelId && preset !== 'floating' && !hasCellHint && slot.groupId && typeof api.getGroup === 'function') {
+        const targetGroup = /** @type {any} */ (api.getGroup(slot.groupId));
+        if (targetGroup && targetGroup.api?.location?.type !== 'floating' && typeof /** @type {any} */ (panel)?.api?.moveTo === 'function') {
           /** @type {any} */ (panel).api.moveTo({ group: targetGroup, position: 'center', ...(Number.isInteger(slot.index) && slot.index >= 0 ? { index: slot.index } : {}) });
         }
       }
@@ -880,16 +1197,37 @@ export function createWallWorkspaceController(options = {}) {
         }
         rememberSlot(profileId, {
           panelId,
-          groupId: asNonEmptyString(/** @type {any} */ (panel)?.group?.id) ?? slot?.groupId ?? null,
-          index: slot?.index ?? 0,
-          referencePanel: slot?.referencePanel ?? null,
-          direction: slot?.direction ?? 'left',
+          groupId: hasCellHint || preset === 'floating' ? null : (asNonEmptyString(/** @type {any} */ (panel)?.group?.id) ?? slot?.groupId ?? null),
+          index: hasCellHint || preset === 'floating' ? 0 : (slot?.index ?? 0),
+          referencePanel: hasCellHint || preset === 'floating' ? null : (slot?.referencePanel ?? null),
+          direction: hasCellHint || preset === 'floating' ? 'left' : (slot?.direction ?? 'left'),
           orderIndex: panelOrder.indexOf(panelId),
         });
       }
       collapseEmptyGroups(); trimHistory();
       if (placement === 'floating') windows.float(panelId);
       else panel.api.setActive();
+      // A float dragged from a grid preset or in Floating preset retains its
+      // saved identity cell after the surface ends. Restore only the new panel
+      // as its own floating group; existing groups stay in place.
+      if (hasCellHint && grid && api.width && api.height) {
+        // Cold restore retains ended surfaces during the orphan grace period.
+        // They are not live occupants of the reopened identity's cell.
+        const livePanels = new Set(presentationRows().map(tile=>tile.id));
+        const occupied = (/** @type {any} */ (api).toJSON().floatingGroups ?? [])
+          .filter((/** @type {any} */ group)=>group.data?.views?.some((/** @type {string} */ id)=>id !== panelId && livePanels.has(id)))
+          .map((/** @type {any} */ group)=>({x:group.position.left,y:group.position.top,width:group.position.width,height:group.position.height}));
+        const rect = nextFloatingCell(api.width,api.height,grid,occupied,hint);
+        fitAllocation(panel,rect.width,rect.height);
+        // Detach this panel from any remembered tab group before positioning
+        // its new group; Dockview may clamp the panel's initial float bounds.
+        /** @type {any} */ (api).addFloatingGroup(panel,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+        fitAllocation(/** @type {any} */ (panel).group,rect.width,rect.height);
+        /** @type {any} */ (api).addFloatingGroup(/** @type {any} */ (panel).group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+        retainFloatingHome(api);
+        rememberFloatingBounds();
+        void host?.completeUserGesture?.();
+      }
       return succeed(Object.freeze({ panelId }));
     } catch (error) {
       return fail('ERR_REVEAL_FAILED', error instanceof Error ? error.message : String(error));
@@ -999,7 +1337,8 @@ export function createWallWorkspaceController(options = {}) {
     });
   }
 
-  return Object.freeze({ handleReady, dispose, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
+  const hasSurfacePanel = (/** @type {string} */ id) => Boolean(api?.getPanel(WALL_PANEL_ID_PREFIX+id));
+  return Object.freeze({ hasSurfacePanel, handleReady, dispose, revealWorkload, revealSurface, applyPresentationIntent, applyLayoutEcho, setPreset, beginFloatingDrag, resizeTile, resizeFocused, refreshPreset, createPanelCallbacks });
 }
 
 /**
@@ -1030,11 +1369,16 @@ export const WallMissingPanel = defineComponent({
 });
 </script>
 <script setup>
-import { markRaw, onBeforeUnmount, useSlots } from 'vue';
+import { inject, provide, markRaw, onBeforeUnmount, ref, useSlots, watch } from 'vue';
 import DockWorkspace from 'capsule-ui-kit/DockWorkspace';
 import SurfacePanel from './SurfacePanel.vue';
+import {createCapsulePanelRouter} from './workloadPanelParams.js';
 
 const props = defineProps({
+  workloadTiles:{type:/** @type {import('vue').PropType<Array<any>>} */ (Array),default:()=>[]},
+  validateWorkloadTile:{type:Function,default:null},
+  identityCells: {type:Object,default:()=>({})},
+  snapGrid: {type: /** @type {import('vue').PropType<{cols:number,rows:number}>} */ (Object), default:()=>({cols:2,rows:2})},
   workspaceComponent: { type: Object, default: () => DockWorkspace },
   scope: {
     type: /** @type {import('vue').PropType<KitLayoutScope>} */ (Object),
@@ -1078,6 +1422,8 @@ const props = defineProps({
 });
 
 const emit = defineEmits([
+  'custom-layout',
+  'snap-grid-change',
   'ready',
   'wall-settled',
   'layout-saved',
@@ -1090,11 +1436,25 @@ const emit = defineEmits([
   'layout-error',
 ]);
 
-const controller = createWallWorkspaceController({ projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
+const controller = createWallWorkspaceController({workloadTiles:()=>props.workloadTiles,validateWorkloadTile:value=>typeof props.validateWorkloadTile==='function'&&props.validateWorkloadTile(value), floatingGrid:()=>props.snapGrid, savedCells:()=>props.identityCells, projectionView: props.projectionView, allowLostSurface: props.allowLostSurface, onLayoutError:error=>emit('layout-error',error) });
 const callbacks = controller.createPanelCallbacks(emit);
 
+const wallRoot = ref(null);
+let releaseDrag = () => {};
+function changeGrid(/** @type {'cols'|'rows'} */ axis, /** @type {Event} */ event) {
+  const value = Number(/** @type {HTMLSelectElement} */ (event.target).value);
+  emit('snap-grid-change',{...props.snapGrid,[axis]:value});
+}
 const slots = useSlots();
 const surfaceSlot = slots.surface ?? null;
+const workloadSlot=slots.workload??null;
+const validWorkload=(/** @type {any} */ row)=>typeof props.validateWorkloadTile==='function'&&props.validateWorkloadTile(row);
+const revealedWorkloads=new Set();
+function revealWorkloads(){for(const row of props.workloadTiles){if(validWorkload(row)&&!revealedWorkloads.has(row.id)){const result=controller.revealWorkload(row.id);if(result.ok)revealedWorkloads.add(row.id);}}}
+watch(()=>props.workloadTiles.map(row=>row?.id).join('|'),revealWorkloads);
+// Dockview mounts router components in isolated roots. Carry the scoped
+// capability into that root instead of relying on App's ancestor provides.
+const capsuleTerminal = inject('capsuleTerminal', null);
 
 const viewportWidth = WALL_INITIAL_VIEWPORT_WIDTH;
 const viewportHeight = WALL_INITIAL_VIEWPORT_HEIGHT;
@@ -1103,7 +1463,11 @@ const viewportHeight = WALL_INITIAL_VIEWPORT_HEIGHT;
  * @param {unknown} payload
  */
 function onReady(payload) {
-  controller.handleReady(payload);
+  const accepted = controller.handleReady(payload);
+  releaseDrag();
+  if (accepted.ok && /** @type {any} */ (wallRoot.value)?.ownerDocument && /** @type {any} */ (payload)?.api) releaseDrag = installFloatingDrag(wallRoot.value,/** @type {any} */ (payload).api,
+    ()=>props.snapGrid,()=>{emit('custom-layout',controller.beginFloatingDrag());},()=>{void /** @type {any} */ (payload).host?.completeUserGesture?.();});
+  revealWorkloads();
   emit('ready', payload);
 }
 
@@ -1148,6 +1512,7 @@ const WallSurfaceRouter = markRaw(defineComponent({
     params: { type: Object, required: true },
   },
   setup(routerProps) {
+    provide('capsuleTerminal', capsuleTerminal);
     return () => {
       const capsuleId = resolveRouterCapsuleId(routerProps.params);
       if (capsuleId === null) {
@@ -1192,8 +1557,10 @@ const SurfaceTab = defineComponent({
 });
 const tabComponents = markRaw({ SurfaceTab });
 
+const CapsuleContentRouter=createCapsulePanelRouter({defineComponent,h,markRaw,graphical:WallSurfaceRouter,
+ rows:()=>props.workloadTiles,validate:validWorkload,slot:workloadSlot});
 const panelComponents = markRaw({
-  CapsulePanel: WallSurfaceRouter,
+  CapsulePanel: CapsuleContentRouter,
 
 });
 
@@ -1212,17 +1579,24 @@ function resizeTile(/** @type {string} */ id, /** @type {string} */ action) { re
 function resizeFocused(/** @type {string} */ action) { return controller.resizeFocused(action); }
 /** Presentation only: used after an acknowledged capsule stop. @param {unknown} intent */
 function applyPresentationIntent(intent) { return controller.applyPresentationIntent(intent); }
+function hasSurfacePanel(/** @type {string} */ id) { return controller.hasSurfacePanel(id); }
 const presetTimer = setInterval(() => { controller.refreshPreset(); },150);
 presetTimer.unref?.();
-defineExpose({ revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
+defineExpose({ hasSurfacePanel, revealWorkload:(/** @type {string} */ id)=>controller.revealWorkload(id), revealSurface, applyLayoutEcho, setPreset, resizeTile, resizeFocused, applyPresentationIntent });
 
 onBeforeUnmount(() => {
+  releaseDrag();
   clearInterval(presetTimer);
   controller.dispose();
 });
 </script>
 <template>
-  <div class="wall-workspace" data-testid="wall-workspace">
+  <div ref="wallRoot" class="wall-workspace" data-testid="wall-workspace">
+    <div class="wall-grid-controls" aria-label="Workspace snap grid">
+      <label>Columns <select :id="`${ownerWindowId}-snap-columns`" :data-semantic-anchor="`workspace/${ownerWindowId}/snap-columns`" aria-label="Workspace snap columns" :value="snapGrid.cols" @change="changeGrid('cols',$event)"><option v-for="n in 5" :key="n" :value="n">{{n}}</option></select></label>
+      <label>Rows <select :id="`${ownerWindowId}-snap-rows`" :data-semantic-anchor="`workspace/${ownerWindowId}/snap-rows`" aria-label="Workspace snap rows" :value="snapGrid.rows" @change="changeGrid('rows',$event)"><option v-for="n in 5" :key="n" :value="n">{{n}}</option></select></label>
+      <span>Hold Control while dragging to snap</span>
+    </div>
     <component :is="props.workspaceComponent"
       :scope="props.scope"
       :storage="props.storage"
@@ -1246,7 +1620,15 @@ onBeforeUnmount(() => {
   </div>
 </template>
 <style>
-.wall-workspace {
+.wall-grid-controls { display:flex; gap:12px; align-items:center; padding:4px 8px; font-size:12px; }
+.wall-grid-controls select { color:inherit; background:var(--mv-panel-bg,Canvas); }
+.wall-workspace .dv-floating-titlebar { display:none; }
+.wall-workspace .dv-floating-titlebar, .wall-workspace .dv-tabs-and-actions-container,
+.wall-workspace .cuk-capsule-panel__header, .wall-workspace .mv-tile-rail,
+.wall-workspace .mv-role-actions { user-select:none; }
+.wall-snap-preview { position:absolute; pointer-events:none; z-index:9999; box-sizing:border-box; border:2px solid Highlight; background:color-mix(in srgb,Highlight 20%,transparent); }
+.wall-workspace > .mv-dock-workspace { flex:1; height:0; min-height:0; }
+.wall-workspace { display:flex; flex-direction:column;
   /* Contain Dockview sashes below sibling full-screen app panels. */
   position: relative;
   z-index: 0;

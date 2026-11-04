@@ -1,6 +1,0 @@
-- Recover a subscription after an isolated publication or delivery failure by dropping the failed frame and publishing a fresh capture at the next poll deadline; reset unchanged-frame confirmation so an undelivered generation cannot suppress recovery.
-- Bound publication and delivery recovery to two consecutive failures [TARGET, unit decision], retaining terminal diagnostics, capacity reclamation, cancellation drain, and the existing confirmed capture-loss policy.
-- Cover ordered capture, missing source, duplicate native sequence, delivery refusal, and retention eviction before reader open in serial and pipelined subscription tests, without changing frame retention or wire contracts.
-- Strengthen review coverage: fail retention setup independently and force eviction, inspect terminal state before unsubscribe clears it, and require advancing native capture ticks plus capture calls on delivery retry.
-- Verify publication cancellation stays quiet with task/context controls and an uncancelled retry control; existing post-publication cancellation guards and capture diagnostics already satisfy the reviewed behavior.
-- Put browser-goal control prerequisites before commands: agent programs start agent controlled; Release control is required after Take control.

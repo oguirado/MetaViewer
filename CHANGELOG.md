@@ -2,8 +2,582 @@
 
 ## [Unreleased]
 
+## 0.2.6 (2026-11-05) [CITED: `VERSION`]
+
+Pre-release. Verification differs by architecture and flow; see [the judge tour](docs/JUDGE_TOUR.md).
+
+- Add the protocol file to the repository entry documents.
 - Replace the fixed 4-capsule limit with admission up to the 16-capsule adapter ceiling, check host free memory against one capsule's 6 GiB Docker budget (4 GiB memory + 2 GiB shm) before each create, expand the logical display pool in the adapter to `MaxSurfaces` (`16`) without launcher changes, and report the limit, open count, and what to close on refusal instead of `host_program_unavailable`.
 - Add the judge doctor, install, run and stop scripts with typed `JUDGE_*` refusals, an AppArmor user-namespace profile, a consented one-step egress firewall and a deterministic install receipt; offline tests use fakes and one mutant per code.
+- Document the daemon adapter and judge scripts in a routed dossier, docs/dossiers/adapter.md, with checked source coordinates.
+- Add route/study/adapter.jsonl: 684 findings for daemon-adapter and scripts, each with a byte span verified against this tree.
+- Advance the per-surface input epoch (`m.nextInputEpoch`) on every ownership transition (`take_control` and `release_control`) in `daemon-adapter/internal/capsule/handoff.go` so in-flight CLI and resident captures straddling a handoff are rejected with `POLICY` and cannot clear the post-release refresh fence.
+- Programs opened as Agent stay agent-controlled, selected and revealed, so agent execution can start immediately.
+- Take control remains available in the tile menu; Human programs and real desktop window capsules retain their control behavior.
+- Seal rejected ARM inventory bindings before closing their owner, preserving the original binding error.
+- Keep schema, metadata and facade regression checks exact without requiring historical Git objects in shallow CI clones.
+- Keep normal ARM64 sessions inside their guardian with a filtered desktop bus, native GTK folder dialogs on the admitted display and a protected proxy prerequisite.
+- Preserve shared-actor headless state and add explicit custody-checked recovery for ARM64 sessions and newly sealed orphan runtimes.
+- Add ARM64 MicroVM guest commands with persistent workspace files, separate output streams, exit status, cancellation and owned stop. Commands execute as an unprivileged guest user with host-owned images and resource limits.
+- Keep graphical VM and fixed-job MicroVM capabilities separate. General image import, networking, graphical MicroVM and other architectures require their own acceptance.
+- Add an opt-in ARM64 MicroVM rewind profile with full RAM checkpoints, a bounded rotating ring, fresh guest sessions after restore, core-owned command generations, visible Pause/Resume/Mark controls and a restore timeline. Packaged acceptance and the shared frontend Back binding remain separate gates; see docs/ARM64_MICROVM_REWIND.md.
+- Preserve cleanup after journal failures, reject stale recovery witnesses, keep mapped checkpoint memory until native closure and retain verified checkpoints when restoration fails. External effects and writable block disks are outside this RAM-workspace profile.
+- Keep published schemas unchanged, add closed rewind contracts and SDK observation/control on the existing authenticated connection, and extend the fixture corpus with separate content pins while retaining the legacy fixture oracles.
+- Treat a protected rewind-only launch as a dedicated guest mode: require its live adapter, reject invalid configuration and prevent automatic graphical capsule creation.
+- Route MicroVM consoles through the pinned kit’s admitted panel type, retaining workload identity across float/hide/show and layout persistence. Add the agreed capability-driven Back header, timed point menu and cleanup controls without changing the shared native header or kit pin.
+- Require authenticated hello before Rewind dispatch even when the optional core-commit pin is absent.
+- Keep the packaged Rewind core opt-in bound to a validated local profile and actor; preserve the closed core environment.
+- Align test harness imports and canonical-family oracles without weakening malformed-message or codec rejection checks.
+- Keep one MicroVM console tile across Rewind generations and synchronize the native command state before confirming completion.
+- Keep fixture imports and disposal checks aligned with the closed Rewind routes, and document the bounded local Rewind acceptance and asset provenance.
+- Run the full UI test list with two workers under the existing budget, retain capability semantic mutant coverage, and check both Rewind handlers during rollback and disposal.
+- Add configured ARM64 MicroVM create/run/stop through the core and Python SDK. The host owns the Firecracker profile and resource limits; uncertain operations retain custody and cannot be replayed as successful work.
+- Derive SDK workload ownership from its actual endpoint registration and forward headless state through preload to the capsule catalogue. The initial fixed job and its limits are documented in `docs/ARM64_MICROVM.md`.
+- Connect graphical VM and the MicroVM command-console tile to normal ARM64 capsule creation with explicit availability reasons and a protected, hash-checked local setup.
+- Introduce separate additive capsule transport, capability and resource-inventory contracts while preserving published schemas and the shared authenticated sequence domain.
+- Bind setup, launcher cancellation and resource reconciliation to exact owned identities, source and package pins. Retain custody when closure is incomplete or uncertain; keep external assets and private components outside the public source distribution.
+- Fix packaged boot races by retrying an unaccepted Unix peer’s missing diagnostic inode within the existing hello deadline, and retain closed acquisition cause codes through the main boot error.
+- Clear the pending capsule reservation (`pending:<profile>`) and publish a typed refusal outcome to the renderer (`metaviewer:authority.createSurface`) whenever the boot or subsequent capsule create fails, so the wall displays the refusal code and remedy and `+` retries a real create instead of refusing with `NO_FREE_PROFILE`.
+- The browser goal lane uses the compiled wall detector when the compiled runtime is selected, so it works on the x64 kit.
+- The browser goal lane can run on the compiled Wender runtime, without importing from its directory.
+- The browser goal lane keeps its session alive during a model wait, so the Muse planner no longer stops with `MW_BROWSER_GOAL_CONFIG`.
+- Add browser goal runs without stored workflows, with AX-grounded clicks, mandatory pixel custody, absorbing human handoff, and core-bound journals. Explicit invocation text requires focused native exact readback before optional Enter; model readings never satisfy the text gate.
+- Restore access to recording and screenshot exports from each live capsule menu and give Copy ID its action tooltip.
+- Rename the Desktop window picker search label to Search windows while retaining the capsule kind.
+- Separate the command palette title and close button with the existing spacing token.
+- Publish copied screenshots atomically so interrupted writes cannot leave truncated final archives.
+- Retire workspace aliases and saved cells before deleting a reusable identity, and prune ended surface aliases.
+- Add per-unit changelog fragments under `changes/unreleased/<slug>.md`, deterministic assembly in `tools/changelog_assemble.py`, and fragment enforcement in `tools/check_laws.py` with a transition switch for direct `CHANGELOG.md` edits.
+- Launch Electron in `ui/test/display-electron.test.js`, `ui/test/display-electron-main.mjs`, and the `.github/workflows/ci.yml` `Run packaged DISPLAY regression` step with software-rendering flags (`--disable-gpu`, `--disable-gpu-compositing`, `--disable-dev-shm-usage`, and `app.disableHardwareAcceleration()`) under `xvfb-run -a -s "-screen 0 1280x900x24"` so GPU-less hosted `ubuntu-24.04-arm` runners do not flood stderr with `OneCopyRasterBufferProvider` `SharedImage` staging buffer errors, and assert the flags and failure guard in `tests/ci/test_packaged_display_ci.py`.
+- Run `ui/test/display-electron.test.js` in the hosted `package` job on `ubuntu-24.04` (`x64`) and `ubuntu-24.04-arm` (`arm64`) under the offline network namespace and `xvfb-run`, record a `package-display` gate receipt, and fail the `package` and `ci-required` jobs when the packaged DISPLAY regression is skipped (`0` [TARGET] allowed skips) or absent.
+- Keep ARM transport and fixed-interpreter test fixtures portable while preserving unsupported-host and unsafe-interpreter refusals.
+- Collapse capsule tools and frame witnesses into geometry-stable overlays, retaining visible isolation warnings and native-view occlusion.
+- Collapse authority activity by default and retain its bounded, accessible receipt list.
+- Reserve a capability-driven header slot for native state controls without rendering unsupported actions.
+- Scope tile chrome occlusion to its own native view while preserving global modal ownership and neighboring live views.
+- Route browser stop detection and state construction through verified standalone entries when compiled mode is selected. Preserve the real absorbing CAPTCHA/login detector, same-acquisition canonical state validation and source-checkout behavior, without importing the compiled distribution into host Python.
+- Refuse malformed, unpinned, timed-out or oversized compiled replies without source fallback or private payload diagnostics. Actual standalone/source equivalence remains an artifact acceptance gate.
+- Add a computer-use playbook with source-checked controls and explicit live-evidence limits.
+- Add portable UI capture, frame inspection, player-loop and local game examples with offline checks.
+- Add `docs/dossiers/core.md`, a routed dossier of the Rust core: admission refusal order, journal layout and errors, journal-full session end, `mv-replay` exit codes and path rules, frame evidence, REWIND phases and codes, recording limits.
+- Add `route/study/core.jsonl`, 39 core findings with byte spans checked against this commit.
+- Keep terminal and activity hover controls dark, reuse modal backdrop colors, and theme scrollbar colors without changing layout.
+- Separate the capsule identity label from its paste field and keep screen tab text on one line.
+- Fix the views: the inactive desktop now stays hidden, so a human tile no longer appears under the agent wall.
+- Hide desktop launchers requiring arguments unsupported by Host program and reject control or bidi characters in display names.
+- Forward `MV_DISPLAY_TAP` in `ALLOWED_ADAPTER_ENV` (`ui/electron/coreLauncher.js`) so `MV_DISPLAY_TAP=off` also disables the daemon-adapter display tap loop, and move `.mv-surface__display-chip` (`DISPLAY · unverified`) into the `SurfaceCanvas.vue` footer witness strip next to `FPS`/`CAP` so the top-right tile input control chip never covers it.
+- Fix the DISPLAY stream for every capsule after the first: it now reads the capsule X server, not the adapter pool slot.
+- Add docs/AI_AT_THE_CONTROLS.md: why and how an AI operates MetaViewer, agent CLI profiles, Copy ID for AI and Direct task, the operating recipe, core checks, refusals and journals, the live demonstration with its conditions, and limits.
+- Rewrite docs/MW_RUN_FIRST_RUN.md as a site-neutral first run: goal mode on a Program capsule, stored-workflow mode with placeholders, refusals, and rechecked STALE_FRAME coordinates.
+- Add a reading map, question lines and live limits to docs/AI_OPERATOR_GUIDE.md, and question lines to docs/AGENT_ENTRY.md.
+- Correct current documentation claims, judge entry paths, release availability, private component boundaries and VM capability notes.
+- Add docs/ERRORS.md, generated by tools/gen_errors_doc.py from source: one section per refusal or error code with where it is raised, meaning, cause, fix and how to verify.
+- Add docs/DEBUG.md: symptom table, bug or refusal test, logs and journal, mv-replay with absolute real paths, route_query use, report checklist and known issues.
+- Add a coverage test that fails when a code in source has no section in docs/ERRORS.md.
+- Rewrite docs/JUDGES.md as the judge hub: reading map, requirements in numbers, capsules per tier, release limits and a paste block for a judge's own AI.
+- Add one install path per platform and tier to docs/JUDGE_QUICKSTART.md, each command with its success marker and failure route, pointing at the v0.2.6 x64 assets.
+- Add a symptom index, a refusal explanation method and known open bugs to docs/JUDGE_TROUBLESHOOTING.md.
+- Add question aliases under judge and install headings, update the app-only route to v0.2.6 and replace private-source line citations in docs/INSTALL.md.
+- Remove internal planning leftovers from the docs, rewrite the Meta model usage ledger, and state the measured ARM64 MicroVM rewind and capsule-kind facts in the VM roadmap.
+- Add docs/WHY_CAPSULES.md explaining why MetaViewer runs applications as capsules, what each capsule kind isolates and does not, how it compares with plain desktops, tabs, containers, VMs and remote desktops, and why a refusal is a feature; correct stale source coordinates and counts in the architecture, reference and ARM64 documents.
+- Allow 30 s for the paste verify and text slot in the rehearsal workflow, matching its delivery budget.
+- Keep native refusal text in the E1 rehearsal trace.
+- Add an offline packaged E1 rehearsal driver with temporary site data, local fixture pages, real external CLI attach, artifact assertions, and a screenshot oracle for login handoffs.
+- Restrict setup and cleanup using process ancestry and fresh native control receipts; guard self-tests reject foreign processes, protected capsules, occupied admission, incomplete receipts, changed answers, and receipt-only display claims.
+- Preserve the R2 finding: the original P12 witness used a profile-derived name instead of the opaque native container. P11h.1 resolves that producer mismatch; MW_NETWORK refusal remains intact.
+- P11h.1 rehearsal confirms WITNESS-BIND: the witness matches the native container and network admission reaches the countdown. The operator CLI then refuses OUT_OF_SUPPORT before any verified step; native AX lacks the discovered store and registry context. Discover SRF_PROXY_REGISTRY and forward the native context without changing the caller environment. Integration into the read-only operator checkout and a fresh packaged rehearsal remain required.
+- Pass explicit store-root and proxy-registry arguments during fixture navigation; guard tests cover relative-path rejection, discovered-context forwarding and conflicting caller registry refusal.
+- Add a forward diagnostic mode with persistent failure rows, backend/native traces, independent login execution, and explicitly marked local-file continuation when the proxy refuses the fixture port. Missing OCR data remains a failed display oracle.
+- Declare UTF-8 in packaged fixtures so Chromium exposes the exact composer label. Guard tests reject a removed charset declaration and protected fixture-copy destinations.
+- Preserve a failed owner's verdict and diagnostic when no receipt was selected, and retain core refusal codes in the report. A successful run still requires a validated receipt; uncertain input is never retried; explicit stale refusals require fresh target validation.
+- Verify composer focus and Unicode length before direct diagnostic submission; use the documented native paste flag for the public fixture prompt.
+- Re-perceive and validate AX target/focus before binding the latest verified pixels; retry only explicit STALE_FRAME refusals within the delivery budget, with typed exhaustion and no replay after uncertain execution.
+- Strip standalone AX button/link captions from answer.txt; ambiguous removal refuses capture and matching answer prose is retained.
+- Add local-file-first packaged probing, idle verified-frame samples and authority transition evidence; diagnose UI list heartbeat lifecycle fences combined with unchanged-frame suppression. The fixed package still cannot verify the first receipt without an adapter/core-boundary repair.
+- Add an autofocus-only local fixture and focused-frame/control-release probe options with guarded UI control selection and exact launcher checkout binding.
+- Share the acquisition AX snapshot to avoid expiring Wender's unchanged locate deadline before dispatch; add grounding timing and repeated-AX negative-control diagnostics.
+- Classify only the measured solid single-column caret blink within a uniquely focused editor; revalidate AX text/value, geometry, identity and focus, and refuse other pixel changes.
+- Consume the core's validated wait-result witnesses without inventing embedded native evidence; cover missing, foreign, mismatched and stripped-witness mutants.
+- Stop the owned capsule through the native API before application shutdown to release its identity lease.
+- Add a negative control proving that native AX null editor length cannot satisfy the empty-slot gate; an explicit empty string remains admissible.
+- [TARGET, unit decision] Read focused composer text with its own native AX text-container ID when value text is unavailable; reject absent, truncated or differently bound text, and verify exact Unicode slot content before Enter. Length masks, equal-length mismatches, nonempty and prefix-only read-backs cannot certify paste.
+- [TARGET, unit decision] Project an invocation-only focus satisfaction predicate for a left composer click whose sole state verifier is focus on its T1 anchor and whose next step pastes into that same focus. Preserve and report source/projected hashes; leave source workflows untouched. Only a uniquely grounded textbox/combobox with exact native role/rectangle, an opaque AX row ID, and focused:true can meet it. False, null, foreign and non-editor focus retain the click path. Wender records satisfied_skip and links the native row evidence; report/trace label it `focus: already-focused (AX)` with `core_action_verified:false`. Paste read-back and submit retain their existing verification paths.
+- [TARGET, unit decision] Give exact post-receipt slot read-back an independent `SLOT_READBACK_WINDOW_MS` of 10000 ms [TARGET], doubled under CI [TARGET] and capped by the existing run deadline. An invocation-local Wender function namespace routes only the post-receipt length observation through this window; delivery, slot, step and run deadlines remain unchanged. Expiry refuses `MW_SLOT_READBACK_DEADLINE`, including late native results; no Enter follows failed verification.
+- Accept the focused rehearsal skip only with explicit `core_action_verified:false`; missing, true and numeric substitutes refuse. Cover expired-paste/fresh-read-back success, expiry before and during acquisition, unchanged fixture slot/delivery budgets and both no-bound and missing-evidence mutants.
+- Update the packaged E1 rehearsal control-cycle driver for the P18 Humans/Agents views and tile role menu: switch to the Agents view, open the agent tile menu (`⋮`), click `Take control (emergency)` without triggering a destructive mode switch, and click the input-indicator `Release` button, with self-test negative controls for menu badge and emergency-item resolution.
+- Update the e2e suites for the host clipboard facade and the Program Binary name step.
+- Admit the catalog `identity-browser` capsule kind on create, show the refusal code and actionable operator sentence in both the outcome toast and the Activity strip across picker and adapter refusals (naming `mv-live-2` on `NO_IDENTITY`), and log `[metaviewer] create refused <CODE>: <reason>` on host `createSurface` refusals.
+- Wire the profile picker's `listIdentities` callback in `ui/electron/main.js` through `operatorBridge.resolveIdentityTool` and `identityEnvironment` so packaged launches without an explicit `MV_MW_HOME` read the identity list and report `NO_IDENTITY` (naming `mv-live-2`) or open a capsule when provisioned instead of refusing with `IDENTITY_LIST_UNAVAILABLE`.
+- Add offline MemoryWeb fixtures, provenance repair notes, operator seeding instructions, and end-to-end backend tests (`VERIFIED` answer capture and `HUMAN_HANDOFF` wall stops) for `ask` workflows under `tests/e2e/fixtures/mw_*/`.
+- Replace repeated error placeholders with source-coordinate lookup rows and reviewed diagnostic guidance.
+- Correct uncertain-input, profile, CLI discovery and lost-capsule troubleshooting; identify the campaign package inventory guard.
+- Preserve missing-code negative controls and cover replay diagnostics, stable anchors and compact output.
+- First startup opens Agents when all reported capsules are agents and Humans is empty.
+- Saved layouts and explicit view choices take precedence over automatic startup selection.
+- Empty views name the other view when it contains capsules and offer a button to go there.
+- Combine live source, manifest, documentation and finding evidence in router results, with explicit source references and exact error priority.
+- Abstain when discriminating terms are missing or unsupported together, and keep evaluation data outside retrieval evidence.
+- Resolve documentation section references, label byte spans and fail on missing references.
+- Add frozen review and independent holdout datasets with reproducible routing gates.
+- Open `holdFifos` test FIFOs with `O_RDWR`, gate every helper stage on `stop`, bound cleanup waits on `done` by the CI timeout scale, and cover early-cleanup interleavings in `TestHoldFifosCleanupOrdering`.
+- Separate the admitted-call timeout (`5` s scaled in CI) from the `delay` refusal timeout (`50` ms scaled in CI) in `TestProcessBoundary`, synchronize the fake CLI `delay` verb on a test-controlled FIFO pair so it blocks deterministically until killed under any runner load, and add a timeout-enforcement mutant guard.
+- Browse and search real installed desktop apps in Add capsule, with local icons and recent MetaViewer launches.
+- Keep Host program isolation warnings, binary validation and the typed binary fallback.
+- Replace terminal Bootstrap prose with a compact capsule identity input while preserving exact clipboard data and workflow actions.
+- Document compact layout labels and retain descriptive accessible names for layout controls.
+- Start new workspaces in the existing dark theme while preserving saved theme choices.
+- Clarify desktop and capsule hierarchy, with separate operational state and persistent isolation warnings.
+- Group Settings in cards and refine Identities, saved slots, capsule creation, command search and empty views using existing theme tokens.
+- Record packaged display boot stages and child termination signals so startup failures retain a diagnostic witness without changing test deadlines.
+- Keep Record, Screenshot and Copy ID icon buttons in wide capsule headers, with the recording state always visible.
+- Retain narrow-tile hover controls, native overlay coordination, action identities and fixed canvas geometry.
+- Keep the capsule live above its paired terminal by reserving a separate drawer row without resizing the guest resolution.
+- Refuse a late native preview result after the overlay closes, preserving the restored live view.
+- Add a capability-gated capsule terminal button that reuses one host-shell session per capsule and binds workflow actions without copying an ID.
+- Preserve the latest capsule selection during serialized terminal launches and keep paired sessions when the dock is hidden.
+- Clip native floating views to their allocated tile and wall boundaries beside the terminal dock.
+- Request native repaint after show and resize without moving focus, and refit terminal viewports when dock geometry changes.
+- Choose recordings and screenshot export folders through native host dialogs, outside the frozen settings contract.
+- Apply saved recording grants on the next packaged start and optionally export sealed recordings when stopping.
+- Report measured free space and preserve RAM captures when an export fails.
+- Keep a restored native view visible when its pending preview capture rejects.
+- Add capability-gated Save and Load header actions for Browser and Program identities that open their existing stored-data slots with stopped-only wording.
+- Keep Host programs, Desktop windows, unknown kinds and protected profiles free of unsupported state controls.
+- Prepare Create automation, Run automation and Direct task prompts ending in Task: for operator input.
+- Copy prompts with the actual paired capsule identity; withhold terminal insertion without an attested agent input target and explain where to paste.
+- Describe Identities as accounts and saved data for each capsule.
+- Add a hidden-by-default paired terminal drawer in tall capsules, retaining the same session when moving to the side dock for grids.
+- Keep native capsule views and terminal overlays within their own tile, and preserve the last frame while a native view is covered.
+- Move Close into the expanded tool row so narrow headers retain the role, isolation warning and menu.
+- Apply narrow-cell constraints to the actual layout group so floating content and header controls stay inside the allocated cell.
+- Update native capsule bounds when its presentation viewport resizes, including paired terminal drawer changes.
+- Show Humans and Agents as a working tree of desktops and real capsule states, with focus and restore actions.
+- Retain Host isolation warnings and pending-handoff indicators in navigation.
+- Hide the unavailable Storyboard entry in release navigation while retaining its implementation and fixtures.
+- Fix the gate self-test version mutation so it no longer rewrites dependency ranges that contain the release version.
+- Group capsule kinds before Recent and installed apps, with one isolation note per app section and no redundant placement badge on app cards.
+- Route registered guest commands through both adapter transport loops with existing authentication, sequence and dispatch checks. Refuse unknown families and foreign or unauthenticated routes.
+- Cover both transport variants with local socket tests for accepted requests, authentication refusal, foreign endpoints and unknown schemas.
+- Fix guest command cancellation acknowledgement to accept the daemon's cancelling job state while preserving terminal output and strict snapshot validation.
+- Show authenticated SDK guest commands and output in the creator capsule with read-only observations, preserving command correlation and rewind authority.
+- Fix the handoff notice in the packaged app: the watcher now reads the state home where mw_run writes, not the private session one.
+- Fix identity create retry: a name whose provisioning failed can be created again, and only an empty host-owned directory is reclaimed.
+- Point unavailable Docker users to app-only judging and report failed administrator package steps without claiming apt-get ran when sudo may have refused it.
+- Use the supported kit surface net up launcher and host proxy executable instead of the desktop entrypoint fallback.
+- Keep policy, registry and audit metadata private and separate under the judge home; pass the same registry to running capsules.
+- Cover x64 setup, launcher failure, a deciding-line mutant and the missing Open image with Docker and surface fakes.
+- Document that the upstream exact-host policy needs explicit approvals and cannot provide arbitrary public browsing.
+- Record the x64 Open image mismatch; browser image 0.1.1 cannot be relabelled as a proven Open-capable 0.2.0 image.
+- The judge kit now installs the package tool's locked dependencies before verifying the app, so a kit unpacked from source no longer stops at `JUDGE_SMOKE` for a missing `@electron/asar`.
+- Honor the selected recording folder after restart when launched by the judge installer, while retaining its default folder for new installations.
+- Refuse root sessions before judge installation and doctor host checks, and direct smoke failures to a normal user without disabling the sandbox.
+- Remove internal planning labels from judge script comments and describe the current optional CPU-pinning check.
+- The judge kit `stop` command removes the RAM directory of a capsule whose container is gone, so a normal session no longer ends in `JUDGE_STOP_LEAK`.
+- Add `unzip:unzip` to `SYSDEP_BASE` in `scripts/judge/preflight.sh`, cover missing `unzip` and its removal mutant in `tests/judge/test_preflight.py`, and document clean Ubuntu system packages (`xvfb x11-utils xauth zip unzip strace git coreutils python3 python3-pip`, plus `docker.io` for T2) and source-build toolchain pins (Node 24, Go, Rust) in `docs/JUDGE_QUICKSTART.md`.
+- Add an English judge tour with product controls, refusal recovery, and explicit x64/arm64 verification limits.
+- Link the tour from the project README, documentation index, and Judge Quickstart.
+- Check tour commands against the public automation parser and judge launcher parser without live execution.
+- Fix Add capsule for browsers: the role and identity step no longer vanishes when the kit dialog closes itself.
+- Remove Holdings app and Desktop from the Add capsule catalog; Identity browser and Program stay.
+- Lower the main process startup memory peak by about 7 MB: the capsule profile picker loads on first use, the settings file is read into a buffer sized to the file, and the 1 MB wire buffer is no longer allocated up front; every cap and the 200 MB budget are unchanged.
+- Bind each browser capsule's DISPLAY tap to its own profile `Display` (`^:[0-9]+$`) end-to-end across `ResolveDisplayTarget`, `srf-fbread getimage`, the W8U binding and per-surface ring (`<surface_id>.ring`), restart the tap after capsule restart, and refuse missing or invalid display bindings with a typed `DisplayTapRefusal` (`DISPLAY_MISSING` / `DISPLAY_INVALID`) while keeping VERIFIED capture available.
+- Fix the paired MicroVM agent attachment so host agents receive the current private session connection automatically and both public attachment pointers close with their session.
+- Keep the MicroVM interface connected when an agent creates a recovery point through the SDK, validating the passive mark before enabling subsequent commands and human Back.
+- Add host paired terminals and live SDK task guidance to MicroVM tiles, replay authenticated workload observations for late agents, keep human Back authority, and show neutral unmeasured restore timing.
+- Add a scripted SDK demonstration that deletes and restores guest files.
+- Show measured Back-to-Ready response time and style MicroVM controls with semantic tokens.
+- Fix the MicroVM panel dark theme alias with the existing semantic token definitions.
+- Show that a ready MicroVM needs no capsule frames without claiming a graphical Core connection.
+- Remove empty workspace restore groups when revealing a workload so the panel can fill its tile.
+- Add a host-owned Muse Code Contributor agent profile with maximum effort, isolated process ownership, and gated prompt preparation.
+- Keep GTK session runtime state inside the validated ephemeral Muse workspace without admitting unknown entries.
+- Enable network and host-socket access for Muse sessions and add an explicit, default-off recording sandbox exception without changing approvals or other agent profiles.
+- Add an exclusive, ephemeral Muse session workspace for socket and automation state without making repository guides writable.
+- Fix the Muse workspace and document an owner-only runtime location for sandboxed attachment access.
+- Add regression tests for remembered Grid6 identity cells (saved on snap and applied on reopen), renamed capsule titles on the tile, the launcher Recent group fed by a real host launch, the input prompt gate of the non-default agent CLIs, and the per-architecture slot helper image candidates.
+- Add `tools/mw_ax_dump.py` and `tests/test_mw_ax_dump.py` for read-only capsule AX dumps and pre-run workflow anchor locale drift checks (`MW_AX_ANCHOR_DRIFT`), and document the pre-flight check in `docs/MW_RUN_FIRST_RUN.md`.
+- Keep an input-uncertain outcome when a verified focus click is followed by a clean type refusal, retaining the click receipt and refused-type evidence.
+- Create private state and run directories explicitly so stored workflows do not block later browser or program runs under a permissive umask.
+- Slot read-back uses `srf-identity-surface ax --text-of` with exact editable text, UTF-8 bytes, Unicode code-point length, truncation and editor binding checks; injected text uses the returned row's length.
+- A failed editable read refuses with `MW_SLOT_LENGTH_TEXT_OF_UNAVAILABLE` and an instruction to update srf-identity-surface, retaining the bounded native timeout without falling back to legacy container text. Static answer capture still uses `--text-container`.
+- Live prerequisite: srf-identity-surface built from OpenSuperficies commit `6ca9da19a7d4ff1ed97fa3cba0abc94b571b5b50` or a descendant preserving its `--text-of` contract. Offline tests cover Unicode, empty legacy text, contract mutants and stale-then-current backend polling; no live capsule was used.
+- Post-receipt slot acquisition polls valid stale text inside the independent read-back window before returning evidence to Wender. Whole-workflow offline tests verify stale-empty and stale-same-length recovery; disabling the window refuses before Enter.
+- End the execution timer before terminal diagnostics and report writing so an uncertain input remains uncertain during finalization.
+- Preserve uncertain-input and human-handoff exit codes when a stored workflow report cannot be written, and clear the unavailable report path.
+- Convert Wender owner sleep durations from integer nanoseconds to seconds, refusing boolean, floating-point and negative durations with `MW_SLEEP_NS`. Cover delayed focus verification through the pinned replay loop with a virtual clock and a wall timeout, so a pending poll respects its deadline.
+- Disarm the run timer before publishing the final result so expiry cannot append a contradictory result line.
+- Arm a run-level wall deadline in `agents/metaviewer_agents/mw_run.py` before invoking `runner(args)`, derived from the staged or builtin workflow (`max(site.execution_policy.min_notice_s, workflow.execution_policy.min_notice_s) + sum_steps(locate_wait_ms + action.delivery_budget_ms + verify.deadline_ms) / 1000.0 + 30.0 s` margin, or a 360.0 s conservative ceiling when unavailable) with a lower-only `MV_MW_WALL_DEADLINE_S` test override.
+- Raise `WallDeadlineError` (`RuntimeError` with `code = "MW_WALL_DEADLINE"`) on `SIGALRM`/`ITIMER_REAL` expiry so `run_entry` writes `report.json`, emits the `metaviewer.mw_run/v1` line, and exits with `rc 6`, while preserving `INPUT_UNCERTAIN` (`rc 5`) if the deadline expires inside the dispatch uncertain window.
+- Keep the last real native frame visible while tile tools are open and suppress tool reveal during floating-window drags.
+- Remove the redundant floating title strip while retaining the capsule header as the drag handle.
+- Recompute floating cells and free-window proportions when the wall resizes, including stored identity cell hints.
+- Match native letterbox and reconnect backgrounds to the resolved tile theme while retaining the fixed guest display.
+- Clear obsolete empty grid dividers behind floating windows while retaining the grid home and populated groups.
+- Add bounded native program clicks through visual target custody, core admission and verified settlement, with optional model planning and exact observed targets in rules mode.
+- Resolve dynamic program frame publishers and refresh unchanged pixels through the existing capture task before rebinding slow decisions; stop uncertain delivery for reconciliation. Program text entry and general task completion remain unsupported.
+- Replace the built-in chat draft and the offline site fixtures with a neutral `sample-chat` site on a reserved example origin; the offline tests keep the same login, challenge-wall, provenance and replay checks.
+- Use reserved example sites and neutral names in the identity and demo dialog placeholders.
+- Add an explicit protected Rewind option to normal ARM64 capsule sessions, preserving resource inventory, VM selection and closure checks.
+- Reconcile collected ARM64 session scopes using explicit unit absence and recorded cgroup closure when systemd does not expose a service MainPID property.
+- Keep normal-session Rewind runtime paths within the existing native socket-path limit without changing non-Rewind allocation or resource caps.
+- Show unavailable ARM64 VM and MicroVM choices as disabled Windows cards with setup guidance, only on supported ARM64 hosts.
+- Copy only the full capsule identifier from Copy ID for AI, keeping task prompts in their dedicated actions.
+- Recover missing live capsule panels when returning to a desktop and add Refresh to rebuild the current wall without changing capsules.
+- Add a graphical launcher focus probe and document the unverified production-backend boundary.
+- Keep the complete recording clock visible in narrow capsule headers without displacing their controls.
+- Refuse wall refresh with stale state and report incomplete panel restoration without clearing unrelated layout errors.
+- Open identity stored data from the tile menu while preserving stopped-only save and load guards.
+- Update UI regressions for Meta examples, identifier-only copying, and current wall, launcher, and terminal test dependencies.
+- Keep terminal context menus local to their capsule so they preserve focus without claiming a global modal overlay.
+- Make the compact paired Capsule ID chip copy only the capsule identifier.
+- Retain independent paired terminal views and output per capsule when hidden or switching desktops, including smaller tiles.
+- Keep the right terminal panel independent from capsule-paired terminals and open it without launching a session.
+- Preserve nonce-protected terminal geometry updates, remove the access banner from active output, and give xterm the approved inner spacing.
+- Keep deck-only launch shortcuts out of paired drawers, correct the Hide anchor and namespace-safe dialog focus, and verify independent terminal overlay ownership.
+- Keep the terminal launcher inside its visible panel and wrap narrow-panel controls without horizontal overflow.
+- Preserve terminal selection ownership before mouse-reporting applications intercept input, keep right-click local, and avoid redundant resize and focus during selection.
+- Require one retained attachment context and exact capsule identity matching when multiple application instances may replace the shared pointer.
+- Replace workflow prompts with compact English entry-file pointers and live identity data while preserving gated, unsent agent preparation.
+- Ship workflow guidance in both Linux package architectures and document the real attachment and read-only capsule observation path.
+- Pin compact prompt delivery against missing safety validators, implicit Enter, and raw-shell insertion with negative-control tests.
+- Remove the Bootstrap button and rocket while retaining workflow actions, the capsule ID chip, and safe prompt preparation.
+- Paint DISPLAY frames in the wall tile at 20-30 fps [TARGET] with a "DISPLAY · unverified" chip and a `data-fps` footer counter, through a pulled, idempotent per-surface port (`display_request/v1`), generation and sequence as decimal strings, bounded per-stage retail diagnostics on stderr, and parking when a tile is unbound; VERIFIED frames, receipts and the GEN/SHA256 footer are unchanged.
+- Add the DISPLAY tap in the daemon adapter: one resident `srf-fbread getimage` loop per live browser surface writes RGB24 frames into a seqlocked tmpfs ring (`MVDISP1`, spec v1.1) at 20-30 fps [TARGET], separate from the VERIFIED path; the tap starts on the live `created` reply, reclaims a stale ring safely, removes finished tasks, never skips VERIFIED destroy cleanup, and is off with `MV_DISPLAY_TAP=off`.
+- Choose human or agent mode for each identity opening; retain legacy profile roles as defaults.
+- Reveal existing identity tiles, offer mode replacement, and distinguish hiding from stopping a capsule.
+- Store explicit login confirmations separately and place human traces under each identity.
+- Add automatic tile presets while retaining existing floating, minimize and maximize operations.
+- Ship and seal the layout decoder required by packaged layout persistence.
+- Keep human openings outside agent capture, polling and DISPLAY consumers.
+- Group secondary header actions under More and give each role tile a mode-specific menu above retained native views, bound hidden live connections with a configurable least-recently-shown limit, preserve minimized agent shells across layout changes, and distinguish initial connection from reconnection.
+- Restore saved empty desktops with Dockview-compatible branch roots, normalize historical leaf roots without discarding layout state, and keep quarantine reason codes visible.
+- Terminal: shells work in the packaged app; node-pty ships pinned outside the ASAR under build-native and loading errors show in the terminal wall.
+- Add installed host-owned agent CLI choices to paired workflow preparation, bounded input readiness, and bracketed paste without Enter.
+- Keep plain shells copy-only and stop insertion for authentication, missing readiness, cancellation, or process exit.
+- Preserve agent input prompt detection across mixed-terminator OSC sequences and paste workflow prompts directly into already-running paired agent CLIs without sending Enter.
+- Revert the packaged kit staging for layout save: it broke the hosted js job (MUT-STAGED-IMPORT, clean-install leg); layout save in the packaged app returns with a staging that keeps those checks green.
+- Keep the running browser or identity program when switching between Human and Agent modes, preserving tabs, page state and session cookies. Refuse explicitly when the runtime cannot preserve the capsule. External Host programs retain their existing restart behavior.
+- Reuse existing program identities during mode changes instead of trying to provision them again.
+- Settle drained agent pixel clicks through the existing bounded post-input capture loop so a receipt can observe delayed paint without repeating input or changing core verification. Preserve unchanged, cancellation, human-input and native semantic Holdings behavior.
+- Retain the actual terminal verification or timeout payload with its dispatch proposal correlation in private program journals and reports, preserving uncertain delivery and preventing automatic replay.
+- Snapshot the actual current published frame before drained agent pixel input so subscription updates cannot leave post-input settling comparing against a prior action. Refuse missing or retired publication state before native input, preserve bounded capture-only settling and retain human and semantic Holdings behavior.
+- Fix Program capsule tiles that froze on the first frame: the live DISPLAY stream now serves program windows.
+- Add focused navigation keys, arrows and Enter, for an Agent Host program through mw_run.
+- Admit host-xpra agent programs through their existing private adapter binding and authenticated core surface, without requiring a Docker lease or identity-store lookup. Require matching adapter custody for legacy host-exec programs too; refuse host windows and builtin programs without exported custody even when an unrelated valid legacy lease exists.
+- Acquire a new verified frame and run visual perception and planning again after each settled move. Stop repeated generations, stale projections and uncertain delivery before another action; retain click-only custody and core verification.
+- Reacquire and plan again when an authenticated newer observation changes before any proposal, sharing the existing bounded attempt count and absolute deadline. Retain the actual mismatch metadata and distinguish a proven pre-dispatch refusal after verified moves from uncertain input delivery.
+- Keep the authenticated program session active during model planning with bounded read-only observations from the same actor. Preserve the model deadline, original target frame, final ownership checks and fail-closed cleanup without reconnecting or retrying input.
+- Keep lost Program capsules available to Stop so their identity can be reopened after verified cleanup without restarting MetaViewer.
+- Admit a fresh program frame after off-target animation only when the selected box has identical RGB pixels and a unique matching role, name and box in the original perception; every proposal binds that fresh frame.
+- Retry invalid Muse action replies and unproved mark mappings within the existing attempt bound and absolute deadline, recording each refusal without input.
+- Preserve model refusal codes and verified partial moves without misclassifying known unsubmitted decisions as uncertain input.
+- Explain MW_PROGRAM_CONTROL recovery: press Release on the tile, then run again.
+- Drain queued authenticated publications before binding; retry explicit STALE_FRAME with RGB checks only, without another perception or model call, within the existing bound and deadline. Record acquisition and RGB-check timings.
+- Guard provider process-group cleanup with strict recorded process identifiers, refusing reserved identifiers, the caller and its own group before signalling; retain the unreaped provider leader until group cleanup prevents identifier reuse.
+- Find bare program names in the standard directories the app PATH omits, such as /usr/games.
+- Describe program text and Agent Host focused navigation keys in workflow prompts while preserving no-Enter paste and safety checks.
+- Rewrite `README.md` in the routed GOLD form: node block `mv.node.v1`, reading map with a question-to-tool table and reading tracks, result contract, gates, engineering triptych, capsule coverage by platform, agent operating protocol, measured results, limitations, reproducibility, pending measurements and the private-component boundary.
+- Publish a forced current agent frame after successful release control so unchanged pages clear the core freshness fence.
+- Refresh active agent lifecycle snapshots after their state event using the same ordered frame path.
+- Preserve successful state changes when capture or publication fails and log the diagnostic for later subscription recovery.
+- Reserve the final rewind request slot for authenticated Stop and cover command observation fixtures across validators and renderer event tests.
+- Include the explicit rewind recovery command in the public operator package.
+- Add Stored data navigation to Human and Agent identity menus, including live identities, while retaining stopped-capsule checks for saved-data operations.
+- Fix recording startup reactivity, keep the tile timer advancing between frames, and provide verified capture subscriptions for Human capsules without changing input authority.
+- Index every H2 and H3 of every tracked Markdown document, plus one lead node per file, in `route/docs.jsonl` with path, anchor, title, Answers line, sha256 and byte span, built deterministically by `tools/route_docs.py build`.
+- Add `route_query.py docs` (field-weighted BM25, shortlist under 2000 bytes and 20 rows, `no_query_term` abstention), `any` (docs, code and findings in one shortlist), `check` (freshness, anchors, links and study spans, prints `ROUTE_OK`) and `--level dossier`.
+- Merge `route/study/*.jsonl` findings ahead of older rows for the same file, and verify every study span against the tree.
+- Make `route/` the stated router in `llms.txt` and `AGENTS.md`, explain that "router unavailable" concerns only the catalogue router, and add an agent entry file that points to `AGENTS.md`.
+- Add `route/`, a queryable map of the repository for workers and orchestrators: symbols, string literals and findings cited to code. Findings are model output with no human review, pinned to a commit; each answer marks them FRESH, SHIFT or STALE against the tree. Start with `python3 route/route_query.py stats`.
+- Parse each embedded contract schema once per process, which restores human input latency after new envelope alternatives.
+- Remove the Use MetaViewer sidebar button and its obsolete feedback while preserving the host prompt-copy API.
+- Reject control characters in Custom CLI commands and unsafe multiline identity data before workflow prompt copying or pasting.
+- Keep terminals alive across screen switches, Humans and Agents views, and closing the terminal wall; only closing a slot or quitting ends a shell.
+- Add copy and paste in terminals: Ctrl+Shift+C, Ctrl+Shift+V and a right-click menu, with byte-exact paste in Bootstrap.
+- Add Automate, Use automation and No automation prompts beside Terminal Bootstrap, using its clipboard and paste flow without submitting input.
+- Allow saved programs to reopen as human or agent using their persisted resolved binary; hide browser login metadata for programs.
+- [TARGET, unit decision] Store program binary metadata privately beside host identity markers; older program rows without metadata require an initial Add capsule launch.
+- Add real program and browser icons to the working tree and include active MicroVM presentations.
+- Add inline desktop and capsule display names with bounded host-side persistence, preserving identity and control state.
+- Revert the node-pty staging outside `app.asar` (U1-PTY-PKG): hosted CI has no `pty.node` prebuilt (`PKG_NATIVE_MISSING` in the package jobs) and its tests assumed an arm64 prebuilt on x64 runners; it returns with an x64-aware, CI-provisioned runtime.
+- Enforce per-class PTY broker limits for `shell` and `ai` sessions in every profile configuration (`maxShellSessions` `4` `[TARGET]` and `maxAiSessions` `4` `[TARGET]` within the `8` `[CITED]` global cap, `8388608` B `[CITED]` shell and `67108864` B `[TARGET]` provider output byte caps, `3600000` ms `[CITED]` shell and `14400000` ms `[TARGET]` provider lifetimes), count closing sessions as live until reaped, escalate explicit session close through `SIGHUP` (`100` ms `[TARGET]` wait; `0.28` ms `[MEASURED]` cooperative exit), `SIGTERM` (`250` ms `[TARGET]` wait; `0.38` ms `[MEASURED]` exit) and `SIGKILL`, guard each class with a spawn brake (`16` `[TARGET]` burst, `1`/s `[TARGET]` refill, `3` `[CITED]` consecutive failures tripping a `60000` ms `[CITED]` cooldown), and attach fixed operator remedies (`BROKER_REFUSAL_REMEDIES`) to `CLASS_LIMIT`, `SPAWN_BRAKE` and `SESSION_LIMIT` refusals.
+- Add the multislot header controls and guards: `+ AI slot` (launching in READ mode by default, enforcing the global 8-session ceiling [CITED] via a cross-capsule count stub [TARGET, unit decision], and mapping broker `SESSION_LIMIT` to a typed limit refusal with a close-a-session remedy), an authenticated-only state chip (`ready`, `busy`, `waiting-input`, `waiting-permission`, `exited`, `failed`, `capsule_gone`), canonical slot height presets (`200`, `360`, `540` px [CITED], clamped to `140..1600` px [CITED] with hidden/lost-surface refusal on presets, step, and resize), fold to `38` px [CITED] without closing live terminal sessions, and Copy ID for capsule and slot identifiers with lost-surface gating.
+- Route every wall human-control path (the tile-header Control action, the `.mv-input-indicator` Take control action, handoff take-control, and attaching to an already-human surface) through a single `applyWallControl` helper in `ui/src/App.vue`, disarming on Release or control loss to the core projection.
+- Focus the tile `<canvas>` automatically in `ui/src/surfaces/SurfaceCanvas.vue` when `inputEnabled` becomes true unless the operator is typing in a text field, transition `.mv-input-indicator` to a distinct `"Click the tile to type"` (`paused`) state after `Escape`, and restore `"Interactive"` when the canvas is clicked.
+- Surface rate-limited input batch refusal notices (`Input refused: <code>`) in `.mv-input-indicator` and `ui/src/input/inputPort.js` without exposing typed text or secrets, and log `METAVIEWER_INPUT_REFUSED surface=<id> code=<code> count=<n>` once per refusal burst in `ui/electron/authorityWire.js`.
+- Constrain capsule wall tiles and surface canvas to the capsule's real aspect ratio (1280x900 default from surface Width/Height, never 16:9) so the browser frame fills its tile without letterbox bands while keeping pointer mapping exact and the DISPLAY footer visible.
+- Resolve the explicit rewind and capsule routing dependencies in UI test harnesses, preserve named import aliases, and verify closed workload routing with negative controls.
+- Add `route/study/ui.jsonl`: 562 routed findings for the UI (wall, layouts, tree, add capsule, terminals, Direct task, modes, identities, recording, activity), each citation byte-checked on this commit.
+- Add `docs/dossiers/ui.md`: a per-subsystem UI dossier with Answers lines, failure and refusal tables, and `path:line` coordinates.
+- Route validated workload panels through the existing CapsulePanel registry without changing graphical capsule rendering.
+- Remove the covering "View only — press Control to interact" tile overlay and move wall input take/release controls and pending/unavailable status into a non-overlapping tile indicator bar.
+- Release v0.2.1 integration: removed per-unit live harness scripts that carried host paths, refreshed the router index, kept the 1 GB heap cap on UI tests.
+- Identities: foreign protected identities are refused for every operation; identity create, delete and provisioning are safer.
+- Terminal: a terminal wall under More with screens, Shell and custom CLI terminals.
+- Wall: tile history keeps panels when no panel list is available.
+- Hosted CI: e2e suites follow the Humans/Agents views and role menus, packaging stages Electron modules with the checked-out kit, and the node-pty runtime verifies across architectures.
+- Release v0.2.2: terminals in the packaged app and hosted CI for the Humans and Agents interface.
+- Terminal: the packaged app passes its resources path to the terminal host and refusals keep their real code in the terminal wall.
+- Provision `program` identities before starting a Program capsule, reuse existing unbound `program` identities while excluding them from browser choices, and keep exact refusal reasons naming the binary in the dialog and Activity.
+- Program card in Add capsule now prompts for a required binary name, resolves the binary on the host via `PATH` or an explicit absolute path without a shell, allocates an isolated dynamic program profile and display per capsule via `host-exec`, surfaces refusals directly in the dialog, and immediately arms wall input on the opened program tile (`V023-HOST-MV`).
+- Bump the release to 0.2.3 with its notes.
+- Fix review findings in program capsules and terminal paste: fail closed on identity list errors, keep refusal reasons, prune stale program entries, and report paste failures.
+- Allow `cuentas-*` and `perplexity-*` identities to open as human or agent capsules and be deleted like any other browser identity, while keeping container and holder names (`srf-id-cuentas-*`, `srf-id-perplexity-*`, `srf-pg-*`, and `PROTECTED_HOLDERS`) protected.
+- Program capsules (`host-exec`) now open in `Human` mode by default from the Add capsule Program dialog (with a `Role` selector offering `Human` and `Agent`), bind onto the native xpra tile (`srf-pg-*`) in the `Humans` view with full tile controls (`⋮` menu, size presets, Stop, move to desktop, and mode switching between Human and Agent), and release their dynamic profile and display on Stop.
+- Bump the release to 0.2.4 with its notes.
+- Note the routed map in the 0.2.4 release notes.
+- Terminals: raise the concurrent limits to 16 shell and 16 AI sessions, 32 in total.
+- Terminal resize: keep the type check clean when a direct port returns no promise.
+- Limit each terminal screen to 2 terminals and automatically open or switch to the next screen when launching another Shell or Custom CLI terminal.
+- Surface real terminal broker refusal codes (such as `CLASS_LIMIT`), make terminal error banners dismissible and auto-cleared on the next successful action, and ensure closing a slot frees its session cleanly without reporting an error when the session is already gone.
+- Remove `Open in multislot` and `Automate from a demo` from the `More` menu in the header while keeping their underlying features intact.
+- Add regression and mutant coverage for the `CatalogLauncher` synchronous kit close role-and-identity step.
+- Add a `Desktop window` card to Add capsule that lists open windows via `srf-host-window list --exclude-pid` with title/program search and explicit `Add`, attaches the selected window as a `desktop_capsule` (`NativeKind: host-window`) without a container, Xvfb, or display pool slot, streams XWD frames via `srf-host-window capture` with resize/minimize/close handling, routes admitted input via `srf-host-window input` pinned to `xid` and `witness`, and renders a real-desktop indicator plus one-click immediate `Stop` detach on the tile (`V025-WINDOW-MV`).
+- Update `scripts/judge/preflight.sh` and `scripts/judge/metaviewer-judge.sh` for standard 8-core, 16 GiB RAM Linux laptops (`MV_JUDGE_REQUIRE_CPUSET=none`, `floor + 512 MiB` RAM minimum with warnings below `floor + 4 GiB`, `1 GiB` `/dev/shm` minimum with warnings below `2.5 GiB`, `15 GB` disk minimum with warnings below `30 GB`, `opensuperficies-identity-browser:0.1.1` and `opensuperficies-program-host:0.1.0` image checks, sudo-free Docker profile provisioning, and a 4-slot default `MV_SRF_PROFILES` pool).
+- Add `tools/build_release_assets.py` to build and verify the release assets and `SHA256SUMS` from local artifacts without host paths.
+- Add `docs/AI_OPERATOR_GUIDE.md` and update `docs/JUDGE_QUICKSTART.md`, `docs/INSTALL.md`, `README.md`, `tests/judge/`, and `tests/test_install_docs.py`.
+- Desktop window capsules: read the real tool output and pass the person's X11 session to capture and input.
+- Show desktop window titles and program tooltips while preserving profile bindings; give window picker rows spacing, keyboard selection and visible selection. Keep unsupported wheel actions out of desktop window input while retaining ordinary capsule scrolling.
+- Update terminal automation prompts and the operator guide for browser goal runs, app attachment sourcing and Host program limits. Document that role switching currently recreates the browser capsule.
+- Upload verified Linux app and Node judge archives with SHA-256 checksums for x64 and arm64 as short-lived hosted workflow artifacts.
+- Host program identities retain their launch type across restart and reopen. Desktop window input verifies the native acknowledgement against the attached window. Private Host programs fill their display without starting a desktop session. Tile menus wrap within narrow tiles, and desktop window controls explain who receives input and where Release hands control.
+- Add Host program capsules with a private host Xvfb/xpra desktop, temporary browser profiles in RAM, Human/Agent roles, private-display capture/input, loopback transport, and witnessed process-group cleanup. The tile labels host execution as not isolated.
+- Bundle the public operator runtime and contracts with optional checkout overrides and sealed installed-runtime admission.
+- Discover source-free Wender/Vision sidecars through explicit judge paths and verify complete distribution hashes and source commit pins. Preserve checkout provenance checks and refuse private browser APIs absent from the compiled export.
+- Accept pinned compiled archives in the offline release builder; report missing xpra as an optional Host program capability with an actionable dialog refusal.
+- Add deterministic regression coverage for a DISPLAY pull before the delayed initial ring read offers its port.
+- Add deterministic regression coverage for unchanged static-frame delivery after port replacement, preserving capture staleness and ordinary poll deduplication.
+- Offer the initial DISPLAY port after guarded ring open, before asynchronous tmpfs validation and frame reads, so a slow first read cannot delay the renderer handoff. Absent rings allocate no channel; pixels still require all existing guards and seqlock validation.
+- [TARGET, unit decision] A replacement requests one validated repaint through the existing rate-limited reader. The repaint retains the ring sequence and capture timestamp, does not advance capture liveness, and republishes stale state after delivery when needed. Ordinary unchanged polls remain deduplicated; no retained frame cache or new IPC is introduced.
+- The documented command test now covers the two program text commands.
+- Add actionable stderr remedies for mw_run refusal results while preserving result fields, verdict codes, return values and existing diagnostics.
+- Cover local refusal codes by source scan, with negative controls and offline output compatibility checks for browser, browser-goal, program and deadline fallback paths.
+- Show startup and first-capsule failures in a dialog with recovery steps, including when no wall window opens.
+- Explain core-only capsule failures and guide new users through identities and the Humans and Agents views.
+- A failed first capsule shows a notice that does not freeze the running app.
+- A failed start exits after its notice instead of waiting on a modal.
+- The startup notice return type passes the type check.
+- Preserve visible human control until Release is acknowledged and prevent delayed control grants from stealing another canvas's focus (F07, F08).
+- Reuse live saved programs, retain lost bindings and corrupt-sidecar recovery handles, retain identity states on refresh failure, and show program launch recovery guidance (F10, F16, F17, F24, F44).
+- Show browser creation progress, switch views after successful creation, preserve edited roles, retain busy-switch confirmation, and direct lost identities to Stop recovery (F18, F19, F20, F21, F22, F46, F47).
+- Publish supervised adapter outages after boot and provide memory, runtime setup, capsule installation, reservation recovery, and unreadable-probe guidance (F06, F34, F35, F37, F38, F58).
+- Show the Bootstrap paste destination and retained capsule identity beside workflow actions; prevent stale close confirmations and duplicate desktop-window detach requests; provide terminal package repair guidance (F09, F50, F51, F52, F53).
+- Retain the last trusted desktop-window title on lost tiles, preserve active panels during preset refresh, and retain custom sizes across viewport changes (F28, F54, F55).
+- Keep sealed recording receipts exportable when list refresh fails; use a known creation timestamp or the measured local receipt time for the UI row when the host omits it [TARGET, unit decision] (F29).
+- Release closed display-peer streams while retaining temporary unbind/rebind behavior (F59).
+- Let native liveness probes confirm absence after a failed Stop, while retaining uncertain reservations.
+- Keep lost capsule identities available to the host Stop capability; core lost-destroy policy remains unchanged.
+- Seal retained recordings after their surface has closed.
+- Publish lost snapshots when the core session closes so painted tiles lose their live input state.
+- Deliver a correlated capture-unavailable terminal before closing a connection after capture storage failure.
+- Retain validated control refusal reasons in host error metadata without changing the existing generic error message.
+- Include xdotool in the host-program dependency recovery command.
+- Stop private-window discovery promptly when its witnessed xpra process exits.
+- Discover browser login handoffs in configured and documented private RAM evidence roots while preserving private-file and acknowledgement checks.
+- Translate browser control, native timeout, core, dependency and model failures into typed remedies without losing uncertain-input verdicts.
+- Preserve literal spacing in focused program OCR verification, label dispatch baselines with settlement references, and omit expired marks image paths from retained reports.
+- Serialize judge run and install ownership, preserve the winning pidfile, and restore the prior app when publication fails.
+- Recheck Docker access after installing system dependencies and provision configured browser profile directories.
+- Warn when UI capsule memory admission will refuse creation and require evidence for display reachability.
+- Report private packaged runtime, host program RAM and display roots during Stop without deleting unproven leftovers.
+- Align Quickstart layouts, top-bar actions and login handoff with shipped controls.
+- Cover ordered launcher, installation and preflight failures with offline judge regressions.
+- Bound Docker and stalled downloads in the judge install, refuse partial dependencies, unprepared directories and malformed assets, and keep a successor session attach pointer.
+- Fix stale dialog completions, late identity alerts, panel closures, missed reveal notices, pointer presses across stream replacement, stuck role recovery and silent view close retries.
+- Keep recovered undispatched admissions cancellable on reconnect while retaining fences for dispatched work (V027-CA01).
+- Bound journal Drop when storage sync stalls; retain the writer lock until the aborted worker exits and prevent pending checkpoint publication (V027-CJ01).
+- Report replay exhaustion through a typed terminal on active connections and reconnect without clearing replay evidence (V027-CR01).
+- Roll back failed session initialization under the writer lock so the same session can be retried without deleting existing sessions (V027-CJ02).
+- Preserve the reserved overflow diagnostic when a keepalive saturates a backpressured daemon connection (V027-CR02).
+- Cap supervisor polling sleeps at the remaining startup and shutdown deadlines (V027-CR03).
+- Select browser custody from active native leases while retaining ambiguity and replacement fences.
+- Recognize provider sign-in headings and labelled password walls before automation input.
+- Report native discovery timeouts through the structured run verdict.
+- Persist an absorbing human handoff when a wall appears during proposal rebind; preserve the pinned workflow journal verbatim.
+- Retry stale browser text readback within the remaining deadline without redispatching input, and read editable content only for the selected goal target.
+- Keep handoff persistence failures visible as human handoffs without claiming a saved artifact.
+- Preserve verified clicks when later typing fails; retain input uncertainty after delivered moves if evidence or later acquisition fails.
+- Refuse disk, symlinked, or public program evidence directories before connecting.
+- Identify missing invocation text slots without exposing their values.
+- Retain text verification failure payloads and correlate stale proposal dispositions with their dispatch artifacts.
+- V027-EM01: Quit through normal teardown when the main authority renderer exits unexpectedly.
+- V027-EM02: Prevent repeated quit events until the shared teardown completes.
+- V027-HB01: Refuse an expired capture without closing the host session; validate and ignore late replies.
+- V027-HP06: Attempt every owned view close and native program stop and report collected disposal failures.
+- V027-LP02: Allow later layout changes to retry a transient write failure while preserving invalid-load protection.
+- V027-AS01: Preserve the selected capsule when opening and dismissing Add.
+- V027-DP02: Acknowledge paint failures as refused deliveries so visible DISPLAY tiles can recover.
+- V027-ID01: Expose retained lost identity bindings and provide a guarded Stop lost capsule action.
+- V027-ID03: Preserve saved host-Xpra mode across Identities and App program opening.
+- V027-XP03: Preserve newer host focus choices while a writable native tile connects.
+- V027-CP02: Share creation admission across boot, browser and role bridges before asynchronous checks [TARGET, unit decision].
+- V027-CP03: Apply the interactive memory floor to boot creation and release its admission on settlement.
+- V027-EG03: Prevent stale settings cleanup from removing replacement subscriptions; cover the case in the isolated unit regression.
+- V027-EM06: Await terminal disposal before completing authority bridge teardown and remove handlers even on failure.
+- V027-HB05: Use monotonic time for typing coalescing and IPC rate windows so clock rollback cannot extend the throttle.
+- V027-HP03: Isolate unreadable or corrupt saved program sidecars during listing and mark affected native identity rows unavailable; strict per-program reads still refuse.
+- V027-CP06: Retain lost browser bindings as destroyable host rows and reserve their profiles until destruction.
+- Desktop window tabs: Refresh existing Dockview titles when native window metadata arrives after the core row.
+- V027-TD06: Release host terminal entries after delivering exit, preserving pre-attach output within the existing attach deadline and normal deck close behavior [TARGET, unit decision].
+- V027-LP08: Allocate desktop IDs from the validated saved next allocator, preserving uniqueness across gaps.
+- V027-AS05: Dismiss Settings after successfully revealing the selected capsule.
+- V027-CL06: Disable attachment when search filters the chosen desktop window out of the visible results.
+- V027-CL05: Disable and guard program/window cancellation while the dispatched create is pending.
+- V027-ID02: Accept lowercase aliases when selecting browser templates for dynamic identities.
+- V027-HP02: Refuse unsupported desktop-window Watch mounts with a typed binding refusal before filesystem access.
+- V027-RS03: Guard in-flight screenshots, expose capture busy state, and clear pending state during disposal.
+- V027-RS04: Retain a sealed screenshot export row from its successful receipt when the automatic relist fails, within the existing row cap.
+- V027-AM02: Reload the binding after subscription drain so resident finalization cannot be overwritten or stopped twice.
+- V027-XP01: Reserve host-Xpra startup before releasing the manager mutex, allowing emergency control of unrelated surfaces; release the reservation only on proven clean failure.
+- V027-AM03: Retain failed view teardown for a later destroy attempt and fence the surface until teardown succeeds.
+- V027-AD01: Preserve the committed surface identity in creation failure wire events after failed capture and compensation.
+- V027-AD03: Use the current published frame for Holdings semantic observations when subscription traffic has evicted the handler baseline.
+- V027-AD04: Release the surface operation lock before reply serialization and socket delivery can block capture.
+- V027-AF01: Retry ordinary DISPLAY target resolution failures with bounded backoff while keeping typed refusals terminal.
+- V027-AF03: Forget resident capture payloads after both subscription stages drain on cancellation or termination.
+- V027-HP05: Preflight xdotool and the configured host-window helper before allocating host-Xpra native resources.
+- V027-HP04: Detect early Xvfb or xpra child exit during socket readiness without reaping the process-group anchor prematurely.
+- V027-AF05: Commit fresh and unchanged publications relative to the held output directory and refuse references after an observed directory replacement.
+- V027-HP08: Release the attached host-window frame tree when publishing the host-Xpra binding fails.
+- V027-XP05: Select a visible normal host-Xpra window only after its XID and witness remain stable across consecutive inventories [TARGET, unit decision].
+- Protect unsupported or unreadable terminal-deck storage from overwrite, and reject overflowing saved screens without truncating slots (V027-LP01, V027-LP04).
+- Recheck terminal capacity after broker attachment and close excess sessions before sending custom commands (V027-TD01).
+- Copy the pasted bootstrap capsule identity into workflow prompts while retaining prompt safety validation (V027-TD02).
+- Bound fallback output to a retained tail of 64 Ki UTF-16 code units per session [TARGET, unit decision] and delete it when slots close or the view unmounts (V027-TD05).
+- Refuse custom CLI launches without a writable session and close their opened shells (V027-TD07).
+- Clear busy-close confirmation on process exit (V027-TD03).
+- Drop V027-TD06 host-entry cleanup for exited injected-facade sessions to preserve the existing close lifecycle contract: closing naturally exited tiles does not issue another broker close.
+- V027-CP01: retain dead-owner RAM reservations for random browser names, host Xvfb/xpra processes, incomplete inventories, and legacy non-mv natives; require positive absence proof before reclaim [TARGET, unit decision].
+- V027-JF01: collect the app child's wait status even when it exits before the first liveness probe.
+- V027-JF02: run static Docker preflight before repairing the legacy capsule network.
+- V027-JF03: print quoted recovery commands with the installed reclaim tool and admission directory, including dry-run followed by guarded apply.
+- V027-JF04: terminate, escalate, and reap the startup child if pidfile publication fails, then report JUDGE_PIDFILE.
+- V027-JF05: validate every advertised default or configured browser profile directory and reject malformed configured pools.
+- V027-JF07: document image loading before optional firewall selection.
+- Tests: add offline regression sequences; update existing reservation expectations to require conservative proof and judge fixtures to provision the advertised profile pool.
+- Recover a subscription after an isolated publication or delivery failure by dropping the failed frame and publishing a fresh capture at the next poll deadline; reset unchanged-frame confirmation so an undelivered generation cannot suppress recovery.
+- Bound publication and delivery recovery to two consecutive failures [TARGET, unit decision], retaining terminal diagnostics, capacity reclamation, cancellation drain, and the existing confirmed capture-loss policy.
+- Cover ordered capture, missing source, duplicate native sequence, delivery refusal, and retention eviction before reader open in serial and pipelined subscription tests, without changing frame retention or wire contracts.
+- Strengthen review coverage: fail retention setup independently and force eviction, inspect terminal state before unsubscribe clears it, and require advancing native capture ticks plus capture calls on delivery retry.
+- Verify publication cancellation stays quiet with task/context controls and an uncancelled retry control; existing post-publication cancellation guards and capture diagnostics already satisfy the reviewed behavior.
+- Put browser-goal control prerequisites before commands: agent programs start agent controlled; Release control is required after Take control.
+- Start Host programs under WSLg, where the X socket directory is read-only: accept the abstract display socket and give its clients a matching private cookie.
+- Document account-free rules planning, authenticated Muse Code, exact observed goals and one goal per run.
+- Explain app attachment, private RAM evidence, compiled browser refusal, human handoff, control release and uncertain-delivery recovery.
+- Update the existing Terminal button prompts and test documented goal commands against the public parser without live automation.
+- Add a checksum-verified judge asset fetch command for explicit local directories and HTTPS releases.
+- Add a before-install doctor phase, early display refusal, and T1 RAM and disk checks.
+- Preserve npm from Node assets and include available npm files in CI runtime assets.
+- Load capsule images before offering the Open firewall and explain the legacy public-network limitation.
+- Document headless installation, Debian verification status, CI asset scope and fresh-clone steps.
+- License MetaViewer source under AGPL-3.0-only, declare it in Rust, npm and Python metadata, and retain the supplied external component notice in release assets.
+- Clarify source redistribution and limited judge evaluation rights for separate compiled components; show the license and a source link in Settings through an exact-URL external opener.
+- Let lost agent-controlled host window tiles close locally without requesting forbidden destruction, and hide unavailable recovery actions.
+- Verify the UI-only lost human window destroy exception and preservation of pending host loss events during input completion.
+- Read typed program text from clean changed-area pixels with OCR margin using the existing vision TSV reader, independently of selected marks and their text truncation.
+- Preserve exact comparison, wrong-text mismatch, unavailable OCR fallback, frozen contracts and existing budgets; cover rendered text, long text, blank pixels and unrelated labels.
+- Accept the network mode reported by a native browser start, so Open network capsules can start. Measured on x64: public site 200, local network and docker bridge blocked.
+- Provision new Program and browser identities with the installed judge image for the host architecture; x64 refused them before.
+- Fix browser goal Enter rebinding across a narrowly classified caret blink while retaining changed-target and content refusal.
+- Preserve product evaluation and license text, the Node runtime license, and supplied OpenSuperficies legal notices in release assets; document obtaining the matching public judge kit tag.
+- Correct judge-facing dependency pins and stale counts, distinguish the historical scaffold from the implemented assembly, add a documentation index, and state host isolation, display, asset and external permission limits without changing licence texts.
+- Replace the obsolete multi-capsule draft with maintained guide links and the source-backed admission ceiling; clarify that pending changelog fragments await conductor assembly.
+- Advertise owner handoff paths and evidence references only after successful persistence while retaining the closed handoff latch on write failure.
+- Cover failed handoff writes during acquisition and proposal rebind, including refusal of subsequent runs.
+- Verify that early program acquisition and planning failures preserve their original exception; reject the reported uninitialized guard lead.
+- Exercise admitted program input followed by failed settlement, asserting the verification call, uncertain disposition, and correlated failure artifact.
+- Add ordered Agent browser, Human browser, Host program and Program journeys through the real role host, private opening-mode staging and host socket bindings; unrelated create events and nonterminal stop events cannot release pending custody.
+- Add a kit install/run/stop journey with a blocked native proxy startup and a late partial-start failure, reusing the judge sandbox and source-mutant pair harness without running a live capsule.
+- Add browser/program mw_run attachment and settlement journeys through a real Unix socket, fragmented envelopes, an early asynchronous receipt, pending verification and backend receipt binding; stale generations must refuse verification.
+- Prove the added seams reject source mutations to opening roles, host-Xpra staging, stop acknowledgement completion, native proxy outcome and receipt freshness; reuse existing mounted catalog, production frame/control/input and native adapter coverage rather than duplicating those journeys.
+- Write the browser goal dispatch journal before the final frame read, so a slow durable write no longer invalidates the frame the proposal binds to.
+- Retry a browser goal step when core refused every proposal of a round as stale; nothing was dispatched, so text is never repeated.
+- Clean a stopped Program capsule frames from RAM: read program ownership before the app removes it.
+- Treat close OCR word spans as explicitly uncertified; retain exact and clearly wrong classifications and bounded actual readback text.
+- Preserve the honest union of title, editor and status pixel changes when no focused field boundary is grounded.
+- Persist terminal Enter verification failure as an unverified effect refusal, without claiming native delivery or retrying the key; keep timeouts uncertain.
+- Verify program click effects across the surface with hash-checked RGB evidence excluding identified clocks; unchanged actions still fail.
+- Add direct program --text after a core-verified field focus click, refusing known password fields and recording OCR exact, unreadable uncertified, or mismatch outcomes.
+- Add offline effect and ordered click/publish/type/publish regressions; update positive receipt fixtures to publish real pixel changes.
+- Add program `--goal focused --text` for operator-asserted current focus: one core-admitted type action, no click or model call, with existing exact/unreadable/mismatch OCR verdicts [TARGET, unit decision].
+- Keep the grounded focus-click form and browser step coverage; guard program text to one step and keep `--key` browser only.
+- Cover empty focused observations, known password refusal, OCR outcomes and public parser guards with offline tests.
+- Offer the ARM64 VM capsule only on an ARM64 host with a configured VM template; x64 no longer lists it.
+- Stop on exposed page-level sign-in headings or password fields paired with sign-in wording, using the existing human handoff outcome.
+- Stop on human-verification text and known challenge frame names without answering or bypassing the challenge.
+- Cover synthetic login and challenge pages, hidden cues, ordinary news pages with Sign in links, and absorbing pre-input handoff; live detection accuracy remains unmeasured.
+- Fix closed desktop window tiles so the closed message and Stop remain visible, show a closed control badge, and count lost tiles separately. Permit explicit UI cleanup of lost human-controlled bindings while keeping input and frame subscriptions revoked.
+- Preserve the pending window-loss event when an attached desktop window closes before the next capture poll, including input-first closure and resident capture. Deliver the lost state before the capture error so the tile exposes its existing recovery controls.
+- fix(ui): keep attached desktop windows active during resize, admit bounded opening geometry independently of retained sizes, and verify Stop before explicitly reopening a live window with the same witness.
+- Tell the operator how to reuse a window id still held by a closed tile.
+- Scale post-input pixel settlement from the measured native capture duration, with a bounded bootstrap capture and an unchanged fast-capture window. Preserve caller cancellation and require a real post-input capture before publishing native evidence.
+- Exercise slow and variable capture latency through native input, pending-input refusal, drain, settlement, publication and receipt evidence for click, text and key actions.
+- Fix capsule cell restoration after a Control snap in custom desktop layouts: a reopened capsule returns to its remembered cell, and ended panels no longer count as occupying it.
+- Missing or inaccessible desktop bus proxies now produce a typed session refusal before session custody is acquired.
+- Prevent stored-data Copy helpers from inheriting custody guards so Program and browser copies can load and open; log refusal stages and underlying adapter causes.
+- Keep ordinary capsule creates independent of pending-create slot fences and journal lifecycle/profile binding atomically so existing frame snapshots remain stable.
+- Update the judge guides with measured x64 results, refusals and the published release download.
+- Fit capsules to their tile without black bars; the tile background fills any aspect difference, and the Interactive banner and footer stay readable when narrow.
+- Keep judge install smoke sockets in a short private temporary root with recorded supervisor ownership and actionable path-length refusals.
+- Reconcile interrupted smoke process identities and exited private roots before installation while preserving live or unverifiable groups.
+- Prevent concurrent native frame probes and captures from reporting false recorder contention while retaining real lock-holder detection.
+- End journal admission cleanly when a headless, guest-command or rewind timer reaches journal capacity, preserving peer connections and ordered cleanup.
+- Reject demo control requests whose args field is not an array before invoking host operations.
+- Explain the person's natural-language Direct task, capsule attachment context, the model's exact observed target selection and independent outcome check.
+- Route attached demo commands through the existing host recording controller, with process-driven tile and tree indicators and shared Stop sealing.
+- Retain recording ownership through sealing, restore native read-only capture, and refuse stale or mismatched app attachments.
+- Defer native frame capture while a demonstration owns the control lock, preserving the live binding and resuming verified capture after sealing.
+- Document automation attachment, admitted-site setup, public-page refusals, holder recovery and the separate authoring and replay gates.
+- Accept the admitted home source returned by the demo site checker while retaining the builtin-source refusal.
+- Require executable workflow authoring and preflight in the creation prompt, and document the pinned runner's zero-locate refusal without expanding budgets.
+- Set the demo authoring prompt's interactive locate wait to the builtin acquisition window and reject nonpositive acting-step waits before site admission with a repair hint.
+- Retain release and list reconciliation refresh requirements across failed native captures so the next successful static-page capture publishes a fresh generation.
+- Verify static-page control release across the real core and adapter: require another native capture, reject the old generation, and admit the fresh generation even when pixels match.
+- Place new floating capsules in the first free desktop grid cell, retain existing floats when adding capsules, and restore bounded identity cell hints through the desktop layout owner.
+- Prevent floating window drags from extending text selections while retaining dialog and terminal selection, and keep the Floating preset after Control snapping.
+- Carry saved program launch markers after a confirmed stored-data copy, reconcile deleted identity markers on inventory refresh, and retain a visible copy acknowledgement when the panel selects the copied identity.
+- Restore reopened capsules with saved grid cells to their own floating group in both Floating and custom layouts without attaching as a tab to another floating group or disturbing existing groups; fall back to the next free cell when the remembered cell is occupied by a live panel.
+- End journal admission cleanly at capacity, flush accepted records, show a clear refusal, and stop capsules in order while keeping peers connected and the archive replayable.
+- Persist replay-bound end hints atomically, ignore damaged or stale hints, keep admission closed on hint I/O failure, advance cleanup past already-terminal capsules, and withdraw live UI presentation on closure. Document session diagnostics and the normal close-and-reopen path.
+- Refuse whitespace in the judge installation home before host checks or writes, with a clear path correction; non-ASCII paths without whitespace remain supported.
+- Admit explicit UI destroy requests for lost non-game capsules in agent or human mode, deliver post-loss destroyed state updates to renderer subscribers, and remove owned capsule RAM run directories on native stop and judge stop.
+- Clear pending identity release confirmation when Identities closes or reopens.
+- Preserve recovery observer evidence across failed capsule retries; clear it after verified release or successful capsule creation.
+- Add confirmed identity release for a capsule left by a dead MetaViewer session; refuse live or unproven owners and protected holders.
+- Clear browser quarantine on retry only after an inactive native lease and verified capsule and login-view absence.
+- Show first-capsule identity contention in the existing nonblocking renderer notice and recover through Identities.
+- Keep deleted identity-bound program sidecars out of host launcher rows while retaining standalone host programs and existing identities.
+- Reuse the existing RGB24 converter when painting display frames while preserving pixels and canvas scratch reuse.
+- Reject reserved session VM and browser profile names when admitting program resources.
+- Verify the admitted setup digest before loading the inventory module during session failure cleanup, retaining guardian shutdown on mismatch.
+- Allow crash reconciliation of the admitted native binary pair while retaining exact key closure and descriptor custody checks.
+- Create sequence reservation temporary files exclusively so stale hard links cannot truncate unrelated files.
+- Add an evidence-tagged reference paper with capsule boundaries, source coordinates, runnable verification gates and explicit qualification limits.
+- Validate reference metadata, stable anchors, evidence tags and repository source coordinates with rejecting negative controls.
+- Add additive capsule state contracts and core authority for save slots.
+- Add the capsule save slot store: atomic generations, streaming payload hash, crash recovery, quotas.
+- Add named stored-data slots in Identities with timestamps, Save, confirmed Overwrite, Load, confirmed Copy to a new capsule and Delete; route every action through core authority and asynchronous daemon storage, refuse native leases/login reservations, reconcile intents at startup, and keep renderer replies path-free.
+- Extend only the new capsule-state contracts with List/Delete and closed listing metadata; update fixtures and pinned fixture-set digests.
+- Fix overlapping identity listings refusing valid slots as busy; show a dedicated selected-identity saved-data panel with progress, operation results, timestamps and archive sizes, readable refusals, normalize native Chromium identities and admit the closed native copy command, release slot custody after confirmed capsule destruction, and open a copied capsule after refreshing identities.
+- Cancel daemon slot work when its launching app dies and refuse cancelled writes before publishing a slot reference, preserving the previous save through interrupted overwrites.
+- Stored data slot deletion now retains a durable intent through cleanup so an interrupted delete cannot restore an older credential-bearing generation; reconciliation finishes deletion before allowing reuse.
+- Stored data loads discard the previous profile after the exchange is durable, and saves prune generations outside the verified recovery references under the existing guards; crash tests cover cleanup interruption and credential retention.
+- Kill the recorded smoke process group on exit, failure, interruption and timeout, keep smoke temporary files in private install state, and refuse a clean stop while smoke ownership or runtime evidence remains.
+- Floating title and capsule-header drags capture Control changes across Dockview overlays, preview and commit desktop grid cells, and remain free when Control is released; default floats retain full wall height and usable frame space. Per-desktop grids and slots persist.
+- Request an 80 ms [TARGET] press/release gap for Host program keys, so polling applications can observe the held key. Requires the private native host-window key-hold option; older binaries refuse input. Browser input and frozen contracts are unchanged.
+- Open a configured ARM64 graphical VM through the existing capsule creation channel while keeping browser defaults and verified-frame presentation unchanged.
+- Document the current VM limits, proposed VM and MicroVM launch flow, image compatibility requirements, and staged acceptance gates.
+- Record the independently reviewed ARM64 graphical episode and stale-input refusal while retaining unproved creation, editing, and platform gates.
+- Route VM guest frame pairs through the native capture validator when resident capture is selected, preserving host-window and host-xpra routing. Reject malformed, stale and foreign pairs; VM display taps remain unsupported.
+- The VM open path in the app is held back until it passes the preload allowlist and the full test suites.
+- Fix Copy ID for AI on tiles: the wall now uses the host clipboard instead of the ambient one, which reports "Copy unavailable".
+- Bind egress start witnesses and allowlist policy keys to the validated native container; refuse malformed readiness without publishing a witness.
+- Revert the 4 GiB per-capsule RAM admission reserve: it refused capsule creates on hosted CI runners; it returns with a CI-safe reserve.
+- Move workspace navigation and activity into a collapsible left column and keep the terminal beside live capsules in a collapsible right dock.
+- Add a six-cell grid preset while preserving existing preset identifiers and native-view presentation during dock changes.
+- Add immutable human and agent capsule roles, isolated native xpra tiles, readonly agent watch, and continuous redacted human traces.
+- Preserve the native xpra client viewport when fitting role tiles, require a healthy role-matched connection before input, and show a typed retryable startup failure.
+- Recover lost role views through the authenticated bridge, preserve sessions across focus and layout changes, contain child crashes with Reopen, and forward human shortcuts to the capsule.
 
 ## 0.2.5 (2026-11-03) [CITED: `VERSION`]
 

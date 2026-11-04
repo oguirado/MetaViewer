@@ -1,0 +1,35 @@
+{"id": "I1", "q": "Which Node version is required?", "expect": ["ui/package.json"], "abstain": false}
+{"id": "I2", "q": "Which Python version is required?", "expect": ["agents/pyproject.toml"], "abstain": false}
+{"id": "I3", "q": "How do I build offline?", "expect": ["scripts/bootstrap.sh"], "abstain": false}
+{"id": "I4", "q": "How are missing system packages installed?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "I5", "q": "Which release architecture should I install?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "I6", "q": "How are browser profile permissions provisioned?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S1", "q": "Why does JUDGE_DISPLAY reject Wayland?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S2", "q": "What causes JUDGE_USERNS?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S3", "q": "What causes JUDGE_DOCKER_HOST?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "S4", "q": "Why does sequence does not match occur?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S5", "q": "Why does sender identity changed occur?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S6", "q": "Why does reply exceeds byte limit occur?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S7", "q": "Why is the registered agent lane busy?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "S8", "q": "Why does MCP say Initialize first?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "D1", "q": "Why are capsule launch targets constrained?", "expect": ["core/src/catalog/launch.rs"], "abstain": false}
+{"id": "D2", "q": "Why reserve sequence numbers before sending?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "D3", "q": "Why verify socket peer ownership?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "D4", "q": "Why bound mailbox reply bytes?", "expect": ["agents/metaviewer_agents/client.py"], "abstain": false}
+{"id": "D5", "q": "Why reject booleans as observation integers?", "expect": ["agents/metaviewer_agents/observe.py"], "abstain": false}
+{"id": "D6", "q": "Why validate observations before copying?", "expect": ["agents/metaviewer_agents/observe.py"], "abstain": false}
+{"id": "A1", "q": "How do I drive mvctl?", "expect": ["agents/metaviewer_agents/mvctl.py"], "abstain": false}
+{"id": "A2", "q": "How do I list surfaces through MCP?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "A3", "q": "How do I propose actions through MCP?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "A4", "q": "How do I await verified receipts through MCP?", "expect": ["agents/metaviewer_agents/mcp_server.py"], "abstain": false}
+{"id": "P1", "q": "Which tests prove MCP frame bounds?", "expect": ["agents/tests/test_mcp_conformance.py"], "abstain": false}
+{"id": "P2", "q": "Which tests prove silent MCP notifications?", "expect": ["agents/tests/test_mcp_conformance.py"], "abstain": false}
+{"id": "P3", "q": "Does MCP conformance exercise the real core?", "expect": ["agents/tests/test_mcp_conformance.py"], "abstain": false}
+{"id": "P4", "q": "Which tests reject wrong sequence numbers?", "expect": ["agents/tests/test_client.py"], "abstain": false}
+{"id": "P5", "q": "Does observation validation prove pixel freshness?", "expect": ["agents/metaviewer_agents/observe.py"], "abstain": false}
+{"id": "P6", "q": "Are package versions aligned with 0.2.6?", "expect": ["ui/package.json"], "abstain": false}
+{"id": "N1", "q": "How do I schedule capsules with Kubernetes?", "expect": [], "abstain": true}
+{"id": "N2", "q": "How do I run an iOS capsule?", "expect": [], "abstain": true}
+{"id": "N3", "q": "How do I configure Stripe billing?", "expect": [], "abstain": true}
+{"id": "N4", "q": "How do I enable LDAP single sign-on?", "expect": [], "abstain": true}
+{"id": "N5", "q": "How do I enable CUDA video encoding?", "expect": [], "abstain": true}

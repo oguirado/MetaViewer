@@ -1,1 +1,0 @@
-- Constrain capsule wall tiles and surface canvas to the capsule's real aspect ratio (1280x900 default from surface Width/Height, never 16:9) so the browser frame fills its tile without letterbox bands while keeping pointer mapping exact and the DISPLAY footer visible.

@@ -1,3 +1,0 @@
-- Bundle the public operator runtime and contracts with optional checkout overrides and sealed installed-runtime admission.
-- Discover source-free Wender/Vision sidecars through explicit judge paths and verify complete distribution hashes and source commit pins. Preserve checkout provenance checks and refuse private browser APIs absent from the compiled export.
-- Accept pinned compiled archives in the offline release builder; report missing xpra as an optional Host program capability with an actionable dialog refusal.

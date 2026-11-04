@@ -1,0 +1,62 @@
+{
+  "review-r2.jsonl": {
+    "role": "development",
+    "source": "R2 review of a998df6157 supplied by operator",
+    "positive": 30,
+    "negative": 5,
+    "target_top5": 25,
+    "target_abstain": 4
+  },
+  "holdout.jsonl": {
+    "role": "initial holdout, subsequently used for normalization feedback; retain first-pass result",
+    "source": "Questions frozen from source after development tuning; no ranking outputs used to select questions",
+    "positive": 15,
+    "negative": 0,
+    "target_top5": 11
+  },
+  "questions.jsonl": {
+    "role": "legacy",
+    "source": "Original router-lane questions; not a held-out evaluation"
+  },
+  "units": "counts",
+  "status": "TARGET",
+  "commands": [
+    "python3 tools/route_eval.py --dataset route/eval/review-r2.jsonl --commands any --min-top5 25 --min-abstain 4",
+    "python3 tools/route_eval.py --dataset route/eval/holdout.jsonl --commands any --min-top5 11",
+    "python3 tools/route_eval.py --dataset route/eval/confirmation.jsonl --commands any --min-top5 11",
+    "python3 tools/route_eval.py --dataset route/eval/round2-dev.jsonl --commands any --min-top5 45 --min-abstain 8",
+    "python3 tools/route_eval.py --dataset route/eval/round2-unseen.jsonl --commands any --min-top5 11"
+  ],
+  "confirmation.jsonl": {
+    "role": "unseen final confirmation",
+    "source": "Questions frozen from different source files after final ranking freeze; no results used for tuning",
+    "positive": 15,
+    "negative": 0,
+    "target_top5": 11
+  },
+  "review-r6.jsonl": {
+    "role": "development",
+    "source": "R6 review of 0da20e0335; verbatim queries and original gold paths recovered from the supplied review log",
+    "positive": 25,
+    "negative": 5,
+    "status": "CITED"
+  },
+  "round2-dev.jsonl": {
+    "role": "development union of review-r2.jsonl and review-r6.jsonl; original exact-path gold retained",
+    "positive": 55,
+    "negative": 10,
+    "target_top5": 45,
+    "target_abstain": 8,
+    "status": "TARGET"
+  },
+  "round2-unseen.jsonl": {
+    "role": "initial unseen confirmation; subsequently used for local coverage follow-up; first pass retained",
+    "source": "Independent read of IPC config, inventory config, identity profiles and guest command profile",
+    "positive": 15,
+    "negative": 0,
+    "target_top5": 11,
+    "status": "TARGET",
+    "first_pass": "round2-unseen-results.json",
+    "followup": "round2-followup-results.json (development feedback, not another unseen exam)"
+  }
+}

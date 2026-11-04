@@ -1,1 +1,0 @@
-- Fix browser goal Enter rebinding across a narrowly classified caret blink while retaining changed-target and content refusal.

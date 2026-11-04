@@ -131,6 +131,7 @@ export const CATALOG_KINDS = Object.freeze([
   Object.freeze({kind:'vm',label:'ARM64 Linux VM',category:'Virtual machines',
     description:'Open the configured graphical VM with verified frames. Requires host support.',
     opensAs:'tab',footprint:'',keywords:Object.freeze(['vm','linux','arm64'])}),
+  Object.freeze({kind:'microvm',label:'MicroVM — ARM64',category:'Compute',description:'Run shell commands in an isolated ARM64 guest console.',opensAs:'tab',footprint:'',keywords:Object.freeze(['microvm','arm64','headless','commands'])}),
 ]);
 
 /**
@@ -141,10 +142,13 @@ export const CATALOG_KIND_IDS = Object.freeze(CATALOG_KINDS.map((entry) => entry
 
 /** Static descriptors stay closed; runtime availability defaults to hidden.
  * @param {unknown} [vmAvailable]
+ * @param {unknown} [headlessAvailable]
+ * @param {any} [capabilities]
  * @returns {ReadonlyArray<string>}
  */
-export function availableCatalogKindIds(vmAvailable = false) {
-  return Object.freeze(CATALOG_KIND_IDS.filter(kind => kind !== 'vm' || vmAvailable === true));
+export function availableCatalogKindIds(vmAvailable = false, headlessAvailable = false, capabilities = null) {
+  if(capabilities){return Object.freeze(CATALOG_KIND_IDS.filter(kind=>!["vm","microvm"].includes(kind)||capabilities.supported_host===true&&capabilities[kind]?.available===true));}
+  return Object.freeze(CATALOG_KIND_IDS.filter(kind => (kind !== 'vm' || vmAvailable === true) && (kind !== 'microvm' || headlessAvailable === true)));
 }
 
 /** @type {ReadonlyMap<string, Readonly<CatalogKind>>} */
@@ -487,4 +491,11 @@ export function createInvokerFocus() {
       return true;
     },
   };
+}
+
+/** Disabled ARM choices remain visible with safe host-provided reasons.
+ * @param {any} capabilities */
+export function unavailableArmCapsules(capabilities) {
+ if(capabilities?.supported_host!==true)return [];
+ return ['vm','microvm'].filter(kind=>capabilities[kind]?.available!==true).map(kind=>({kind,label:CATALOG_KINDS.find(row=>row.kind===kind)?.label??kind,reason:capabilities[kind]?.reason||'Capsule setup prerequisites are unavailable.'}));
 }

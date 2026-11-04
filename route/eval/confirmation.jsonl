@@ -1,0 +1,15 @@
+{"id": "C01", "q": "How does the host reject a create request when another surface creation is already pending?", "expect": ["ui/electron/hostBindings.js"]}
+{"id": "C02", "q": "Which event can settle a pending create, and how are errors from a still-live surface kept from settling it?", "expect": ["ui/electron/hostBindings.js"]}
+{"id": "C03", "q": "How does the host prevent an older frame generation arriving late from replacing a newer pending frame?", "expect": ["ui/electron/hostBindings.js"]}
+{"id": "C04", "q": "How are browser profile candidates ordered when a live profile is configured, and what is used when the profile map is unusable?", "expect": ["ui/electron/profilePicker.js"]}
+{"id": "C05", "q": "When does the picker refuse capsule creation for insufficient or unreadable host memory, and what reason does it return?", "expect": ["ui/electron/profilePicker.js"]}
+{"id": "C06", "q": "How does the picker treat a lost browser surface when deciding whether its profile can be reused?", "expect": ["ui/electron/profilePicker.js"]}
+{"id": "C07", "q": "What checks distinguish a locally malformed tool response from a core refusal, and is a refusal reason preserved?", "expect": ["agents/metaviewer_agents/tools.py"]}
+{"id": "C08", "q": "How does a verification wait handle pending replies without resubmitting the action or sleeping beyond its deadline?", "expect": ["agents/metaviewer_agents/tools.py"]}
+{"id": "C09", "q": "Which recording modes are accepted by the start operation, and what destination fields are required for disk recording?", "expect": ["agents/metaviewer_agents/tools.py"]}
+{"id": "C10", "q": "Which launch target combinations are rejected when registering a browser, program, virtual machine, game, or desktop surface?", "expect": ["core/src/catalog/launch.rs"]}
+{"id": "C11", "q": "What executable and arguments are selected for a game launch, and what game-specific registration constraints apply?", "expect": ["core/src/catalog/launch.rs"]}
+{"id": "C12", "q": "How does the nested program launch differ in its inner arguments and generated surface-create request?", "expect": ["core/src/catalog/launch.rs"]}
+{"id": "C13", "q": "Which environment variables must be set before the bootstrap script proceeds, and what local Electron inputs are accepted?", "expect": ["scripts/bootstrap.sh"]}
+{"id": "C14", "q": "Which test runs before packaging, and how does a failed test affect whether packaging starts?", "expect": ["scripts/bootstrap.sh"]}
+{"id": "C15", "q": "How does the script choose the Node executable and determine the project root used for testing and packaging?", "expect": ["scripts/bootstrap.sh"]}

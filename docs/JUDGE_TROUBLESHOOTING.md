@@ -1,5 +1,51 @@
 # Judge troubleshooting
 
+Answers: error, refusal, failed, why did it fail, what does this code mean, fix
+
+Every refusal of the judge launcher and preflight is a line
+`JUDGE_<CODE>: <problem> -- fix: <command>` on stderr with exit code `2`
+[CITED: scripts/judge/metaviewer-judge.sh]. Unknown shell subcommands or options exit `64`, while invalid `MV_JUDGE_HOME`
+values exit `2` [CITED: scripts/judge/metaviewer-judge.sh]. Fetch argument errors exit `2`
+[CITED: scripts/judge/fetch_assets.py]. Warnings and success markers are not refusals. Find the code below, read the linked source, then apply the
+printed fix. The table rows are checked against their source files by
+`tests/test_judge_troubleshooting_docs.py`.
+
+## Which table do I look in?
+
+Answers: symptom index, where is my error, I saw a message, what was I doing
+
+Choose the table for the operation that failed, then match its exact code.
+
+| What you were doing | Table |
+| --- | --- |
+| doctor, fetch, install or run printed `JUDGE_…` | [Kit install and run](#kit-install-and-run) |
+| Adding, starting or using a capsule | [Capsules](#capsules) |
+| Running a browser goal (`mw_run`, browser) | [Browser goals](#browser-goals) |
+| Running a program goal (`mw_run`, program) | [Program goals](#program-goals) |
+| The run stopped at a login or CAPTCHA page | [Walls](#walls) |
+| The stop command printed a leftover | [Stop](#stop) |
+| Something odd with no code | [Known open bugs](#known-open-bugs) |
+
+## How do I explain a refusal to someone?
+
+Answers: explain a bug, why does this happen, explain to a judge, root cause
+
+Explain the failed source condition and the observed value before proposing a fix.
+
+1. Copy the exact line, including the text after `-- fix:`.
+2. Find the code in the tables below and open the file in its **Source** column.
+3. Search that file for the code (for the launcher: `grep -n 'JUDGE_RAM' scripts/judge/preflight.sh`)
+   and read the condition just above it: that condition is the cause.
+4. Say the cause, the measured value printed in the message, and the fix. A refusal
+   is the launcher protecting the machine or the evidence, not a crash.
+
+Example: `JUDGE_RAM` is printed when `MemAvailable` is below min(MemTotal/4, 20 GiB)
++ 512 MiB [CITED: scripts/judge/preflight.sh:293].
+
+## What do the launcher messages say in general?
+
+Answers: overview, how to read this page, INPUT_UNCERTAIN, grounding
+
 Use this from the kit root on Linux x64 or arm64. Start with the area matching
 what you were doing; use **Ctrl+F** to find the exact code. The first column is
 an exact stable code or literal message,
@@ -11,11 +57,16 @@ from the diagnostic or release maintainer; never paste them literally.
 
 [Quickstart](JUDGE_QUICKSTART.md) · [Tour and architecture verification table](JUDGE_TOUR.md#architecture-support-at-this-snapshot)
 
-This is a source reference, not additional live verification. The tour’s architecture
-table remains the authority for what was checked: x64 Program launch, Host program,
-Desktop window, calculator and program text do not gain verification from this page.
-Its x64 browser-goal result concerns local pages with rules; do not generalize it to
-public browsing. Arm64 kit installation is not separately attested.
+The tour’s architecture table scopes live verification. The release-package x64
+WSL2 evaluation [CITED: maintainer evaluation; raw receipt absent] reported browser rules
+goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent]; Open network with its firewall step reached a public
+site with HTTP 200 [CITED: maintainer evaluation; raw receipt absent], with local network and Docker bridge blocked.
+Agent `gnome-calculator` launched through both Host program and isolated Program;
+Desktop window `gedit` attach, type, resize and closed message, login wall
+`HUMAN_HANDOFF`, and clean stop were observed. Typed calculator `2+3` exited
+with rc 0 [CITED: maintainer evaluation; raw receipt absent] but `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; do not certify
+readback or arithmetic. Muse on x64 and real mouse drag under a window manager
+remain unverified. Arm64 kit installation is not separately attested.
 “No known remedy” means stop and preserve the diagnostic, not guess a command
 or weaken a check.
 
@@ -36,7 +87,7 @@ considering new input ([readback](../tools/mw_run_browser_goal.py)).
 missing host binary available ([lookup](../daemon-adapter/internal/capsule/opening_mode.go)).
 **Host program** needs xpra and runs with real host access; it is not isolated
 ([runtime](../daemon-adapter/internal/capsule/host_xpra.go)). The tour records the
-observed refusal and live-check limits; these source facts do not upgrade them.
+observed launch results and live-check limits; these source facts do not upgrade them.
 `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` means typed but not read by OCR.
 Verdicts ending in `_BOUNDED_ACTIONS_VERIFIED` prove the moves, never the goal.
 
@@ -53,32 +104,37 @@ state before continuing; no source-backed code-specific remedy is available.
 
 ## Kit install and run
 
+Answers: doctor failed, install failed, JUDGE codes, sudo declined, node too old, display not set
+
+Use the failing command’s exact diagnostic; retain its paths and tier when retrying.
+
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
 | `JUDGE_PREFLIGHT_FAIL` | The selected preflight phase found refusals; the count is a summary, not a separate diagnosis. | Read each preceding `JUDGE_…` diagnostic and its `-- fix:`, then run `bash scripts/judge/metaviewer-judge.sh doctor --capsules --before-install` for host prerequisites, or `bash scripts/judge/metaviewer-judge.sh doctor --capsules` for the installed runtime. | [code](../scripts/judge/preflight.sh) |
-| `JUDGE_USAGE` | Invalid command, options, HOME or installation directory. | Run `bash scripts/judge/metaviewer-judge.sh doctor --capsules --before-install`; for an invalid home, `unset MV_JUDGE_HOME`. | [code](../scripts/judge/preflight.sh) |
-| `JUDGE_SUDO` | An administrator step was declined, unavailable or failed. | Run the exact administrator command printed above the refusal yourself, then rerun install. | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_USAGE` | Invalid command, options, HOME or installation directory. | Correct the option named in the diagnostic; shell subcommands are doctor, install, run and stop. For fetch syntax run `python3 scripts/judge/fetch_assets.py --help`. Restore a normal login HOME; use a dedicated absolute MV_JUDGE_HOME without whitespace or unset that override. | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_SUDO` | An administrator step was declined, unavailable or failed; package setup may have failed at sudo authorization or apt-get. | Inspect the printed command and its error. If sudo needs a password or refuses this user, ask an administrator to install the listed packages, then rerun install as your normal user. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_PIDFILE` | The launcher cannot lock or publish its owned process record. | Make the directory named in the diagnostic writable, then rerun the same command. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_RUNNING` | The app or another launcher already owns the run. | For a running app: `bash scripts/judge/metaviewer-judge.sh stop`; for an active launcher: wait for it to finish. | [code](../scripts/judge/metaviewer-judge.sh) |
-| `JUDGE_ASSET` | A release asset, checksum, extraction or receipt cannot be trusted or written. | Follow this occurrence’s printed `-- fix:`; missing sums: `python3 scripts/judge/fetch_assets.py --source "<complete-release-directory>"` (replace the placeholder with the maintainer’s directory). | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_ASSET` | A release asset, checksum, extraction or receipt cannot be trusted or written. | Follow this occurrence’s printed `-- fix:`. For HTTPS fetch, require the matching published release and its independent --sums-sha256 digest; a missing release or digest is a blocker. A local --source directory must contain the complete matching set. Never repair a mismatch by editing SHA256SUMS. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_SYSDEP` | A required system tool or package installation is missing or failed. | Run the exact `sudo apt-get install -y …` printed in `-- fix:`. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_NODE` | The Node runtime is missing or too old. | Run `bash scripts/judge/metaviewer-judge.sh install` to install the kit runtime. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_USERNS` | The required AppArmor profile or loader is unavailable. | Run `bash scripts/judge/metaviewer-judge.sh install`; if the loader is missing, `sudo apt-get install -y apparmor`. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_NPM` | The Node asset lacks npm needed by package verification. | Run `sudo apt-get install -y npm`. | [code](../scripts/judge/metaviewer-judge.sh) |
-| `JUDGE_SMOKE` | Package verification, tool dependency installation or application smoke failed. | Read the log named in `-- fix:`; restore the full kit for a missing tool, or replace the tarball for a verification failure. For display failure, check DISPLAY/xvfb-run and the AppArmor profile before reinstalling. | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_ROOT` | Electron cannot run safely as root. | Log in as a normal user and re-run without sudo; install requests its own administrator steps. Never disable the sandbox. | [code](../scripts/judge/preflight.sh) |
+| `JUDGE_SMOKE` | Package verification, tool dependency installation or application smoke failed. | Read the log named in `-- fix:`; restore the full kit for a missing tool, or replace the tarball for a verification failure. Use a non-root user and check DISPLAY/xvfb-run and the AppArmor profile before reinstalling. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_IMAGE` | A required capsule image is missing, incompatible or could not load. | Run `bash scripts/judge/metaviewer-judge.sh install --capsules`; if Open firewall is active but its image is absent, obtain the compatible kit named in the diagnostic. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_PROFILE` | The profile pool or its private directories are invalid. | Run `bash scripts/judge/metaviewer-judge.sh install --capsules`; for an invalid custom pool use the printed diagnostic before provisioning it. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_NET` | Capsule routes, network, proxy or private proxy metadata are not ready. | Run `bash scripts/judge/metaviewer-judge.sh install --capsules` for missing network setup. For overlapping routes or a mismatched existing proxy, follow the printed operator recovery diagnostic; no general automatic repair is supplied. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_NOT_INSTALLED` | The app or valid installation receipt is absent. | Run `bash scripts/judge/metaviewer-judge.sh install` (add `--capsules` for live capsules). | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_ARCH` | The machine architecture is unsupported. | Use Linux x64 or arm64; no command converts an incompatible host. | [code](../scripts/judge/preflight.sh) |
-| `JUDGE_BUNDLE_ARCH` | The kit or its binaries target a different architecture. | Obtain the tarball for the architecture printed by the script, then run `bash scripts/judge/metaviewer-judge.sh install`. | [code](../scripts/judge/preflight.sh) |
+| `JUDGE_BUNDLE_ARCH` | The kit or its binaries target a different architecture. | Obtain assets for the architecture printed by the script, then rerun install. If no matching assets are published, use the documented source-build prerequisites or stop; never rename x64 files to arm64. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_DISPLAY` | No reachable X display is proved. | For headless installation: `xvfb-run -a bash scripts/judge/metaviewer-judge.sh install --capsules`; if xdpyinfo is missing: `sudo apt-get install -y x11-utils`. For visible use, choose a reachable desktop DISPLAY. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_XDG_RUNTIME` | The login runtime directory is absent or foreign-owned. | Use a desktop logind session; on WSL enable `systemd=true` under `[boot]` in `/etc/wsl.conf`, then run `wsl --shutdown` from Windows. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_SHM` | Shared memory is not tmpfs or has insufficient free capacity. | Free shared memory; for an existing tmpfs at the normal location the source suggests `sudo mount -o remount,size=4g /dev/shm` [CITED: preflight.sh]. Follow the printed path if configured differently. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_RAM` | Available memory cannot be read or is below the admission floor. | Close applications or add RAM; on WSL raise `memory=` in `.wslconfig`. For unreadable meminfo, mount `/proc` and rerun. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_CPUSET` | Explicitly requested CPU pinning includes unusable CPUs. | Use a host satisfying the cpuset printed in the diagnostic; no automatic repinning remedy is supplied. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_DOCKER_HOST` | A remote/rootless Docker override is set. | Run `unset DOCKER_HOST DOCKER_CONTEXT`. | [code](../scripts/judge/preflight.sh) |
-| `JUDGE_DOCKER` | Docker is inaccessible, rootless or uses a nonlocal endpoint. | For group access: `sudo usermod -aG docker "$USER"`, then log out and in. For a nonlocal context: `docker context use default`. For rootless mode, install rootful Docker and run `systemctl --user disable --now docker` as directed. | [code](../scripts/judge/preflight.sh) |
+| `JUDGE_DOCKER` | Docker is inaccessible, rootless or uses a nonlocal endpoint. | Without Docker, omit `--capsules` and follow [app-only judging](JUDGE_NO_DOCKER.md). For group access: `sudo usermod -aG docker "$USER"`, then log out and in. For a nonlocal context: `docker context use default`. For rootless mode, install rootful Docker and run `systemctl --user disable --now docker` as directed. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_DOCKER_DESKTOP` | Docker Desktop cannot bind the required host paths. | Install docker-ce inside the distro and stop Docker Desktop integration; no installation command is supplied by this refusal. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_RAM_STALE` | Dead-owner admission records remain, or the inspection itself is unavailable. | When dead owners are proved: `python3 tools/mv_ram_admission.py reclaim --dry-run`, inspect it, then `python3 tools/mv_ram_admission.py reclaim --apply`. A failed or absent inspection is not a clean result. | [code](../scripts/judge/preflight.sh) |
 | `JUDGE_DISK` | The installation or Docker filesystem lacks free space. | Run the exact `df -h …` printed in `-- fix:` and free space on the named filesystem. | [code](../scripts/judge/preflight.sh) |
@@ -270,6 +326,15 @@ state before continuing; no source-backed code-specific remedy is available.
 
 ## Capsules
 
+Answers: capsule failed, Add capsule refused, RAM admission, image missing
+
+**Reused X11 id:** a closed Desktop window tile can retain an id later reused by
+a new window. **Add** then refuses because the window is already attached.
+Press **Stop** on the old tile, including a tile showing the closed message,
+then refresh and select the intended live window. Closing with **✕** only hides
+it. The x64 observation is not permission to bypass the binding check
+[CITED: operator evaluation, c26/c27; [binding check](../ui/electron/roleHost.js)].
+
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
 | `MW_IDENTITY` | The identity is invalid or unavailable. | Select an existing identity and run again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
@@ -403,7 +468,7 @@ state before continuing; no source-backed code-specific remedy is available.
 | `XPRA_BINDING_REFUSED` | The requested surface cannot use this Xpra binding. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_BOUNDS_REFUSED` | The Xpra tile geometry is invalid or outside supported bounds. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_HOST_CLOSED` | The host tile closed while the operation was pending. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
-| `XPRA_MODE_REFUSED` | Changing the native Xpra input mode failed. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
+| `XPRA_MODE_REFUSED` | Changing the native Xpra input mode failed; on x64, Human Program `gedit` closed its window with this refusal [CITED: maintainer evaluation; raw receipt absent]. | Preserve the diagnostic and stop that tile. Human Program `gedit` is not a verified demo route; use the measured Agent calculator or attach an existing harmless `gedit` through Desktop window for those distinct flows. | [code](../ui/electron/roleHost.js) |
 | `XPRA_MODE_UNPROVEN` | The native acknowledgement did not prove the requested Xpra input mode. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_PAYLOAD_REFUSED` | The Xpra operation payload is unsupported or invalid. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `XPRA_ROLE_OWNERSHIP` | The Xpra role or current surface ownership cannot authorize the operation. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
@@ -478,9 +543,11 @@ state before continuing; no source-backed code-specific remedy is available.
 | `UNCHANGED` | The frame request was refused by the declared DISPLAY_READER_REASONS guard. | No known remedy in this source; preserve the exact diagnostic for the operator. | [code](../ui/electron/displayReader.js) |
 | `UNPUBLISHED` | The frame request was refused by the declared FRAME_REASONS guard. | No known remedy in this source; preserve the exact diagnostic for the operator. | [code](../ui/electron/framePort.js) |
 
-`MW_RUN_ATTACH` / configuration: use the running app’s **Copy env path**, then follow the [tour attachment setup](JUDGE_TOUR.md#prepare-commands-for-your-ai). Never guess a configuration path.
+`MW_RUN_ATTACH` / configuration: resolve `${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env` from the original terminal runtime, then follow [the attachment setup](AGENT_ENTRY.md#attachment-and-identity). Never guess a configuration path.
 
 ## Browser goals
+
+Answers: browser goal failed, mw_run browser, text mismatch
 
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
@@ -501,6 +568,8 @@ state before continuing; no source-backed code-specific remedy is available.
 
 
 ## Program goals
+
+Answers: program goal failed, calculator, uncertified text
 
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
@@ -540,12 +609,17 @@ state before continuing; no source-backed code-specific remedy is available.
 | `MW_PROGRAM_TEXT_REFUSED` | Program text input was refused. | Inspect the report and editor state before considering another input. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `MW_PROGRAM_TEXT_STEPS` | Program text input requires a single bounded step. | Use --steps 1 with --text. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `MW_PROGRAM_UNKNOWN_OBSERVATION` | The program observation cannot be classified safely. | Inspect the capsule and acquire a supported observation. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_REQUEST` | The navigation request is unsupported. | Use focused-key with one arrow or Enter, one step, rules and no text. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_HOST_ONLY` | Navigation requires an Agent Host program custody binding. | Select a live Agent Host program before running again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
+| `MW_PROGRAM_KEY_REFUSED` | The navigation input was refused. | Inspect the report and acquire a fresh observation before planning again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
 | `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE` | Text was typed, but OCR did not read it back; a successful exit does not certify the text. | Take control and inspect the editor; do not blindly type again. No command to force readable OCR is supplied. | [code](../tools/mw_run_program.py) |
 | `PROGRAM_BOUNDED_ACTIONS_VERIFIED` | The bounded moves were verified, never the whole goal. | Inspect the fresh capsule output and receipts; for a calculator, inspect the displayed result separately. | [code](../tools/mw_run_program.py) |
 
 
 
 ## Walls
+
+Answers: login wall, CAPTCHA, handoff, human required
 
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
@@ -561,14 +635,35 @@ state before continuing; no source-backed code-specific remedy is available.
 
 ## Stop
 
+Answers: stop failed, leftovers, leak, timeout
+
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
+| `JUDGE_SMOKE_ACTIVE` | An interrupted install left a live group or ownership evidence that cannot be verified. | Inspect `run/smoke-processes/*.pid` (leader PID and `/proc` start time) and `run/smoke-roots/*.json` under `MV_JUDGE_HOME`. Let the exact recorded group exit, then re-run `install`; it reconciles exited groups and their private roots without sending signals. Preserve malformed or reused-PID records for manual inspection; never kill a guessed PID. | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_SMOKE_STATE` | An interrupted install left a live group or ownership evidence that cannot be verified. | Inspect `run/smoke-processes/*.pid` (leader PID and `/proc` start time) and `run/smoke-roots/*.json` under `MV_JUDGE_HOME`. Let the exact recorded group exit, then re-run `install`; it reconciles exited groups and their private roots without sending signals. Preserve malformed or reused-PID records for manual inspection; never kill a guessed PID. | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_HOME_PATH` | The judge home cannot fit the filesystem name or path limits. | Set `MV_JUDGE_HOME` to a shorter dedicated directory, such as `$HOME/mv-judge`, and retry. Ordinary long home names use the recorded short smoke root automatically. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_STOP_CLEAN` | The stop check found no scoped leftovers; the shared egress proxy is excluded. | Inspect any saved evidence; no further cleanup command is required by this result. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `JUDGE_STOP_TIMEOUT` | The owned app did not exit after termination. | Only if you accept losing unsaved capsule state, run the exact `kill -KILL <pid>` printed in the refusal; substitute only that reported owned PID. | [code](../scripts/judge/metaviewer-judge.sh) |
-| `JUDGE_STOP_LEAK` | A scoped container, socket, RAM root or admission record remains. | Inspect its exact name and ownership. Use only this occurrence’s printed `-- fix:` after confirming the owner exited; private runtime roots have no automatic removal command. | [code](../scripts/judge/metaviewer-judge.sh) |
+| `JUDGE_STOP_LEAK` | A scoped container, socket, RAM root, smoke ownership record or admission record remains. | Inspect its exact name and ownership. Use only this occurrence’s printed `-- fix:` after confirming the owner exited; private runtime roots have no automatic removal command. | [code](../scripts/judge/metaviewer-judge.sh) |
 | `CAPSULE_STOP_UNAVAILABLE` | The host does not provide a surface-stop operation. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 | `CAPSULE_STOP_UNPROVEN` | The stop response did not prove that the requested surface was destroyed. | No known remedy in this source; preserve the exact code and host diagnostic for the operator. | [code](../ui/electron/roleHost.js) |
 
 `JUDGE_STOP_CLEAN` excludes the shared `srf-egress-proxy`, which intentionally remains running. The leak census is not proof that every private runtime root has disappeared. Inspect RAM evidence before stopping; remove only resources whose ownership and exited processes are established ([stop implementation](../scripts/judge/metaviewer-judge.sh)).
 
+Standalone package smoke can refuse with `PKG_SMOKE_SOCKET_PATH` when its temporary directory cannot hold the core or Electron socket. Set `TMPDIR` to a short private directory under `/tmp`, or use the judge installer, which records a short smoke root independently of `MV_JUDGE_HOME` ([package tool](../ui/tools/package.js)).
+
 This troubleshooting mandate is limited to the linked source code and the supplied tour’s verification claims.
+
+## Known open bugs
+
+Answers: known issues, open bugs, unexplained, pycache, terminal closed, journal full
+
+These were observed on live runs and are not fixed in this release [CITED: maintainer evaluation; raw receipt absent].
+
+| Symptom | Cause | Workaround |
+| --- | --- | --- |
+| After an `mw_run`, a developer `--arm64` start holds with "exhaustive manifest inventory" | Running Python leaves `__pycache__` bytecode in the package tree, which the exhaustive inventory then rejects | Remove the `__pycache__` directories from the package tree, then start again |
+| The paired terminal exited after a very long typed line | ABSENT — do not invent: cause not diagnosed | Keep typed lines short; reopen the terminal from the dock |
+| A long session ends by itself | A full session journal ends the session by design | Start a fresh session for each long run |
+| Switching a Host program between human and agent restarts it | The program is relaunched for the new controller | Save work in the program before switching |
+| Replay with `mv-replay` reports Invalid on a good session | The session path was relative, a symlink or a copy | Pass the absolute real path of the original session directory |

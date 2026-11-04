@@ -1,1 +1,0 @@
-- The browser goal lane can run on the compiled Wender runtime, without importing from its directory.

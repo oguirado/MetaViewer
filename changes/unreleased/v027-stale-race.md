@@ -1,1 +1,0 @@
-- Write the browser goal dispatch journal before the final frame read, so a slow durable write no longer invalidates the frame the proposal binds to.

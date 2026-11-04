@@ -261,6 +261,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		return loopErr
 	}
 	first := true
+	capsuleHelloSeen := false
 	var ctrlGate <-chan struct{}
 	for {
 		raw, err := framer.Read(ctx)
@@ -286,18 +287,23 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			fail(err)
 			return exitLoop(err)
 		}
-		if in.Schema != "envelope/v0.2" || in.From != registration.From || in.To != registration.To || in.SessionID != registration.SessionID || in.Seq == 0 || in.Nonce == "" {
+		if in.Schema != ipc.EnvelopeSchema(in.Body) || in.From != registration.From || in.To != registration.To || in.SessionID != registration.SessionID || in.Seq == 0 || in.Nonce == "" {
 			err = errors.New("registered core route refused")
 			fail(err)
 			return exitLoop(err)
 		}
 		isHello := first && body.Schema == "hello/v0.2" && body.Component == "core"
+		if (in.Schema == "capsule_envelope/v0.2" || in.Schema == "rewind_envelope/v0.2") && !capsuleHelloSeen {
+			err = errors.New("authenticated core hello required before requests")
+			fail(err)
+			return exitLoop(err)
+		}
 		isPolicyRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "POLICY"
 		frameMu.Lock()
 		_, sentFrame := frameIDs[body.ProposalID]
 		frameMu.Unlock()
 		isFrameRefusal := body.Schema == "action_verdict/v0.2" && body.Decision == "refused" && body.ReasonCode == "STALE_FRAME" && sentFrame
-		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" {
+		if !isHello && !isPolicyRefusal && !isFrameRefusal && body.Schema != "metaviewer.role_switch/v0.3" && body.Schema != "capsule_state_request/v0.2" && body.Schema != "surface_request/v0.2" && body.Schema != "record_request/v0.2" && body.Schema != "headless_request/v0.2" && body.Schema != "guest_command_request/v0.2" && body.Schema != "rewind_request/v0.2" {
 			err = errors.New("core surface request required")
 			fail(err)
 			return exitLoop(err)
@@ -327,6 +333,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 			continue
 		}
 		if isHello {
+			capsuleHelloSeen = true
 			continue
 		}
 		// [TARGET, unit decision] The core liveness probe is answered here, in
@@ -346,7 +353,7 @@ func connectStreaming(ctx context.Context, cfg ipc.Config, policy ipc.Policy, re
 		_ = json.Unmarshal(in.Body, &op)
 		target := dataIn
 		item := queuedEnvelope{in: in, wait: ctrlGate}
-		if op.Op == "take_control" || op.Op == "release_control" {
+		if op.Op == "take_control" || op.Op == "release_control" || body.Schema == "metaviewer.role_switch/v0.3" {
 			done := make(chan struct{})
 			ctrlGate = done
 			item = queuedEnvelope{in: in, done: done}

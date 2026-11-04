@@ -1,0 +1,140 @@
+{
+  "unit": "bytes",
+  "results": [
+    {
+      "id": "H01",
+      "q": "Why does the IPC transport configuration reject a zero or missing hello timeout instead of substituting a default?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H02",
+      "q": "What happens when a transport configuration sets the maximum frame size above the frozen ceiling?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H03",
+      "q": "What upper bound does the transport policy place on the idle read timeout for later frames on a connection?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H04",
+      "q": "How does configuration validation handle an empty socket path, and which other fields must be at least 1 for validation to pass?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H05",
+      "q": "Why does the resource inventory loader refuse a configuration in which the identity provisioner field is present but set to null?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H06",
+      "q": "What happens when an artifact file's contents do not hash to the digest recorded in its pin?",
+      "any": {
+        "rank": null,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H07",
+      "q": "How does the inventory configuration constrain where its root directory is allowed to live and what its journal path must be?",
+      "any": {
+        "rank": 4,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H08",
+      "q": "What does the producer compare against its stored root stat to detect that the inventory root directory has been swapped out since it was opened?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H09",
+      "q": "Why are identity profiles with protected identity prefixes left out of the template used for new identity profiles?",
+      "any": {
+        "rank": 1,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H10",
+      "q": "What happens to a dynamically allocated identity profile once none of its bindings remain active?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H11",
+      "q": "How is a display chosen for a new dynamic identity profile when some displays are already reserved by static profiles?",
+      "any": {
+        "rank": 1,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H12",
+      "q": "Why does the public profile lookup refuse an ID that has a static entry unless that entry was created dynamically?",
+      "any": {
+        "rank": null,
+        "abstained": true
+      }
+    },
+    {
+      "id": "H13",
+      "q": "Why does the guest command profile loader reject a configuration template whose owner or runtime root differs from the profile's own values?",
+      "any": {
+        "rank": null,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H14",
+      "q": "How does loading a rewind profile change the set of runtime modules the loader requires?",
+      "any": {
+        "rank": null,
+        "abstained": false
+      }
+    },
+    {
+      "id": "H15",
+      "q": "What happens when a profile JSON file repeats a key within the same object, or has extra content after the top-level value?",
+      "any": {
+        "rank": null,
+        "abstained": false
+      }
+    }
+  ],
+  "totals": {
+    "any": {
+      "positive": 15,
+      "top1": 2,
+      "top5": 3,
+      "negative": 0,
+      "abstained": 0,
+      "max_bytes": 1730
+    }
+  },
+  "provenance": {
+    "dataset_sha256": "bbb8fc4b3809bf7cf641efec482b50436c6ec85c78679d9607ba2bfe285c9d02",
+    "router_sha256": "4d66b8cc59cfe7630c15f939e498c87e757130c5a7315d9ae519da687ebed01d",
+    "measurement": "MEASURED"
+  }
+}

@@ -1,1 +1,0 @@
-- Keep native refusal text in the E1 rehearsal trace.

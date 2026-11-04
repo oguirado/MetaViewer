@@ -1,5 +1,5 @@
 /**
- * MetaViewer settings model (mvui33): mv-light (primary) / mv-dark schemes,
+ * MetaViewer settings model (mvui33): mv-dark (primary) / mv-light schemes,
  * compact/comfortable density, live wall fps presets and recording fps,
  * persisted through an injected host settings interface (XDG on the host
  * side). Never localStorage, never the repository.
@@ -24,7 +24,7 @@
  */
 
 /**
- * Closed MetaViewer scheme set. mv-light is primary.
+ * Closed MetaViewer scheme set. mv-dark is primary.
  * @type {ReadonlyArray<string>}
  */
 export const MV_SCHEMES = Object.freeze(['mv-light', 'mv-dark']);
@@ -33,7 +33,7 @@ export const MV_SCHEMES = Object.freeze(['mv-light', 'mv-dark']);
  * Primary scheme and decode fallback.
  * @type {string}
  */
-export const MV_PRIMARY_SCHEME = 'mv-light';
+export const MV_PRIMARY_SCHEME = 'mv-dark';
 
 /**
  * MetaViewer density default. Compact only until mvui33; the closed set is

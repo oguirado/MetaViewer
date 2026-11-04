@@ -1,0 +1,28 @@
+{
+  "schema": "capsule_envelope/v0.2",
+  "msg_id": "message-demo",
+  "ts_ns": 1000000,
+  "from": {
+    "component": "agent",
+    "instance": "agent-demo"
+  },
+  "to": {
+    "component": "core",
+    "instance": "core-demo"
+  },
+  "session_id": "session-demo",
+  "seq": 1,
+  "nonce": "nonce-demo",
+  "body": {
+    "schema": "headless_request/v0.2",
+    "request_id": "request-2",
+    "op": "run",
+    "params": {
+      "workload_id": "workload-example",
+      "generation": 1,
+      "job_id": "job-example",
+      "operation": "sumsq",
+      "n": 10
+    }
+  }
+}

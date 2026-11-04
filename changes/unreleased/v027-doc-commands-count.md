@@ -1,1 +1,0 @@
-- The documented command test now covers the two program text commands.

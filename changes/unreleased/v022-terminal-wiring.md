@@ -1,1 +1,0 @@
-- Terminal: the packaged app passes its resources path to the terminal host and refusals keep their real code in the terminal wall.
