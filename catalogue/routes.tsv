@@ -219,8 +219,13 @@ microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
 microvm-2ad050142531	changes/unreleased/microvm-rewind-theme.md
 mutatio-9bd8e2d9afd9	changes/unreleased/mutation-regression-tests.md
 mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
+mwparti-1980adad520e	changes/unreleased/mw-partial-text-refusal.md
+mwpriva-76f7c208b48f	changes/unreleased/mw-private-run-parents.md
 mw-readback-textof.md	changes/unreleased/mw-readback-textof.md
+mw-report-deadline.md	changes/unreleased/mw-report-deadline.md
+mw-report-outcome.md	changes/unreleased/mw-report-outcome.md
 mw-sleep-ns.md	changes/unreleased/mw-sleep-ns.md
+mwtermi-843dba820964	changes/unreleased/mw-terminal-deadline.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
