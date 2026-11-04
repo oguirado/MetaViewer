@@ -231,6 +231,7 @@ mwtermi-843dba820964	changes/unreleased/mw-terminal-deadline.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
+opfix-arm-cards.md	changes/unreleased/opfix-arm-cards.md
 opfixco-cf56b9a29339	changes/unreleased/opfix-copy-identifier.md
 opfixde-af5b2743aa57	changes/unreleased/opfix-desktop-recovery.md
 opfixla-694d6cb6954e	changes/unreleased/opfix-launcher-focus-probe.md
@@ -240,6 +241,8 @@ opfix2c-e8850a6263c8	changes/unreleased/opfix2-context-focus.md
 opfix2c-d46a8141f71e	changes/unreleased/opfix2-copy-capsule-id.md
 opfix2r-06d31b5099f6	changes/unreleased/opfix2-retain-capsule-drawers.md
 opfix2s-f24cf262333c	changes/unreleased/opfix2-separate-terminal-panel.md
+opfix2t-07c2e902ca62	changes/unreleased/opfix2-terminal-geometry.md
+opfix2t-c6e5a419b2e9	changes/unreleased/opfix2-terminal-verification.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
 p18-opening-modes.md	changes/unreleased/p18-opening-modes.md
@@ -3126,6 +3129,7 @@ nesting.test.js	ui/test/nesting.test.js
 nesting-c224ecae31d5	ui/test/nestingStartup.test.js
 netcopy-panel.test.js	ui/test/netcopy-panel.test.js
 operator-stubs.mjs	ui/test/operator-stubs.mjs
+opfix-arm-cards.cjs	ui/test/opfix-arm-cards.cjs
 opfix-copy.cjs	ui/test/opfix-copy.cjs
 opfixde-a65fc8a18cb5	ui/test/opfix-desktops-visual.js
 opfix-desktops.cjs	ui/test/opfix-desktops.cjs
@@ -3141,6 +3145,7 @@ opfixme-9fed732a954c	ui/test/opfix-meta-examples.test.js
 opfix-recording.cjs	ui/test/opfix-recording.cjs
 opfix-recording.html	ui/test/opfix-recording.html
 opfix-recording.js	ui/test/opfix-recording.js
+opfix2g-d55bf7b8e845	ui/test/opfix2-geometry-nonce.test.js
 opfix2s-4a2285d09741	ui/test/opfix2-separation.test.js
 originc-568d530772a3	ui/test/origin-contract.test.js
 overlay-e9a006de4470	ui/test/overlay-surface-scope.test.js
