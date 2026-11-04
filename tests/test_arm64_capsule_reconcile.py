@@ -66,6 +66,54 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn('durable_complete_graphical_allocation_inventory', result['missing_proofs'])
         self.assertTrue(self.marker.exists())
 
+    def test_collected_scope_may_omit_main_pid_only_with_confirmed_absent_cgroup(self):
+        bound = {'unit': self.unit, 'invocation': 'a' * 32,
+                 'cgroup': '/own/group', 'device': 1, 'inode': 2}
+        observed = {'LoadState': 'not-found', 'ActiveState': 'inactive',
+                    'ControlGroup': '', 'InvocationID': ''}
+        class Observer:
+            def unit(self, unit): return observed
+            def cgroup(self, group): return None
+        evidence = r.prove_unit(Observer(), bound)
+        self.assertEqual(evidence['unit_state'], observed)
+        self.assertNotIn('MainPID', evidence['unit_state'])
+        self.assertIsNone(evidence['cgroup_state'])
+        with patch.object(r.Observations, '_query', return_value=b'LoadState=not-found\nActiveState=inactive\nControlGroup=\nInvocationID=\n'):
+            self.assertEqual(r.Observations().unit(self.unit), observed)
+
+    def test_missing_main_pid_does_not_admit_service_loaded_active_or_unknown_scope(self):
+        base = {'LoadState': 'not-found', 'ActiveState': 'inactive',
+                'ControlGroup': '', 'InvocationID': ''}
+        for unit, changes in [(self.unit.replace('.scope', '.service'), {}),
+                              (self.unit, {'LoadState': 'loaded'}),
+                              (self.unit, {'ActiveState': 'active'}),
+                              (self.unit, {'ActiveState': 'failed'}),
+                              (self.unit, {'ControlGroup': '/own/group'})]:
+            observed = {**base, **changes}
+            raw = ''.join(k + '=' + v + '\n' for k, v in observed.items()).encode()
+            class Observer:
+                def unit(self, requested): return observed
+                def cgroup(self, group): self.fail('incomplete unit must refuse first')
+            with self.subTest(unit=unit, changes=changes):
+                with self.assertRaises(r.Refused):
+                    r.prove_unit(Observer(), {'unit': unit, 'invocation': 'a' * 32,
+                                 'cgroup': '/own/group', 'device': 1, 'inode': 2})
+                with patch.object(r.Observations, '_query', return_value=raw), self.assertRaises(r.Refused):
+                    r.Observations().unit(unit)
+
+    def test_collected_scope_without_main_pid_still_rejects_live_or_replaced_cgroup(self):
+        bound = {'unit': self.unit, 'invocation': 'a' * 32,
+                 'cgroup': '/own/group', 'device': 1, 'inode': 2}
+        observed = {'LoadState': 'not-found', 'ActiveState': 'inactive',
+                    'ControlGroup': '', 'InvocationID': ''}
+        for group in ({'device': 1, 'inode': 2, 'members': [123], 'populated': 1},
+                      {'device': 1, 'inode': 3, 'members': [], 'populated': 0}):
+            class Observer:
+                def unit(self, unit): return observed
+                def cgroup(self, path): return group
+            with self.subTest(group=group), self.assertRaises(r.Refused):
+                r.prove_unit(Observer(), bound)
+
     def test_rewind_plan_boolean_preserves_root_identity(self):
         short = self.directory / ('metaviewer-arm64-' + self.run + '-')
         short.mkdir(mode=0o700)
