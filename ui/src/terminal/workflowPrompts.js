@@ -45,7 +45,7 @@ const tasks = {
     'From the MetaViewer checkout, for browsers run:',
     "PYTHONPATH=agents python3 -m metaviewer_agents.mw_run --surface-kind browser --identity '<browser-profile>' --planner rules --goal 'Exact visible control name' --steps 1",
     "Browser goals must name an exact visible control; for text replace --steps 1 with --text 'Synthetic value' --key Enter --steps 3.",
-    'For programs use --surface-kind program and the copied program identity with one exact observed name; clicks only.',
+    'For programs use --surface-kind program and the copied identity; tools/mw_run_program.md covers clicks, explicit text and Host-only focused-key with --planner rules, --steps 1 and no text.',
     'Use private RAM XDG_STATE_HOME under /dev/shm: export XDG_STATE_HOME="$(mktemp -d /dev/shm/metaviewer-goal.XXXXXX)".',
     '--planner muse sends marks to authenticated Muse Code; without an account keep rules.',
     'A login wall or CAPTCHA stops with rc 4: person handles it, releases control, then observes a fresh goal.',
@@ -72,7 +72,7 @@ export function workflowPrompt(kind) {
   return assertSafeWorkflowPrompt([
     ...attachment, '', ...tasks[/** @type {keyof typeof tasks} */ (kind)], '',
     'Copy ID for AI line (paste here): <operator-pasted capsule identity line>',
-    'Programs support clicks only; browser goals also support verified text and optional Enter.',
+    'Programs support clicks and explicit text; Agent Host programs also allow focused-key with Up, Down, Left, Right or Enter. Browser goals support verified text and optional Enter.',
     'A verified action is not a finished goal; check the observed outcome separately.',
     'Keep the operator present. Stop on refusal, uncertain delivery, login or CAPTCHA.',
     'rc 0 verifies bounded actions; rc 5 means INPUT_UNCERTAIN: never retry; rc 6 means inspect and repair the refusal.',
