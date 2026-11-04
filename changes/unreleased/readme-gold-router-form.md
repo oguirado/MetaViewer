@@ -1,0 +1,1 @@
+- Rewrite `README.md` in the routed GOLD form: node block `mv.node.v1`, reading map with a question-to-tool table and reading tracks, result contract, gates, engineering triptych, capsule coverage by platform, agent operating protocol, measured results, limitations, reproducibility, pending measurements and the private-component boundary.
