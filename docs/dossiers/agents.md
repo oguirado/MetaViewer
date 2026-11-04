@@ -344,7 +344,8 @@ Answers: known bugs, __pycache__ after mw_run, arm64 holds, exhaustive manifest 
 Answers: what was not verified, what could not be run, how far to trust this
 
 - This box has no KVM and no docker daemon: nothing ARM64, no capsule, no live run of `mw_run` was executed for this dossier. Live facts are the operator's, tagged as such.
-- Run for this dossier: the span checker over every citation in `route/study/agents.jsonl`, and the Python unit tests in `agents/tests` (result in the pull request).
+- Run for this dossier [MEASURED]: the span checker over every citation in `route/study/agents.jsonl` (all FRESH), and `bash tools/gate.sh --leg agents`: 905 tests ran, 835 passed, 70 errored, so the leg reported FAIL. 69 of the errors are `DependencyLockError: MV_WENDER_ROOT is required`, because the private wender-agent checkout is not present on this box (`agents/metaviewer_agents/perception/deps_lock.py:352`). One is `test_holdings_e2e` set-up, because cargo could not fetch `serde` offline. Expect the same on any clone without those two inputs.
+- That gate run left `__pycache__` directories under `agents/metaviewer_agents/` [MEASURED], which matches the bytecode side of the first open bug.
 - `agents/metaviewer_agents/export.py` and `agents/metaviewer_agents/loop_trials.py` are covered only by rows in the study file; they have no callers outside tests [MEASURED: grep].
 - The full error-code list is owned by the debugging lane; the codes above are those read in these files.
 - Findings were written by a model and checked byte-for-byte against the code, but not reviewed by a person.
