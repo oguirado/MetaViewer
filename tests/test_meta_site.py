@@ -32,33 +32,33 @@ class MetaSiteTests(unittest.TestCase):
     def test_fallback_is_read_only_and_user_site_wins_entirely(self):
         before = {p.relative_to(BUILTIN): hashlib.sha256(p.read_bytes()).hexdigest()
                   for p in BUILTIN.rglob('*') if p.is_file()}
-        self.assertEqual(site_root(self.home, 'meta-ai'), BUILTIN)
+        self.assertEqual(site_root(self.home, 'sample-chat'), BUILTIN)
         self.assertEqual(list(self.home.iterdir()), [])
-        user = self.home / 'sites/meta-ai'
+        user = self.home / 'sites/sample-chat'
         user.mkdir(parents=True)
         # Even an incomplete user site wins: never mix in built-in workflows.
-        self.assertEqual(site_root(self.home, 'meta-ai'), self.home)
+        self.assertEqual(site_root(self.home, 'sample-chat'), self.home)
         self.assertFalse((user / 'workflows/ask.json').exists())
         after = {p.relative_to(BUILTIN): hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in BUILTIN.rglob('*') if p.is_file()}
         self.assertEqual(before, after)
 
     def test_negative_invalid_missing_file_and_symlink(self):
-        for name in ('../meta-ai', '/meta-ai', 'meta-ai/x', '', 'META'):
+        for name in ('../sample-chat', '/sample-chat', 'sample-chat/x', '', 'META'):
             with self.assertRaises(HomeError):
                 site_root(self.home, name)
         with self.assertRaisesRegex(HomeError, 'MW_SITE_MISSING'):
             site_root(self.home, 'not-provided')
         sites = self.home / 'sites'
         sites.mkdir()
-        site = sites / 'meta-ai'
+        site = sites / 'sample-chat'
         site.write_text('invalid')
         with self.assertRaisesRegex(HomeError, 'MW_SITE_PATH'):
-            site_root(self.home, 'meta-ai')
+            site_root(self.home, 'sample-chat')
         site.unlink()
         site.symlink_to(self.temp_root / 'absent')
         with self.assertRaisesRegex(HomeError, 'MW_HOME_SYMLINK'):
-            site_root(self.home, 'meta-ai')
+            site_root(self.home, 'sample-chat')
 
     def test_demo_check_offline_uses_builtin_without_installing(self):
         spec = importlib.util.spec_from_file_location('meta_demo_test', ROOT / 'tools/mv_demo.py')
@@ -68,11 +68,11 @@ class MetaSiteTests(unittest.TestCase):
         # protocol. The operator's real MemoryWeb checkout is checked separately.
         checkout = self.temp_root / 'authoring'
         (checkout / 'tools').mkdir(parents=True)
-        source_digest = hashlib.sha256((BUILTIN / 'sites/meta-ai/site.json').read_bytes()).hexdigest()
+        source_digest = hashlib.sha256((BUILTIN / 'sites/sample-chat/site.json').read_bytes()).hexdigest()
         (checkout / 'tools/build_index.py').write_text(
             'import hashlib,pathlib,sys\n'
             'root=pathlib.Path(sys.argv[sys.argv.index("--root")+1])\n'
-            'site=root/"sites/meta-ai/site.json"\n'
+            'site=root/"sites/sample-chat/site.json"\n'
             f'assert hashlib.sha256(site.read_bytes()).hexdigest()=={source_digest!r}\n'
             'index=root/"checked"\n'
             'if "--check" in sys.argv: assert index.read_text()=="validated"\n'
@@ -80,7 +80,7 @@ class MetaSiteTests(unittest.TestCase):
         with patch.object(demo, 'admitted_home', return_value=self.home), \
              patch.object(demo, 'authoring_checkout', return_value=checkout), \
              contextlib.redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(demo.main(['check', '--site', 'meta-ai']), 0)
+            self.assertEqual(demo.main(['check', '--site', 'sample-chat']), 0)
         self.assertTrue(json.loads(output.getvalue())['result']['validated'])
         self.assertEqual(list(self.home.iterdir()), [])
         self.assertFalse((checkout / 'sites').exists())
