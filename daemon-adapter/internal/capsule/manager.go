@@ -1181,8 +1181,11 @@ func (m *Manager) destroy(ctx context.Context, r Request, version string) ([]jso
 		return nil, e
 	}
 	b, ok := m.bindings[q.SurfaceID]
-	if !ok || b.Surface.State == "destroyed" || m.destroying[q.SurfaceID] {
+	if !ok || b.Surface.State == "destroyed" {
 		return nil, fault("surface", "unknown or terminal surface")
+	}
+	if m.destroying[q.SurfaceID] {
+		return nil, fault("surface", "destroy already in progress")
 	}
 	if m.hasPending(q.SurfaceID) {
 		return nil, fault("POLICY", "input must be drained before destroy")

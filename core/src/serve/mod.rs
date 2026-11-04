@@ -52,6 +52,7 @@
 mod capture;
 mod guest_command;
 mod headless;
+mod journal_end;
 mod layout;
 mod rewind;
 mod timings;
@@ -218,6 +219,7 @@ pub struct Server {
     capture: crate::record::capture::Host,
     frame_timings: timings::Writer,
     frame_clock: Option<timings::Clock>,
+    journal_end: Option<journal_end::SessionEnd>,
 }
 impl Server {
     pub fn open(config: Config, state_dir: &Path, uid: u32) -> Result<Self> {
@@ -444,7 +446,7 @@ impl Server {
         }
         let capture = crate::record::capture::Host::with_serial(authority.state().core_seq);
         let frame_timings = timings::Writer::start(root.join("artifacts/frame_timings.jsonl"));
-        Ok(Self {
+        let mut server = Self {
             rewind_enabled: std::env::var("MV_REWIND_ENABLED").ok().as_deref() == Some("1"),
             frame_timings,
             frame_clock: None,
@@ -466,9 +468,12 @@ impl Server {
             unsubscribed: BTreeSet::new(),
             human_inputs,
             headless_graphical_seen,
+            journal_end: None,
             tool_state,
             capture,
-        })
+        };
+        server.load_journal_end()?;
+        Ok(server)
     }
     pub fn snapshot(&self) -> Result<Vec<u8>> {
         Ok(self.authority.state().snapshot()?)
@@ -503,6 +508,14 @@ impl Server {
             self.observers.remove(peer);
             self.subscriptions.retain(|(p, _)| p != peer);
             self.unsubscribed.retain(|(p, _)| p != peer);
+            if self.journal_end.is_some() {
+                // JOURNAL_FULL already settled connected UI waiters. Cleanup
+                // after the end must not invalidate the replay-bound marker,
+                // even when a smaller cleanup record would still fit.
+                self.human_inputs
+                    .retain(|_, h| peer.component != Component::Daemon && &h.ui != peer);
+                return;
+            }
             if peer.component == Component::Daemon {
                 if let Ok(now_ns) = self.now() {
                     let _ = self.mark_headless_unknown(now_ns);
@@ -1283,7 +1296,18 @@ impl Server {
         if let (Some(clock), Some(Ok(pixels))) = (&mut self.frame_clock, &pre_pixels) {
             clock.read(pixels);
         }
-        let result = self.route_at_inner(now_ns, peer, epoch, env, pre_pixels);
+        let result = self.route_at_inner(now_ns, peer, epoch, env.clone(), pre_pixels);
+        let result = if matches!(
+            result
+                .as_ref()
+                .err()
+                .and_then(|e| e.downcast_ref::<crate::journal::JournalError>()),
+            Some(crate::journal::JournalError::Policy)
+        ) {
+            self.end_full_journal(now_ns, &env)
+        } else {
+            result
+        };
         if let Some(clock) = self.frame_clock.take() {
             if clock.accepted {
                 self.frame_timings.submit(clock.finish());
@@ -1302,6 +1326,9 @@ impl Server {
         let boundary_started = Instant::now();
         if !self.record_envelope_at(now_ns, &env)? {
             return Ok(());
+        }
+        if self.journal_end.is_some() {
+            return self.route_ended_session(now_ns, &env);
         }
         // [TARGET, unit decision] An authenticated, replay-reserved probe ack
         // changes no surface state and retains no journal witness.
@@ -2011,6 +2038,9 @@ impl Server {
         self.poll_tool_waiters_at(now_ns)
     }
     fn poll_tool_waiters_at(&mut self, now_ns: u64) -> Result<()> {
+        if self.journal_end.is_some() {
+            return self.poll_journal_stop_failure(now_ns);
+        }
         self.poll_headless_at(now_ns)?;
         self.poll_guest_command_at(now_ns)?;
         let prev = self.route_now_ns.replace(now_ns);
@@ -2620,12 +2650,18 @@ async fn connection_with_liveness(
         let now_ns = s.now()?;
         s.replay
             .record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
-        if env.from.component == Component::Daemon {
+        if env.from.component == Component::Daemon && s.journal_end.is_none() {
             let witness = s
                 .authority
                 .retain_witness(serde_json::to_string(&env)?.as_bytes())?;
-            s.authority
-                .apply_with_witnesses(Input::Connect, vec![witness])?;
+            match s
+                .authority
+                .apply_with_witnesses(Input::Connect, vec![witness])
+            {
+                Ok(_) => {}
+                Err(crate::journal::JournalError::Policy) => s.end_full_journal(now_ns, &env)?,
+                Err(e) => return Err(e.into()),
+            }
         }
         s.serial = s
             .serial
@@ -2644,6 +2680,7 @@ async fn connection_with_liveness(
         );
         let hello = s.config.core.hello.clone();
         s.send_at(now_ns, ready.endpoint(), Command::Hello(Box::new(hello)))?;
+        s.resume_journal_end(now_ns, ready.endpoint())?;
         Ok((id, epoch))
     })();
     let (id, epoch) = match admitted {
@@ -2856,6 +2893,7 @@ mod tests;
 
 #[cfg(test)]
 mod nv_regressions {
+    include!("journal_end_tests.rs");
 
     #[test]
     fn v027_capture_storage_terminal_flushes_before_socket_closes() {

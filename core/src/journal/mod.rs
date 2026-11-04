@@ -650,6 +650,17 @@ pub(crate) fn unsynced_dirty_evictions(root: &Path) -> u64 {
 
 const MAX_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RECORDS: u64 = 100_000;
+#[cfg(test)]
+static TEST_RECORD_LIMITS: std::sync::Mutex<std::collections::BTreeMap<PathBuf, u64>> =
+    std::sync::Mutex::new(std::collections::BTreeMap::new());
+
+#[cfg(test)]
+pub(crate) fn set_record_limit_for_test(root: &Path, limit: u64) {
+    TEST_RECORD_LIMITS
+        .lock()
+        .unwrap()
+        .insert(root.into(), limit);
+}
 const MAX_LINE: usize = crate::MAX_FRAME_BYTES;
 const ZERO: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3122,7 +3133,16 @@ impl Journal {
             self.clear_surface_witness_cache();
             return Err(JournalError::Poisoned);
         }
-        if self.count >= MAX_RECORDS {
+        #[cfg(test)]
+        let record_limit = TEST_RECORD_LIMITS
+            .lock()
+            .unwrap()
+            .get(&self.root)
+            .copied()
+            .unwrap_or(MAX_RECORDS);
+        #[cfg(not(test))]
+        let record_limit = MAX_RECORDS;
+        if self.count >= record_limit {
             return Err(JournalError::Policy);
         }
         let next = self.count.checked_add(1).ok_or(JournalError::Policy)?;
