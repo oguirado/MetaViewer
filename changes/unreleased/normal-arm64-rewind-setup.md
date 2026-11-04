@@ -1,0 +1,1 @@
+- Add an explicit protected Rewind option to normal ARM64 capsule sessions, preserving resource inventory, VM selection and closure checks.

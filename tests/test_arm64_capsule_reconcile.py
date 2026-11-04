@@ -66,6 +66,22 @@ class ReconcileTests(unittest.TestCase):
         self.assertIn('durable_complete_graphical_allocation_inventory', result['missing_proofs'])
         self.assertTrue(self.marker.exists())
 
+    def test_rewind_plan_boolean_preserves_root_identity(self):
+        short = self.directory / ('metaviewer-arm64-' + self.run + '-')
+        short.mkdir(mode=0o700)
+        self.write(self.marker, dict(self.held, root=str(short)))
+        plan = dict(self.plan, rewind=True)
+        self.write(short / 'PLAN.json', plan)
+        self.assertFalse(r.inspect_held(self.marker)['closure_proven'])
+        for bad in ('true', 1, None):
+            self.write(short / 'PLAN.json', dict(plan, rewind=bad))
+            with self.subTest(bad=bad), self.assertRaises(r.Refused):
+                r.inspect_held(self.marker)
+        self.write(short / 'PLAN.json', self.plan)
+        self.assertFalse(r.inspect_held(self.marker)['closure_proven'])
+        self.write(short / 'PLAN.json', dict(plan, rewind=False))
+        self.assertFalse(r.inspect_held(self.marker)['closure_proven'])
+
     def test_caller_closed_receipt_cannot_supply_missing_source_proof(self):
         self.write(self.root / 'caller-closure.json', {'closed': True, 'all_allocations': [], 'complete': True})
         self.assertFalse(r.inspect_held(self.marker)['closure_proven'])
