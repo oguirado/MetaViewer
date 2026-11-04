@@ -147,6 +147,10 @@ testws3-5a6f7cc82936	agents/tests/test_ws3_wheel_record.py
 updateh-db8505f33fcd	agents/tools/update_headless_mirror.py
 protocol.json	catalogue/protocol.json
 changes-README.md	changes/README.md
+agents-dossier.md	changes/unreleased/agents-dossier.md
+fix2f5d-52fda4e9618f	changes/unreleased/fix2-f5-docs-claims.md
+fix2f5r-b1aaf3f75979	changes/unreleased/fix2-f5-readme-probes.md
+router-round-two.md	changes/unreleased/router-round-two.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json
 actionr-3778f6831d07	contracts/examples/action_receipt.invalid.schema.json
@@ -1948,6 +1952,7 @@ USER_GUIDE.md	docs/USER_GUIDE.md
 WHY_CAPSULES.md	docs/WHY_CAPSULES.md
 XPRAROL-ebaca5649767	docs/XPRA_ROLE_TILES_DESIGN.md
 adapter.md	docs/dossiers/adapter.md
+agents.md	docs/dossiers/agents.md
 core.md	docs/dossiers/core.md
 ui.md	docs/dossiers/ui.md
 muse_lanes.json	docs/meta-ai/muse_lanes.json
@@ -1988,11 +1993,18 @@ holdout.jsonl	route/eval/holdout.jsonl
 questions.jsonl	route/eval/questions.jsonl
 results.json	route/eval/results.json
 review-r2.jsonl	route/eval/review-r2.jsonl
+review-r6.jsonl	route/eval/review-r6.jsonl
+round2d-80d7c05d957e	route/eval/round2-dev-results.json
+round2-dev.jsonl	route/eval/round2-dev.jsonl
+round2f-8673cf86011f	route/eval/round2-followup-results.json
+round2u-ce54c96be4eb	route/eval/round2-unseen-results.json
+round2-unseen.jsonl	route/eval/round2-unseen.jsonl
 sets.json	route/eval/sets.json
 manifest.json	route/manifest.json
 nodes.jsonl	route/nodes.jsonl
 route_query.py	route/route_query.py
 adapter.jsonl	route/study/adapter.jsonl
+agents.jsonl	route/study/agents.jsonl
 core.jsonl	route/study/core.jsonl
 ui.jsonl	route/study/ui.jsonl
 symbols.jsonl	route/symbols.jsonl
