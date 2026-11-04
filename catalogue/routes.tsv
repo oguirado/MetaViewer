@@ -275,6 +275,7 @@ p18h-packaged-pty.md	changes/unreleased/p18h-packaged-pty.md
 paireda-f24b256557a9	changes/unreleased/paired-agent-preparation.md
 pairedw-56696318f548	changes/unreleased/paired-workflow-paste.md
 pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
+preserv-c8144030478c	changes/unreleased/preserve-mode-switch-page.md
 program-61837f6b5cd8	changes/unreleased/program-click-settle.md
 program-5f5847f0f976	changes/unreleased/program-current-baseline.md
 program-display.md	changes/unreleased/program-display.md
@@ -1650,6 +1651,12 @@ rolereq-5cf53e9b6867	contracts/examples/v0.3/role_request.valid.switch.json
 rolereq-96988530a775	contracts/examples/v0.3/role_request.valid.visibility.json
 rolesur-cfe509bf53b7	contracts/examples/v0.3/role_surface.invalid.json
 rolesur-69a0c8e07bbf	contracts/examples/v0.3/role_surface.valid.json
+roleswi-d54a0a578bf4	contracts/examples/v0.3/role_switch.invalid.json
+roleswi-8324de0c5870	contracts/examples/v0.3/role_switch.valid.json
+roleswi-806bcb82c75b	contracts/examples/v0.3/role_switch_envelope.invalid.json
+roleswi-32cc18c10bca	contracts/examples/v0.3/role_switch_envelope.valid.json
+roleswi-638f1d780485	contracts/examples/v0.3/role_switch_result.invalid.json
+roleswi-d4a4df827bcb	contracts/examples/v0.3/role_switch_result.valid.json
 rolevie-58625b740a7b	contracts/examples/v0.3/role_view_state.invalid.json
 rolevie-d4c79d835d30	contracts/examples/v0.3/role_view_state.valid.json
 actionp-07a9393c5450	contracts/v0.1/action_proposal.schema.json
@@ -1711,10 +1718,14 @@ humantr-b1447e03437b	contracts/v0.3/human_trace.schema.json
 opening-ec86afc13d6e	contracts/v0.3/opening_mode.schema.json
 rolereq-907578dea231	contracts/v0.3/role_request.schema.json
 rolesur-dd4fbfc7e390	contracts/v0.3/role_surface.schema.json
+roleswi-c90acb12357a	contracts/v0.3/role_switch.schema.json
+roleswi-c0ceab26221f	contracts/v0.3/role_switch_envelope.schema.json
+roleswi-ea49875be0e4	contracts/v0.3/role_switch_result.schema.json
 rolevie-05c3cfe19374	contracts/v0.3/role_view_state.schema.json
 core-Cargo.toml	core/Cargo.toml
 core-README.md	core/README.md
 mod.rs	core/src/admission/mod.rs
+role_switch_tests.rs	core/src/admission/role_switch_tests.rs
 metaviewer-core.rs	core/src/bin/metaviewer-core.rs
 mv-replay.rs	core/src/bin/mv-replay.rs
 decode.rs	core/src/catalog/decode.rs
@@ -1752,6 +1763,7 @@ receipt-5b6711b5d5ee	core/src/serve/receipt_evidence_tests.rs
 reconnect_tests.rs	core/src/serve/reconnect_tests.rs
 regression.rs	core/src/serve/regression.rs
 serve-rewind.rs	core/src/serve/rewind.rs
+role_switch.rs	core/src/serve/role_switch.rs
 serve-tests.rs	core/src/serve/tests.rs
 timings.rs	core/src/serve/timings.rs
 tools.rs	core/src/serve/tools.rs
@@ -1776,6 +1788,8 @@ wire-headless.rs	core/src/wire/headless.rs
 wire-mod.rs	core/src/wire/mod.rs
 payload.rs	core/src/wire/payload.rs
 wire-rewind.rs	core/src/wire/rewind.rs
+wire-role_switch.rs	core/src/wire/role_switch.rs
+roleswi-7ad0c652c026	core/src/wire/role_switch_tests.rs
 schemas.rs	core/src/wire/schemas.rs
 admission_journal.rs	core/tests/admission_journal.rs
 admissi-c7b9c901081c	core/tests/admission_lifecycle.rs
@@ -1942,6 +1956,8 @@ receipt-e7a340c634f2	daemon-adapter/internal/capsule/receipt_evidence_test.go
 regressions_test.go	daemon-adapter/internal/capsule/regressions_test.go
 ringmode.go	daemon-adapter/internal/capsule/ringmode.go
 ringmode_test.go	daemon-adapter/internal/capsule/ringmode_test.go
+role_switch.go	daemon-adapter/internal/capsule/role_switch.go
+role_switch_test.go	daemon-adapter/internal/capsule/role_switch_test.go
 role_test.go	daemon-adapter/internal/capsule/role_test.go
 shared_roots_test.go	daemon-adapter/internal/capsule/shared_roots_test.go
 copy_guard_test.go	daemon-adapter/internal/capsule/slots/copy_guard_test.go
@@ -2007,6 +2023,8 @@ record_wire_test.go	daemon-adapter/internal/daemon/record_wire_test.go
 revision_test.go	daemon-adapter/internal/daemon/revision_test.go
 rewinde-a1eb0dbfdaa6	daemon-adapter/internal/daemon/rewind_environment_test.go
 rewinds-ee27c2e95410	daemon-adapter/internal/daemon/rewind_stream_hello_test.go
+daemon-role_switch.go	daemon-adapter/internal/daemon/role_switch.go
+roleswi-affc7816f905	daemon-adapter/internal/daemon/role_switch_test.go
 run.go	daemon-adapter/internal/daemon/run.go
 run_test.go	daemon-adapter/internal/daemon/run_test.go
 runtime_test.go	daemon-adapter/internal/daemon/runtime_test.go
@@ -2118,6 +2136,8 @@ rewind_client_test.go	daemon-adapter/internal/ipc/rewind_client_test.go
 rewinde-5bad21c7509f	daemon-adapter/internal/ipc/rewind_envelope_test.go
 rewind_fd_test.go	daemon-adapter/internal/ipc/rewind_fd_test.go
 rewindf-22d4ae7f00d0	daemon-adapter/internal/ipc/rewind_fixture_pins_test.go
+ipc-role_switch.go	daemon-adapter/internal/ipc/role_switch.go
+roleswi-1d516d2e563c	daemon-adapter/internal/ipc/role_switch_test.go
 session.go	daemon-adapter/internal/ipc/session.go
 session_test.go	daemon-adapter/internal/ipc/session_test.go
 socket.go	daemon-adapter/internal/ipc/socket.go
@@ -2933,6 +2953,7 @@ microvm-f8ba8f8cfb46	ui/test/microvm-agent-prompt-recipe.test.js
 microvm-07f31d8d2e40	ui/test/microvm-agent-prompt.test.js
 microvm-42de163b3796	ui/test/microvm-rewind-passive-mark.test.js
 microvm-b270d5ac69d2	ui/test/microvm-tile-controls.test.js
+modeswi-c0f9b2675105	ui/test/mode-switch-live-surface.test.js
 multica-199756b14b9b	ui/test/multicap-profile-picker.test.js
 multisl-cc0b2c69edc0	ui/test/multislot-u5a-ui.test.js
 multisl-575193d23c36	ui/test/multislotfix-sweep.test.js
@@ -3242,6 +3263,7 @@ polish2.test.js	ui/test/polish2.test.js
 preload-ports.test.js	ui/test/preload-ports.test.js
 preload-f111f04ca6a8	ui/test/preload-v02-notice.test.js
 preload.test.js	ui/test/preload.test.js
+program-00c9031ec528	ui/test/program-existing-identity.test.js
 projection.test.js	ui/test/projection.test.js
 providers.test.js	ui/test/providers.test.js
 ptyBrok-530f7643d38a	ui/test/ptyBrokerClasses.test.js
