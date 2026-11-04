@@ -2115,3 +2115,25 @@ test('journal ended surfaces lose live presentation while stop is unconfirmed', 
   assert.equal(entries.at(-1).stateOnly,true);
   assert.equal(bindings.core.getStatus().availability,'live');
 });
+
+test('journal end withdraws creating capsules and preserves terminal presentation', async t => {
+  const f = await fixture(t), notices=[];
+  const bindings = await createMainBindings({...f,onSessionEnd:code=>notices.push(code)});
+  t.after(()=>bindings.core.dispose());
+  for (const state of ['creating','active','destroyed','lost']) {
+    f.send({schema:'surface_event/v0.2',event:'state_changed',data:{surface:{...surface,surface_id:'end-'+state,state}}});
+  }
+  await waitForCondition(()=>bindings.core.getHumanSurface('end-lost')?.state==='lost');
+  assert.equal(bindings.core.getHumanSurface('end-creating').state,'creating');
+  assert.equal(bindings.core.getHumanSurface('end-active').state,'active');
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'closed'}});
+  await waitForCondition(()=>notices.length===1);
+  assert.equal(bindings.core.getHumanSurface('end-creating').state,'lost','creating capsules cannot remain live');
+  assert.equal(bindings.core.getHumanSurface('end-active').state,'lost');
+  assert.equal(bindings.core.getHumanSurface('end-destroyed'),null,'negative control: preserve terminal absence');
+  assert.equal(bindings.core.getHumanSurface('end-lost').state,'lost');
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'duplicate'}});
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert.deepEqual(notices,['JOURNAL_FULL']);
+  assert.equal(bindings.core.getHumanSurface('end-creating').state,'lost');
+});

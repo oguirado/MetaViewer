@@ -511,7 +511,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
           // Cleanup runs outside the accepted journal. Until confirmed, these
           // last accepted frames cannot represent live, controllable capsules.
           for (const state of surfaces.values()) {
-            if (state.state === 'active') {
+            if (state.state !== 'destroyed' && state.state !== 'lost') {
               publishState({...state, state:'lost'});
               surfaces.set(state.surface_id, Object.freeze({...state, state:'lost'}));
               display.removeSurface(state.surface_id);
