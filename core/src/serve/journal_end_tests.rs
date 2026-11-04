@@ -845,3 +845,33 @@ fn journal_end_daemon_retire_keeps_held_headless_state_replay_bound() {
         assert!(f.server.journal_end.is_some());
     });
 }
+
+#[test]
+fn journal_end_in_progress_destroy_keeps_the_ordered_barrier() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let mut second = f.server.authority.state().surfaces["surface-demo"].clone();
+        second.frame = None;
+        f.server.authority.apply(Input::Surface { id: "surface-second".into(), surface: second }).unwrap();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        f.route(Component::Daemon, 2, journal_review_notice()).await.unwrap();
+        ui.try_recv().unwrap();
+        daemon.try_recv().unwrap();
+        let snapshot = f.server.snapshot().unwrap();
+        f.route(Component::Daemon, 3, json!({"schema":"surface_event/v0.2","event":"error","data":{
+            "surface_id":"surface-demo","code":"ADAPTER_SURFACE","detail":"surface: destroy already in progress"}})).await.unwrap();
+        assert!(daemon.try_recv().is_err(), "draining is not terminal");
+        assert!(ui.try_recv().is_err(), "draining is not a stop failure");
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+        f.route(Component::Daemon, 4, json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":{
+            "schema":"surface/v0.2","surface_id":"surface-demo","kind":"browser","display":":92",
+            "geometry":{"w":1,"h":1},"state":"destroyed","visibility":"unfolded","control":"agent","profile_id":"test"}}})).await.unwrap();
+        assert_eq!(serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]["surface_id"], "surface-second");
+        assert!(daemon.try_recv().is_err());
+        assert!(ui.try_recv().is_err());
+    });
+}

@@ -231,6 +231,10 @@ impl Server {
             } else if end.active.is_some()
                 && sid == end.active.as_deref()
                 && value["event"] == "error"
+                && !((value["data"]["code"] == "ADAPTER_SURFACE"
+                    && value["data"]["detail"] == "surface: destroy already in progress")
+                    || (value["data"]["code"] == "surface"
+                        && value["data"]["detail"] == "destroy already in progress"))
             {
                 // Stop failure is explicit; retain the active identity so we
                 // never claim completion or race a later capsule's stop.
