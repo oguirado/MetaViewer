@@ -287,6 +287,7 @@ class SessionTests(Fixture):
         (directory / 'held-session.json').write_text('{"status":"unknown"}')
         with patch.object(s.setup, 'load_registry', return_value=self.value), \
                 patch.object(s.setup, 'host_check', return_value={}), \
+                patch.object(s, 'memory_floor'), \
                 patch.object(s.setup, 'interpreter_check'), \
                 patch.object(s, 'ui_transport', return_value={}), \
                 patch.object(s, 'ui_bus_executable', return_value='/synthetic/xdg-dbus-proxy'), \
