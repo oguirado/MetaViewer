@@ -201,6 +201,7 @@ async function moveTile(/** @type {number|'new'} */ desktop, follow = false) {
   if (!result?.ok) error.value = 'Desktop move is unavailable.';
 }
 let stopNativeFocus = /** @type {(()=>void)|undefined} */ (undefined);
+let viewportResizeObserver = /** @type {ResizeObserver|undefined} */ (undefined);
 let stopOverlaySubscription = /** @type {(()=>void)|undefined} */ (undefined);
 const menuPopup = ref(/** @type {HTMLElement|null} */ (null));
 watch(menuOpen, async open => {
@@ -456,6 +457,10 @@ async function confirmLogin() {
 }
 onMounted(async () => {
   stopOverlaySubscription = overlays?.subscribe(() => { void sync(); });
+  if (typeof ResizeObserver === 'function' && root.value) {
+    viewportResizeObserver = new ResizeObserver(onGeometryChange);
+    viewportResizeObserver.observe(root.value);
+  }
   stopNativeFocus = api?.onFocus?.((/** @type {string} */ id) => {if(id === props.surfaceId) {tileLayout?.focus?.(id);void sync();}});
   headerTarget.value = root.value?.closest?.('.mv-tile')?.querySelector('.cuk-capsule-panel__actions') ?? null;
   globalThis.document?.addEventListener?.('pointerdown', closeMenu, true);
@@ -492,7 +497,7 @@ watch(() => props.control, () => { if (props.control !== 'agent') watching.value
 watch(watching, () => { void sync(); }, {flush:'post'});
 watch(progress, () => { if (!progress.value && ended) void sync(); });
 watch(() => props.presentationActive, () => { menuOpen.value = false; void sync(); }, {flush:'sync'});
-onBeforeUnmount(() => { stopOverlaySubscription?.(); stopNativeFocus?.(); overlays?.set(menuOwner, false); globalThis.window?.removeEventListener?.('pointermove', onGeometryChange, true); globalThis.window?.removeEventListener?.('resize', onGeometryChange); globalThis.document?.removeEventListener?.('pointerdown', closeMenu, true); transferring = tileLayout?.transfers.has(props.surfaceId) === true; if (transferring) Object.assign(tileLayout.transfers.get(props.surfaceId),{watching:watching.value,mounted}); alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); if (!transferring) void revoke(); });
+onBeforeUnmount(() => { viewportResizeObserver?.disconnect(); stopOverlaySubscription?.(); stopNativeFocus?.(); overlays?.set(menuOwner, false); globalThis.window?.removeEventListener?.('pointermove', onGeometryChange, true); globalThis.window?.removeEventListener?.('resize', onGeometryChange); globalThis.document?.removeEventListener?.('pointerdown', closeMenu, true); transferring = tileLayout?.transfers.has(props.surfaceId) === true; if (transferring) Object.assign(tileLayout.transfers.get(props.surfaceId),{watching:watching.value,mounted}); alive = false; clearInterval(timer); while (scrollCleanups.length) scrollCleanups.pop()?.(); if (!transferring) void revoke(); });
 </script>
 <template>
   <div class="mv-role-surface" :data-capsule-role="role || 'unproven'">

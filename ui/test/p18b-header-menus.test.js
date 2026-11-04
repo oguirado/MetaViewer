@@ -28,9 +28,9 @@ async function compile(source, deps = {}) {
   return (await import('data:text/javascript;base64,'+Buffer.from(code).toString('base64')+'#'+serial)).default;
 }
 function mount(Component, props = {}, providers = {}, slots = {}) {
-  const geometry = {shown:true};
+  const geometry = {shown:true,height:500};
   const node = tag => ({tag,children:[],props:{},parent:null,style:{},
-    getBoundingClientRect:()=>({x:10,y:10,width:geometry.shown?700:0,height:500}),
+    getBoundingClientRect:()=>({x:10,y:10,width:geometry.shown?700:0,height:geometry.height}),
     getClientRects:()=>geometry.shown?[1]:[]});
   const renderer = vue.createRenderer({
     createElement:node,createText:value=>({...node('#text'),text:value}),createComment:()=>node('#comment'),
@@ -396,4 +396,34 @@ test('removing the current-occlusion fence reproduces the stale hide',async()=>{
   assert.notEqual(mutant,source);
   await assert.rejects(()=>latePreviewOracle(mutant),{code:'ERR_ASSERTION'});
   await assert.rejects(()=>latePreviewOracle(mutant,true),{code:'ERR_ASSERTION'});
+});
+
+async function viewportResizeOracle(source) {
+  const previous={observer:globalThis.ResizeObserver,interval:globalThis.setInterval,clear:globalThis.clearInterval};
+  const observers=[];
+  globalThis.ResizeObserver=class {
+    constructor(callback){this.callback=callback;observers.push(this);}
+    observe(target){this.target=target;}
+    disconnect(){this.disconnected=true;}
+  };
+  // The resize must reach native bounds without the polling fallback.
+  globalThis.setInterval=()=>0;globalThis.clearInterval=()=>{};
+  try {
+    await withRoles(async({add,calls})=>{
+      globalThis.metaviewerRoles.resize=async(id,bounds)=>{calls.push(['resize',id,bounds]);return {ok:true};};
+      const f=await add('resized-human','human');
+      assert.equal(observers.length,1);
+      assert(observers[0].target,'observe the presentation viewport');
+      f.geometry.height=260;
+      observers[0].callback([]);await tick();
+      assert(calls.some(c=>c[0]==='resize' && c[1]==='resized-human' && c[2].height===260),'native bounds follow the viewport resize');
+    },source);
+    assert.equal(observers[0].disconnected,true,'release the observer on unmount');
+  } finally {globalThis.ResizeObserver=previous.observer;globalThis.setInterval=previous.interval;globalThis.clearInterval=previous.clear;}
+}
+test('native bounds follow viewport resize without waiting for polling',()=>viewportResizeOracle(read('../src/surfaces/RoleSurface.vue')));
+test('removing viewport observation fails the immediate resize oracle',async()=>{
+  const source=read('../src/surfaces/RoleSurface.vue');
+  const mutant=source.replace('viewportResizeObserver.observe(root.value);','/* observation removed */');
+  assert.notEqual(mutant,source);await assert.rejects(()=>viewportResizeOracle(mutant),{code:'ERR_ASSERTION'});
 });
