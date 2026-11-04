@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/graphical_session_notice.schema.json",
+  "title": "Unsolicited graphical session invalidation notice",
+  "type": "object",
+  "additionalProperties": false,
+  "maxProperties": 4,
+  "required": [
+    "schema",
+    "notice_id",
+    "reason_code",
+    "session"
+  ],
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "graphical_session_notice/v0.2",
+      "maxLength": 29
+    },
+    "notice_id": {
+      "type": "string",
+      "pattern": "^notice-[a-z0-9][a-z0-9._-]{0,63}$",
+      "minLength": 8,
+      "maxLength": 71
+    },
+    "reason_code": {
+      "type": "string",
+      "const": "EXECUTOR_EPOCH_CHANGED",
+      "maxLength": 22
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "schema": {
+          "type": "string",
+          "const": "graphical_session/v0.2"
+        },
+        "surface_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "runtime_id": {
+          "type": "string",
+          "minLength": 72,
+          "maxLength": 72,
+          "pattern": "^runtime-[0-9a-f]{64}$"
+        },
+        "owner_id": {
+          "type": "string",
+          "minLength": 7,
+          "maxLength": 70,
+          "pattern": "^actor-[a-z0-9][a-z0-9._-]{0,63}$"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority_epoch": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "authority": {
+          "type": "string",
+          "const": "core"
+        },
+        "phase": {
+          "type": "string",
+          "const": "outcome_unknown"
+        },
+        "ownership": {
+          "type": "string",
+          "const": "held"
+        },
+        "pending_request_id": {
+          "type": "null"
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "point_id": {
+                "type": "string",
+                "minLength": 7,
+                "maxLength": 70,
+                "pattern": "^point-[a-z0-9][a-z0-9._-]{0,63}$"
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              },
+              "label": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 80,
+                "pattern": "^[^\\x00-\\x1f\\x7f/\\\\]*$"
+              },
+              "manifest_sha256": {
+                "type": "string",
+                "minLength": 64,
+                "maxLength": 64,
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "created_mono_ns": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "point_id",
+              "generation",
+              "label",
+              "manifest_sha256",
+              "created_mono_ns"
+            ],
+            "additionalProperties": false,
+            "maxProperties": 5
+          },
+          "minItems": 0,
+          "maxItems": 4
+        },
+        "backend": {
+          "type": "string",
+          "const": "qemu",
+          "maxLength": 4
+        },
+        "isa": {
+          "type": "string",
+          "const": "aarch64",
+          "maxLength": 7
+        }
+      },
+      "required": [
+        "schema",
+        "surface_id",
+        "runtime_id",
+        "owner_id",
+        "generation",
+        "authority_epoch",
+        "authority",
+        "phase",
+        "ownership",
+        "pending_request_id",
+        "points",
+        "backend",
+        "isa"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 13
+    }
+  }
+}

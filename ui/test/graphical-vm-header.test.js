@@ -52,10 +52,10 @@ test('a full four-point session hides Mark and refuses dispatch while retaining 
  const html=await render(s);assert.doesNotMatch(html,/aria-label="Mark VM checkpoint"/);assert.match(html,/aria-label="Back to VM checkpoint"/);
  const h=host(s);await h.controller.refresh();assert.equal(await h.controller.request({op:'mark',surface_id:row.id,generation:1,authority_epoch:1,label:''},1,[row]),false);assert.equal(h.calls.length,0);h.controller.dispose();
 });
-test('attach uses only a live VM row, once, without renderer ownership or request ids',async()=>{
+test('explicit attach uses only a live VM row, once, without renderer ownership or request ids',async()=>{
  const h=host({...emptyGraphicalSnapshot(),available:true});await h.controller.refresh();
  await h.controller.attach([{...row,kind:'program'},{...row,backendLifecycle:'lost'}]);assert.equal(h.calls.length,0);
- await h.controller.attach([row]);await h.controller.attach([row]);assert.deepEqual(h.calls,[{op:'attach',surface_id:row.id}]);h.controller.dispose();assert.equal(h.stops(),1);
+ await h.controller.attach([row]);assert.equal(h.calls.length,0);const action={op:'attach',surface_id:row.id};await h.controller.request(action,0,[row]);await h.controller.request(action,0,[row]);assert.deepEqual(h.calls,[action]);h.controller.dispose();assert.equal(h.stops(),1);
 });
 test('stale revision, tuple, removed point and other-surface clicks never reach host',async()=>{
  const h=host();await h.controller.refresh();const action=graphicalAction(fixture(),row,'restore','point-before');
@@ -88,7 +88,7 @@ test('App forwards the existing header seam without changing the MicroVM header'
 
 test('a physically released stopped session permits attach to a new VM lifetime',async()=>{
  const s=fixture();s.session.phase='stopped';s.session.ownership='released';const h=host(s);await h.controller.refresh();
- await h.controller.attach([{...row,id:'surface-new'}]);assert.deepEqual(h.calls,[{op:'attach',surface_id:'surface-new'}]);h.controller.dispose();
+ await h.controller.attach([{...row,id:'surface-new'}]);assert.equal(h.calls.length,0);await h.controller.request({op:'attach',surface_id:'surface-new'},s.revision,[{...row,id:'surface-new'}]);assert.deepEqual(h.calls,[{op:'attach',surface_id:'surface-new'}]);h.controller.dispose();
 });
 
 
@@ -108,5 +108,18 @@ test('graphical control local mv-dark bridge mirrors canonical dark without chan
   const local=source.split(`:root[data-theme-scheme="mv-dark"][data-theme-contrast="${contrast}"] .graphical-vm-state-controls {`)[1].split('}')[0];
   const values=text=>new Map([...text.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map(match=>[match[1],match[2]]));
   for(const key of keys)assert.equal(values(local).get(`--mv-semantic-${key}`),values(canonical).get(`--mv-semantic-${key}`));
+ }
+});
+
+test('enabled unattached VM renders an explicit enable control; flag-off diagnostics render nothing',async()=>{
+ const s={...emptyGraphicalSnapshot(),available:true};assert.match(await render(s),/Enable checkpoints/);assert.doesNotMatch(await render(s),/aria-label="Mark VM checkpoint"/);
+ assert.doesNotMatch(await render({...emptyGraphicalSnapshot(),code:'UNAVAILABLE'}),/Enable checkpoints|graphical-vm-state-controls/);
+ const held=fixture();held.code='CAPACITY';const html=await render(held);assert.match(html,/Checkpoints: CAPACITY/);assert.match(html,/disabled/);assert.equal(graphicalAction(held,row,'restore','point-before'),null);
+});
+
+test('clean refusal displays the reason and disables the explicit Enable checkpoints button',async()=>{
+ for(const code of ['UNAVAILABLE','POLICY']) {
+  const snapshot={...emptyGraphicalSnapshot(),available:true,code,revision:2};const html=await render(snapshot);
+  assert.match(html,/Enable checkpoints/);assert.match(html,new RegExp(`Checkpoints: ${code}`));assert.match(html,/<button[^>]*disabled[^>]*>Enable checkpoints<\/button>/);assert.equal(graphicalAction(snapshot,row,'attach'),null);
  }
 });

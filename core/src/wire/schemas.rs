@@ -34,6 +34,12 @@ fn schema_uncached(name: &str) -> Option<serde_json::Value> {
         "graphical_session_envelope.schema.json" => {
             include_str!("../../../contracts/v0.2/graphical_session_envelope.schema.json")
         }
+        "graphical_session_notice.schema.json" => {
+            include_str!("../../../contracts/v0.2/graphical_session_notice.schema.json")
+        }
+        "graphical_session_notice_envelope.schema.json" => {
+            include_str!("../../../contracts/v0.2/graphical_session_notice_envelope.schema.json")
+        }
         "rewind_envelope.schema.json" => {
             include_str!("../../../contracts/v0.2/rewind_envelope.schema.json")
         }

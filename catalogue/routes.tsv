@@ -199,6 +199,7 @@ fronten-5717175eba13	changes/unreleased/frontend-working-tree.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 graphic-d6644d957c3e	changes/unreleased/graphical-qemu-session.md
 graphic-53c6d26a220b	changes/unreleased/graphical-rewind-custody.md
+graphic-514852dfb0b5	changes/unreleased/graphical-rewind-review-guards.md
 graphic-7ebce61348e3	changes/unreleased/graphical-session-review-fixes.md
 graphic-194a2bad7a4f	changes/unreleased/graphical-vm-header.md
 graphic-7dd542f5cb3e	changes/unreleased/graphical-vm-projection.md
@@ -832,6 +833,16 @@ graphic-c5bdf960ead4	contracts/examples/v0.2/graphical_session_event.valid.resto
 graphic-f028ad123f80	contracts/examples/v0.2/graphical_session_event.valid.restore-outcome_unknown.json
 graphic-6998a4c56cb7	contracts/examples/v0.2/graphical_session_event.valid.restore-refused-live.json
 graphic-760f9bb5f21d	contracts/examples/v0.2/graphical_session_event.valid.restore-refused.json
+graphic-f9181f727b28	contracts/examples/v0.2/graphical_session_notice.invalid.fake-pending.json
+graphic-60357e7e5b9c	contracts/examples/v0.2/graphical_session_notice.invalid.ready.json
+graphic-1a0895a930d3	contracts/examples/v0.2/graphical_session_notice.invalid.released.json
+graphic-43729c4960a1	contracts/examples/v0.2/graphical_session_notice.invalid.request-extra.json
+graphic-2a11e4837a40	contracts/examples/v0.2/graphical_session_notice.invalid.runtime.json
+graphic-e97c411f4782	contracts/examples/v0.2/graphical_session_notice.valid.json
+graphic-4f33f2ed72e5	contracts/examples/v0.2/graphical_session_notice_envelope.invalid.agent-recipient.json
+graphic-a6d2da085f1d	contracts/examples/v0.2/graphical_session_notice_envelope.invalid.daemon-sender.json
+graphic-06107648288b	contracts/examples/v0.2/graphical_session_notice_envelope.invalid.old-event.json
+graphic-ab5d1a413f4b	contracts/examples/v0.2/graphical_session_notice_envelope.valid.json
 graphic-f8c7d17edcdb	contracts/examples/v0.2/graphical_session_request.invalid.extra.json
 graphic-69771a5d2740	contracts/examples/v0.2/graphical_session_request.invalid.missing-fence.json
 graphic-ff3310bf1bfc	contracts/examples/v0.2/graphical_session_request.invalid.owner-shape.json
@@ -1663,6 +1674,8 @@ framere-c880d4608fa9	contracts/v0.2/frame_ref.schema.json
 graphic-b904ede2230f	contracts/v0.2/graphical_session.schema.json
 graphic-73fcd6e44f01	contracts/v0.2/graphical_session_envelope.schema.json
 graphic-8c51a819a5f6	contracts/v0.2/graphical_session_event.schema.json
+graphic-81839807efef	contracts/v0.2/graphical_session_notice.schema.json
+graphic-eb6c80c8c888	contracts/v0.2/graphical_session_notice_envelope.schema.json
 graphic-f27d11ec2c97	contracts/v0.2/graphical_session_request.schema.json
 guestco-0cd8abecc696	contracts/v0.2/guest_command_event.schema.json
 guestco-89b51b5c1592	contracts/v0.2/guest_command_observation.schema.json
@@ -2676,6 +2689,7 @@ framePort.js	ui/electron/framePort.js
 frameReader.js	ui/electron/frameReader.js
 graphic-350783a4f96c	ui/electron/graphicalSessionChecks.js
 graphic-0c36ef0b0289	ui/electron/graphicalSessionHost.js
+graphic-4144b58031a1	ui/electron/graphicalSessionNoticeValues.js
 graphic-5de86cebbb31	ui/electron/graphicalSessionValues.js
 guestCommandHost.js	ui/electron/guestCommandHost.js
 guestCo-82eb0d009d63	ui/electron/guestCommandObservation.js
@@ -2880,6 +2894,8 @@ frameTile.test.js	ui/test/frameTile.test.js
 framesParity.test.mjs	ui/test/framesParity.test.mjs
 graphic-c8d63d0dc408	ui/test/graphical-session-admission.test.js
 graphic-b4e819c27267	ui/test/graphical-session-host.test.js
+graphic-facd7cb492c7	ui/test/graphical-session-notice.test.js
+graphic-fcc78e9ff463	ui/test/graphical-session-partials.test.js
 graphic-d69e641ed221	ui/test/graphical-session-projection.test.js
 graphic-44a0b41d7087	ui/test/graphical-session-transport.test.js
 graphic-189e7dc03464	ui/test/graphical-session-values.test.js
@@ -3346,6 +3362,7 @@ ws3gaps-d98fd62bde12	ui/test/ws3_gap_settings_fresh_reject.test.mjs
 xpra-keyboard.test.js	ui/test/xpra-keyboard.test.js
 xprarol-70171ccfef16	ui/test/xpra-role-tiles.test.js
 xpratra-a0751dd88f74	ui/test/xpra-trace-drop.test.js
+generat-e50980f1d043	ui/tools/generate_graphical_notice_bindings.py
 kitQuar-44093eb0ae91	ui/tools/kitQuarantineReason.js
 package.js	ui/tools/package.js
 testpac-77161fb71059	ui/tools/test_package_clean_install.mjs

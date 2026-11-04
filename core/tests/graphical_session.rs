@@ -298,6 +298,13 @@ fn attach_is_ui_and_registered_actor_bound_and_duplicate_is_not_redispatched() {
 }
 
 #[test]
+fn graphical_core_deadline_leaves_margin_before_host_timeout() {
+    let mut state = core();
+    assert!(submit(&mut state, ui(), request("attach", "request-deadline", None, None)).dispatch);
+    assert_eq!(state.graphical_session.pending.as_ref().unwrap().deadline_ns, 28_000_000_100);
+}
+
+#[test]
 fn mark_preserves_generation_and_rejects_wrong_daemon_or_stale_tuple() {
     let mut state = core(); complete_attach(&mut state);
     let req = request("mark", "request-mark", Some(1), Some(1));

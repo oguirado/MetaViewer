@@ -2265,4 +2265,5 @@ pub enum Command {
     SurfaceRequest(Box<SurfaceRequest>),
     TerminalSession(Box<TerminalSession>),
     UiIntent(Box<UiIntent>),
+    GraphicalSessionNotice(Box<super::graphical_session::GraphicalSessionNotice>),
 }

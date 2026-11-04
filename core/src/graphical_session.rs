@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 const MAX_HISTORY: usize = 128;
 const MAX_POINTS: usize = 4;
-const DEADLINE_NS: u64 = 30_000_000_000;
+const DEADLINE_NS: u64 = 28_000_000_000;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

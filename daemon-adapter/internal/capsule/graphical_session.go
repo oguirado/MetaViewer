@@ -307,7 +307,10 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 		}
 		point = "point-" + hex.EncodeToString(bytes[:])
 	}
-	work, cancel := context.WithTimeout(ctx, 30*time.Second)
+	// Core's graphical deadline is 28s and the host allows 30s. Start the
+	// adapter budget before the bounded capture drain so native work, restore
+	// capture and publication all remain inside the 24s adapter window.
+	work, cancel := context.WithTimeout(ctx, 24*time.Second)
 	defer cancel()
 	if m.graphical == nil {
 		m.graphical = g
@@ -486,12 +489,18 @@ func (m *Manager) HandleGraphicalSession(ctx context.Context, raw []byte, publis
 		cb, frame, captureErr := m.Capture(context.WithValue(work, graphicalCaptureKey{}, g), q.SurfaceID)
 		var hash string
 		var generation uint64
+		if captureErr == nil && work.Err() != nil {
+			captureErr = work.Err()
+		}
 		if captureErr == nil {
 			if publish == nil {
 				captureErr = fault("configuration", "fresh graphical frame publisher required")
 			} else {
 				hash, generation, captureErr = publish(cb, frame)
 			}
+		}
+		if captureErr == nil && work.Err() != nil {
+			captureErr = work.Err()
 		}
 		m.mu.Lock()
 		current, live = m.bindings[q.SurfaceID]

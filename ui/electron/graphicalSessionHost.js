@@ -1,4 +1,5 @@
 import {randomUUID} from 'node:crypto';
+import {graphicalNoticePlain,graphicalNoticeValid} from './graphicalSessionNoticeValues.js';
 import {graphicalAction,graphicalValid,graphicalSnapshot,graphicalPlain} from './graphicalSessionValues.js';
 
 /** @typedef {{body:any, resolve:(value:any)=>void, accepted:boolean, before:any, timer:ReturnType<typeof setTimeout>|null, acceptTuple?:{generation:number,authority_epoch:number}}} GraphicalPending */
@@ -7,13 +8,14 @@ import {graphicalAction,graphicalValid,graphicalSnapshot,graphicalPlain} from '.
  * @param {{send:(body:any)=>void,available:()=>boolean,ownerId:string,timeoutMs?:number}} options */
 export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=30000}) {
  if(typeof send!=='function'||typeof available!=='function'||typeof ownerId!=='string'||!/^actor-[a-z0-9][a-z0-9._-]{0,63}$/.test(ownerId)||!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>30000)throw Error('GRAPHICAL_CONFIG');
- let session=/** @type {any} */(null),code=/** @type {string|null} */(null),revision=0,uncertain=false,disposed=false;
+ let session=/** @type {any} */(null),code=/** @type {string|null} */(null),revision=0,uncertain=false,disposed=false,capacityHeld=false;
  const pending=/** @type {Map<string,GraphicalPending>} */(new Map()),history=/** @type {Map<string,GraphicalHistory>} */(new Map()),seen=/** @type {Set<string>} */(new Set()),tombstones=/** @type {Set<string>} */(new Set()),listeners=/** @type {Set<(value:any)=>void>} */(new Set());
  /** @param {any} v @returns {any} */
  const clone=v=>structuredClone(v);
+ const exhausted=()=>capacityHeld||history.size>=128||seen.size>=256||tombstones.size>=256;
  const status=()=>{const now=process.hrtime.bigint(), ages=/** @type {Record<string,number|null>} */({});for(const p of session?.points??[]){let age=/** @type {number|null} */(null);try{const then=BigInt(p.created_mono_ns),d=now-then;if(d>=0n&&d<=BigInt(Number.MAX_SAFE_INTEGER)*1000000n)age=Number(d/1000000n);}catch{}ages[p.point_id]=age;}return clone({available:!disposed&&available(),busy:pending.size>0,code,revision,session,uncertain,point_ages_ms:ages});};
- function publish(){revision++;const v=status();if(!graphicalSnapshot(v))throw Error('GRAPHICAL_STATE');for(const cb of listeners){try{cb(clone(v));}catch{listeners.delete(cb);}}return v;}
- const commandAllowed=()=>!disposed&&available()&&!uncertain&&!pending.size&&(!session||session.phase==='ready'&&session.ownership==='held');
+ function publish(){if(code==='CAPACITY')capacityHeld=true;if(exhausted())code='CAPACITY';revision++;const v=status();if(!graphicalSnapshot(v))throw Error('GRAPHICAL_STATE');for(const cb of listeners){try{cb(clone(v));}catch{listeners.delete(cb);}}return v;}
+ const commandAllowed=()=>!disposed&&available()&&!exhausted()&&!uncertain&&!pending.size&&(!session||session.phase==='ready'&&session.ownership==='held');
  /** @param {string} id @param {GraphicalHistory} entry */
  function remember(id,entry){if(history.has(id)){history.set(id,entry);return;}if(history.size>=128)throw Error('GRAPHICAL_HISTORY_CAPACITY');history.set(id,entry);}
  /** @param {GraphicalPending} p @param {string} [reason] */
@@ -22,14 +24,15 @@ export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=300
  function request(action){
   if(!graphicalAction(action))throw Error('GRAPHICAL_REQUEST');
   if(disposed||!available()){code='UNAVAILABLE';return Promise.resolve(publish());}
-  if(!commandAllowed()||history.size>=128||seen.size>=256){code='BUSY';return Promise.resolve(publish());}
+  if(exhausted()){code='CAPACITY';return Promise.resolve(publish());}
+  if(!commandAllowed()){code='BUSY';return Promise.resolve(publish());}
   if(action.op==='attach'){
    if(session||tombstones.has(action.surface_id)){code='BUSY';return Promise.resolve(publish());}
    if(tombstones.size>=256){code='CAPACITY';return Promise.resolve(publish());}
   } else {
    if(!session||session.surface_id!==action.surface_id||session.owner_id!==ownerId||session.ownership!=='held'||session.phase!=='ready'||uncertain||session.generation!==action.generation||session.authority_epoch!==action.authority_epoch){code='STALE';return Promise.resolve(publish());}
    if(action.op==='restore'&&!session.points.some((/** @type {any} */ p)=>p.point_id===action.point_id)){code='POINT_UNAVAILABLE';return Promise.resolve(publish());}
-   if(action.op==='mark'&&session.points.length>=4){code='CAPACITY';return Promise.resolve(publish());}
+   if(action.op==='mark'&&session.points.length>=4){code='POINT_CAPACITY';return Promise.resolve(publish());}
   }
   const {op,surface_id,...params}=action,body={schema:'graphical_session_request/v0.2',request_id:'request-'+randomUUID(),surface_id,op,params:op==='attach'?{}:op==='mark'?{label:params.label}:{point_id:params.point_id},...(op==='attach'?{}:{generation:params.generation,authority_epoch:params.authority_epoch}),owner_id:ownerId};
   if(!graphicalValid('graphical_session_request.schema.json',body))throw Error('GRAPHICAL_REQUEST_INTERNAL');
@@ -52,7 +55,7 @@ export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=300
   const fail=()=>{unknown(p);return false;};
   if(!correlate(event,p))return fail();
   if(seen.has(event.event_id))return false;
-  if(seen.size>=256)throw Error('GRAPHICAL_PROTOCOL');
+  if(seen.size>=256)return fail();
   const s=event.session,b=p.body;
   if(s&&(s.surface_id!==b.surface_id||s.owner_id!==ownerId||s.backend!=='qemu'||s.isa!=='aarch64'))return fail();
   if(event.event==='accepted'){
@@ -83,6 +86,17 @@ export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=300
   }
   session=clone(s);uncertain=false;code=null;seen.add(event.event_id);clearTimeout(/** @type {ReturnType<typeof setTimeout>} */(p.timer));pending.delete(b.request_id);remember(b.request_id,{body:b,closed:false,unknown:false});p.resolve(publish());return true;
  }
+ /** Unsolicited authenticated Core invalidation; never establishes a session.
+  * @param {any} value @returns {boolean} */
+ function notice(value){
+  if(!graphicalNoticePlain(value)||!graphicalNoticeValid(value))throw Error('GRAPHICAL_NOTICE_PROTOCOL');
+  if(disposed)return false;
+  const s=value.session;
+  if(!session||session.ownership!=='held'||session.phase==='stopped'||s.owner_id!==ownerId||s.surface_id!==session.surface_id||s.runtime_id!==session.runtime_id||s.generation!==session.generation||s.authority_epoch!==session.authority_epoch||s.backend!==session.backend||s.isa!==session.isa||!same(s.points,session.points))return false;
+  if(seen.has(value.notice_id))return false;
+  if(seen.size>=256){if(!uncertain)quarantine();return false;}
+  seen.add(value.notice_id);quarantine();return true;
+ }
  /** @param {any} v @returns {any} */
  function canonical(v){if(Array.isArray(v))return v.map(canonical);if(v&&typeof v==='object')return Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])]));return v;}
  /** @param {any} a @param {any} b @returns {boolean} */
@@ -98,7 +112,7 @@ export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=300
   // Only this trusted physical-destroy callback resets per-owner replay caps.
   // Fresh random request IDs keep all old late events detached from new owners.
   history.clear();seen.clear();tombstones.clear();
-  session=null;uncertain=false;code=null;const v=publish();for(const p of done)p.resolve(v);return true;
+  session=null;uncertain=false;code=null;capacityHeld=false;const v=publish();for(const p of done)p.resolve(v);return true;
  }
  function quarantine(){
   if(disposed)return;
@@ -107,5 +121,5 @@ export function createGraphicalSessionHost({send,available,ownerId,timeoutMs=300
   publish();
  }
  function disconnect(){if(disposed)return;disposed=true;for(const p of pending.values())unknown(p);code='UNAVAILABLE';publish();}
- return Object.freeze({status,request,receive,commandAllowed,disconnect,quarantine,subscribe(/** @type {(value:any)=>void} */ cb){if(typeof cb!=='function'||listeners.size>=64)throw Error('GRAPHICAL_SUBSCRIBER');listeners.add(cb);cb(status());return()=>listeners.delete(cb);},surfaceClosed});
+ return Object.freeze({status,request,receive,notice,commandAllowed,disconnect,quarantine,subscribe(/** @type {(value:any)=>void} */ cb){if(typeof cb!=='function'||listeners.size>=64)throw Error('GRAPHICAL_SUBSCRIBER');listeners.add(cb);cb(status());return()=>listeners.delete(cb);},surfaceClosed});
 }

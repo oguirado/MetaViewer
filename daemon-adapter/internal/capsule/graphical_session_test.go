@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -126,6 +127,174 @@ func TestGraphicalNativeABIPointsRestoreAndEmission(t *testing.T) {
 	m.CompleteGraphicalEmission(id, e.RequestID, false)
 	if !m.graphical.unknown {
 		t.Fatal("failed completion delivery not fenced")
+	}
+}
+
+func TestGraphicalDeadlineIncludesDrainNativeFrameAndPublish(t *testing.T) {
+	m, id := graphicalTestManager(t)
+	graphicalTestAttach(t, m, id)
+	m.runner = graphicalTestRunner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		return graphicalTestNative("mark", args[len(args)-1], "ready", 1), nil
+	})
+	mark := graphicalTestEvent(t, m, graphicalTestRequest(id, "mark", "deadline-mark", ""), nil)
+	if mark.Event != "completed" || mark.PointID == nil {
+		t.Fatalf("mark %+v", mark)
+	}
+	m.CompleteGraphicalEmission(id, mark.RequestID, true)
+	b := m.bindings[id]
+	// Match the daemon runtime's 90s manager ceiling so the graphical 24s
+	// deadline, rather than the generic manager ceiling, is observed here.
+	m.cfg.Timeout = 90 * time.Second
+	var deadlineMu sync.Mutex
+	var nativeDeadline, frameDeadline time.Time
+	m.runner = graphicalTestRunner(func(ctx context.Context, args []string, _ []byte) ([]byte, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatal("adapter operation context has no deadline")
+		}
+		if args[1] == "frame" {
+			deadlineMu.Lock()
+			frameDeadline = deadline
+			deadlineMu.Unlock()
+			return json.Marshal(NativeFrame{Path: filepath.Join(b.FramesRoot, "fresh.png"), Seq: 1, Generation: b.Container, Width: 2, Height: 1, SHA256RGB24: strings.Repeat("c", 64), CaptureMonoNS: 200, Window: &Window{ID: b.Window, W: 2, H: 1}})
+		}
+		deadlineMu.Lock()
+		nativeDeadline = deadline
+		deadlineMu.Unlock()
+		return graphicalTestNative("restore", *mark.PointID, "ready", 2), nil
+	})
+	m.graphicalCaptures = map[string]int{id: 1}
+	type result struct {
+		e   GraphicalEvent
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := m.HandleGraphicalSession(context.Background(), graphicalTestRequest(id, "restore", "deadline-restore", *mark.PointID), func(_ Binding, _ NativeFrame) (string, uint64, error) {
+			deadlineMu.Lock()
+			deadline := nativeDeadline
+			deadlineMu.Unlock()
+			if deadline.IsZero() || time.Until(deadline) <= 0 {
+				return "", 0, context.DeadlineExceeded
+			}
+			return strings.Repeat("d", 64), 3, nil
+		})
+		var event GraphicalEvent
+		if err == nil {
+			err = json.Unmarshal(out, &event)
+		}
+		done <- result{event, err}
+	}()
+	deadline := time.After(time.Second)
+	for {
+		m.mu.Lock()
+		busy := m.graphical.busy
+		m.mu.Unlock()
+		if busy {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("restore never entered drain")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	time.Sleep(1100 * time.Millisecond)
+	m.mu.Lock()
+	m.graphicalCaptures[id] = 0
+	m.mu.Unlock()
+	select {
+	case got := <-done:
+		if got.err != nil || got.e.Event != "completed" {
+			t.Fatalf("bounded restore failed: event=%+v err=%v", got.e, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("restore did not finish within test bound")
+	}
+	deadlineMu.Lock()
+	gotNativeDeadline, gotFrameDeadline := nativeDeadline, frameDeadline
+	deadlineMu.Unlock()
+	remaining := time.Until(gotNativeDeadline)
+	if !gotNativeDeadline.Equal(gotFrameDeadline) || remaining >= 23*time.Second || remaining <= 20*time.Second {
+		t.Fatalf("native/frame deadline did not include drain or differ: same=%v remaining=%v", gotNativeDeadline.Equal(gotFrameDeadline), remaining)
+	}
+}
+
+func TestGraphicalParentCancellationCannotCompleteNativeOperation(t *testing.T) {
+	m, id := graphicalTestManager(t)
+	graphicalTestAttach(t, m, id)
+	entered := make(chan struct{})
+	m.runner = graphicalTestRunner(func(ctx context.Context, _ []string, _ []byte) ([]byte, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		e   GraphicalEvent
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := m.HandleGraphicalSession(ctx, graphicalTestRequest(id, "mark", "cancelled-mark", ""), nil)
+		var event GraphicalEvent
+		if err == nil {
+			err = json.Unmarshal(out, &event)
+		}
+		done <- result{event, err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("native operation did not start")
+	}
+	cancel()
+	select {
+	case got := <-done:
+		if got.err != nil || got.e.Event != "outcome_unknown" || m.graphical == nil || !m.graphical.unknown || m.graphical.busy {
+			t.Fatalf("cancelled operation was not fenced as unknown: event=%+v state=%+v err=%v", got.e, m.graphical, got.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not reach native operation")
+	}
+}
+
+func TestGraphicalExpiredPublishCannotCompleteRestore(t *testing.T) {
+	m, id := graphicalTestManager(t)
+	graphicalTestAttach(t, m, id)
+	m.runner = graphicalTestRunner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		return graphicalTestNative("mark", args[len(args)-1], "ready", 1), nil
+	})
+	mark := graphicalTestEvent(t, m, graphicalTestRequest(id, "mark", "publish-expiry-mark", ""), nil)
+	if mark.Event != "completed" || mark.PointID == nil {
+		t.Fatalf("mark %+v", mark)
+	}
+	m.CompleteGraphicalEmission(id, mark.RequestID, true)
+	b := m.bindings[id]
+	m.cfg.Timeout = 90 * time.Second
+	m.runner = graphicalTestRunner(func(_ context.Context, args []string, _ []byte) ([]byte, error) {
+		if args[1] == "frame" {
+			return json.Marshal(NativeFrame{Path: filepath.Join(b.FramesRoot, "fresh.png"), Seq: 1, Generation: b.Container, Width: 2, Height: 1, SHA256RGB24: strings.Repeat("c", 64), CaptureMonoNS: 200, Window: &Window{ID: b.Window, W: 2, H: 1}})
+		}
+		return graphicalTestNative("restore", *mark.PointID, "ready", 2), nil
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	out, err := m.HandleGraphicalSession(ctx, graphicalTestRequest(id, "restore", "publish-expiry-restore", *mark.PointID), func(_ Binding, _ NativeFrame) (string, uint64, error) {
+		time.Sleep(75 * time.Millisecond)
+		return strings.Repeat("d", 64), 3, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e GraphicalEvent
+	if err = json.Unmarshal(out, &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Event != "outcome_unknown" || m.graphical == nil || !m.graphical.unknown || m.graphical.busy || m.graphical.session.Generation != 1 {
+		t.Fatalf("restore published success after its work deadline: event=%+v state=%+v", e, m.graphical)
 	}
 }
 

@@ -26,3 +26,4 @@ macro_rules! message {
 message!(GraphicalSessionRequest, "graphical_session_request", "graphical_session_request/v0.2");
 message!(GraphicalSessionEvent, "graphical_session_event", "graphical_session_event/v0.2");
 message!(GraphicalSession, "graphical_session", "graphical_session/v0.2");
+message!(GraphicalSessionNotice, "graphical_session_notice", "graphical_session_notice/v0.2");

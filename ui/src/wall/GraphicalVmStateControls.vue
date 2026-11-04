@@ -11,6 +11,7 @@ const overlays=/** @type {any} */(inject('overlayCoordinator',null)),owner={};
 let observed=performance.now(),timer=/** @type {ReturnType<typeof setInterval>|undefined} */(undefined);
 function close(){open.value=false;if(popup.value?.matches?.(':popover-open'))popup.value.hidePopover();overlays?.set(owner,false);}
 watch(()=>props.snapshot,()=>{observed=performance.now();elapsed.value=0;close();});
+const attachClick=computed(()=>{const action=graphicalAction(props.snapshot,props.row,'attach'),revision=props.snapshot.revision;return ()=>{if(action)emit('action',{action,revision});};});
 const markClick=computed(()=>{const action=graphicalAction(props.snapshot,props.row,'mark'),revision=props.snapshot.revision;return ()=>{if(action)emit('action',{action,revision});};});
 /** Each rendered handler retains its displayed tuple; App rechecks it before dispatch.
  * @param {string} pointId */
@@ -31,6 +32,7 @@ onBeforeUnmount(()=>{close();clearInterval(timer);document.removeEventListener('
 </script>
 <template>
  <div v-if="caps.visible" class="graphical-vm-state-controls" :data-semantic-anchor="`capsule/${row.id}/graphical/controls`">
+  <button v-if="caps.attach.available" :id="`tile-${row.id}-graphical-enable`" type="button" :disabled="!caps.attach.enabled" :data-semantic-anchor="`tile-${row.id}-graphical-enable`" @click="attachClick">Enable checkpoints</button>
   <button v-if="caps.mark.available" :id="`tile-${row.id}-graphical-mark`" type="button" :disabled="!caps.enabled" :data-semantic-anchor="`tile-${row.id}-graphical-mark`" title="Mark a checkpoint" aria-label="Mark VM checkpoint" @click="markClick">Mark</button>
   <button v-if="caps.back.available" ref="button" class="graphical-vm-back" :id="`tile-${row.id}-graphical-back`" type="button" :disabled="!caps.enabled" :data-semantic-anchor="`tile-${row.id}-graphical-back`" title="Back to checkpoint" aria-label="Back to VM checkpoint" aria-haspopup="menu" :aria-expanded="open" @click="toggle"><span class="graphical-vm-rewind-icon" aria-hidden="true">⏪︎</span><span>Back</span></button>
   <span v-if="status" class="graphical-vm-state-status" :title="status" role="status" aria-live="polite">{{ status }}</span>

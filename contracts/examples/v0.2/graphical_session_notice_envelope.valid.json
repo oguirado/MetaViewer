@@ -1,0 +1,44 @@
+{
+  "schema": "graphical_session_notice_envelope/v0.2",
+  "msg_id": "msg-notice-core-42",
+  "ts_ns": 42,
+  "from": {
+    "component": "core",
+    "instance": "core-test"
+  },
+  "to": {
+    "component": "ui",
+    "instance": "ui-test"
+  },
+  "session_id": "session-test",
+  "seq": 42,
+  "nonce": "nonce-test",
+  "body": {
+    "schema": "graphical_session_notice/v0.2",
+    "notice_id": "notice-core-42",
+    "reason_code": "EXECUTOR_EPOCH_CHANGED",
+    "session": {
+      "authority": "core",
+      "authority_epoch": 1,
+      "backend": "qemu",
+      "generation": 1,
+      "isa": "aarch64",
+      "owner_id": "actor-test",
+      "ownership": "held",
+      "pending_request_id": null,
+      "phase": "outcome_unknown",
+      "points": [
+        {
+          "point_id": "point-test",
+          "generation": 1,
+          "label": "test",
+          "manifest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "created_mono_ns": 1
+        }
+      ],
+      "runtime_id": "runtime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "schema": "graphical_session/v0.2",
+      "surface_id": "surface-notice-test"
+    }
+  }
+}

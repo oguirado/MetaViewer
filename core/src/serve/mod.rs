@@ -1610,8 +1610,11 @@ impl Server {
                 }
                 if let SurfaceEvent::Case1(e) = event.as_ref() {
                     if e.data.surface.state == SurfaceState::Lost {
-                        self.authority.flush_sync()?;
-                        self.notify_graphical_lost_at(now_ns, &e.data.surface.surface_id)?;
+                        let surface_id = &e.data.surface.surface_id;
+                        if self.authority.state().graphical_session.held_surface() == Some(surface_id) {
+                            self.authority.flush_sync()?;
+                            self.notify_graphical_lost_at(now_ns, surface_id)?;
+                        }
                     }
                 }
                 if let SurfaceEvent::Case1(e) = event.as_ref() {
@@ -2661,6 +2664,9 @@ async fn connection_with_liveness(
         let now_ns = s.now()?;
         s.replay
             .record_reconnect(&env.session_id, &env.from, &env.nonce, env.seq)?;
+        let prior_graphical_epoch = s.authority.state().epoch;
+        let prior_graphical_session = s.authority.state().graphical_session.session.clone();
+        let prior_graphical_creator = s.authority.state().graphical_session.creator.clone();
         if env.from.component == Component::Daemon {
             let witness = s
                 .authority
@@ -2687,6 +2693,12 @@ async fn connection_with_liveness(
         s.send_at(now_ns, ready.endpoint(), Command::Hello(Box::new(hello)))?;
         if ready.endpoint().component == Component::Daemon {
             s.mark_graphical_session_unknown_at(now_ns)?;
+            s.notify_graphical_epoch_change_at(
+                now_ns,
+                prior_graphical_epoch,
+                prior_graphical_session,
+                prior_graphical_creator,
+            )?;
         }
         Ok((id, epoch))
     })();
@@ -5960,6 +5972,66 @@ mod nv_regressions {
     }
 
     #[test]
+    fn idle_executor_epoch_change_flushes_unknown_notice_only_to_matching_creator() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            f.server.graphical_session_enabled = true;
+            let ui_rx = f.attach(Component::Ui, 32);
+            let _daemon_rx = f.attach(Component::Daemon, 32);
+            let owner = crate::headless::actor_id(&f.endpoint(Component::Agent));
+            f.route(Component::Ui, 2, json!({
+                "schema":"graphical_session_request/v0.2","request_id":"request-notice-attach",
+                "surface_id":"surface-demo","owner_id":owner,"op":"attach","params":{}
+            })).await.unwrap();
+            f.route(Component::Daemon, 2, json!({
+                "schema":"graphical_session_event/v0.2","event_id":"event-notice-attach",
+                "request_id":"request-notice-attach","owner_id":owner,"surface_id":"surface-demo",
+                "generation":1,"authority_epoch":1,"op":"attach","event":"completed","reason_code":null,
+                "point_id":null,"session":{"schema":"graphical_session/v0.2","surface_id":"surface-demo",
+                    "runtime_id":format!("runtime-{}", "a".repeat(64)),"owner_id":owner,"generation":1,
+                    "authority_epoch":1,"authority":"core","phase":"ready","ownership":"held",
+                    "pending_request_id":null,"points":[],"backend":"qemu","isa":"aarch64"},
+                "elapsed_ms":1,"frame_sha256":null,"frame_generation":null
+            })).await.unwrap();
+
+            let prior_epoch = f.server.authority.state().epoch;
+            let prior_session = f.server.authority.state().graphical_session.session.clone();
+            let creator = f.server.authority.state().graphical_session.creator.clone().unwrap();
+            f.server.authority.apply(Input::Connect).unwrap();
+            let unknown = f.server.authority.state().graphical_session.session.as_ref().unwrap();
+            assert_eq!(unknown["phase"], "outcome_unknown");
+            assert_eq!(unknown["ownership"], "held");
+
+            // A mismatched UI identity cannot receive the notice.
+            let mut foreign_creator = creator.clone();
+            foreign_creator.instance.push_str("-foreign");
+            f.server.notify_graphical_epoch_change_at(
+                10, prior_epoch, prior_session.clone(), Some(foreign_creator),
+            ).unwrap();
+            assert!(!ui_rx.try_iter().any(|env| matches!(env.body, Command::GraphicalSessionNotice(_))));
+
+            f.server.notify_graphical_epoch_change_at(
+                11, prior_epoch, prior_session, Some(creator.clone()),
+            ).unwrap();
+            let notices: Vec<_> = ui_rx.try_iter().filter_map(|env| match env.body {
+                Command::GraphicalSessionNotice(notice) => Some((env.to, notice.0)), _ => None,
+            }).collect();
+            assert_eq!(notices.len(), 1);
+            assert_eq!(notices[0].0, creator);
+            assert_eq!(notices[0].1["reason_code"], "EXECUTOR_EPOCH_CHANGED");
+            assert_eq!(notices[0].1["session"]["phase"], "outcome_unknown");
+            assert_eq!(notices[0].1["session"]["ownership"], "held");
+            assert!(notices[0].1["session"]["pending_request_id"].is_null());
+
+            let replay = crate::journal::scan(&f.server.root.join("journal.jsonl"), &f.server.root)
+                .expect("epoch transition must be durable before notification");
+            assert_eq!(replay.state.graphical_session.session.as_ref().unwrap()["phase"], "outcome_unknown");
+            assert!(replay.state.core_seq >= f.server.authority.state().core_seq);
+        });
+    }
+
+    #[test]
     fn registered_agent_can_forward_stop_for_its_held_graphical_vm() {
         run(async {
             let mut f = Fixture::new();
@@ -6043,6 +6115,36 @@ mod nv_regressions {
             }).collect::<Vec<_>>();
             assert_eq!(unknowns.len(), 1, "Lost must not replay an unknown event already sent at deadline");
             assert_eq!(unknowns[0]["request_id"], "request-mark-deadline");
+        });
+    }
+
+    #[test]
+    fn ordinary_lost_surface_keeps_lifecycle_and_human_cleanup_durable_without_graphical_flush() {
+        run(async {
+            let mut f = Fixture::new();
+            f.seed();
+            let _daemon_rx = f.attach(Component::Daemon, 32);
+            f.server.human_inputs.insert("pending-human".into(), HumanInputPending {
+                seq: 7,
+                ui: f.endpoint(Component::Ui),
+                surface_id: "surface-demo".into(),
+                ui_proposal_id: "proposal-human".into(),
+                case4_expired: false,
+            });
+
+            let lost = json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":{
+                "schema":"surface/v0.2","surface_id":"surface-demo","kind":"vm","display":"display-nv",
+                "geometry":{"w":1280,"h":720},"state":"lost","visibility":"unfolded","control":"agent",
+                "profile_id":"profile-demo"}}});
+            f.route(Component::Daemon, 2, lost).await.unwrap();
+            assert!(!f.server.human_inputs.contains_key("pending-human"));
+
+            let replay = crate::journal::scan(
+                &f.server.root.join("journal.jsonl"),
+                &f.server.root,
+            ).expect("the ordinary Lost and human-cleanup journal updates remain durable");
+            assert!(!replay.state.surfaces["surface-demo"].live);
+            assert!(replay.state.core_seq > 2, "human cleanup was journaled after Lost");
         });
     }
 }

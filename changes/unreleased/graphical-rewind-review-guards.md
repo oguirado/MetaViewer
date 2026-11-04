@@ -1,0 +1,2 @@
+- Require explicit checkpoint activation and keep capacity refusals disabled until physical Stop, while leaving Back available at the point limit.
+- Order graphical deadlines without increasing budgets, scope graphical Lost flushing, and send a separate Core-to-UI notice when an idle executor change invalidates the held session.

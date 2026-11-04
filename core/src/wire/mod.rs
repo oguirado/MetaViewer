@@ -259,6 +259,7 @@ pub fn envelope_schema(body: &Command) -> &'static str {
         Command::GraphicalSessionRequest(_) | Command::GraphicalSessionEvent(_) => {
             "graphical_session_envelope/v0.2"
         }
+        Command::GraphicalSessionNotice(_) => "graphical_session_notice_envelope/v0.2",
         Command::RewindRequest(_) | Command::RewindEvent(_) => "rewind_envelope/v0.2",
         Command::HeadlessRequest(_)
         | Command::HeadlessEvent(_)
@@ -294,6 +295,7 @@ pub fn decode_envelope_with_limits(
                 | "rewind_envelope/v0.2"
                 | "guest_command_observation_envelope/v0.2"
                 | "graphical_session_envelope/v0.2"
+                | "graphical_session_notice_envelope/v0.2"
         )
     }) || is_unknown_body_version(value["body"]["schema"].as_str())
         || value["body"]["schema"] == "hello/v0.2"
@@ -315,6 +317,7 @@ pub fn decode_envelope_with_limits(
         "capsule_envelope/v0.2" => "capsule_envelope.schema.json",
         "rewind_envelope/v0.2" => "rewind_envelope.schema.json",
         "graphical_session_envelope/v0.2" => "graphical_session_envelope.schema.json",
+        "graphical_session_notice_envelope/v0.2" => "graphical_session_notice_envelope.schema.json",
         _ => return Err(DecodeError::UnknownVersion),
     };
     let value = serde_json::to_value(&envelope).map_err(|_| DecodeError::InvalidField)?;
@@ -427,6 +430,7 @@ fn pattern_ok(s: &str, pattern: &str) -> bool {
         "event-",
         "job-",
         "actor-",
+        "notice-",
         "reservation-",
         "point-",
     ] {
@@ -656,6 +660,40 @@ impl<T: Serialize> Serialize for Optional<T> {
 mod tests {
     use super::{schemas, valid};
     use serde_json::json;
+
+    #[test]
+    fn graphical_session_notice_contract_accepts_only_core_to_ui_notice_envelopes() {
+        let notice: super::graphical_session::GraphicalSessionNotice = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/graphical_session_notice.valid.json"
+        )).expect("approved notice fixture decodes");
+        assert_eq!(notice.0["reason_code"], "EXECUTOR_EPOCH_CHANGED");
+        for raw in [
+            include_str!("../../../contracts/examples/v0.2/graphical_session_notice.invalid.ready.json"),
+            include_str!("../../../contracts/examples/v0.2/graphical_session_notice.invalid.released.json"),
+            include_str!("../../../contracts/examples/v0.2/graphical_session_notice.invalid.fake-pending.json"),
+            include_str!("../../../contracts/examples/v0.2/graphical_session_notice.invalid.request-extra.json"),
+            include_str!("../../../contracts/examples/v0.2/graphical_session_notice.invalid.runtime.json"),
+        ] {
+            assert!(serde_json::from_str::<super::graphical_session::GraphicalSessionNotice>(raw).is_err());
+        }
+        let valid: super::Envelope = serde_json::from_str(include_str!(
+            "../../../contracts/examples/v0.2/graphical_session_notice_envelope.valid.json"
+        )).expect("approved Core-to-UI notice fixture decodes");
+        assert!(matches!(valid.body, super::Command::GraphicalSessionNotice(_)));
+        assert_eq!(valid.schema, "graphical_session_notice_envelope/v0.2");
+        for fixture in [
+            "graphical_session_notice_envelope.invalid.agent-recipient.json",
+            "graphical_session_notice_envelope.invalid.daemon-sender.json",
+            "graphical_session_notice_envelope.invalid.old-event.json",
+        ] {
+            let raw = match fixture {
+                "graphical_session_notice_envelope.invalid.agent-recipient.json" => include_str!("../../../contracts/examples/v0.2/graphical_session_notice_envelope.invalid.agent-recipient.json"),
+                "graphical_session_notice_envelope.invalid.daemon-sender.json" => include_str!("../../../contracts/examples/v0.2/graphical_session_notice_envelope.invalid.daemon-sender.json"),
+                _ => include_str!("../../../contracts/examples/v0.2/graphical_session_notice_envelope.invalid.old-event.json"),
+            };
+            assert!(super::decode_envelope(raw).is_err(), "accepted {fixture}");
+        }
+    }
 
     #[test]
     fn ref_evaluates_target_and_sibling_keywords() {

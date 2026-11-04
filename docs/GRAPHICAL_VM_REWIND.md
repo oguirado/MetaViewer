@@ -18,7 +18,9 @@ container through read-only binds. No new image build is required.
 Configure an agent template with `Kind=vm`, `NativeKind=vm`,
 `Program=notepad-rw-vm` and a separately admitted private RAM root. Create the VM
 through Add capsule. Its graphical-session controls attach to the live surface
-and submit Mark or Back using the current generation and authority epoch.
+and require an explicit Enable checkpoints action before Mark or Back using the
+current generation and authority epoch. Opening a tile does not attach a checkpoint
+session on its own.
 Human input control does not transfer the creator UI's checkpoint authority.
 
 For this variant, set the explicit `MV_SRF_STATE_DIR` to an `identity-state`
@@ -50,8 +52,23 @@ state, a fresh bound frame, continued guest input, measured operation times and
 verified physical closure with the read-only base unchanged.
 
 This remains a developer opt-in and is not a release acceptance claim. Operation
-history stays bounded for the VM lifetime; reaching its ceiling requires Stop.
-Host and adapter timeouts may settle an operation as unknown before a late native
-result, so custody remains held rather than inferring success. An idle adapter
-epoch change still needs explicit recovery notification. Add capsule and native
-storage cleanup need their own live gates in addition to a successful Back test.
+history stays bounded for the VM lifetime. A global CAPACITY refusal disables
+checkpoint commands until physical Stop; POINT_CAPACITY disables only Mark and
+leaves existing Back points available. A clean attach refusal also disables its
+button until the old surface is physically closed.
+
+| Graphical layer | Deadline |
+|---|---|
+| Main host | 30 seconds [TARGET] |
+| Core | 28 seconds [TARGET] |
+| Adapter, including capture drain and restore publication | 24 seconds [TARGET] |
+
+These margins do not turn a late or ambiguous outcome into success. Custody stays
+held after uncertainty. An idle executor epoch change is reported through the
+separate graphical_session_notice contract and its Core-to-UI envelope, after the
+state transition is durable. The notice contains no operation or request id; it
+can only quarantine the same already-held session identity and points. It cannot
+create, resume or release an owner. Existing operation contracts are unchanged.
+
+Add capsule and native storage cleanup need their own live gates in addition to
+a successful Back test. Source tests alone do not establish those gates.

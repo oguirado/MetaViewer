@@ -1,8 +1,50 @@
 //! Authenticated graphical QEMU rewind session routing.
 use super::*;
-use crate::wire::graphical_session::{GraphicalSessionEvent, GraphicalSessionRequest};
+use crate::wire::graphical_session::{GraphicalSessionEvent, GraphicalSessionNotice, GraphicalSessionRequest};
 
 impl Server {
+    pub(super) fn notify_graphical_epoch_change_at(
+        &mut self,
+        now_ns: u64,
+        prior_epoch: u64,
+        prior_session: Option<serde_json::Value>,
+        prior_creator: Option<Endpoint>,
+    ) -> Result<()> {
+        let current = &self.authority.state().graphical_session;
+        let (Some(before), Some(creator), Some(after)) =
+            (prior_session, prior_creator, current.session.as_ref())
+        else { return Ok(()); };
+        if self.authority.state().epoch == prior_epoch
+            || current.pending.is_some()
+            || current.creator.as_ref() != Some(&creator)
+            || creator.component != Component::Ui
+            || !self.connections.contains_key(&creator)
+            || before["phase"] != "ready"
+            || before["ownership"] != "held"
+            || after["phase"] != "outcome_unknown"
+            || after["ownership"] != "held"
+            || after["pending_request_id"] != serde_json::Value::Null
+            || after["backend"] != "qemu"
+            || after["isa"] != "aarch64"
+        {
+            return Ok(());
+        }
+        for key in ["surface_id", "runtime_id", "owner_id", "generation", "authority_epoch", "backend", "isa", "points"] {
+            if before[key] != after[key] { return Ok(()); }
+        }
+        let core_seq = self.authority.state().core_seq;
+        let notice = serde_json::json!({
+            "schema": "graphical_session_notice/v0.2",
+            "notice_id": format!("notice-core-{core_seq}"),
+            "reason_code": "EXECUTOR_EPOCH_CHANGED",
+            "session": after,
+        });
+        let notice: GraphicalSessionNotice = serde_json::from_value(notice)?;
+        // The epoch transition and unknown session are journaled before notice enqueue.
+        self.authority.flush_sync()?;
+        self.send_at(now_ns, &creator, Command::GraphicalSessionNotice(Box::new(notice)))
+    }
+
     pub(super) fn graphical_session_request_at(
         &mut self,
         now_ns: u64,

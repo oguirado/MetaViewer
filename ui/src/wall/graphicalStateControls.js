@@ -19,16 +19,22 @@ export function graphicalSnapshot(value) {
 }
 /** Control ownership deliberately does not gate UI rewind: Human Take control retains it. @param {any} snapshot @param {any} row */
 export function graphicalCapabilities(snapshot,row) {
-  const visible = graphicalSnapshot(snapshot) && (snapshot.available || snapshot.code !== null || snapshot.session !== null) && row?.kind === 'vm' && (!snapshot.session || snapshot.session.surface_id===row.id);
-  const s=visible ? snapshot.session : null;
+  const valid=graphicalSnapshot(snapshot),current=valid?snapshot.session:null;
+  const released=current?.phase==='stopped'&&current?.ownership==='released';
+  const attachable=current===null||released;
+  const visible = valid && (snapshot.available || current !== null) && row?.kind === 'vm' && (attachable || current.surface_id===row.id);
+  const s=visible ? current : null;
   const matching = !!s && s.surface_id === row.id;
   const held=matching && snapshot.available && s.ownership === 'held' && s.phase !== 'stopped';
-  const enabled=held && row.backendLifecycle === 'active' && !snapshot.busy && !snapshot.uncertain && s.phase === 'ready' && s.pending_request_id === null;
-  return {visible,held,enabled,back:{available:held && s.points.length > 0},mark:{available:held && s.points.length < 4},points:matching?s.points:[],phase:matching?s.phase:null,code:visible?snapshot.code:null,uncertain:visible && snapshot.uncertain};
+  const unfenced=visible&&snapshot.available&&row.backendLifecycle==='active'&&!snapshot.busy&&!snapshot.uncertain&&snapshot.code!=='CAPACITY';
+  const enabled=held && unfenced && s.phase === 'ready' && s.pending_request_id === null;
+  return {visible,held,enabled,attach:{available:visible&&snapshot.available&&attachable,enabled:unfenced&&attachable&&snapshot.code===null},back:{available:held && s.points.length > 0},mark:{available:held && s.points.length < 4&&snapshot.code!=='POINT_CAPACITY'},points:matching?s.points:[],phase:matching?s.phase:null,code:visible?snapshot.code:null,uncertain:visible && snapshot.uncertain};
 }
 /** Build only the facade's admitted fields, bound to the currently displayed tuple. @param {any} snapshot @param {any} row @param {string} op @param {string} [value] */
 export function graphicalAction(snapshot,row,op,value='') {
-  if (!graphicalCapabilities(snapshot,row).enabled) return null;
+  const caps=graphicalCapabilities(snapshot,row);
+  if(op==='attach')return caps.attach.enabled?{op:'attach',surface_id:row.id}:null;
+  if (!caps.enabled) return null;
   const s=snapshot.session;
   const target={op,surface_id:row.id,generation:s.generation,authority_epoch:s.authority_epoch};
   if(op==='mark' && s.points.length < 4 && graphicalLabel(value))return {...target,label:value};
@@ -58,18 +64,18 @@ export function createGraphicalSessionController(host,changed=()=>{}) {
   }
   return {
     refresh,
-    /** No retries of an ambiguous or refused attach; only a new physical surface starts another attempt. @param {any[]} rows */
-    async attach(rows){
-      if(!alive||pending||!state.available||state.busy||state.uncertain||(state.session && !(state.session.phase==='stopped'&&state.session.ownership==='released')))return;
-      const row=rows.find(r=>r.kind==='vm'&&r.backendLifecycle==='active'&&!attempted.has(r.id));
-      if(row){attempted.add(row.id);await send({op:'attach',surface_id:row.id});}
-    },
+    /** Passive watcher compatibility: checkpoint ownership requires an explicit user action. @param {any[]} _rows */
+    async attach(_rows){},
     /** Reject saved click handlers and tuples from before a host publication. @param {any} action @param {number} revision @param {any[]} rows */
     async request(action,revision,rows){
       if(!alive||pending||revision!==state.revision)return false;
       const row=rows.find(r=>r.id===action?.surface_id);
       const fresh=graphicalAction(state,row,action?.op,action?.op==='mark'?action.label:action?.point_id);
       if(!fresh||Object.keys(fresh).sort().join(',')!==Object.keys(action).sort().join(',')||Object.entries(fresh).some(([key,value])=>action[key]!==value))return false;
+      if(fresh.op==='attach'){
+        if(attempted.has(row.id))return false;
+        attempted.add(row.id);
+      }
       return send(fresh);
     },
     dispose(){alive=false;unsubscribe?.();},

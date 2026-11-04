@@ -40,6 +40,7 @@ import { isDeepStrictEqual } from 'node:util';
 /** Exact capsule-family tag selection; hello, list and graphical traffic stay legacy.
  * @param {any} body */
 export function envelopeTagForBody(body) {
+ if(body?.schema==='graphical_session_notice/v0.2')return 'graphical_session_notice_envelope/v0.2';
  if(['graphical_session_request/v0.2','graphical_session_event/v0.2'].includes(body?.schema))return 'graphical_session_envelope/v0.2';
  if(['rewind_request/v0.2','rewind_event/v0.2'].includes(body?.schema))return 'rewind_envelope/v0.2';
  if(body?.schema==='guest_command_observation/v0.2')return 'guest_command_observation_envelope/v0.2';
@@ -503,6 +504,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
         live = true;clearTimeout(helloTimer);ready();return;
       }
       if(body.schema==='graphical_session_event/v0.2'){if(graphicalSession){try{graphicalSession.receive(body);}catch{graphicalSession.quarantine();}}return;}
+      if(body.schema==='graphical_session_notice/v0.2'){if(graphicalSession){try{graphicalSession.notice(body);}catch{graphicalSession.quarantine();}}return;}
       if(body.schema==='rewind_event/v0.2'){if(!rewind)throw fail();rewind.receive(body);return;}
       const observationMetadata={session_id:env.session_id,from:env.from,to:env.to,seq:env.seq};
       if(body.schema==='guest_command_observation/v0.2'){if(!observationEnvelopeValid(env))throw fail();guestCommand.observe(body,observationMetadata);return;}

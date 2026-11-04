@@ -68,7 +68,7 @@ test('physical destruction resets bounded per-owner history but loss or quaranti
   const p=f.h.request({op:'mark',surface_id:surface,generation:1,authority_epoch:1,label:'Before'});old=f.sent.at(-1);
   f.event(old,'mark','refused',ready(),1,1,{reason_code:'NATIVE_FAILED'});await p;
  }
- const count=f.sent.length;assert.equal((await f.h.request({op:'mark',surface_id:surface,generation:1,authority_epoch:1,label:'Before'})).code,'BUSY');assert.equal(f.sent.length,count);
+ const count=f.sent.length;assert.equal((await f.h.request({op:'mark',surface_id:surface,generation:1,authority_epoch:1,label:'Before'})).code,'CAPACITY');assert.equal(f.sent.length,count);
  f.h.quarantine();assert.equal(f.h.commandAllowed(),false);assert.equal(f.h.surfaceClosed('foreign'),false);assert.equal(f.h.status().uncertain,true);
  assert.equal(f.h.surfaceClosed(surface),true);
  const next=f.h.request({op:'attach',surface_id:surface}),np=f.sent.at(-1);assert.equal(f.sent.length,count+1);
