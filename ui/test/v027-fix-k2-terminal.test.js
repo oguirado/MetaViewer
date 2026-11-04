@@ -58,9 +58,9 @@ function environment(t) {
   t.after(()=>{globalThis.document=doc;globalThis.window=win;});
 }
 function event(key,extra={}) { return {key,preventDefault(){this.prevented=true;},stopPropagation(){this.stopped=true;},stopImmediatePropagation(){this.stopped=true;},...extra}; }
-function setup() {
+function setup(extraProps = {}) {
   const writes=[];
-  const view=mountView(loadView(),{storage:storage(null),terminalBroker:{open:async()=>({session:'session-k2'}),close:async()=>{}},terminalBinding:{attach:async()=>{},write:req=>writes.push(req),close(){},onData(){},onExit(){}}});
+  const view=mountView(loadView(),{storage:storage(null),terminalBroker:{open:async()=>({session:'session-k2'}),close:async()=>{}},terminalBinding:{attach:async()=>{},write:req=>writes.push(req),close(){},onData(){},onExit(){}},...extraProps});
   return {...view,writes};
 }
 test('V027 K2 Ctrl+Shift+F6 exits terminal input without bytes; Tab stays terminal input',async t=>{
@@ -74,11 +74,11 @@ test('V027 K2 Ctrl+Shift+F6 exits terminal input without bytes; Tab stays termin
   assert.equal(leave.prevented,true);assert.equal(v.writes.length,0);
 });
 test('V027 K2 busy-close focuses Cancel, contains Tab, blocks background shortcuts and restores focus',async t=>{
-  environment(t);const v=setup();t.after(()=>v.app.unmount());
+  environment(t);const v=setup({idPrefix:'surface:with.dots'});t.after(()=>v.app.unmount());
   const slot=await v.exposed.controller.launchProfile('shell');await tick();
-  const before=v.find('terminal-deck-new');document.activeElement=before;
+  const before=v.find('surface:with.dots-terminal-deck-new');document.activeElement=before;
   await v.exposed.controller.requestCloseSlot(slot.id);await tick();
-  const cancel=v.find('terminal-deck-confirm-close-no'),confirm=v.find('terminal-deck-confirm-close-yes');
+  const cancel=v.find('surface:with.dots-terminal-deck-confirm-close-no'),confirm=v.find('surface:with.dots-terminal-deck-confirm-close-yes');
   assert.ok(vue.toRaw(document.activeElement)===cancel,'Cancel receives focus');
   const tab=event('Tab',{target:cancel});v.exposed.onWindowKeyDown(tab);assert.ok(vue.toRaw(document.activeElement)===confirm,'Tab focuses confirm');assert.equal(tab.prevented,true);
   const reverse=event('Tab',{shiftKey:true,target:confirm});v.exposed.onWindowKeyDown(reverse);assert.ok(vue.toRaw(document.activeElement)===cancel,'Cancel receives focus');
