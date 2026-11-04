@@ -17,13 +17,17 @@ test('drawer requires real visible geometry large enough for both content and te
  assert.equal(choose(target,{a:host},true,true),null);
  assert.equal(choose(target,{},true,false),null);assert.equal(choose(null,{a:host},true,false),null);
 });
-test('drawer is tile-contained, keeps the deck instance and uses only scoped native occlusion',()=>{
+test('drawer is tile-contained, keeps the deck instance and reserves live presentation space',()=>{
  assert.match(source,/<Teleport :to="terminalDrawerTarget \|\| 'body'" :disabled="!terminalInDrawer">/);
- assert.match(source,/setSurface\(terminalDrawerOwner,id,true\)/);
- assert.match(source,/setSurface\(terminalDrawerOwner,previous,false\)/);
- assert.doesNotMatch(source,/set\(terminalDrawerOwner/);
+ assert.doesNotMatch(source,/terminalDrawerOwner/,'the drawer cannot occlude its live native view');
  const css=readFileSync(new URL('../src/wall/wall.css',import.meta.url),'utf8');
  assert.match(css,/\.mv-tile-terminal-drawer \{[^}]*position:absolute;[^}]*inset:auto 0 0;[^}]*height:min\(45%,360px\)/);
+ assert.match(css,/data-terminal-drawer="true"\] \{[^}]*display: grid;[^}]*grid-template-rows: minmax\(0,1fr\) min\(45%,360px\)/);
+ assert.match(css,/data-terminal-drawer="true"\] > \.cuk-capsule-panel \{[^}]*grid-row: 1;/);
+ assert.match(css,/data-terminal-drawer="true"\] > \.mv-tile-terminal-drawer \{[^}]*grid-row: 2;[^}]*position: relative;/);
+ const panel=readFileSync(new URL('../src/wall/SurfacePanel.vue',import.meta.url),'utf8');
+ assert.match(panel,/:data-terminal-drawer="String\(capsuleTerminal\?\.inDrawer\?\.\(props.capsuleId\) \?\? false\)"/);
+
 });
 
 

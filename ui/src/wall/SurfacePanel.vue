@@ -698,7 +698,7 @@ function onActivateSurface() {
 }
 </script>
 <template>
-  <div class="mv-tile" :hidden="presentationHidden" :data-chrome-expanded="String(chromeExpanded)" :data-mv-window-hidden="String(presentationHidden)" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">
+  <div class="mv-tile" :data-terminal-drawer="String(capsuleTerminal?.inDrawer?.(props.capsuleId) ?? false)" :hidden="presentationHidden" :data-chrome-expanded="String(chromeExpanded)" :data-mv-window-hidden="String(presentationHidden)" :data-tile-state="tile.tile" :data-error-code="row?.refusal?.code ?? snapshot?.error?.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">
   <div ref="terminalDrawerHost" class="mv-tile-terminal-drawer" :id="`tile-terminal-drawer-${props.capsuleId}`" :data-semantic-anchor="`capsule/${props.capsuleId}/terminal-drawer`" :aria-label="`Paired terminal for ${props.title}`" :hidden="!capsuleTerminal?.inDrawer?.(props.capsuleId)"></div>
   <Teleport :to="stateControlTarget || 'body'" :disabled="!stateControlTarget">
     <div class="mv-tile-state-controls" :hidden="!props.stateControls"><slot name="state-controls" :capabilities="props.stateControls" :on-action="onStateAction" /></div>

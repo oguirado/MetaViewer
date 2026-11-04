@@ -309,7 +309,7 @@ async function sync() {
         if (scopedOcclusion && geometricallyShown && typeof api.preview === 'function') {
           try {
             const preview = await api.preview(props.surfaceId);
-            if (!current()) return;
+            if (!current() || overlays?.isSurfaceOccluded(props.surfaceId) !== true) return;
             if (preview?.ok && typeof preview.image === 'string' && preview.image.length <= 2800000
                 && /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(preview.image)) nativePreview.value = preview.image;
           } catch { /* The typed placeholder remains when native capture is unavailable. */ }

@@ -103,7 +103,7 @@ test('mvui17 wall fold: pending busy and refusal reset are wired; template untou
   assert.match(setup, /snapshot\.value\?\.status/);
   assert.match(setup, /snapshot\.value\?\.error\?\.code/);
   assert.match(setup, /isLiveAxisTileState\(tile\.value\.tile\)/);
-  assert.match(template, /<div class="mv-tile" :hidden="presentationHidden" :data-chrome-expanded="String\(chromeExpanded\)" :data-mv-window-hidden="String\(presentationHidden\)" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">/);
+  assert.match(template, /<div class="mv-tile" :data-terminal-drawer="String\(capsuleTerminal\?\.inDrawer\?\.\(props.capsuleId\) \?\? false\)" :hidden="presentationHidden" :data-chrome-expanded="String\(chromeExpanded\)" :data-mv-window-hidden="String\(presentationHidden\)" :data-tile-state="tile\.tile" :data-error-code="row\?\.refusal\?\.code \?\? snapshot\?\.error\?\.code" @pointermove="chromePointer" @pointerleave="chromeHover = false" @focusin="chromeFocused" @focusout="chromeFocus = false" ref="chromeRoot">/);
   assert.ok(template.includes(":presentation-status=\"tile.tile === 'error' ? 'Surface update unavailable' : tile.status\""));
   assert.doesNotMatch(withoutPairedTerminalControl(template), /v-if/);
 });

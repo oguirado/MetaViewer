@@ -374,3 +374,24 @@ test('P18B mutant: ignoring deferred visibility prevents the native view from re
   const source=read('../src/surfaces/RoleSurface.vue'),mutant=source.replace('if (reply.visible === false)','if (false)');
   assert.notEqual(source,mutant);await assert.rejects(()=>deferredVisibilityOracle(mutant),{code:'ERR_ASSERTION'});
 });
+
+async function latePreviewOracle(source) {
+  await withRoles(async({add,calls,overlays})=>{
+    let finishPreview,entered=false;
+    globalThis.metaviewerRoles.preview=()=>{entered=true;return new Promise(resolve=>{finishPreview=resolve;});};
+    await add('preview-human','human');
+    const owner={};
+    overlays.setSurface(owner,'preview-human',true);await tick();
+    assert.equal(entered,true,'native preview is pending');
+    overlays.setSurface(owner,'preview-human',false);
+    finishPreview({ok:true,image:'data:image/png;base64,YQ=='});await tick();await tick();
+    assert.equal(calls.some(c=>c[0]==='visibility' && c[2]===false),false,'a closed overlay must not hide the restored live view');
+  },source);
+}
+test('late native preview cannot hide a view after its overlay closes',()=>latePreviewOracle(read('../src/surfaces/RoleSurface.vue')));
+test('removing the current-occlusion fence reproduces the stale hide',async()=>{
+  const source=read('../src/surfaces/RoleSurface.vue');
+  const mutant=source.replace(' || overlays?.isSurfaceOccluded(props.surfaceId) !== true','');
+  assert.notEqual(mutant,source);
+  await assert.rejects(()=>latePreviewOracle(mutant),{code:'ERR_ASSERTION'});
+});

@@ -208,8 +208,8 @@ const pairedTerminalTarget = shallowRef(/** @type {any} */ (null));
 const activeTerminalPair = ref(/** @type {string|null} */ (null));
 const terminalPreferDock = ref(false);
 const terminalDrawerHosts = shallowRef(/** @type {Record<string,{element:HTMLElement,width:number,height:number,visible:boolean}>} */ ({}));
-/** Keep the canvas geometry unchanged; only sufficiently tall, visible tiles
- * receive a terminal overlay. Unknown geometry stays in the side dock.
+/** Keep the wall cell stable; sufficiently tall visible tiles reserve a row
+ * below their live viewport. Unknown geometry stays in the side dock.
  * @param {any} target @param {Record<string,any>} hosts @param {boolean} open @param {boolean} preferDock */
 function pairedDrawerTarget(target, hosts, open, preferDock) {
   const host=target && hosts[target.surfaceId];
@@ -218,12 +218,6 @@ function pairedDrawerTarget(target, hosts, open, preferDock) {
 const terminalDrawerTarget = computed(() => pairedDrawerTarget(pairedTerminalTarget.value,terminalDrawerHosts.value,terminalDeckOpen.value,terminalPreferDock.value));
 const terminalInDrawer = computed(() => Boolean(terminalDrawerTarget.value));
 const terminalDockOpen = computed(() => terminalDeckOpen.value && !terminalInDrawer.value);
-const terminalDrawerOwner = {};
-watch(() => terminalInDrawer.value ? pairedTerminalTarget.value?.surfaceId : null, (id,previous) => {
-  if (previous) overlayCoordinator?.setSurface(terminalDrawerOwner,previous,false);
-  if (id) overlayCoordinator?.setSurface(terminalDrawerOwner,id,true);
-},{flush:'sync'});
-onBeforeUnmount(() => {if (pairedTerminalTarget.value) overlayCoordinator?.setSurface(terminalDrawerOwner,pairedTerminalTarget.value.surfaceId,false);});
 watch(activeTerminalPair,(id,previous) => {
   if (previous && terminalInDrawer.value && id !== pairedTerminalTarget.value?.surfaceId) terminalPreferDock.value=true;
 });

@@ -563,3 +563,25 @@
 .mv-shell .mv-tile .mv-tile-terminal-toggle,
 .mv-shell .mv-tile .mv-role-menu-button { flex:0 0 24px; min-width:24px; width:24px; padding:2px; }
 .mv-shell .mv-tile .cuk-capsule-panel__title-cluster { min-width:0; }
+
+/* Opening the terminal reserves presentation space; the native guest keeps its
+   fixed resolution and remains live above this separate row. */
+.mv-tile[data-terminal-drawer="true"] {
+  display: grid;
+  grid-template-rows: minmax(0,1fr) min(45%,360px);
+  grid-template-columns: minmax(0,1fr);
+}
+.mv-tile[data-terminal-drawer="true"] > .cuk-capsule-panel {
+  grid-row: 1;
+  grid-column: 1;
+  min-height: 0;
+  height: 100%;
+}
+.mv-tile[data-terminal-drawer="true"] > .mv-tile-terminal-drawer {
+  grid-row: 2;
+  grid-column: 1;
+  position: relative;
+  inset: auto;
+  height: 100%;
+  min-height: 0;
+}
