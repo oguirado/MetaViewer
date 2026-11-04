@@ -248,6 +248,7 @@ rewindc-c88a66137ae1	changes/unreleased/rewind-cleanup-and-observation-coverage.
 rewindr-f6d46b8b6090	changes/unreleased/rewind-recovery-package.md
 routed-map.md	changes/unreleased/routed-map.md
 router-benchmark.md	changes/unreleased/router-benchmark.md
+router-vue-symbols.md	changes/unreleased/router-vue-symbols.md
 schema-parse-once.md	changes/unreleased/schema-parse-once.md
 sidebar-74e83dfe487d	changes/unreleased/sidebar-entry-cleanup.md
 termina-d99d31338446	changes/unreleased/terminal-input-controls.md
@@ -358,6 +359,7 @@ witness-bind.md	changes/unreleased/witness-bind.md
 wj4admi-f9ed43f66238	changes/unreleased/wj4-admission-revert.md
 workspace-columns.md	changes/unreleased/workspace-columns.md
 xpra-role-tiles.md	changes/unreleased/xpra-role-tiles.md
+ROUTER_DONE.md	cloud-audit/ROUTER_DONE.md
 ROUTER_PLAN.md	cloud-audit/ROUTER_PLAN.md
 actionp-0ef0ddb499b4	contracts/examples/action_proposal.invalid.schema.json
 actionp-215c1416bbcf	contracts/examples/action_proposal.valid.json

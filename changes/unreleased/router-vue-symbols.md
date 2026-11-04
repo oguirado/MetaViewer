@@ -1,0 +1,1 @@
+- Extract symbols from Vue `<script>` blocks for the catalogue router (`tools/router_index.py`), so symbol names defined in `.vue` files route to their component; text outside the script blocks stays ignored.

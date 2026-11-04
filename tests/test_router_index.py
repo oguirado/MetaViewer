@@ -1105,5 +1105,37 @@ class RouterIndexTests(unittest.TestCase):
         self.assertIn("real_prod_symbol", syms)
 
 
+    def test_vue_script_symbols_extracted_and_template_ignored(self):
+        root, _env = self._tree(self._base_files())
+        mod = self._load_mod(root)
+        raw = (
+            b"<template>\n"
+            b"function templateDecoy() {}\n"
+            b"<button @click=\"confirmChoice\">ok</button>\n"
+            b"</template>\n"
+            b"<script setup>\n"
+            b"import { ref } from 'vue'\n"
+            b"function confirmChoice() {}\n"
+            b"async function loadWallRows() {}\n"
+            b"export const sharedLimit = 3\n"
+            b"</script>\n"
+            b"<style>\nfunction styleDecoy() {}\n</style>\n"
+        )
+        syms, _docs = mod._extract_symbols_and_docs("ui/src/x/PanelView.vue", "vue", raw)
+        self.assertEqual(syms, ["confirmChoice", "loadWallRows", "sharedLimit"])
+        # Negative control: the masked text keeps offsets and newlines exactly.
+        text = raw.decode("utf-8")
+        masked = mod._vue_script_only(text)
+        self.assertEqual(len(masked), len(text))
+        self.assertEqual(masked.count("\n"), text.count("\n"))
+        self.assertEqual(masked.index("confirmChoice()"), text.index("confirmChoice()"))
+        self.assertNotIn("templateDecoy", masked)
+        self.assertNotIn("styleDecoy", masked)
+        search = mod._build_search("ui/src/x/PanelView.vue", "PanelView.vue", "PanelView",
+                                   "PanelView", "vue", raw)
+        self.assertIn("confirmChoice", search["keywords"])
+        self.assertNotIn("templateDecoy", " ".join(search.get("tasks", [])))
+
+
 if __name__ == "__main__":
     unittest.main()

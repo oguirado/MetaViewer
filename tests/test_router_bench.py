@@ -67,5 +67,19 @@ class RouterBenchFixtureTest(unittest.TestCase):
         self.assertEqual((perfect['top1'], perfect['mrr10']), (2, 1.0))
 
 
+class RouterBenchFloorTest(unittest.TestCase):
+    """Ratchet: catalogue symbol lookups on .vue files must not fall back.
+
+    Phase 1 of cloud-audit/ROUTER_PLAN.md measured 0/6 before Vue symbol
+    extraction; the floor is the measured value after it.
+    """
+
+    def test_catalogue_finds_vue_symbols(self):
+        rows = [row for row in bench.load() if row['mode'] == 'find' and row['gold'][0].endswith('.vue')]
+        self.assertEqual(len(rows), 6)
+        report = bench.run(('catalogue',), rows)['catalogue']['summary']['all']
+        self.assertGreaterEqual(report['top3'], 5, report)
+
+
 if __name__ == '__main__':
     unittest.main()

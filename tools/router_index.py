@@ -282,8 +282,17 @@ _SYM_PATTERNS = {
         ),
     ),
 }
-for _ext in ("mjs", "cjs", "ts", "tsx", "jsx"):
+for _ext in ("mjs", "cjs", "ts", "tsx", "jsx", "vue"):
     _SYM_PATTERNS[_ext] = _SYM_PATTERNS["js"]
+_VUE_SCRIPT_RE = re.compile(r"(<script\b[^>]*>)(.*?)</script\s*>", re.S | re.I)
+
+
+def _vue_script_only(text):
+    """Blank everything outside Vue <script> bodies, keeping offsets and newlines."""
+    out = list(re.sub(r"[^\n]", " ", text))
+    for match in _VUE_SCRIPT_RE.finditer(text):
+        out[match.start(2):match.end(2)] = match.group(2)
+    return "".join(out)
 
 
 def _ident_tokens(text):
@@ -464,7 +473,12 @@ def _extract_symbols_and_docs(rel, suffix, raw):
     except UnicodeDecodeError:
         return [], []
     ext = suffix.lower()
-    scan_text = _strip_rust_cfg_test(text) if ext == "rs" else text
+    if ext == "rs":
+        scan_text = _strip_rust_cfg_test(text)
+    elif ext == "vue":
+        scan_text = _vue_script_only(text)
+    else:
+        scan_text = text
     syms = []
     for pat in _SYM_PATTERNS.get(ext, ()):
         for match in pat.finditer(scan_text):
