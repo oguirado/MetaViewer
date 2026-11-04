@@ -307,6 +307,10 @@ slot values must not contain secrets because process arguments expose them.
 
 Use **Create automation** to teach by demonstrating steps, **Run automation** to use a saved workflow, or **Direct task** to work without a saved workflow. Each prepares a prompt whose final line is `Task: `; type your task there.
 
+For Direct task, the person can type `Task: Show me the domain names that IANA reserves.` Supply the selected capsule's **Copy ID for AI** line in the provided identity placeholder and the running app's **Copy env path** when attachment context is needed. Submit with Enter after reviewing the prepared text. [CITED: `../ui/src/terminal/workflowPrompts.js`, `../ui/src/wall/capsuleId.js`]
+
+The model observes that Agent capsule, chooses a unique exact observed control name such as `Reserved Domains`, and uses the documented browser-goal runner for a bounded action. It then observes the result, for example the heading `IANA-managed Reserved Domains`. The person's task describes the desired outcome; the model supplies the exact control name to the runner. Ambiguous controls, missing attachment values, refusals, login and CAPTCHA stop the task for the person. Read the actual result and receipt: successful input alone does not establish the requested outcome. [CITED: `../ui/src/terminal/workflowPrompts.js`, `../tools/mw_run_browser_goal.md`]
+
 Without a matching pair, the prompt is copied to the clipboard. With a paired capsule, the buttons offer installed agent profiles and launch the chosen CLI with the actual capsule identity. Once its input prompt is recognized, the instructions are pasted without Enter; add your task and submit it. The readiness wait is bounded at `15` seconds [CITED: `../ui/src/terminal/agentPromptGate.js`]. Missing, exited, unready or authentication-waiting agents receive no prompt. Plain shells remain copy-only.
 
 Open **＋ New terminal** to choose an installed CLI profile or **Custom CLI**, then **Launch**. The paired session starts as a host shell; pairing alone does not launch an agent. Review terminal errors rather than treating a copied prompt as proof of launch.
