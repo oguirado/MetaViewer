@@ -412,7 +412,10 @@ step_verify_smoke() {
     else
         fail JUDGE_SMOKE "package verification failed: $(tail -n 3 "$log" | tr '\n' ' ')" "download the release tarball again and re-run install"
     fi
-    if timeout 600 "$NODE_BIN" "$PKG_TOOL" --smoke "$ASSET_DIR/metaviewer-linux-$ARCHN.tar.gz" >>"$log" 2>&1; then # MUT:JUDGE_SMOKE
+    mkdir -p "$JUDGE_HOME/run/smoke-tmp" "$JUDGE_HOME/run/smoke-processes" &&
+        chmod 0700 "$JUDGE_HOME/run/smoke-tmp" "$JUDGE_HOME/run/smoke-processes" ||
+        fail JUDGE_SMOKE "cannot create private smoke state" "make $JUDGE_HOME/run writable"
+    if TMPDIR="$JUDGE_HOME/run/smoke-tmp" MV_PACKAGE_SMOKE_STATE_DIR="$JUDGE_HOME/run/smoke-processes" timeout 600 "$NODE_BIN" "$PKG_TOOL" --smoke "$ASSET_DIR/metaviewer-linux-$ARCHN.tar.gz" >>"$log" 2>&1; then # MUT:JUDGE_SMOKE
         say METAVIEWER_MAIN_SMOKE_OK
     else
         rc=$?
@@ -789,6 +792,13 @@ cmd_stop() {
         say "no running MetaViewer process"
     fi
     remove_owned_pid "$pid"
+    # Retain interrupted/unverified smoke ownership records. Stop must never
+    # turn missing cleanup proof into a clean verdict or kill guessed PIDs.
+    for f in "$JUDGE_HOME/run/smoke-processes"/* "$JUDGE_HOME/run/smoke-tmp"/*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        leaks=$((leaks + 1))
+        printf 'JUDGE_STOP_LEAK: smoke ownership/runtime %s remains -- fix: verify its recorded process identity and group have exited before removing this state\n' "$f" >&2
+    done
     if [ -x "$SRF_BIN/srf-identity-surface" ] && command -v docker >/dev/null 2>&1 &&
         bounded_docker info >/dev/null 2>&1 &&
         inventory=$(bounded_docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then

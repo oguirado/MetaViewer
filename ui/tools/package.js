@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { buildFuseConfig, ELECTRON_PIN, FUSE_TABLE } from '../electron/main.js';
 import { extractFile, listPackage, statFile, uncache } from '@electron/asar';
 import { checkInstalled, syncKit } from '../../tools/sync_kit.mjs';
+import { executeSmoke } from './smokeProcess.js';
 
 export { ELECTRON_PIN };
 export const PKG_BOOT_BUDGET_MS = 10000;
@@ -2720,7 +2721,7 @@ export async function operatorPackagedSmoke(installed, source = process.env) {
   env.MV_PACKAGE_SMOKE_OPERATOR = '1';
   const admission = await preparePackagedAdmission(env);
   const before = new Set(await fs.readdir(admission));
-  const result = await execute('xvfb-run', ['-a', join(resolve(installed), 'metaviewer')],
+  const result = await executeSmoke('xvfb-run', ['-a', join(resolve(installed), 'metaviewer')],
     {cwd:installed, env, timeout:120000, maxBuffer:1024*1024});
   assertSmokeOutput(result);
   if (!result.stdout.includes('METAVIEWER_SURFACE_CREATE_WIRE_REPLY') || !result.stdout.includes('METAVIEWER_ADAPTER_HOLD_OK')) throw new Error('PKG_OPERATOR_HOLD_FAILED');
@@ -2779,8 +2780,8 @@ export async function cleanInstallSmoke(artifact) {
     try {
       await writeFakeSmokeAdapter(adapter,receiptPath);
       const trace=join(clean,'files.trace');
-      const env={XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
-      await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
+      const env={TMPDIR:clean,XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1',MV_SRF_BIN_DIR:srfBinDir};
+      await runSmokeCommand(() => executeSmoke('xvfb-run',['-a','strace','-f','-e','trace=file','-o',trace,
         join(installed,'metaviewer'),`--user-data-dir=${join(clean,'profile')}`],{cwd:clean,env,timeout:30000,maxBuffer:1024*1024}));
       await verifySmokeAdapterReceipt(receiptPath,srfBinDir);
       const accesses=await fs.readFile(trace,'utf8');
@@ -2811,6 +2812,7 @@ export async function cleanInstallSmoke(artifact) {
       });
       const realTrace=join(clean,'real-files.trace');
       const realEnv={
+        TMPDIR:clean,
         XDG_RUNTIME_DIR:hostRuntime,
         PATH:process.env.PATH,
         HOME:clean,
@@ -2822,7 +2824,7 @@ export async function cleanInstallSmoke(artifact) {
         MV_SRF_PROFILES:srfProfiles,
         MV_PACKAGE_SMOKE_HOLD:'1',
       };
-      await runSmokeCommand(() => execute('xvfb-run',['-a','strace','-f','-e','trace=file','-o',realTrace,
+      await runSmokeCommand(() => executeSmoke('xvfb-run',['-a','strace','-f','-e','trace=file','-o',realTrace,
         join(installed,'metaviewer'),`--user-data-dir=${join(clean,'real-profile')}`],{cwd:clean,env:realEnv,timeout:60000,maxBuffer:1024*1024}));
       // An entry that never opened the shared ledger left no reservation; other errors fail.
       // A missing host runtime directory itself is never read as an empty ledger.
@@ -2836,6 +2838,7 @@ export async function cleanInstallSmoke(artifact) {
       const negSrfIdentityDir=await fs.mkdtemp(join(clean,'neg-srf-identity-'));
       for (const dir of [negSrfStateDir,negSrfIdentityDir]) await fs.chmod(dir,0o700);
       const noProfilesEnv={
+        TMPDIR:clean,
         XDG_RUNTIME_DIR:hostRuntime,
         PATH:process.env.PATH,
         HOME:clean,
@@ -2848,7 +2851,7 @@ export async function cleanInstallSmoke(artifact) {
       const configTrace=join(clean,'config-refusal.trace');
       let configResult;
       try {
-        const result=await execute('xvfb-run',['-a','strace','-ff','-e','trace=write',
+        const result=await executeSmoke('xvfb-run',['-a','strace','-ff','-e','trace=write',
           '-s','256','-o',configTrace,join(installed,'metaviewer'),
           `--user-data-dir=${join(clean,'no-profiles-profile')}`],
           {cwd:clean,env:noProfilesEnv,timeout:60000,maxBuffer:1024*1024});
@@ -2862,10 +2865,10 @@ export async function cleanInstallSmoke(artifact) {
     } finally {
       await fs.rm(shmRoot,{recursive:true,force:true});
     }
-    const env={XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
+    const env={TMPDIR:clean,XDG_RUNTIME_DIR:hostRuntime,PATH:process.env.PATH,HOME:clean,LANG:'C.UTF-8',MV_PACKAGE_SMOKE:'1'};
     let refused=false, refusalDetail='';
     try {
-      await execute('xvfb-run',['-a',join(installed,'metaviewer'),
+      await executeSmoke('xvfb-run',['-a',join(installed,'metaviewer'),
         `--user-data-dir=${join(clean,'refusal-profile')}`,'--remote-debugging-port=9222'],
         {cwd:clean,env,timeout:60000,maxBuffer:1024*1024});
     } catch (error) {
