@@ -124,6 +124,10 @@ class GuestCommandSession:
     def __init__(self, client, *, observe_owned=False):
         self._observe_owned = observe_owned
         self._rewind = None
+        self._bootstrap_complete = not observe_owned
+        self._bootstrap_request_id = 'guest-bootstrap-' + secrets.token_hex(16) if observe_owned else None
+        self._bootstrap_sent = False
+        self._bootstrap_deadline = None
         self._retired_generations = set()
         self._ready_notice = threading.Event()
         self.client = client
@@ -153,6 +157,9 @@ class GuestCommandSession:
                 raise GuestCommandError('registered agent identity required')
             client._guest_claim = self
             client.active._io_owner = -1
+        if observe_owned:
+            from .rewind import RewindSession
+            self._rewind = RewindSession(self)
         self._thread = threading.Thread(target=self._pump, name='mv-guest-command', daemon=True)
         self._thread.start()
 
@@ -179,7 +186,7 @@ class GuestCommandSession:
 
     def _rewind_stop_target(self):
         if self._rewind is None:return
-        target=self._rewind.target
+        target=self._rewind._target_snapshot()
         if target is None or self._session is None:return
         if target['workload_id']!=self._session['workload_id'] or target['generation']<self._session['generation']:
             raise GuestCommandError('invalid rewind cleanup target')
@@ -212,7 +219,7 @@ class GuestCommandSession:
     @property
     def session(self):
         with self._lock:
-            return copy.deepcopy(self._session)
+            return copy.deepcopy(self._session) if self._bootstrap_complete else None
 
     @property
     def last_result(self):
@@ -231,6 +238,8 @@ class GuestCommandSession:
 
     def _submit(self, op, params, timeout_ms):
         _timeout(timeout_ms)
+        if not self._bootstrap_complete:
+            raise GuestCommandError('guest bootstrap is not complete')
         body = {'schema': 'guest_command_request/v0.2', 'request_id': 'request-' + secrets.token_hex(16), 'op': op, 'params': params}
         operation = GuestOperation(body, time.monotonic() + timeout_ms / 1000)
         operation._pump_thread = self._thread
@@ -292,6 +301,8 @@ class GuestCommandSession:
 
     def stop(self, *, timeout_ms=15000):
         with self._lock:
+            if not self._bootstrap_complete:
+                raise GuestCommandError('guest bootstrap is not complete')
             if self._closed:
                 return copy.deepcopy(self._session)
             if self._halt.is_set() or self._session is None:
@@ -325,6 +336,8 @@ class GuestCommandSession:
 
     def _issue(self, operation):
         with self._lock:
+            if not self._bootstrap_complete:
+                raise GuestCommandError('guest bootstrap is not complete')
             if operation.unknown or operation._future.done():
                 return
             if operation.deadline <= time.monotonic():
@@ -339,13 +352,43 @@ class GuestCommandSession:
         # Guest-only list has no response. Any inbound non-guest body remains a
         # protocol violation; this does not introduce a generic reply sink.
         with self._lock:
-            if not _heartbeat_due(now, self._last_send):
+            if not self._bootstrap_complete or not _heartbeat_due(now, self._last_send):
                 return
             body = {"schema": "surface_request/v0.2", "op": "list", "params": {}}
             envelope = self.client._envelope(body, "guest-keepalive-" + secrets.token_hex(16))
             self.client._reserve()
             self.client.active.send(envelope)
             self._last_send = now
+
+    def _issue_bootstrap(self):
+        # The existing read-only list result is queued after handshake history.
+        # Its exact correlation is the fence; no guest event is synthesized.
+        with self._lock, self.client._io_lock:
+            if self._bootstrap_complete or self._bootstrap_sent:
+                raise GuestCommandError('invalid bootstrap send')
+            body = {'schema': 'mv_tool_call/v0.2', 'request_id': self._bootstrap_request_id,
+                    'op': 'list', 'args': {'cursor': None, 'limit': 1}}
+            envelope = self.client._envelope(body, self._bootstrap_request_id)
+            self._bootstrap_sent = True
+            self._bootstrap_deadline = time.monotonic() + 5.0
+            self.client._reserve()
+            self.client.active.send(envelope)
+            self._last_send = time.monotonic()
+
+    def _accept_bootstrap(self, body):
+        from .tools import _check_result_head
+        if (self._bootstrap_complete or not self._bootstrap_sent
+                or self._bootstrap_deadline is None
+                or time.monotonic() >= self._bootstrap_deadline):
+            raise GuestCommandError('unexpected or expired bootstrap result')
+        _check_result_head(body, request_id=self._bootstrap_request_id, op='list')
+        if (body['status'] != 'ok' or len(body['surfaces']) > 1
+                or self._uncertain or self._closed or self._binding is None
+                or self._session is None or self._create is None or not self._create.done()):
+            raise GuestCommandError('bootstrap history or result unavailable')
+        self._bootstrap_complete = True
+        self._bootstrap_deadline = None
+        self._ready_notice.set()
 
     def _controls(self, session, acknowledging=None):
         for name, control in session['controls'].items():
@@ -369,6 +412,8 @@ class GuestCommandSession:
             raise GuestCommandError('replayed core sequence')
         self._last_seq = envelope['seq']
         e = envelope['body']
+        if e.get('schema') == 'mv_tool_result/v0.2':
+            self._accept_bootstrap(e);return
         if e.get('schema') == 'rewind_event/v0.2':
             if self._rewind is None:raise GuestCommandError('unclaimed rewind family')
             self._rewind._handle(e);return
@@ -454,7 +499,7 @@ class GuestCommandSession:
             if op is not self._create or not op._accepted.is_set() or incoming['phase'] != phase or incoming['job'] is not None or incoming['jobs_started'] != 0:
                 raise GuestCommandError('invalid ready')
             self._session = copy.deepcopy(incoming)
-            self._ready_notice.set()
+            if self._bootstrap_complete:self._ready_notice.set()
             op._future.set_result(copy.deepcopy(incoming)); op.deadline = None
             return
         if kind in ('output', 'job_finished'):
@@ -507,6 +552,7 @@ class GuestCommandSession:
         previous = self.client.active._timeout_s
         self.client.active._timeout_s = min(previous, 3.0)
         try:
+            if self._observe_owned:self._issue_bootstrap()
             while not self._halt.is_set():
                 for _ in range(8):
                     try:op = self._queue.get_nowait()
@@ -518,6 +564,8 @@ class GuestCommandSession:
                     if envelope is None:break
                     with self._lock:self._handle(envelope)
                 with self._lock:
+                    if self._bootstrap_deadline is not None and time.monotonic() >= self._bootstrap_deadline:
+                        raise GuestCommandUnknown('bootstrap deadline expired; no retry')
                     if self._rewind is not None:self._rewind._poll(time.monotonic())
                     if any(not o._future.done() and o.deadline is not None and time.monotonic() >= o.deadline for o in self._ops.values()):
                         self._fail('operation deadline expired; no replay')

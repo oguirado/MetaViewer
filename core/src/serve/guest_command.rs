@@ -166,11 +166,13 @@ impl Server {
         ) {
             Ok(observation) => observation,
             Err(error) => {
+                self.guest_agent_replay.invalidate();
                 self.mark_guest_command_unknown(now)?;
                 return Err(error);
             }
         };
         if let Some((ui, observation)) = observation {
+            self.record_guest_observation(Command::GuestCommandEvent(Box::new(forwarded.clone())));
             // The accepted transition is durably committed above. The pair is
             // adjacent on the creator's queue; neither member grants authority.
             if self.send_at(now, &ui, observation).is_err()
@@ -196,6 +198,7 @@ impl Server {
             }
             return Ok(());
         }
+        self.record_guest_observation(Command::GuestCommandEvent(Box::new(forwarded.clone())));
         for p in receivers {
             if self.connections.contains_key(&p) {
                 let _ = self.send_at(
@@ -245,6 +248,7 @@ impl Server {
             let e: GuestCommandEvent = serde_json::from_value(
                 json!({"schema":"guest_command_event/v0.2","event_id":format!("event-core-{}-{}",out.core_seq,index),"request_id":id,"reservation_id":reservation,"owner_id":owner,"session":session,"event":"outcome_unknown","data":{"op":op,"code":"TRANSPORT"}}),
             )?;
+            self.record_guest_observation(Command::GuestCommandEvent(Box::new(e.clone())));
             for p in &receivers {
                 if self.connections.contains_key(p) {
                     let _ = self.send_at(now, p, Command::GuestCommandEvent(Box::new(e.clone())));

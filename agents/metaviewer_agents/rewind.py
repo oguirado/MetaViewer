@@ -51,10 +51,14 @@ class RewindSession:
 
     @property
     def status(self):
-        with self.guest._lock:return copy.deepcopy(self._session)
+        with self.guest._lock:return copy.deepcopy(self._session) if self.guest._bootstrap_complete else None
 
     @property
     def target(self):
+        with self.guest._lock:
+            return self._target_snapshot() if self.guest._bootstrap_complete else None
+
+    def _target_snapshot(self):
         with self.guest._lock:
             if self._target is not None:return copy.deepcopy(self._target)
             s=self.guest._session
@@ -66,7 +70,7 @@ class RewindSession:
         with self.guest._lock:return self.guest._session is not None and self.guest._session['ownership']=='held' and self.guest._session['phase']=='ready' and not self.guest._uncertain and self.command_allowed()
 
     def command_allowed(self):
-        return not self._uncertain and self._pending is None and (self._session is None or self._session['phase']=='ready')
+        return self.guest._bootstrap_complete and not self._uncertain and self._pending is None and (self._session is None or self._session['phase']=='ready')
 
     def _point_id(self,rid,workload):
         h=hashlib.sha256()
@@ -77,6 +81,7 @@ class RewindSession:
     def start(self,op,*,label=None,point_id=None,timeout_ms=30000):
         _timeout(timeout_ms)
         with self.guest._lock:
+            if not self.guest._bootstrap_complete:raise RewindError('guest bootstrap is not complete')
             target=self.target
             if target is None or self.guest._closed or self.guest._halt.is_set() or self._pending is not None or self._uncertain:
                 raise RewindError('no ready owned rewind target')
@@ -137,7 +142,7 @@ class RewindSession:
     def _passive(self,e):
         if self._pending is not None or len(self._ops)>=256:raise RewindError('overlapping observed rewind')
         if not self.guest._observe_owned or e['event'] not in ('accepted','outcome_unknown'):raise RewindError('unmatched rewind request')
-        target=self.target;s=e['session']
+        target=self._target_snapshot();s=e['session']
         if target is None:raise RewindError('no confirmed GC target')
         op=e['data']['op'];origin=self._session['phase'] if self._session else 'ready'
         planned=copy.deepcopy(target)

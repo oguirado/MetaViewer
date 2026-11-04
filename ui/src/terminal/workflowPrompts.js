@@ -14,6 +14,7 @@ export function assertSafeWorkflowIdentity(text) {
     const match=/^CAPSULE=(\S+)  IDENTITY=(\S+)$/.exec(text);
     if (!match || !isCapsuleSurfaceId(match[1]) || !(match[2]==='<none>' || isCapsuleIdentity(match[2]))) throw Error('WORKFLOW_IDENTITY_UNSAFE');
   }
+  if (text.startsWith('MICROVM=') && !/^MICROVM=workload-[a-z0-9][a-z0-9._-]{0,63}  GENERATION=[1-9][0-9]*  OWNER=actor-[a-z0-9][a-z0-9._-]{0,63}$/.test(text)) throw Error('WORKFLOW_IDENTITY_UNSAFE');
   return text;
 }
 /** @param {string} text */
@@ -24,8 +25,39 @@ export function assertSafeWorkflowPrompt(text) {
   }
   return text;
 }
-/** @param {string} kind */
-export function workflowPrompt(kind) {
+/** Closed, trusted host projection; never accept a transport token or arbitrary text.
+ * @param {any} context */
+export function assertMicrovmContext(context) {
+  const keys=['kind','workloadId','generation','ownerId','profileId','backend','isa'];
+  if (!context || typeof context!=='object' || Object.keys(context).length!==keys.length
+      || keys.some(key=>!Object.hasOwn(context,key)) || context.kind!=='microvm'
+      || typeof context.workloadId!=='string' || !/^workload-[a-z0-9][a-z0-9._-]{0,63}$/.test(context.workloadId)
+      || typeof context.ownerId!=='string' || !/^actor-[a-z0-9][a-z0-9._-]{0,63}$/.test(context.ownerId)
+      || !Number.isSafeInteger(context.generation) || context.generation<1
+      || context.profileId!=='guest-command-arm64-v1' || context.backend!=='firecracker' || context.isa!=='aarch64') throw Error('WORKFLOW_MICROVM_CONTEXT');
+  return Object.freeze({...context});
+}
+/** @param {any} context */
+export function microvmIdentity(context) {
+  const c=assertMicrovmContext(context);
+  return `MICROVM=${c.workloadId}  GENERATION=${c.generation}  OWNER=${c.ownerId}`;
+}
+/** @param {string} kind @param {any} [context] */
+export function workflowPrompt(kind,context) {
+  if (context!==undefined) {
+    const c=assertMicrovmContext(context);
+    if(kind!=='no-automation') throw Error('WORKFLOW_MICROVM_KIND');
+    return assertSafeWorkflowPrompt([
+      'First locate and source the live app attachment in a task subshell: ENV=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/metaviewer/attach/current.env; set -a; . "$ENV"; set +a. Stop if missing or stale.',
+      'Then read "$MV_OPERATOR_REPO/docs/AGENT_ENTRY.md", section "MicroVM Direct task"; stop if the attachment does not supply MV_OPERATOR_REPO.',
+      microvmIdentity(c),
+      `BINDING: profile_id=${c.profileId} backend=${c.backend} isa=${c.isa}`,
+      `export MV_TASK_BINDING='${JSON.stringify({workload_id:c.workloadId,generation:c.generation,owner_id:c.ownerId,profile_id:c.profileId,backend:c.backend,isa:c.isa})}'`,
+      'Use the existing SDK properties client.guest_commands and client.rewind on the authenticated host channel; verify the complete live binding before any command. Construct guest commands from the one-sentence objective below; follow the executable recipe, never substitute a fixed demonstration task.',
+      'GUARD: the human alone owns Back. Never create or substitute a guest, guess attachment or IDs, use native control, or retry uncertain delivery. Stop if the live binding is unavailable or changed.',
+      'Task: ',
+    ].join('\n'));
+  }
   if (!Object.hasOwn(tasks, kind)) throw Error('WORKFLOW_PROMPT_KIND');
   const task=tasks[/** @type {keyof typeof tasks} */ (kind)];
   return assertSafeWorkflowPrompt([

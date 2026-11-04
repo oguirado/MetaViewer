@@ -3,7 +3,9 @@ import {computed,ref,watch,onMounted,onUnmounted} from 'vue';
 import {gcSnapshot,gcAction,gcObservationSnapshot} from '../../electron/guestCommandValues.js';
 import {rewindHeaderCapabilities,rewindHeaderRestoreAction} from '../wall/rewindStateControls.js';
 import {createRestoreDuration} from '../wall/restoreDuration.js';
-const props=defineProps({snapshot:{type:Object,required:true},rewind:{type:Object,default:null},rewindPanel:{type:[Object,Function],default:null}});
+const props=defineProps({snapshot:{type:Object,required:true},rewind:{type:Object,default:null},rewindPanel:{type:[Object,Function],default:null},
+ terminalComponent:{type:[String,Object,Function],default:null},terminalBroker:{type:Object,default:null},terminalSessionPort:{type:Object,default:null},
+ hostProviders:{type:Array,default:()=>[]},brokerCommands:{type:Array,default:()=>[]},clipboard:{type:Object,default:null}});
 const emit=defineEmits(['action','rewind-action']);
 const command=ref('uname -m'),cwd=ref('');
 const observation=ref(/** @type {any} */(null));
@@ -24,6 +26,15 @@ onUnmounted(()=>{restoreDuration.clear();stopObservation?.();stopObservation=nul
 /** @param {number|null} age */
 const pointAge=age=>{const elapsed=ageElapsed.value;if(age===null||elapsed===null||!Number.isSafeInteger(age)||age<0||!Number.isSafeInteger(age+elapsed))return 'Age unavailable';return `${Math.floor((age+elapsed)/1000)} s ago`;};
 const state=computed(()=>gcSnapshot(props.snapshot)?props.snapshot:{available:false,busy:false,canCancel:false,uncertain:true,code:'INVALID_STATE',session:null,stdout:'',stderr:''}),session=computed(()=>state.value.session);
+const terminalOpen=ref(false),terminalStarted=ref(false),copyStatus=ref('');
+const terminalStorage={getItem:()=>null,setItem:()=>{}};
+// This is the core workload identity, never a graphical surface identifier.
+const terminalTarget=computed(()=>{const value=session.value;if(!value)return null;return {kind:'microvm',workloadId:value.workload_id,generation:value.generation,ownerId:value.owner_id,profileId:value.profile_id,backend:value.backend,isa:value.isa,title:'ARM64 MicroVM'};});
+const shortWorkloadId=computed(()=>{const id=session.value?.workload_id??'';return id.length<=14?id:`${id.slice(0,8)}…${id.slice(-5)}`;});
+const hostTerminalAvailable=computed(()=>!!terminalTarget.value&&!!props.terminalComponent&&typeof props.terminalBroker?.open==='function');
+function toggleTerminal(){if(terminalOpen.value){terminalOpen.value=false;return;}if(!hostTerminalAvailable.value)return;terminalStarted.value=true;terminalOpen.value=true;}
+async function copyWorkloadId(){const t=terminalTarget.value;if(!t)return;const clipboard=props.clipboard??globalThis.navigator?.clipboard;if(typeof clipboard?.writeText!=='function'){copyStatus.value='Copy unavailable';return;}
+ try{await clipboard.writeText(`MICROVM=${t.workloadId}  GENERATION=${t.generation}  OWNER=${t.ownerId}`);copyStatus.value='Copied';}catch{copyStatus.value='Copy unavailable';}}
 const target=()=>({workload_id:session.value?.workload_id,generation:session.value?.generation});
 const runAction=()=>({op:'run',...target(),command_utf8:command.value,cwd:cwd.value,stdin_b64:'',timeout_ms:30000});
 const rewindAllows=computed(()=>!props.rewind?.available||!props.rewind.busy&&!props.rewind.uncertain&&(!props.rewind.session||props.rewind.session.phase==='ready'));
@@ -33,10 +44,13 @@ function cancel(){if(state.value.canCancel)emit('action',{op:'cancel',...target(
 function stop(){if(session.value?.ownership==='held'&&!session.value.controls?.stop)emit('action',{op:'stop',...(props.rewind?.stop_target??target())});}
 </script>
 <template>
+ <div class="microvm-tile" :data-terminal-open="String(terminalOpen)">
  <section class="guest-command-panel" aria-labelledby="guest-command-title" data-semantic-anchor="capsule/microvm/commands">
   <div class="guest-command-panel__sticky">
   <slot name="header" :capabilities="headerCapabilities" :onRestore="restorePoint">
   <header><div><small>ARM64 MicroVM</small><h2 id="guest-command-title">Guest commands</h2></div>
+   <div v-if="terminalTarget" class="microvm-identity" data-semantic-anchor="capsule/microvm/id"><span>Capsule ID</span><code :title="terminalTarget.workloadId">{{ shortWorkloadId }}</code><button type="button" aria-label="Copy MicroVM ID for AI" @click="copyWorkloadId">Copy ID for AI</button><small role="status">{{ copyStatus }}</small></div>
+   <button v-if="hostTerminalAvailable" type="button" class="microvm-terminal-toggle" data-semantic-anchor="capsule/microvm/terminal" :aria-expanded="terminalOpen" @click="toggleTerminal">{{ terminalOpen?'Hide paired terminal':'Open paired terminal' }}</button>
    <details v-if="headerCapabilities.back.available" class="rewind-back" data-semantic-anchor="capsule/microvm/header/back">
     <summary aria-label="Back to checkpoint"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M11 5v14l-9-7zM22 5v14l-9-7z" fill="currentColor" /></svg><span>Back</span></summary>
     <ul aria-label="Available checkpoints"><li v-for="point in headerCapabilities.back.points" :key="point.point_id"><button type="button" @click="restorePoint(point.point_id)" :aria-label="`Back to ${point.label||'checkpoint'}`"><strong>{{ point.label||'Checkpoint' }}</strong><span>{{ pointAge(point.age_ms) }} · Guest counter {{ point.counter_value??'unknown' }}</span></button></li></ul>
@@ -44,7 +58,7 @@ function stop(){if(session.value?.ownership==='held'&&!session.value.controls?.s
    <strong>{{ state.uncertain?'Outcome unknown':rewind?.session?.phase??session?.phase??'Creating' }}</strong>
   </header>
  </slot>
-  <aside class="restore-response" aria-live="polite"><span>Restore response (observed)</span><strong data-testid="restore-duration">{{ restoreMilliseconds===null?'Unavailable':`${restoreMilliseconds.toFixed(1)} ms` }}</strong><small>Back click to confirmed Ready · includes pause and transport.</small></aside>
+  <aside class="restore-response" :class="{'restore-response--pending':restoreMilliseconds===null}" aria-live="polite"><span>Restore response (observed)</span><strong data-testid="restore-duration">{{ restoreMilliseconds===null?'Not measured yet':`${restoreMilliseconds.toFixed(1)} ms` }}</strong><small>{{ restoreMilliseconds===null?'A measured time appears after using Back.':'Back click to confirmed Ready · includes pause and transport.' }}</small></aside>
   </div>
   <p>Commands run inside the guest. This is a command log, not an interactive terminal.</p>
   <p role="status" aria-live="polite">{{ session?.ownership==='released'?'Stopped — native closure confirmed.':state.uncertain?'Ownership retained. Stop to reconcile the workload.':'Owned by this session.' }}</p>
@@ -56,8 +70,18 @@ function stop(){if(session.value?.ownership==='held'&&!session.value.controls?.s
   <p v-if="session?.job">Job: {{ session.job.state }} · Exit: {{ session.job.exit_code??'—' }} · Signal: {{ session.job.signal??'—' }} · Output {{ session.job.output_complete?'complete':'not confirmed complete' }}</p>
   <p v-if="state.code" role="alert">{{ state.code }}</p>
  </section>
+ <aside v-if="terminalStarted" class="microvm-host-terminal" :hidden="!terminalOpen" aria-label="Host paired terminal for MicroVM"><small>Host paired terminal · this shell runs on your computer, not inside the guest.</small><component :is="terminalComponent" :compact="true" :id-prefix="`microvm-${terminalTarget?.workloadId??'closed'}`" :open="terminalOpen" :paired-target="terminalTarget" :terminal-broker="terminalBroker" :terminal-session-port="terminalSessionPort" :host-providers="hostProviders" :broker-commands="brokerCommands" :clipboard="clipboard" :storage="terminalStorage" /></aside>
+ </div>
 </template>
 <style scoped>
+.microvm-tile{height:100%;min-height:0;display:grid;grid-template-rows:minmax(0,1fr)}
+.microvm-tile[data-terminal-open="true"]{grid-template-rows:minmax(0,1fr) min(45%,360px)}
+.microvm-host-terminal{min-height:0;display:flex;flex-direction:column;overflow:hidden;border-top:1px solid var(--mv-semantic-border-default)}
+.microvm-host-terminal[hidden]{display:none}.microvm-host-terminal>small{padding:.3rem .7rem;color:var(--mv-semantic-text-muted)}
+.microvm-host-terminal :deep(.mv-terminal-deck){flex:1;min-height:0;height:auto}
+.microvm-identity{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;font-size:.8rem}.microvm-identity code{font-family:monospace}.microvm-identity button{font-size:.8rem}
+.restore-response--pending strong{font-size:1rem!important;font-weight:400;color:var(--mv-semantic-text-muted)}
+
 .guest-command-panel{position:relative;width:100%;height:100%;box-sizing:border-box;padding:1.5rem;overflow:auto;border:1px solid var(--mv-semantic-border-default);border-radius:1rem;background:var(--mv-semantic-surface-canvas);color:var(--mv-semantic-text-primary)}
 .guest-command-panel__sticky{position:sticky;top:-1.5rem;z-index:2;margin:-1.5rem -1.5rem 0;padding:1.5rem 1.5rem .5rem;background:var(--mv-semantic-surface-canvas);isolation:isolate}.guest-command-panel__sticky>header{position:relative;z-index:2}
 header,.controls{display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}h2{margin:.3rem 0}form{display:grid;gap:.6rem;margin-top:1rem}form .primary{justify-self:start}.controls{justify-content:flex-start;margin-top:.75rem;margin-bottom:1.25rem}.controls .danger{margin-left:auto}
