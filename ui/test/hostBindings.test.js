@@ -2077,6 +2077,7 @@ test('journal capacity reports a closed notice and refuses new work without disp
   t.after(() => bindings.core.dispose());
   const notice = code => ({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code,detail:'ignored foreign detail'}});
   f.send(notice('UNRELATED'));
+  f.send({...notice('JOURNAL_FULL'),data:{...notice('JOURNAL_FULL').data,surface_id:'s1'}});
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.deepEqual(notices, [], 'negative control: unrelated errors do not end admission');
   f.send(notice('JOURNAL_FULL'));
@@ -2095,4 +2096,22 @@ test('journal capacity reports a closed notice and refuses new work without disp
   f.send(notice('JOURNAL_STOP_FAILED'));
   await waitForCondition(() => notices.length === 2);
   assert.deepEqual(notices, ['JOURNAL_FULL','JOURNAL_STOP_FAILED']);
+});
+
+
+test('journal ended surfaces lose live presentation while stop is unconfirmed', async t => {
+  const f = await fixture(t);
+  const bindings = await createMainBindings({...f}); t.after(()=>bindings.core.dispose());
+  const states=[], entries=[]; bindings.wire.frames.subscribe(value=>{entries.push(value);states.push(value.state);});
+  f.send({schema:'surface_event/v0.2',event:'created',data:{surface}});
+  f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:f.frame}});
+  await waitForCondition(()=>states.length > 0);
+  f.send({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code:'JOURNAL_FULL',detail:'closed'}});
+  await waitForCondition(()=>states.some(value=>value.surface_id==='s1' && value.state==='lost'));
+  const count=entries.length;
+  f.send({schema:'surface_event/v0.2',event:'frame_ready',data:{frame_ref:{...f.frame,generation:2}}});
+  await new Promise(resolve=>setTimeout(resolve,25));
+  assert.equal(entries.length,count,'late frames cannot restore live presentation');
+  assert.equal(entries.at(-1).stateOnly,true);
+  assert.equal(bindings.core.getStatus().availability,'live');
 });

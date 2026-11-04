@@ -46,25 +46,62 @@ impl Server {
     }
 
     pub(super) fn load_journal_end(&mut self) -> Result<()> {
+        self.journal_end = None;
         let path = self.root.join("journal-ended.json");
-        let meta = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
-            Err(e) => return Err(e.into()),
+        let read_marker = || -> Result<EndMarker> {
+            let meta = fs::symlink_metadata(&path)?;
+            if !meta.is_file()
+                || meta.len() > 1024
+                || meta.uid() != effective_uid()?
+                || meta.mode() & 0o077 != 0
+            {
+                return Err(invalid("invalid journal end marker"));
+            }
+            Ok(serde_json::from_slice(&fs::read(&path)?)?)
         };
-        if !meta.is_file()
-            || meta.len() > 1024
-            || meta.uid() != effective_uid()?
-            || meta.mode() & 0o077 != 0
-        {
-            return Err(invalid("invalid journal end marker"));
+        match read_marker() {
+            Ok(marker) if marker == self.end_marker()? => {
+                self.journal_end = Some(self.new_session_end());
+            }
+            Err(e)
+                if e.downcast_ref::<io::Error>()
+                    .is_some_and(|e| e.kind() == io::ErrorKind::NotFound) => {}
+            _ => {
+                // A marker is only a hint. Strict replay already established
+                // authority; a damaged or stale hint cannot make it unavailable.
+                eprintln!("Ignoring invalid or replay-mismatched journal end marker");
+                if fs::rename(&path, self.root.join("journal-ended.ignored.json")).is_err() {
+                    eprintln!("Could not move ignored journal end marker aside");
+                }
+            }
         }
-        let marker: EndMarker = serde_json::from_slice(&fs::read(path)?)?;
-        if marker != self.end_marker()? {
-            return Err(invalid("journal end marker disagrees with replay"));
-        }
-        self.journal_end = Some(self.new_session_end());
         Ok(())
+    }
+
+    fn persist_journal_end(&self) -> Result<()> {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let serial = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let temp = self.root.join(format!(
+            ".journal-ended-{}-{serial}.tmp",
+            std::process::id()
+        ));
+        let bytes = crate::journal::canonical_bytes(&serde_json::to_value(self.end_marker()?)?)?;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temp)?;
+        let result = (|| -> Result<()> {
+            file.write_all(&bytes)?;
+            file.sync_all()?;
+            fs::rename(&temp, self.root.join("journal-ended.json"))?;
+            fs::File::open(&self.root)?.sync_all()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        result
     }
 
     pub(super) fn resume_journal_end(&mut self, now_ns: u64, peer: &Endpoint) -> Result<()> {
@@ -93,19 +130,13 @@ impl Server {
     pub(super) fn end_full_journal(&mut self, now_ns: u64, env: &Envelope) -> Result<()> {
         self.authority.flush_sync()?;
         if self.journal_end.is_none() {
-            // This terminal marker grants no authority; bind it to strict replay.
-            // It is outside the capped record stream because no slot remains.
-            let bytes =
-                crate::journal::canonical_bytes(&serde_json::to_value(self.end_marker()?)?)?;
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(self.root.join("journal-ended.json"))?;
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            fs::File::open(&self.root)?.sync_all()?;
+            // Close admission before attempting this non-authoritative hint.
+            // ENOSPC, a torn previous hint or failed directory sync cannot
+            // turn a capacity refusal back into a peer transport failure.
             self.journal_end = Some(self.new_session_end());
+            if let Err(e) = self.persist_journal_end() {
+                eprintln!("Journal admission closed; end marker persistence failed: {e}");
+            }
             let peers: Vec<_> = self
                 .connections
                 .keys()
@@ -171,10 +202,16 @@ impl Server {
                 .as_str()
                 .or_else(|| value["data"]["surface"]["surface_id"].as_str());
             let end = self.journal_end.as_mut().unwrap();
+            let terminal_refusal = value["event"] == "error"
+                && ((value["data"]["code"] == "surface"
+                    && value["data"]["detail"] == "unknown or terminal surface")
+                    || (value["data"]["code"] == "ADAPTER_SURFACE"
+                        && value["data"]["detail"] == "surface: unknown or terminal surface"));
             if end.active.is_some()
                 && sid == end.active.as_deref()
-                && value["event"] == "state_changed"
-                && value["data"]["surface"]["state"] == "destroyed"
+                && ((value["event"] == "state_changed"
+                    && value["data"]["surface"]["state"] == "destroyed")
+                    || terminal_refusal)
             {
                 end.active = None;
             } else if end.active.is_some()

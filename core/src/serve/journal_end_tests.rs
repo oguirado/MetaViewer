@@ -129,10 +129,17 @@ fn full_journal_stops_in_order_without_retiring_peers_or_publishing_refused_fram
         let mut tampered: Value = serde_json::from_slice(&marker).unwrap();
         tampered["core_seq"] = 0.into();
         fs::write(&marker_path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+        f.server.load_journal_end().unwrap();
         assert!(
-            f.server.load_journal_end().is_err(),
-            "negative control: marker must agree with replay"
+            f.server.journal_end.is_none(),
+            "negative control: a mismatched hint cannot end admission"
         );
+        assert_eq!(
+            f.server.snapshot().unwrap(),
+            snapshot,
+            "replay remains authoritative"
+        );
+        assert!(f.server.root.join("journal-ended.ignored.json").exists());
         fs::write(&marker_path, marker).unwrap();
     });
 }
@@ -277,5 +284,434 @@ fn journal_capacity_over_real_sockets_keeps_daemon_and_ui_alive() {
         }
         shared.lock().unwrap().shutdown().unwrap();
         drop(shared);
+    });
+}
+
+fn journal_review_notice() -> Value {
+    json!({"schema":"surface_event/v0.2","event":"error","data":{
+        "surface_id":"surface-demo","code":"TEST","detail":"capacity probe"}})
+}
+
+#[test]
+fn journal_review_empty_unreadable_and_mismatched_markers_do_not_block_replay() {
+    use std::os::unix::fs::PermissionsExt;
+    for contents in [
+        b"".as_slice(),
+        b"{",
+        br#"{"schema":"metaviewer.journal-ended/v1","core_seq":0,"state_sha256":"stale"}"#,
+    ] {
+        let mut f = Fixture::new();
+        f.seed();
+        let snapshot = f.server.snapshot().unwrap();
+        let path = f.server.root.join("journal-ended.json");
+        fs::write(&path, contents).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        f.server
+            .load_journal_end()
+            .expect("a hint cannot overrule replay");
+        assert!(f.server.journal_end.is_none());
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+    }
+    let mut f = Fixture::new();
+    f.seed();
+    fs::create_dir(f.server.root.join("journal-ended.json")).unwrap();
+    f.server
+        .load_journal_end()
+        .expect("unreadable marker is absent");
+    assert!(f.server.journal_end.is_none());
+}
+
+#[test]
+fn journal_review_marker_write_failure_never_resets_peer_and_retries_are_closed() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let _daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        // A directory at the destination forces the final rename to fail.
+        fs::create_dir(f.server.root.join("journal-ended.json")).unwrap();
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        let snapshot = f.server.snapshot().unwrap();
+        for n in 2..=3 {
+            f.route(Component::Daemon, n, journal_review_notice())
+                .await
+                .expect("marker I/O must not turn capacity refusal into transport failure");
+        }
+        assert!(f.server.journal_end.is_some());
+        assert_eq!(f.server.connections.len(), 2);
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+        assert_eq!(
+            serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
+            "JOURNAL_FULL"
+        );
+    });
+}
+
+#[test]
+fn journal_review_terminal_destroy_refusal_advances_but_policy_failure_does_not() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let mut second = f.server.authority.state().surfaces["surface-demo"].clone();
+        second.frame = None;
+        f.server
+            .authority
+            .apply(Input::Surface {
+                id: "surface-second".into(),
+                surface: second,
+            })
+            .unwrap();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        f.route(Component::Daemon, 2, journal_review_notice())
+            .await
+            .unwrap();
+        let _ = ui.try_recv().unwrap();
+        assert_eq!(
+            serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]["surface_id"],
+            "surface-demo"
+        );
+        let err = |id, code, detail| json!({"schema":"surface_event/v0.2","event":"error","data":{"surface_id":id,"code":code,"detail":detail}});
+        f.route(
+            Component::Daemon,
+            3,
+            err(
+                "surface-demo",
+                "POLICY",
+                "input must be drained before destroy",
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(daemon.try_recv().is_err());
+        assert_eq!(
+            serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
+            "JOURNAL_STOP_FAILED"
+        );
+        f.route(
+            Component::Daemon,
+            4,
+            err("unrelated", "surface", "unknown or terminal surface"),
+        )
+        .await
+        .unwrap();
+        assert!(daemon.try_recv().is_err());
+        f.route(
+            Component::Daemon,
+            5,
+            err("surface-demo", "surface", "unknown or terminal surface"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]["surface_id"],
+            "surface-second"
+        );
+        assert!(
+            ui.try_recv().is_err(),
+            "already stopped is not a stop failure"
+        );
+    });
+}
+
+#[test]
+fn journal_review_mismatched_marker_is_reported_and_ignored() {
+    use std::os::unix::fs::PermissionsExt;
+    let mut f = Fixture::new();
+    f.seed();
+    let snapshot = f.server.snapshot().unwrap();
+    let path = f.server.root.join("journal-ended.json");
+    fs::write(
+        &path,
+        br#"{"schema":"metaviewer.journal-ended/v1","core_seq":0,"state_sha256":"stale"}"#,
+    )
+    .unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    f.server
+        .load_journal_end()
+        .expect("stale hint cannot block replay");
+    assert!(f.server.journal_end.is_none());
+    assert_eq!(f.server.snapshot().unwrap(), snapshot);
+    assert!(!path.exists(), "mismatch is moved aside");
+    assert!(f.server.root.join("journal-ended.ignored.json").exists());
+}
+
+#[test]
+fn journal_archive_byte_limit_preserves_replay_and_transport_with_a_torn_hint() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        // Enlarge legitimate reduced state, without changing either product limit.
+        for n in 0..32 {
+            let mut surface = f.server.authority.state().surfaces["surface-demo"].clone();
+            surface.frame = None;
+            surface.allowed_verbs = vec!["mouse".into(); 128];
+            f.server
+                .authority
+                .apply(Input::Surface {
+                    id: format!("archive-{n}"),
+                    surface,
+                })
+                .unwrap();
+        }
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        let shm = ShmFixture::new();
+        let path = shm.0.join("archive.rgb");
+        fs::write(&path, [1, 2, 3]).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        // Simulate a prior interrupted marker write: P3 must still close cleanly.
+        fs::write(f.server.root.join("journal-ended.json"), b"").unwrap();
+        let mut generation = 2;
+        loop {
+            let snapshot = f.server.snapshot().unwrap();
+            let journal_bytes = fs::read(f.server.root.join("journal.jsonl")).unwrap();
+            f.route(
+                Component::Daemon,
+                generation,
+                json!({"schema":"frame_ref/v0.2","surface_id":"surface-demo",
+                "generation":generation,"tick":generation,"ts_ns":generation,"width":1,"height":1,
+                "format":"rgb24","ramws_path":path,"sha256":sha256_hex(&[1,2,3]),"capture_us":1}),
+            )
+            .await
+            .expect("archive capacity with a torn hint must not reset the daemon");
+            if f.server.journal_end.is_some() {
+                assert_eq!(f.server.snapshot().unwrap(), snapshot);
+                assert_eq!(
+                    fs::read(f.server.root.join("journal.jsonl")).unwrap(),
+                    journal_bytes
+                );
+                break;
+            }
+            for message in ui.try_iter() {
+                let value = serde_json::to_value(message.body).unwrap();
+                assert_ne!(
+                    value["data"]["code"], "JOURNAL_FULL",
+                    "accepted records do not close admission"
+                );
+            }
+            generation += 1;
+            assert!(
+                generation < 2000,
+                "P3 must fire well before the record limit"
+            );
+        }
+        assert_eq!(f.server.connections.len(), 2);
+        assert_eq!(
+            serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
+            "JOURNAL_FULL"
+        );
+        assert_eq!(
+            serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["op"],
+            "destroy"
+        );
+        f.server.authority.flush_sync().unwrap();
+        let root = f.server.root.clone();
+        let snapshot = f.server.snapshot().unwrap();
+        let mut accounted = fs::metadata(root.join("genesis.json")).unwrap().len();
+        for n in 1..=f.server.authority.state().core_seq {
+            let bytes = fs::read(root.join("events").join(format!("{n}.json"))).unwrap();
+            let event: Value = serde_json::from_slice(&bytes).unwrap();
+            accounted += bytes.len() as u64
+                + crate::journal::canonical_bytes(&event["state"])
+                    .unwrap()
+                    .len() as u64;
+        }
+        assert!(accounted <= 64 * 1024 * 1024);
+        assert!(
+            accounted > 63 * 1024 * 1024,
+            "archive budget, not P1 or journal bytes, is exhausted"
+        );
+        assert!(fs::metadata(root.join("journal.jsonl")).unwrap().len() < 1024 * 1024);
+        let replay = crate::journal::scan(&root.join("journal.jsonl"), &root).unwrap();
+        assert_eq!(replay.state.snapshot().unwrap(), snapshot);
+        eprintln!(
+            "P3 accepted records={} accounted_bytes={accounted}",
+            replay.state.core_seq
+        );
+        let config = f.server.config.clone();
+        f.server.shutdown().unwrap();
+        let replacement = Server::open(
+            config.clone(),
+            &f.root.join("unused"),
+            effective_uid().unwrap(),
+        )
+        .unwrap();
+        drop(std::mem::replace(&mut f.server, replacement));
+        f.server = Server::open(config, &f.root, effective_uid().unwrap()).unwrap();
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+        assert!(
+            f.server.journal_end.is_some(),
+            "P3 restart preserves the ended session"
+        );
+    });
+}
+
+#[test]
+fn journal_review_restart_after_completed_stops_tolerates_terminal_probes() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let mut second = f.server.authority.state().surfaces["surface-demo"].clone();
+        second.frame = None;
+        f.server
+            .authority
+            .apply(Input::Surface {
+                id: "surface-second".into(),
+                surface: second,
+            })
+            .unwrap();
+        let daemon = f.attach(Component::Daemon, 64);
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        f.route(Component::Daemon, 2, journal_review_notice())
+            .await
+            .unwrap();
+        let stopped = |id| {
+            json!({"schema":"surface_event/v0.2","event":"state_changed","data":{"surface":{
+            "schema":"surface/v0.2","surface_id":id,"kind":"browser","display":":92",
+            "geometry":{"w":1,"h":1},"state":"destroyed","visibility":"unfolded","control":"agent","profile_id":"test"}}})
+        };
+        assert_eq!(
+            serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]["surface_id"],
+            "surface-demo"
+        );
+        f.route(Component::Daemon, 3, stopped("surface-demo"))
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]["surface_id"],
+            "surface-second"
+        );
+        f.route(Component::Daemon, 4, stopped("surface-second"))
+            .await
+            .unwrap();
+        assert!(daemon.try_recv().is_err());
+        let snapshot = f.server.snapshot().unwrap();
+        let config = f.server.config.clone();
+        f.server.shutdown().unwrap();
+        let replacement = Server::open(
+            config.clone(),
+            &f.root.join("unused"),
+            effective_uid().unwrap(),
+        )
+        .unwrap();
+        drop(std::mem::replace(&mut f.server, replacement));
+        f.server = Server::open(config, &f.root, effective_uid().unwrap()).unwrap();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        f.server
+            .resume_journal_end(1, &f.endpoint(Component::Daemon))
+            .unwrap();
+        for (n, id) in [(10, "surface-demo"), (11, "surface-second")] {
+            assert_eq!(
+                serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]
+                    ["surface_id"],
+                id
+            );
+            f.route(
+                Component::Daemon,
+                n,
+                json!({"schema":"surface_event/v0.2","event":"error",
+                "data":{"surface_id":id,"code":"surface","detail":"unknown or terminal surface"}}),
+            )
+            .await
+            .unwrap();
+        }
+        assert!(daemon.try_recv().is_err());
+        assert!(ui.try_recv().is_err());
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+    });
+}
+
+#[test]
+fn journal_review_open_rederives_an_ignored_hint_at_the_next_capacity_refusal() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        fs::write(f.server.root.join("journal-ended.json"), b"").unwrap();
+        let snapshot = f.server.snapshot().unwrap();
+        let config = f.server.config.clone();
+        f.server.shutdown().unwrap();
+        let replacement = Server::open(
+            config.clone(),
+            &f.root.join("unused"),
+            effective_uid().unwrap(),
+        )
+        .unwrap();
+        drop(std::mem::replace(&mut f.server, replacement));
+        f.server = Server::open(config, &f.root, effective_uid().unwrap()).unwrap();
+        assert!(f.server.journal_end.is_none());
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        f.route(Component::Daemon, 20, journal_review_notice())
+            .await
+            .unwrap();
+        assert!(f.server.journal_end.is_some());
+        assert_eq!(f.server.snapshot().unwrap(), snapshot);
+        assert_eq!(
+            serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
+            "JOURNAL_FULL"
+        );
+        assert_eq!(
+            serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["op"],
+            "destroy"
+        );
+        let marker: Value =
+            serde_json::from_slice(&fs::read(f.server.root.join("journal-ended.json")).unwrap())
+                .unwrap();
+        assert_eq!(marker["core_seq"], limit);
+        assert_eq!(marker["state_sha256"], sha256_hex(&snapshot));
+    });
+}
+
+#[test]
+fn journal_review_native_wire_terminal_refusal_advances_without_false_failure() {
+    run(async {
+        let mut f = Fixture::new();
+        f.seed();
+        let mut second = f.server.authority.state().surfaces["surface-demo"].clone();
+        second.frame = None;
+        f.server
+            .authority
+            .apply(Input::Surface {
+                id: "surface-second".into(),
+                surface: second,
+            })
+            .unwrap();
+        let daemon = f.attach(Component::Daemon, 64);
+        let ui = f.attach(Component::Ui, 64);
+        let limit = f.server.authority.state().core_seq;
+        crate::journal::set_record_limit_for_test(&f.server.root, limit);
+        f.route(Component::Daemon, 2, journal_review_notice())
+            .await
+            .unwrap();
+        ui.try_recv().unwrap();
+        daemon.try_recv().unwrap();
+        // wireFailure uses WireCode and Fault::Error, not Manager::HandleFor.
+        f.route(Component::Daemon,3,json!({"schema":"surface_event/v0.2","event":"error","data":{
+            "surface_id":"surface-demo","code":"ADAPTER_SURFACE","detail":"surface: unknown or terminal surface"}})).await.unwrap();
+        assert!(
+            ui.try_recv().is_err(),
+            "a terminal target is not JOURNAL_STOP_FAILED"
+        );
+        assert_eq!(
+            serde_json::to_value(daemon.try_recv().unwrap().body).unwrap()["params"]["surface_id"],
+            "surface-second"
+        );
+        // The same code with a different detail is still a genuine failure.
+        f.route(Component::Daemon,4,json!({"schema":"surface_event/v0.2","event":"error","data":{
+            "surface_id":"surface-second","code":"ADAPTER_SURFACE","detail":"surface: not confirmed stopped"}})).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(ui.try_recv().unwrap().body).unwrap()["data"]["code"],
+            "JOURNAL_STOP_FAILED"
+        );
+        assert!(daemon.try_recv().is_err());
     });
 }

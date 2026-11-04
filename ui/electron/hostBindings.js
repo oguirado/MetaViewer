@@ -507,6 +507,19 @@ export async function createMainBindings({env = process.env, createMessageChanne
       if (body.schema === 'surface_event/v0.2' && body.event === 'error'
           && body.data?.surface_id === 'session'
           && ['JOURNAL_FULL','JOURNAL_STOP_FAILED'].includes(body.data?.code)) {
+        if (!journalEnded) {
+          // Cleanup runs outside the accepted journal. Until confirmed, these
+          // last accepted frames cannot represent live, controllable capsules.
+          for (const state of surfaces.values()) {
+            if (state.state === 'active') {
+              publishState({...state, state:'lost'});
+              surfaces.set(state.surface_id, Object.freeze({...state, state:'lost'}));
+              display.removeSurface(state.surface_id);
+            }
+          }
+          latestFrames.clear();
+          pendingDeliveries.clear();
+        }
         journalEnded = true;
         const error = Object.assign(new Error('Session journal is full; start a new session.'), {code:'JOURNAL_FULL'});
         for (const [key,item] of pending) {clearTimeout(item.timer);pending.delete(key);item.reject(error);}

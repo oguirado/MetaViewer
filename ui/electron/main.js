@@ -3137,7 +3137,7 @@ async function mainDirectEntry() {
     const bindings = await loadMainBindings(process.env, {onSessionEnd: (/** @type {string} */ code) => {
       const detail = code === 'JOURNAL_STOP_FAILED'
         ? 'A capsule could not be stopped. Stop the remaining capsules before starting a new session.'
-        : 'New work is refused. Capsules are stopping in order. The accepted journal remains replayable. Start a new session.';
+        : 'New work is refused. Capsules are stopping in order. The accepted journal remains replayable. Close and reopen MetaViewer to start a fresh session.';
       const readyApp = /** @type {{whenReady:()=>Promise<unknown>}} */ (electron.app);
       const noticeDialog = /** @type {{showMessageBox:(options:object)=>Promise<unknown>}} */ (electron.dialog);
       void readyApp.whenReady().then(() => noticeDialog.showMessageBox({type:'warning',title:'Session journal full',

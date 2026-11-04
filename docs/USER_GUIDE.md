@@ -429,3 +429,13 @@ Settings → Recording chooses the recordings and screenshot export folders thro
 ### Working tree names
 
 Double-click a desktop or capsule name, or focus it and press F2, to edit its display name. Enter saves and Escape cancels. Names are stored with the host layout; capsule identity and Copy ID do not change. Program icons come from the installed-app inventory when known, browser identities use a browser symbol, and unknown programs keep a generic mark. Live Host program and Desktop window isolation warnings remain visible while editing.
+
+
+### Full session journal
+
+When the session journal fills, new work is refused and capsules stop in order.
+The last accepted journal remains replayable. Frozen frames cease to represent
+live capsules. Close and reopen MetaViewer through its normal application entry
+to start a fresh session. If a capsule could not be stopped, stop the remaining
+capsules before reopening. See [Full session journals](JOURNAL_END.md) for the
+error codes, cleanup behavior and recovery details.
