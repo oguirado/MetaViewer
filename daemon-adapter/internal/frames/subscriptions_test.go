@@ -1702,3 +1702,39 @@ func TestLogQuietMutantsMustFail(t *testing.T) {
 		t.Logf("MUTANT_KILLED[%s]: %v", tc.mutant, err)
 	}
 }
+
+func TestDemoBusySubscriptionResumesAfterSeal(t *testing.T) {
+	root, b, f := ramFixture(t)
+	src := &lossAwareCaptureSource{b: b, f: f, failPolls: map[int]error{}}
+	// Beyond the ordinary terminal failure threshold: a demo may last arbitrarily long.
+	for i := 1; i <= 5; i++ {
+		src.failPolls[i] = &cli.Fault{Code: "native_busy", Detail: "native control lock held"}
+	}
+	events := make(chan json.RawMessage, 16)
+	subs, err := NewSubscriptions(context.Background(), SubscriptionConfig{
+		MaxSubscriptions: 1, PollInterval: 2 * time.Millisecond, CaptureTimeout: time.Second, ShutdownTimeout: time.Second,
+	}, src, publisher(t, root), func(_ context.Context, msg json.RawMessage) error { events <- msg; return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer subs.Close(context.Background())
+	if err := subs.Subscribe(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case msg := <-events:
+		var ev struct {
+			Event string `json:"event"`
+		}
+		if err := json.Unmarshal(msg, &ev); err != nil || ev.Event != "frame_ready" {
+			t.Fatalf("demo contention terminated capture: %s %v", msg, err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("capture did not resume after demo seal")
+	}
+	src.mu.Lock()
+	defer src.mu.Unlock()
+	if src.marked != 0 || src.calls < 6 {
+		t.Fatalf("false loss or no recovery: marked=%d calls=%d", src.marked, src.calls)
+	}
+}

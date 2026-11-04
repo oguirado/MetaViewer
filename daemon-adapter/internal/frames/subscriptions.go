@@ -535,7 +535,9 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 		markLost := false
 		transientFailure := false
 		resized := capsule.IsHostWindowResize(e)
-		if resized || capsule.IsHostWindowWaiting(e) {
+		var nativeFault *cli.Fault
+		nativeBusy := errors.As(e, &nativeFault) && nativeFault.Code == "native_busy"
+		if nativeBusy || resized || capsule.IsHostWindowWaiting(e) {
 			// Resize proves a live window. Reset loss evidence and retry only
 			// at the next scheduled poll, including through a continuous drag.
 			consecutiveFailures = 0

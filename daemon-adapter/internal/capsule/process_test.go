@@ -335,3 +335,42 @@ func TestRuntimeRequiresBinaryEnvironment(t *testing.T) {
 		t.Fatal("missing binary environment accepted")
 	}
 }
+
+// A writable demonstration owns the native control lock until sealing. Capture
+// must wait without spawning a frame command or declaring the capsule absent.
+func TestDemoControlLockDefersFrameAndResumes(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	os.Chmod(state, 0700)
+	binary := filepath.Join(root, "srf-identity-surface")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'frame-resumed'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(state, "control.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewProcessRunner(root, []string{"PATH=/usr/bin:/bin", "MV_SRF_STATE_DIR=" + state}, 4096, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{binary, "frame", "--container", "srf-id-demo"}
+	for i := 0; i < 3; i++ {
+		out, err := r.Run(context.Background(), args, nil)
+		var f *cli.Fault
+		if !errors.As(err, &f) || f.Code != "native_busy" || IsAbsenceFault(err) || len(out) != 0 {
+			t.Fatalf("recording contention must defer capture, got %q, %v", out, err)
+		}
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.Run(context.Background(), args, nil)
+	if err != nil || string(out) != "frame-resumed" {
+		t.Fatalf("capture did not resume after seal: %q %v", out, err)
+	}
+}
