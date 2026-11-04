@@ -220,6 +220,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     // settle the create of the reopened capsule as if it were the create's own adapter error.
     /** @type {Set<string>} */ const departed = new Set();
     /** @type {Map<string,any>} */ const latestFrames = new Map();
+    /** @type {Map<string,any>} */ const lostFrames = new Map();
     /** @type {Map<string,number>} */ const streamIds = new Map();
     /** @type {Map<string,any>} */ const channels = new Map();
     /** @type {Set<string>} */ const subscriptions = new Set();
@@ -304,7 +305,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       }
       surfaceInputQueues.clear();
       for (const channel of channels.values()) {channel.port1.close();channel.port2.close();}
-      channels.clear();surfaces.clear();latestFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();failedFrameGenerations.clear();listeners.clear();captureListeners.clear();cadenceListeners.clear();
+      channels.clear();surfaces.clear();latestFrames.clear();lostFrames.clear();streamIds.clear();subscriptions.clear();delivering.clear();pendingDeliveries.clear();failedFrameGenerations.clear();listeners.clear();captureListeners.clear();cadenceListeners.clear();
     };
     const headless = createHeadlessHost({send,
       available:()=>live && !disposed && process.arch === 'arm64' && headlessOwner !== null && agentPeers.length === 1 && headlessOwner === 'actor-'+createHash('sha256').update('agent:'+agentPeers[0].endpoint.instance).digest('hex'),
@@ -464,7 +465,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     }
     /** @param {any} state */
     function publishState(state) {
-      const frame = latestFrames.get(state?.surface_id);
+      const frame = latestFrames.get(state?.surface_id) ?? lostFrames.get(state?.surface_id);
       if (!frame || listeners.size === 0) return;
       const binding = Object.freeze({principal:'ui',epoch:1,surfaceId:state.surface_id,surfaceGeneration:1});
       const entry = {stateOnly:true,frameRef:frame,state:{...state},readerOptions:{binding}};
@@ -518,6 +519,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
             }
           }
           latestFrames.clear();
+          lostFrames.clear();
           pendingDeliveries.clear();
         }
         journalEnded = true;
@@ -569,8 +571,13 @@ export async function createMainBindings({env = process.env, createMessageChanne
           if (state.state === 'lost') {
             if (!surfaces.has(state.surface_id) && surfaces.size >= MAX_ITEMS) throw fail();
             surfaces.set(state.surface_id,Object.freeze({...state}));
+            const lastFrame = latestFrames.get(state.surface_id);
+            if (lastFrame) lostFrames.set(state.surface_id,lastFrame);
           }
-          else surfaces.delete(state.surface_id);
+          else {
+            surfaces.delete(state.surface_id);
+            lostFrames.delete(state.surface_id);
+          }
           departed.delete(state.surface_id); departed.add(state.surface_id);
           if (departed.size > MAX_ITEMS) departed.delete(/** @type {string} */ (departed.values().next().value));
           surfaceInputQueues.delete(state.surface_id);

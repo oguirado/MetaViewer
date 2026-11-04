@@ -760,9 +760,10 @@ impl CoreState {
                         // [TARGET, unit decision] Explicit Stop may retire a lost human
                         // binding; this grants no input, frames or renewed liveness.
                         self.is_destroyed(id)
-                            || self.surfaces.get(id).is_some_and(|s| {
-                                !s.live && (value["op"] != "destroy" || s.agent_controlled)
-                            })
+                            || self
+                                .surfaces
+                                .get(id)
+                                .is_some_and(|s| !s.live && value["op"] != "destroy")
                     })
                     || !valid_surface_create_policy(request)
                 {
