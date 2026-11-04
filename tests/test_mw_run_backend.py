@@ -228,6 +228,26 @@ class BackendTests(unittest.TestCase):
         with self.assertRaisesRegex(host.OwnerRefused, 'MW_RUN_OPERATION'):
             b.call('input')
 
+    def test_report_write_failure_preserves_terminal_execution_outcome(self):
+        args = SimpleNamespace(identity='alice', site='example', workflow='read', slot=[])
+        for original_rc, code in ((5, 'INPUT_UNCERTAIN'), (4, 'HUMAN_HANDOFF'),
+                                  (6, 'MW_RUN_CONFIG')):
+            with self.subTest(rc=original_rc):
+                output = io.StringIO()
+                with patch.dict(os.environ, XDG_STATE_HOME=str(self.root)), \
+                     patch.object(host, 'admit_home', return_value=self.root / 'home'), \
+                     patch.object(host, 'connect'), \
+                     patch.object(host, 'HostBackend', return_value=SimpleNamespace()), \
+                     patch.object(host, 'execute', return_value=(original_rc, code, None)), \
+                     patch.object(host.ReplayOwner, 'write', side_effect=OSError('synthetic full disk')), \
+                     contextlib.redirect_stdout(output):
+                    rc = host.run_entry(args)
+                result = json.loads(output.getvalue())
+                self.assertEqual(rc, original_rc)
+                self.assertEqual(result['rc'], original_rc)
+                self.assertEqual(result['verdict_code'], code if original_rc in (4, 5) else 'MW_PRIVATE_OUTPUT')
+                self.assertIsNone(result['report'])
+
     def test_entry_json_and_missing_receipt_is_nonzero(self):
         args = SimpleNamespace(identity='alice', site='example', workflow='read', slot=[])
         env = {'XDG_STATE_HOME': str(self.root)}

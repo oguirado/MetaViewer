@@ -1042,6 +1042,8 @@ def run_entry(args):
             ReplayOwner.write(Path(report), (json.dumps(dict(result, message=message,
                 network=getattr(backend, 'network_evidence', None), **trace), separators=(',', ':')) + '\n').encode())
         except OSError:
-            result.update(rc=6, verdict_code='MW_PRIVATE_OUTPUT')
+            result['report'] = None
+            if result['rc'] not in (4, 5):
+                result.update(rc=6, verdict_code='MW_PRIVATE_OUTPUT')
     print(json.dumps(result, separators=(',', ':')))
     return result['rc']
