@@ -204,8 +204,8 @@ watch(()=>[props.open,props.initialProfile],([open,profile])=>{if(open)selectedS
       <p v-if="nameError" id="identity-name-error" role="alert">{{ nameError }}</p>
       <p><label>Display name (optional)<UiTextInput v-model="displayName" label="Display name" :placeholder="typedName || id || 'Work account'" :disabled="busy" /></label></p>
       <details><summary>Advanced</summary>
-        <p><label>Allowed sites (optional)<UiTextInput v-model="domains" label="Allowed sites" placeholder="dev.meta.ai, example.com" aria-describedby="identity-sites-hint" :disabled="busy" /></label></p>
-        <p id="identity-sites-hint">Sites this identity may open, for example dev.meta.ai. Leave empty to allow any site.</p>
+        <p><label>Allowed sites (optional)<UiTextInput v-model="domains" label="Allowed sites" placeholder="example.com, example.org" aria-describedby="identity-sites-hint" :disabled="busy" /></label></p>
+        <p id="identity-sites-hint">Sites this identity may open, for example example.com. Leave empty to allow any site.</p>
       </details>
     </section>
     <p v-if="error" role="alert">{{ error }}</p>
