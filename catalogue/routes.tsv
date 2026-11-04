@@ -206,6 +206,7 @@ identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
 judgein-6d7ef63592c7	changes/unreleased/judge-install-diagnostics.md
 judgeki-2abc0a3eae20	changes/unreleased/judge-kit-capsule-net.md
 judgeki-16dad1d0cde7	changes/unreleased/judge-kit-package-tool-deps.md
+judgere-2117af84a647	changes/unreleased/judge-recording-folder.md
 judge-root-refusal.md	changes/unreleased/judge-root-refusal.md
 judgesc-91a8a932898f	changes/unreleased/judge-script-comments.md
 judgest-1257a8a92a8d	changes/unreleased/judge-stop-capsule-ram.md
@@ -243,6 +244,7 @@ program-5f5847f0f976	changes/unreleased/program-current-baseline.md
 program-display.md	changes/unreleased/program-display.md
 program-d44e2c75b099	changes/unreleased/program-focused-key.md
 program-9c236b0bad7f	changes/unreleased/program-host-fresh-frames.md
+program-lost-stop.md	changes/unreleased/program-lost-stop.md
 program-593ec53b328a	changes/unreleased/program-moves-in-a-row.md
 program-037135db5049	changes/unreleased/program-provider-kill-guard.md
 program-53a257f2b164	changes/unreleased/program-standard-dirs.md
@@ -3282,6 +3284,7 @@ v028orp-8bfbd9efdd7e	ui/test/v028-orphan-release-live.cjs
 v028orp-960ca38225fe	ui/test/v028-orphan-release-live.html
 v028orp-b574bd667de3	ui/test/v028-orphan-release-live.js
 v028orp-a675e6c6ca58	ui/test/v028-orphan-release.test.js
+v028pro-ab1961a1a105	ui/test/v028-program-recovery.test.js
 v028pro-c087ddecf946	ui/test/v028-program-sidecar.test.js
 v028-tiles-visual.js	ui/test/v028-tiles-visual.js
 v028-tiles.html	ui/test/v028-tiles.html
