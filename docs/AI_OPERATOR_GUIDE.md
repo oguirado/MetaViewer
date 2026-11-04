@@ -268,7 +268,7 @@ do not substitute the surface ID.
 
 ---
 
-## 9. Built-in Terminals, Screens, and `🚀 Bootstrap`
+## 9. Built-in Terminals, Screens, and Task Prompts
 
 MetaViewer includes a built-in multi-screen terminal drawer for running shells and
 AI CLIs right alongside your capsules.
@@ -280,13 +280,12 @@ AI CLIs right alongside your capsules.
   two terminals; a third opens a new screen. Up to 16 shells and 16 AI sessions run at once.
 - Sessions keep running, with their scrollback, while you visit other views.
 
-### Launching Terminals and `🚀 Bootstrap`
+### Launching Terminals and Preparing Tasks
 
-- **`🚀 Bootstrap`** copies the public entry prompt to the clipboard. The toast
-  says **`Copied`** or **`Copy unavailable`**. Paste the prompt into your chosen AI.
-  Bootstrap does not create a shell or export environment variables. The separate
-  provider **`Launch`** control starts the selected CLI; source the app attachment
-  in the shell used for operator commands as described below.
+- **Create automation**, **Run automation**, and **Direct task** prepare agent
+  instructions while keeping the Capsule ID chip visible. Add the requested task
+  after `Task: ` and submit it yourself. The app never sends Enter and never pastes
+  a workflow prompt into a plain shell. See [AGENT_ENTRY.md](AGENT_ENTRY.md).
 - **`＋ New terminal`**: Opens the new-terminal modal with three presets:
   - **`Shell`** (`$SHELL` or `/bin/bash`)
   - **`Agy`** (`agy`)

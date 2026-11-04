@@ -3,7 +3,7 @@
  * OpenFresnel-style full-wall Terminal Deck view for MetaViewer (P18h).
  *
  * Acts as a third workspace beside Humans and Agents. Renders the screen bar
- * ("Screen 1, 2, …" with "+" and empty-only "✕"), "🚀 Bootstrap" and
+ * ("Screen 1, 2, …" with "+" and empty-only "✕"), workflow controls and
  * "＋ New terminal" actions, the profile/Custom CLI launcher popover, an
  * equal-tile terminal grid with focus rings and SIGINT-then-close lifecycle,
  * and busy-close confirmation.
@@ -866,10 +866,6 @@ function onDismissError() {
   controller.dismissError();
 }
 
-async function onBootstrap() {
-  await controller.bootstrap();
-}
-
 /**
  * @param {number} index
  */
@@ -1122,17 +1118,6 @@ defineExpose({
           @paste="onBootstrapPaste"
           @keydown="onBootstrapKeyDown"
         >
-          <button
-            type="button"
-            :id="domId('terminal-deck-bootstrap')"
-            data-semantic-anchor="terminal/bootstrap"
-            class="mv-terminal-deck__action-btn"
-            @focus="lastBootstrapFocused = true"
-            @blur="onBootstrapFocusOut"
-            @paste="onBootstrapPaste"
-            @keydown="onBootstrapKeyDown"
-            @click="onBootstrap"
-          >🚀 Bootstrap</button>
           <button v-if="focusedPair" type="button" :id="domId('terminal-deck-copy-capsule-id')"
             class="mv-terminal-deck__identity-pill mv-terminal-deck__identity-copy"
             :title="`Copy capsule ID: ${focusedPair.surfaceId}`" aria-label="Copy capsule ID" @click="copyPairedId">
