@@ -94,7 +94,7 @@ export function createButtonService({root,demoRoot=root,clipboard,env=process.en
         if(verb==='prompt')copyBounded(clipboard,promptBlock(text));
         else {
           const row=JSON.parse(text.trim().split('\n').at(-1)??'');
-          if(row.schema!=='metaviewer.demo/v1' || row.ok!==true || !row.result || (verb==='record' && !announced) || (verb==='check' && (row.result.site!==v.site || row.result.validated!==true || (row.result.source!==undefined && row.result.source!=='user'))))throw new Error();
+          if(row.schema!=='metaviewer.demo/v1' || row.ok!==true || !row.result || (verb==='record' && !announced) || (verb==='check' && (row.result.site!==v.site || row.result.validated!==true || (row.result.source!==undefined && !['user','home'].includes(row.result.source)))))throw new Error();
         }
         reply=/** @type {any} */({ok:true});
       }catch{/* Public refusal only. */}

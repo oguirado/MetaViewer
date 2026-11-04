@@ -116,3 +116,11 @@ test('failure after announcement clears active after exit without another Stop',
   assert.deepEqual(await f.service.request('demo.stop',[]),{ok:false,code:'DEMO_NOT_RECORDING'});
   await f.service.dispose();
 });
+
+test('DEMO-HOME-CHECK: accept the actual admitted-home tool result and refuse builtin substitution',async()=>{
+  for(const source of ['home','builtin']) {
+    const f=fixture();const checked=f.service.request('demo.check',[{site:'site'}]);
+    close(f.children[0],{site:'site',validated:true,source});
+    assert.deepEqual(await checked,source==='home'?{ok:true}:{ok:false,code:'DEMO_REFUSED'});
+  }
+});
