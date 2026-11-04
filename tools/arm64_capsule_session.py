@@ -656,9 +656,7 @@ def internal(root):
     setup.write_new(root / 'inner-process.json', process_identity(os.getpid()))
     record(root, 'session_admitted', guardian=plan['unit'], cgroup=group)
     setup.host_check(value)
-    memory = int(next(x.split()[1] for x in Path('/proc/meminfo').read_text().splitlines()
-                      if x.startswith('MemAvailable:'))) * 1024
-    setup.need(memory >= 32 * 1024**3, 'combined ARM session memory floor')
+    memory_floor()
     guard = lambda: effect_guard(root, plan)
     profile = provision(value, root, plan['run_id'], guard=guard, inventory=inventory)
     normal = {kind: provision(value, root, plan['run_id'], kind=kind, guard=guard, inventory=inventory)
@@ -688,6 +686,12 @@ def internal(root):
     return rc
 
 
+def memory_floor():
+    memory = int(next(x.split()[1] for x in Path('/proc/meminfo').read_text().splitlines()
+                      if x.startswith('MemAvailable:'))) * 1024
+    setup.need(memory >= 32 * 1024**3, 'combined ARM session memory floor')
+
+
 def launch(app, source_root, transport_path, expected_commit, launcher_pid, launcher_start, rewind=False):
     setup.need(type(rewind) is bool, 'explicit rewind mode required')
     setup.need(os.environ.get('MV_ARM64_CAPSULES') != '1', 'already internal session')
@@ -709,6 +713,7 @@ def launch(app, source_root, transport_path, expected_commit, launcher_pid, laun
     setup.need(app == value['package']['app']['path'] and source_root == value['source_root'],
                'explicit launcher binding mismatch')
     setup.host_check(value)
+    memory_floor()  # A short host must refuse before the held marker exists.
     directory = setup.private_dir(setup.registry_path().parent)
     lock = os.open(directory / 'session.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
     try:
@@ -772,7 +777,7 @@ def main():
         setup.need(bool(args.app and args.source_root and args.ui_transport and args.expected_commit), 'explicit app/source/UI binding required')
         return launch(args.app, args.source_root, args.ui_transport, args.expected_commit,
                       args.launcher_pid, args.launcher_start, rewind=args.rewind)
-    except (ValueError, OSError, subprocess.SubprocessError):
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
         if args.internal_root:
             # Failure after an uncertain Popen still has a captured own scope.
             # Never guess a PID; stop only its freshly matching invocation/inode.
@@ -791,7 +796,7 @@ def main():
                 stop_guardian(guardian)
             except (ValueError, OSError, subprocess.SubprocessError):
                 pass  # custody remains held; never infer clean close
-        print('ARM64_SESSION_REFUSED: retained state requires inspection')
+        print(f'ARM64_SESSION_REFUSED: {error}; retained state requires inspection')
         return 2
 
 

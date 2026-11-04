@@ -376,6 +376,27 @@ class SessionTests(Fixture):
             write.assert_not_called()
             call.assert_not_called()
 
+    def test_memory_floor_refusal_precedes_held_marker_and_scope(self):
+        meminfo = 'MemTotal: 134217728 kB\nMemAvailable: %d kB\n' % (31 * 1024 * 1024)
+        real_read = Path.read_text
+        with patch.object(s.setup, 'load_registry', return_value=self.value), \
+                patch.object(s.setup, 'interpreter_check'), patch.object(s.setup, 'host_check'), \
+                patch.object(s, 'ui_bus_executable'), patch.object(s, 'ui_transport', return_value={}), \
+                patch.object(s.setup, 'read', return_value=b'{}'), patch.object(s.setup, 'decode', return_value={}), \
+                patch.object(Path, 'read_text', lambda path, *a, **k: meminfo if str(path) == '/proc/meminfo' else real_read(path, *a, **k)), \
+                patch.object(s, 'publish_held_marker') as held, patch.object(s, 'monitor_scope') as scope:
+            with self.assertRaisesRegex(s.setup.Refused, 'memory floor'):
+                s.launch(self.value['package']['app']['path'], self.value['source_root'], '/synthetic/ui', self.value['source_commit'], 111, 222)
+            held.assert_not_called()
+            scope.assert_not_called()
+
+    def test_refusal_prints_its_reason(self):
+        with patch.object(s.setup, 'load_registry', side_effect=s.setup.Refused('the named reason')), \
+                patch('sys.argv', ['session', '--app', 'a', '--source-root', 'b', '--ui-transport', 'c', '--expected-commit', 'd']), \
+                patch('builtins.print') as printed:
+            self.assertEqual(s.main(), 2)
+        self.assertIn('the named reason', printed.call_args[0][0])
+
     def test_normal_browser_template_not_static_program(self):
         profiles = s.child_environment(self.value, self.root, 'agent', 'vm',
             {'display': ':9', 'xauthority': None, 'dbus_session_bus_address': 'unix:path=/synthetic'},
