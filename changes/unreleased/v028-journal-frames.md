@@ -1,0 +1,1 @@
+- Store compact frame events with reducer-result digests while retaining every witness, record, hash chain and replay boundary, and continue reading existing full-state archives without rewriting them.

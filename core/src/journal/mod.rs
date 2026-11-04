@@ -54,6 +54,8 @@ mod sha256;
 pub use sha256::{sha256_hex, StreamingSha256};
 
 #[cfg(test)]
+mod compact_tests;
+#[cfg(test)]
 mod v027_tests;
 
 // [TARGET, unit decision] Group-commit window for frame witness/record fsyncs.
@@ -1077,8 +1079,38 @@ struct Event {
     envelope: crate::Envelope,
     input: Input,
     outcome: Outcome,
-    state: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state_sha256: Option<String>,
     witnesses: Vec<Witness>,
+}
+impl Event {
+    // [TARGET, unit decision] Internal archive encoding only; wire contracts and
+    // session_record bytes stay unchanged. Legacy events retain their exact
+    // canonical form. Compact frames bind the reducer's full result by digest.
+    fn valid_encoding(&self) -> bool {
+        match self.schema.as_str() {
+            "metaviewer.event/v1" => self.state.is_some() && self.state_sha256.is_none(),
+            "metaviewer.event/v2" => {
+                matches!(self.input, Input::Frame { .. })
+                    && self.outcome.reason.is_none()
+                    && self.state.is_none()
+                    && self.state_sha256.as_deref().is_some_and(hex)
+            }
+            _ => false,
+        }
+    }
+
+    fn matches_snapshot(&self, snapshot: &[u8]) -> Result<bool, JournalError> {
+        if !self.valid_encoding() {
+            return Ok(false);
+        }
+        match &self.state {
+            Some(state) => Ok(canonical_bytes(state)? == snapshot),
+            None => Ok(self.state_sha256.as_deref() == Some(sha256_hex(snapshot).as_str())),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -3151,9 +3183,9 @@ impl Journal {
         }
         let mut reduced = self.state.clone();
         let expected = reduced.apply(input).map_err(|_| JournalError::Invalid)?;
+        let snapshot = state.snapshot().map_err(|_| JournalError::Invalid)?;
         if expected != *outcome
-            || reduced.snapshot().map_err(|_| JournalError::Invalid)?
-                != state.snapshot().map_err(|_| JournalError::Invalid)?
+            || reduced.snapshot().map_err(|_| JournalError::Invalid)? != snapshot
         {
             return Err(JournalError::Invalid);
         }
@@ -3172,24 +3204,32 @@ impl Journal {
         {
             return Err(JournalError::Policy);
         }
+        // Keep full diagnostic snapshots on refusals, including frames arriving
+        // after a lifecycle fence. Only admitted frame updates use reduction.
+        let compact_frame = matches!(input, Input::Frame { .. }) && outcome.reason.is_none();
         let event = json(&Event {
-            schema: "metaviewer.event/v1".into(),
+            schema: if compact_frame {
+                "metaviewer.event/v2"
+            } else {
+                "metaviewer.event/v1"
+            }
+            .into(),
             envelope: audit_envelope(&record, &state.session_id),
             record,
             input: input.clone(),
             outcome: outcome.clone(),
-            state: serde_json::to_value(state).map_err(|_| JournalError::Invalid)?,
+            state: if compact_frame {
+                None
+            } else {
+                Some(serde_json::to_value(state).map_err(|_| JournalError::Invalid)?)
+            },
+            state_sha256: compact_frame.then(|| sha256_hex(&snapshot)),
             witnesses: witnesses.clone(),
         })?;
         let archive_bytes = self
             .archive_bytes
             .checked_add(event.len() as u64)
-            .and_then(|n| {
-                state
-                    .snapshot()
-                    .ok()
-                    .and_then(|s| n.checked_add(s.len() as u64))
-            })
+            .and_then(|n| n.checked_add(snapshot.len() as u64))
             .ok_or(JournalError::Policy)?;
         if archive_bytes > MAX_BYTES {
             return Err(JournalError::Policy);
@@ -3522,7 +3562,7 @@ fn verify_prefix_and_classify_tail(
         let envelope_raw = json(&event.envelope).ok()?;
         let envelope_text = std::str::from_utf8(&envelope_raw).ok()?;
         let decoded = crate::decode_envelope(envelope_text).ok()?;
-        if event.schema != "metaviewer.event/v1"
+        if !event.valid_encoding()
             || event.record != record
             || decoded != audit_envelope(&record, &header.session_id)
         {
@@ -3542,7 +3582,7 @@ fn verify_prefix_and_classify_tail(
             return None;
         }
         let snapshot = state.snapshot().ok()?;
-        if snapshot != canonical_bytes(&event.state).ok()? {
+        if !event.matches_snapshot(&snapshot).ok()? {
             return None;
         }
         archive_budget = archive_budget.checked_add(snapshot.len() as u64)?;
@@ -3591,7 +3631,7 @@ fn verify_prefix_and_classify_tail(
                     saw_torn = true;
                     break;
                 };
-                if ev.schema != "metaviewer.event/v1" || ev.record != rec {
+                if !ev.valid_encoding() || ev.record != rec {
                     saw_torn = true;
                     break;
                 }
@@ -3625,7 +3665,7 @@ fn verify_prefix_and_classify_tail(
                         return None;
                     }
                     let snapshot = state.snapshot().ok()?;
-                    if snapshot != canonical_bytes(&ev.state).ok()? {
+                    if !ev.matches_snapshot(&snapshot).ok()? {
                         return None;
                     }
                     archive_budget = archive_budget.checked_add(snapshot.len() as u64)?;
@@ -3936,7 +3976,7 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
         let envelope_text =
             std::str::from_utf8(&envelope_raw).map_err(|_| JournalError::Corrupt)?;
         let decoded = crate::decode_envelope(envelope_text).map_err(|_| JournalError::Corrupt)?;
-        if event.schema != "metaviewer.event/v1"
+        if !event.valid_encoding()
             || event.record != record
             || decoded != audit_envelope(&record, &header.session_id)
         {
@@ -3958,7 +3998,7 @@ pub fn scan(path: &Path, root: &Path) -> Result<Replay, JournalError> {
             return Err(JournalError::Corrupt);
         }
         let snapshot = state.snapshot().map_err(|_| JournalError::Corrupt)?;
-        if snapshot != canonical_bytes(&event.state)? {
+        if !event.matches_snapshot(&snapshot)? {
             return Err(JournalError::Corrupt);
         }
         archive_budget = archive_budget
