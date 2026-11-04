@@ -7,11 +7,33 @@ Linux desktop or laptop.
 This guide describes the repository interfaces. Live verification is limited to
 the architecture support table in [Judge tour](JUDGE_TOUR.md#architecture-support-at-this-snapshot).
 
+**A finding tells you where to look. Only the code proves it.** Read the cited code
+before repeating a claim; numbers carry [MEASURED], [CITED: path] or [TARGET], and
+unknown facts read `ABSENT — do not invent`.
+
+## 0. Reading map
+
+Answers: where do I start; which document answers my question as an AI operator.
+
+| You want | Go to |
+|---|---|
+| Why an AI should drive MetaViewer, what was shown live, limits | [AI_AT_THE_CONTROLS.md](AI_AT_THE_CONTROLS.md) |
+| Which agent CLIs the paired terminal can start | [AI_AT_THE_CONTROLS.md#2-which-agent-clis-work](AI_AT_THE_CONTROLS.md#2-which-agent-clis-work) |
+| The exact prompts an attached AI follows | [AGENT_ENTRY.md](AGENT_ENTRY.md) |
+| A first `mw_run`, expected output, refusals | [MW_RUN_FIRST_RUN.md](MW_RUN_FIRST_RUN.md) |
+| Install and run | [Section 4](#4-installing-running-and-stopping-metaviewer-metaviewer-judgesh) |
+| Capsule kinds | [Section 6](#6-adding-capsules-browser-program-and-desktop-window) |
+| Roles and takeover | [Section 7](#7-human-and-agent-roles-hand-off-and-emergency-takeover) |
+| Limits | [Section 13](#13-what-is-not-supported-honest-limitations) |
+| Find code for a symptom | `python3 route/route_query.py locate "<symptom>"`; findings are pinned to an older commit, read the code [CITED: route/README.md] |
+
 ---
 
 ## 1. What MetaViewer Is (and How to Explain It to a Person)
 
-MetaViewer is a Linux desktop wall of live, isolated capsules. Instead of letting an
+Answers: what is MetaViewer; how do I explain MetaViewer to a judge; what are human and agent roles.
+
+MetaViewer is a Linux desktop wall of live capsules. Instead of letting an
 automation script take over your personal browser or desktop session, MetaViewer runs
 each browser session or Linux program inside its own container (`OpenSuperficies`)
 with its own virtual X11 display and streams the live surface into
@@ -34,6 +56,8 @@ A person and an AI work side by side on the same wall:
 ---
 
 ## 2. Target Hardware and Tier Thresholds (Typical x64 / arm64 Linux Laptop)
+
+Answers: what hardware do I need; which tier fits my machine.
 
 MetaViewer is designed for standard Linux machines (`x86_64` / `x64` and `aarch64` /
 `arm64`) such as an **8-core, 16 GiB RAM laptop** running Ubuntu 24.04 LTS or
@@ -58,6 +82,8 @@ sudo mount -o remount,size=4G /dev/shm
 ---
 
 ## 3. Release Assets and Building Them Locally
+
+Answers: which release assets exist; how do I build the assets.
 
 `scripts/judge/metaviewer-judge.sh` verifies every archive against `assets/SHA256SUMS`
 before unpacking:
@@ -90,6 +116,8 @@ python3 tools/build_release_assets.py \
 ---
 
 ## 4. Installing, Running, and Stopping MetaViewer (`metaviewer-judge.sh`)
+
+Answers: how do I install MetaViewer; how do I start and stop it; when is sudo used.
 
 All four lifecycle subcommands live in `scripts/judge/metaviewer-judge.sh`:
 
@@ -137,6 +165,8 @@ memory (4 GiB RAM plus 2 GiB shm) and refuses with a reason naming what to close
 
 ## 5. Navigating the UI: Views, Desktops, and Tile Presets
 
+Answers: how do I switch views or desktops; how do I move or resize tiles.
+
 When the MetaViewer window opens, the top bar (`42 px` height) controls the workspace:
 
 ### Views (`Humans` vs `Agents`)
@@ -179,6 +209,8 @@ arrangement:
 ---
 
 ## 6. Adding Capsules: Browser, Program, and Desktop Window
+
+Answers: how do I add a browser, a program or a desktop window capsule.
 
 Click **`＋ Add capsule`** in the top bar (or **`＋ Add capsule`** inside an empty
 desktop). The dialog also offers Host program, which runs on your computer and
@@ -230,6 +262,8 @@ Attaches a window that is already open on your real X11 desktop into a tile. No 
 
 ## 7. Human and Agent Roles, Hand-off, and Emergency Takeover
 
+Answers: how do I hand a capsule to the agent; how do I take control back.
+
 Every browser capsule enforces a strict role state machine (`Role: human` vs
 `Role: agent`) with a per-capsule menu (`⋮` in the tile header) and a context bar at
 the bottom of the tile:
@@ -251,6 +285,8 @@ the program in a human tile.
 
 ## 8. `Copy ID for AI`
 
+Answers: what does Copy ID for AI copy; how does an AI know which capsule to use.
+
 Every capsule tile header has an **`ID`** button (and **`Copy ID for AI`** in the
 tile's **`⋮`** menu).
 
@@ -269,6 +305,8 @@ do not substitute the surface ID.
 ---
 
 ## 9. Built-in Terminals, Screens, and Task Prompts
+
+Answers: how do I open a terminal; how are task prompts prepared.
 
 MetaViewer includes a built-in multi-screen terminal drawer for running shells and
 AI CLIs right alongside your capsules.
@@ -299,6 +337,8 @@ AI CLIs right alongside your capsules.
 ---
 
 ## 10. Managing Browser Identities (`Identities` Dialog and `tools/mv_identity.py`)
+
+Answers: how do I create, list or release a browser identity.
 
 ### From the UI (`Identities`)
 
@@ -357,6 +397,8 @@ python3 tools/mv_identity.py \
 ---
 
 ## 11. `Use MetaViewer`: Attaching Any External AI (`docs/AGENT_ENTRY.md`)
+
+Answers: how do I attach an external AI; where is the attachment file.
 
 Copy the fenced prompt from [AGENT_ENTRY.md](AGENT_ENTRY.md) for your external AI.
 The sidebar entry button is not available in this release.
@@ -419,6 +461,8 @@ send invented raw capsule commands to the core socket.
 ---
 
 ## 12. Automation with `mw_run` and MemoryWeb
+
+Answers: how do I run mw_run; how do I record and replay a workflow; how do I automate a program.
 
 MetaViewer integrates with **MemoryWeb (`wender-agent`)** to compile recorded
 demonstrations into repeatable site graphs (`site.json` + `workflows/<workflow>.json`)
@@ -579,6 +623,8 @@ A traceback without JSON also requires stopping and operator inspection.
 
 ## 13. What Is Not Supported (Honest Limitations)
 
+Answers: what does MetaViewer not support; what are the known limits.
+
 When explaining MetaViewer to a user or judge, state these boundaries clearly:
 
 1. **Linux Only (No macOS, No Native Windows)**:
@@ -594,14 +640,25 @@ When explaining MetaViewer to a user or judge, state these boundaries clearly:
    name and grounded input; they support clicks, verified text and optional Enter.
    Login walls and CAPTCHA require the person (rc `4` [CITED: tools/mw_run_browser_goal.md]).
    Program and Host program runs admit clicks and bounded operator text with
-   readback; program key input and automation of Desktop window capsules are
-   unsupported. Live program results are limited to the Judge tour table. Explicit
+   readback; key input is limited to `--goal focused-key` with Up, Down, Left,
+   Right or Enter on Host programs [CITED: tools/mw_run_program.md:68], and
+   automation of Desktop window capsules is unsupported. Live program results are limited to the Judge tour table. Explicit
    `--planner muse` sends marks to a provider. A verified action is not a finished
    goal. Browser role switches currently recreate the capsule and can lose the
    open page; preserved profile login state does not prove page continuity.
 4. **Rootless Docker and Docker Desktop Are Refused for Tier 2**:
    OpenSuperficies capsule isolation requires the local rootful Linux Docker daemon
    (`JUDGE_DOCKER`, `JUDGE_DOCKER_DESKTOP`, `JUDGE_DOCKER_HOST`).
+5. **Session and Mode Limits Seen Live** [MEASURED, operator session 4 Nov 2026]:
+   a plain start offers browsers, Host program and Program; `--arm64` offers VM and
+   MicroVM only, and there is no x64 VM, MicroVM or rewind. Switching a Host program
+   between human and agent restarts it. A full journal ends the session; use a fresh
+   session per long run ([JOURNAL_END.md](JOURNAL_END.md)).
+6. **Open Bugs** [MEASURED, operator session 4 Nov 2026]: after an `mw_run` the
+   package gains `__pycache__` and a later `--arm64` start holds with "exhaustive
+   manifest inventory"; remove the bytecode directories. A paired terminal exited
+   after a very long typed line; cause unknown. More in
+   [AI_AT_THE_CONTROLS.md#8-limits-and-negative-results](AI_AT_THE_CONTROLS.md#8-limits-and-negative-results).
 
 ### Legacy kit proxy setup
 
