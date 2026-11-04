@@ -161,7 +161,9 @@ flakepi-626bf7f96335	changes/unreleased/flake-pin-procbound-r2.md
 flakepi-0268f441f2d7	changes/unreleased/flake-pin-procbound.md
 fronten-ad184a70c9c9	changes/unreleased/frontend-bootstrap-pill.md
 fronten-5d1bc7d41629	changes/unreleased/frontend-display-diagnostics.md
+fronten-0222318de737	changes/unreleased/frontend-live-terminal-drawer.md
 fronten-b6bbf2d128e7	changes/unreleased/frontend-paired-terminal.md
+fronten-f714efd566f6	changes/unreleased/frontend-stored-data-header.md
 fronten-43746ea4feed	changes/unreleased/frontend-terminal-drawer.md
 gatever-df8c02216e72	changes/unreleased/gate-version-mutation.md
 handoff-state-home.md	changes/unreleased/handoff-state-home.md
@@ -2226,6 +2228,7 @@ shellLayout.test.js	ui/test/shellLayout.test.js
 sideTer-79758cec3d1d	ui/test/sideTerminalFacade.test.js
 smoke-main.mjs	ui/test/smoke-main.mjs
 smoke.mjs	ui/test/smoke.mjs
+storedd-c6d18a5aee44	ui/test/stored-data-header.test.js
 storedd-b4a0a6900778	ui/test/stored-data-slots.test.js
 surfacePanel.test.js	ui/test/surfacePanel.test.js
 t4mainr-cfee7eadc227	ui/test/t4-main-regression.test.js
