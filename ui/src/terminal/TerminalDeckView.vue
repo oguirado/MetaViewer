@@ -17,6 +17,7 @@ import {
   collectRetainedSlotIds,
   createTerminalDeckController,
   matchDeckShortcut,
+  placeTerminalLauncher,
 } from './terminalDeckModel.js';
 import './terminal.css';
 import {createPairedTerminals} from './pairedTerminals.js';
@@ -310,6 +311,32 @@ const allScreenSlots = computed(() => {
   return list;
 });
 const launcherWrap = ref(/** @type {any} */ (null));
+const launcherPanel = ref(/** @type {HTMLElement|null} */ (null));
+const launcherPlacement = ref(/** @type {ReturnType<typeof placeTerminalLauncher>} */ (null));
+let launcherSizeObserver = /** @type {ResizeObserver|null} */ (null);
+function updateLauncherPlacement() {
+  if (!launcherOpen.value) return;
+  const panel=deckRoot.value?.getBoundingClientRect?.(),anchor=newTerminalButton.value?.getBoundingClientRect?.(),menu=launcherPanel.value;
+  if (!panel || !anchor || !menu) return;
+  const next=placeTerminalLauncher(panel,anchor,Math.max(menu.scrollHeight,menu.offsetHeight),{width:globalThis.window?.innerWidth ?? 0,height:globalThis.window?.innerHeight ?? 0});
+  if (JSON.stringify(next)!==JSON.stringify(launcherPlacement.value)) launcherPlacement.value=next;
+}
+watch(launcherOpen,async open=>{
+  launcherSizeObserver?.disconnect();launcherSizeObserver=null;launcherPlacement.value=null;
+  if (!open) return;
+  await nextTick();
+  if (!launcherOpen.value) return;
+  if (typeof ResizeObserver==='function') {
+    launcherSizeObserver=new ResizeObserver(updateLauncherPlacement);
+    if(deckRoot.value)launcherSizeObserver.observe(deckRoot.value);
+    if(launcherPanel.value)launcherSizeObserver.observe(launcherPanel.value);
+  }
+  updateLauncherPlacement();await nextTick();updateLauncherPlacement();
+});
+const launcherStyle=computed(()=>/** @type {import('vue').CSSProperties} */ (launcherPlacement.value ? {
+  position:'fixed',right:'auto',left:`${launcherPlacement.value.left}px`,top:`${launcherPlacement.value.top}px`,
+  width:`${launcherPlacement.value.width}px`,maxHeight:`${launcherPlacement.value.maxHeight}px`,visibility:'visible',
+} : {visibility:'hidden'}));
 const overlayCoordinator = /** @type {{ set?: (owner: object, active: boolean) => void, setSurface?: (owner: object, surfaceId: string, active: boolean) => void } | null} */ (inject('overlayCoordinator', null));
 const launcherOverlayOwner = {};
 const contextOverlayOwner = {};
@@ -940,6 +967,8 @@ watch(
 );
 
 onMounted(() => {
+  globalThis.window?.addEventListener?.('resize', updateLauncherPlacement);
+  globalThis.window?.addEventListener?.('scroll', updateLauncherPlacement, true);
   globalThis.document?.addEventListener?.('focusin', containDialogFocus, true);
   if (props.open) {
     void controller.refreshProviders();
@@ -963,6 +992,9 @@ watch(
 
 onBeforeUnmount(() => {
   agentGeneration++;
+  launcherSizeObserver?.disconnect();
+  globalThis.window?.removeEventListener?.('resize', updateLauncherPlacement);
+  globalThis.window?.removeEventListener?.('scroll', updateLauncherPlacement, true);
   viewportObserver?.disconnect();
   globalThis.document?.removeEventListener?.('focusin', containDialogFocus, true);
   syncOverlayAttr(false);
@@ -1124,6 +1156,8 @@ defineExpose({
 
           <div
             v-if="launcherOpen"
+            ref="launcherPanel"
+            :style="launcherStyle"
             :id="domId('terminal-deck-launcher')"
             data-semantic-anchor="terminal/launcher"
             class="mv-terminal-deck__popover"

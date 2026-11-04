@@ -53,6 +53,7 @@
 }
 
 .mv-terminal-deck__bar {
+  flex-wrap: wrap;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -118,6 +119,9 @@
 }
 
 .mv-terminal-deck__actions {
+  flex: 1 1 16rem;
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -125,6 +129,8 @@
 }
 
 .mv-terminal-deck__bootstrap-wrap {
+  min-width: 0;
+  max-width: 100%;
   flex-wrap: wrap;
 }
 
@@ -151,7 +157,10 @@
   right: 0;
   top: calc(100% + var(--cuk-semantic-spacing-xs));
   z-index: var(--cuk-semantic-z-index-overlay);
-  min-width: 18rem;
+  min-width: 0;
+  box-sizing: border-box;
+  overflow: auto;
+  overflow-wrap: anywhere;
   padding: var(--cuk-semantic-spacing-sm);
   border: 1px solid var(--cuk-semantic-border-default);
   border-radius: var(--cuk-semantic-radius-md);
@@ -201,6 +210,7 @@
 }
 
 .mv-terminal-deck__custom-row {
+  flex-wrap: wrap;
   display: flex;
   gap: var(--cuk-semantic-spacing-xs);
 }
