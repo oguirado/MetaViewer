@@ -228,6 +228,7 @@ u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
 ui-control-arm.md	changes/unreleased/ui-control-arm.md
 ui-geometry-wire.md	changes/unreleased/ui-geometry-wire.md
+uiharne-93450a6cef45	changes/unreleased/ui-harness-rewind-imports.md
 uiworkl-206c0331796b	changes/unreleased/ui-workload-routing.md
 ux-chip.md	changes/unreleased/ux-chip.md
 v021-release.md	changes/unreleased/v021-release.md
@@ -3064,6 +3065,8 @@ rv9elec-3b07d2eb24f6	ui/test/rv9-elec-regressions.test.js
 security.test.js	ui/test/security.test.js
 setting-c22b53627f2f	ui/test/settingsHarden.test.mjs
 settingsMut.test.mjs	ui/test/settingsMut.test.mjs
+sfcimpo-132e7c0323aa	ui/test/sfc-import-binding.mjs
+sfcimpo-9388741bb7ad	ui/test/sfc-import-binding.test.js
 shellFixture.html	ui/test/shellFixture.html
 shellFixture.js	ui/test/shellFixture.js
 shellLayout.test.js	ui/test/shellLayout.test.js
