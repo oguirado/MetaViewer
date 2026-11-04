@@ -158,14 +158,9 @@ function pureOracle(m) {
     const long = m.shortCapsuleId(SURFACE);
     assert.ok(long.length < SURFACE.length && long.includes('…') && long.startsWith('surf-012') && long.endsWith('bcdef'));
   });
-  check('ready line carries id, identity and the exact mw_run usage', () => {
+  check('ready line carries only the exact live capsule and identity data', () => {
     const line = m.buildCapsuleReadyLine({ surfaceId: SURFACE, profileId: IDENTITY });
-    assert.ok(line.includes(SURFACE));
-    assert.ok(line.includes(`--identity ${IDENTITY}`));
-    assert.ok(line.includes('python3 -m metaviewer_agents.mw_run'));
-    assert.ok(line.includes('--site <site> --workflow <workflow>'));
-    assert.ok(line.includes('metaviewer/attach/current.env'));
-    assert.ok(line.includes('HUMAN_HANDOFF'));
+    assert.equal(line, `CAPSULE=${SURFACE}  IDENTITY=${IDENTITY}`);
   });
   check('ready line is one line with no host path or secret shape', () => {
     const line = m.buildCapsuleReadyLine({ surfaceId: SURFACE, profileId: IDENTITY });

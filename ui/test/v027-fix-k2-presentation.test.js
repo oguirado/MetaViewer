@@ -6,11 +6,12 @@ import {HANDOFF_STEPS} from '../src/handoff/handoffModel.js';
 import * as capture from '../src/wall/tileCapture.js';
 
 test('V027 K2 copy guidance distinguishes programs and refuses Desktop window automation',()=>{
-  const line=buildCapsuleReadyLine({surfaceId:'surface-demo',profileId:'program-demo'});
+  assert.equal(buildCapsuleReadyLine({surfaceId:'surface-demo',profileId:'program-demo'}),'CAPSULE=surface-demo  IDENTITY=program-demo');
+  const line=readFileSync(new URL('../../docs/AGENT_ENTRY.md',import.meta.url),'utf8').replace(/\s+/g,' ');
   assert.match(line,/--surface-kind program/);
   assert.match(line,/tools\/mw_run_program\.md/);
   assert.match(line,/Desktop.window.*unsupported/i);
-  assert.match(line,/For browser goal mode/);
+  assert.match(line,/browser goal/i);
   assert.equal(buildCapsuleReadyLine({surfaceId:'bad id',profileId:'program-demo'}),null);
 });
 test('V027 K2 intervention guides direct wall typing only after takeover',()=>{
