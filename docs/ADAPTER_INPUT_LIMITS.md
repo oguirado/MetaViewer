@@ -7,7 +7,7 @@ also rejects non-printable runes [CITED: the same source, lines 284–287]; the
 adapter refuses those at admission with `input`, including trailing newlines
 which the CLI would otherwise remove.
 
-The per-proposal cap is 16384 runes [TARGET, unit decision]. Text above that cap
+The per-proposal cap is 16384 runes [TARGET]. Text above that cap
 is refused with stable fault code `TEXT_TOO_LONG` before consuming a permit or
 calling the native CLI. Existing JSON transport byte/string caps still apply
 before action admission. The cap counts Unicode runes, not bytes; each native
@@ -28,7 +28,7 @@ Successful long-text `InputEvidence` includes adapter-local `TextSequence.Chunks
 delivery. Each entry contains the validated native receipt, rune count and SHA256
 of the exact stdin bytes. The existing top-level evidence identifies the final
 verified call; sequence evidence is returned only after every chunk succeeds.
-This adapter-local evidence interface is [TARGET, unit decision]. The public
+This adapter-local evidence interface is [TARGET]. The public
 receipt keeps the final native receipt as an aggregate success witness, emitted
 only after all calls verify. Per-chunk evidence is excluded from JSON because
 `contracts/v0.2/action_receipt.schema.json:107` forbids extra native evidence
@@ -41,7 +41,7 @@ OpenSuperficies `docs/CONTRACT_IDENTITY_SURFACE.md` at the pinned commit above].
 No paste permission is inferred from either interface.
 
 The runner's NAV-TEXTCAP chunking remains: its bounded proposals are compatible
-with adapter chunking [TARGET, unit decision]. No runner changes are required.
+with adapter chunking [TARGET]. No runner changes are required.
 
 This mandate is scoped to the supplied MetaViewer worktree and pinned
 OpenSuperficies source corpus.

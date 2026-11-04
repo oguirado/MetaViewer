@@ -1,0 +1,28 @@
+{
+  "schema": "guest_command_session/v0.2",
+  "workload_id": "workload-fixture",
+  "generation": 1,
+  "owner_id": "actor-fixture",
+  "profile_id": "guest-command-arm64-v1",
+  "backend": "firecracker",
+  "isa": "aarch64",
+  "phase": "starting",
+  "ownership": "held",
+  "jobs_started": 0,
+  "job": {
+    "job_id": "job-fixture",
+    "state": "running",
+    "exit_code": 0,
+    "signal": 1,
+    "stdout_bytes": 0,
+    "stderr_bytes": 0,
+    "output_complete": false
+  },
+  "controls": {
+    "cancel": null,
+    "stop": {
+      "request_id": "request-fixture",
+      "ack": "refused"
+    }
+  }
+}

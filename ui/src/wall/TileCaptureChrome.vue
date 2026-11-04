@@ -3,9 +3,9 @@
   capture store passed down from the wall root; a missing store disables the
   controls with the shared unavailable reason instead of throwing. Hidden in
   nested display-only mode. Kit owns the record toggle (SaasRecordButton)
-  and the screenshot glyph (SidebarIcon); the lane owns layout and copy. -->
+  while the lane owns decorative capture glyphs, layout and copy. -->
 <script setup>
-import { computed, onBeforeUnmount, shallowRef } from 'vue';
+import { computed, inject, onBeforeUnmount, shallowRef } from 'vue';
 import SaasRecordButton from '../../.kit/capsule-ui-kit/src/saas/SaasRecordButton.vue';
 import SidebarIcon from '../../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue';
 import {
@@ -48,6 +48,8 @@ import {
 
 const props = defineProps({
   capsuleId: { type: String, required: true },
+  compact: { type: Boolean, default: false },
+  headerTarget: { type: /** @type {import('vue').PropType<Element|null>} */ (Object), default: null },
   capsuleLabel: { type: String, default: '' },
   captureState: {
     type: /** @type {import('vue').PropType<TileCaptureStateLike | null>} */ (Object),
@@ -62,14 +64,22 @@ const props = defineProps({
   clipboard: { type: /** @type {import('vue').PropType<import('./capsuleId.js').CapsuleClipboardLike | null>} */ (Object), default: null },
 });
 
+const automation=/** @type {any} */(inject('automation-recording',null));
+const demoActive=computed(()=>{
+  const state=automation?.snapshot?.value;
+  return Boolean(props.profileId && state?.identity===props.profileId && ['recording','sealing'].includes(state.phase));
+});
+const demoSealing=computed(()=>automation?.snapshot?.value?.phase==='sealing');
+const demoStopDisabled=computed(()=>demoSealing.value || automation?.pending?.value===true);
 const entry = computed(() => readSurfaceEntry(props.captureState, props.capsuleId));
 const refusal = computed(() => tileCaptureRefusal(entry.value));
 const phase = computed(() => surfaceEntryPhase(entry.value));
 const busy = computed(() => tileCapturePhaseBusy(phase.value));
 const unavailable = computed(() => isCaptureUnavailable(props.captureState));
 
-const recordDisabled = computed(() => unavailable.value || busy.value);
+const recordDisabled = computed(() => unavailable.value || busy.value || demoActive.value);
 const recordReason = computed(() => {
+  if (demoActive.value) return 'An automation is recording';
   if (unavailable.value) return TILE_CAPTURE_UNAVAILABLE_REASON;
   if (busy.value) return `Recording is ${phase.value}`;
   return '';
@@ -99,7 +109,7 @@ const badgeText = computed(() => tileBadgeText({
   phase: phase.value,
   elapsedMs: entry.value?.elapsedMs,
 }));
-const badgeVariant = computed(() => tileBadgeVariant({ phase: phase.value }));
+const badgeVariant = computed(() => demoActive.value ? 'recording' : tileBadgeVariant({ phase: phase.value }));
 const badgeTitle = computed(() => `Phase ${phase.value}`);
 const groupName = computed(() => tileChromeGroupName({
   capsuleLabel: props.capsuleLabel,
@@ -176,7 +186,7 @@ function onShotClick() {
 }
 </script>
 <template>
-  <div v-if="!props.displayOnly" class="mv-tile-chrome" role="group" :aria-label="groupName">
+  <div v-if="!props.displayOnly" class="mv-tile-chrome" :class="{ 'mv-tile-chrome--compact': compact }" role="group" :aria-label="groupName">
     <span :id="recordWrapId" class="mv-tile-chrome__record" :data-semantic-anchor="recordAnchor">
       <SaasRecordButton
         :capsule-id="props.capsuleId"
@@ -211,22 +221,24 @@ function onShotClick() {
         class="mv-tile-capid__copy"
         :data-semantic-anchor="tileCopyIdAnchor"
         :aria-label="capId.copyName"
-        :title="copyDisabledReason || capId.hover"
+        :title="copyDisabledReason || capId.copyName"
         :disabled="copyDisabled"
         :aria-busy="copyState === 'copying' ? 'true' : undefined"
         :data-unavailable-reason="copyDisabledReason || undefined"
         @click="onCopyId"
-      >{{ CAPSULE_COPY_LABEL }}</button>
+      ><SidebarIcon class="mv-tile-copy-icon" name="save" aria-hidden="true" /><span class="mv-tile-copy-label">{{ CAPSULE_COPY_LABEL }}</span></button>
       <span v-if="copyStatusText !== ''" role="status" class="mv-tile-capid__status" :data-copy-outcome="copyState" :title="copyReason || undefined">{{ copyStatusText }}</span>
     </span>
     <span v-if="refusal" role="alert" class="mv-tile-chrome__refusal">{{ refusal }}</span>
+    <Teleport :to="headerTarget || 'body'" :disabled="!headerTarget">
     <span
       :id="badgeId"
-      class="mv-tile-chrome__badge"
-      :data-variant="badgeVariant"
+      class="mv-tile-chrome__badge" :class="{ 'mv-tile-chrome__badge--header': headerTarget }"
+      :data-variant="badgeVariant" :data-automation-recording="demoActive ? 'true' : undefined"
       role="status"
       :data-semantic-anchor="badgeAnchor"
-      :title="badgeTitle"
-    >{{ badgeText }}</span>
+      :title="demoActive ? (demoSealing ? 'Sealing automation' : 'Recording automation') : badgeTitle"
+    >{{ demoActive ? 'Recording automation' : phase === 'error' ? 'Error' : badgeText }}<button v-if="demoActive" :id="`${badgeId}-demo-stop`" type="button" class="mv-demo-stop" :aria-label="`Stop recording automation for ${props.capsuleLabel || props.profileId}`" :data-semantic-anchor="`demo/stop/tile/${props.capsuleId}`" :disabled="demoStopDisabled" @click.stop="automation?.stop?.()">{{ demoSealing ? 'Sealing…' : 'Stop' }}</button></span>
+    </Teleport>
   </div>
 </template>

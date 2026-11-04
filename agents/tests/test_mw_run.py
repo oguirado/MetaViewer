@@ -37,6 +37,8 @@ class EntryTests(unittest.TestCase):
     def test_program_text_and_browser_step_guards(self):
         base = ['--identity', 'alice']
         accepted = [
+            ['--surface-kind', 'program', '--goal', 'focused-key', '--key', 'Up'],
+            ['--surface-kind', 'program', '--goal', 'focused-key', '--key', 'Enter'],
             ['--surface-kind', 'program', '--goal', 'focused', '--text', 'hello', '--steps', '1'],
             ['--surface-kind', 'program', '--goal', 'Message', '--text', 'hello', '--steps', '1'],
             ['--goal', 'Message', '--text', 'hello', '--steps', '2'],
@@ -48,6 +50,10 @@ class EntryTests(unittest.TestCase):
                 self.assertEqual(mw_run.main(base + flags, runner=runner), 0)
                 runner.assert_called_once()
         rejected = [
+            ['--surface-kind', 'program', '--goal', 'focused-key'],
+            ['--surface-kind', 'program', '--goal', 'focused-key', '--key', 'Up', '--steps', '2'],
+            ['--surface-kind', 'program', '--goal', 'focused-key', '--key', 'Enter', '--planner', 'muse'],
+            ['--goal', 'Message', '--text', 'hello', '--key', 'Up', '--steps', '3'],
             ['--surface-kind', 'program', '--goal', 'focused'],
             ['--surface-kind', 'program', '--goal', 'focused', '--text', 'hello', '--steps', '2'],
             ['--surface-kind', 'program', '--goal', 'focused', '--text', 'hello', '--key', 'Enter'],

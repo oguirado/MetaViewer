@@ -116,6 +116,22 @@ class JudgeFixJ1(unittest.TestCase):
         self.assertTrue(entry.exists())
         self.assertNotIn('stop --container srf-pg-judge', self.sb.log('srf.log'))
 
+    def test_stopped_program_audit_record_cleans_stale_ram_entry(self):
+        self.install(capsules=True)
+        state = self.sb.home / 'state/metaviewer/srf'
+        state.mkdir(parents=True, exist_ok=True, mode=0o700)
+        store = self.sb.home / 'store'
+        store.chmod(0o700)
+        audit = store / 'audit.jsonl'
+        audit.write_text('{"time":1,"action":"acquire","profile_id":"program-gedit","holder":"srf-pg-08b31bde3214","result":"ok"}\n')
+        audit.chmod(0o600)
+        entry = self.ram_entry('srf-pg-08b31bde3214')
+        self.sb.put('containers', 'srf-egress-proxy\n')
+        result = self.sb.judge('stop')
+        self.assertEqual(result.rc, 0, result.text)
+        self.assertFalse(entry.exists())
+        self.assertIn('JUDGE_STOP_CLEAN', result.out)
+
     def test_wrong_arch_private_sidecars_refuse_install_and_doctor(self):
         for component, executable in (('vision-engine', 'vision-runtime'),
                                       ('wender-agent', 'wender-runtime')):

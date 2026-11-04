@@ -1,0 +1,12 @@
+{
+  "kind": "exec",
+  "workload_id": "workload-fixture",
+  "generation": 1,
+  "reservation_id": "reservation-fixture",
+  "request_id": "request-fixture",
+  "job_id": "job-fixture",
+  "cwd": "",
+  "timeout_ms": 1,
+  "command_bytes": 1,
+  "stdin_bytes": 0
+}

@@ -1,4 +1,7 @@
 //! Closed wire payload types matching the versioned contracts.
+//! [TARGET, unit decision] The additive capsule state handoff binds operation,
+//! profile and slot IDs; Copy additionally names a destination profile. UI human
+//! credential confirmation is explicit; payload bytes/host paths never cross it.
 use super::Optional;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -2142,9 +2145,105 @@ pub enum UiIntent {
     Case8(Box<UiIntentCase8>),
     Case9(Box<UiIntentCase9>),
 }
+// [TARGET, unit decision] Stopped-slot handoff: core admits UI requests and
+// forwards once; the adapter returns accepted then a terminal event asynchronously.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CapsuleStateRequestSchema {
+    #[serde(rename = "capsule_state_request/v0.2")]
+    Value,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CapsuleStateEventSchema {
+    #[serde(rename = "capsule_state_event/v0.2")]
+    Value,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapsuleStateOp {
+    List,
+    Delete,
+    Save,
+    Overwrite,
+    Load,
+    Copy,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CapsuleStatePhase {
+    Accepted,
+    Completed,
+    Refused,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapsuleStateRequest {
+    pub schema: CapsuleStateRequestSchema,
+    pub operation_id: String,
+    pub op: CapsuleStateOp,
+    pub profile_id: String,
+    pub slot_id: String,
+    pub credential_copy_confirmed: bool,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub destination_profile_id: Optional<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapsuleSlot {
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub size_bytes: Optional<u64>,
+    pub slot_id: String,
+    pub name: String,
+    pub saved_at: String,
+    pub generation: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapsuleStateEvent {
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub slots: Optional<Vec<CapsuleSlot>>,
+    pub schema: CapsuleStateEventSchema,
+    pub operation_id: String,
+    pub op: CapsuleStateOp,
+    pub profile_id: String,
+    pub slot_id: String,
+    pub event: CapsuleStatePhase,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub reason_code: Optional<String>,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub generation: Optional<u64>,
+    #[serde(
+        default = "Optional::missing",
+        skip_serializing_if = "Optional::is_missing"
+    )]
+    pub sha256: Optional<String>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Command {
+    GuestCommandObservation(Box<super::command_observation::GuestCommandObservation>),
+    CapsuleStateRequest(Box<CapsuleStateRequest>),
+    CapsuleStateEvent(Box<CapsuleStateEvent>),
+    RewindRequest(Box<super::rewind::RewindRequest>),
+    RewindEvent(Box<super::rewind::RewindEvent>),
+    GuestCommandRequest(Box<super::guest_command::GuestCommandRequest>),
+    GuestCommandEvent(Box<super::guest_command::GuestCommandEvent>),
+    HeadlessRequest(Box<super::headless::HeadlessRequest>),
+    HeadlessEvent(Box<super::headless::HeadlessEvent>),
     ActionProposal(Box<ActionProposal>),
     ActionReceipt(Box<ActionReceipt>),
     ActionVerdict(Box<ActionVerdict>),

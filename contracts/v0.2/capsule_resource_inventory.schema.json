@@ -1,0 +1,829 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/capsule_resource_inventory.schema.json",
+  "title": "Normal ARM64 source-bound allocation journal row",
+  "description": "New metadata-only contract. payload is exact JSON text; runtime validates decoded payload against body and cross-row lifecycle. Digest binds ASCII seq, LF, prev, LF, UTF8 payload. No existing wire envelope is changed.",
+  "type": "object",
+  "properties": {
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "prev": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "payload": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 65536
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "schema": {
+      "const": "capsule_resource_inventory/v0.2"
+    }
+  },
+  "required": [
+    "seq",
+    "prev",
+    "payload",
+    "sha256",
+    "schema"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "body": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/session"
+        },
+        {
+          "$ref": "#/$defs/guardian_bound"
+        },
+        {
+          "$ref": "#/$defs/app_pending"
+        },
+        {
+          "$ref": "#/$defs/app_bound"
+        },
+        {
+          "$ref": "#/$defs/native_pending"
+        },
+        {
+          "$ref": "#/$defs/native_bound"
+        },
+        {
+          "$ref": "#/$defs/native_closed"
+        },
+        {
+          "$ref": "#/$defs/service_pending"
+        },
+        {
+          "$ref": "#/$defs/service_bound"
+        },
+        {
+          "$ref": "#/$defs/service_closed"
+        },
+        {
+          "$ref": "#/$defs/helper_pending"
+        },
+        {
+          "$ref": "#/$defs/helper_bound"
+        },
+        {
+          "$ref": "#/$defs/helper_removed"
+        },
+        {
+          "$ref": "#/$defs/unknown"
+        },
+        {
+          "$ref": "#/$defs/producer_sealed"
+        },
+        {
+          "$ref": "#/$defs/coordinator_sealed"
+        }
+      ]
+    },
+    "session": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "session"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{24}$"
+        },
+        "actor": {
+          "type": "string",
+          "pattern": "^actor-[0-9a-f]{64}$"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "root_device": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "root_inode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "source_commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "asar_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "session_helper_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "setup_helper_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "producer_pins": {
+          "type": "object",
+          "properties": {
+            "setup": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false
+            },
+            "graphical": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false
+            },
+            "guestcommand": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "sha256"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "setup",
+            "graphical",
+            "guestcommand"
+          ],
+          "additionalProperties": false
+        },
+        "package_manifest": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "additionalProperties": false
+        },
+        "registry_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "run_id",
+        "actor",
+        "unit",
+        "root_device",
+        "root_inode",
+        "source_commit",
+        "asar_sha256",
+        "session_helper_sha256",
+        "setup_helper_sha256",
+        "producer_pins",
+        "package_manifest",
+        "registry_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "guardian_bound": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "guardian_bound"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "id": {
+          "const": "guardian"
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "invocation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "cgroup": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "device": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "inode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "unit",
+        "invocation",
+        "cgroup",
+        "device",
+        "inode"
+      ],
+      "additionalProperties": false
+    },
+    "app_pending": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "app_pending"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "id": {
+          "const": "app"
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "app_bound": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "app_bound"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "id": {
+          "const": "app"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "start_ticks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "cgroup": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "pid",
+        "start_ticks",
+        "cgroup"
+      ],
+      "additionalProperties": false
+    },
+    "native_pending": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "native_pending"
+        },
+        "producer": {
+          "const": "graphical"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "generation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "profile_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "native_kind": {
+          "enum": [
+            "vm",
+            "browser",
+            "program"
+          ]
+        },
+        "container_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "image_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "payload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "payload_device": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "payload_inode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "generation",
+        "profile_id",
+        "native_kind",
+        "container_name",
+        "image_id",
+        "payload",
+        "payload_device",
+        "payload_inode"
+      ],
+      "additionalProperties": false
+    },
+    "native_bound": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "native_bound"
+        },
+        "producer": {
+          "const": "graphical"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "container_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "run_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "cid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "native_pid": {
+          "type": "object",
+          "properties": {
+            "pid": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "pid",
+            "start"
+          ],
+          "additionalProperties": false
+        },
+        "native_state_path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "native_state_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "container_name",
+        "run_id",
+        "cid",
+        "native_pid",
+        "native_state_path",
+        "native_state_sha256"
+      ],
+      "additionalProperties": false
+    },
+    "native_closed": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "native_closed"
+        },
+        "producer": {
+          "const": "graphical"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "service_pending": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "service_pending"
+        },
+        "producer": {
+          "const": "guestcommand"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "unit"
+      ],
+      "additionalProperties": false
+    },
+    "service_bound": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "service_bound"
+        },
+        "producer": {
+          "const": "guestcommand"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "invocation": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "cgroup": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "device": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "inode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "start_ticks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "unit",
+        "invocation",
+        "cgroup",
+        "device",
+        "inode",
+        "pid",
+        "start_ticks"
+      ],
+      "additionalProperties": false
+    },
+    "service_closed": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "service_closed"
+        },
+        "producer": {
+          "const": "guestcommand"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "helper_pending": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "helper_pending"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "image_id": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "payload": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "payload_device": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "payload_inode": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "name",
+        "image_id",
+        "payload",
+        "payload_device",
+        "payload_inode"
+      ],
+      "additionalProperties": false
+    },
+    "helper_bound": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "helper_bound"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "cid": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "cid"
+      ],
+      "additionalProperties": false
+    },
+    "helper_removed": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "helper_removed"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "unknown": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "unknown"
+        },
+        "producer": {
+          "type": "string",
+          "enum": [
+            "setup",
+            "graphical",
+            "guestcommand"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "producer_sealed": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "producer_sealed"
+        },
+        "producer": {
+          "type": "string",
+          "enum": [
+            "setup",
+            "graphical",
+            "guestcommand"
+          ]
+        },
+        "last_seq": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "last_seq"
+      ],
+      "additionalProperties": false
+    },
+    "coordinator_sealed": {
+      "type": "object",
+      "properties": {
+        "stage": {
+          "const": "coordinator_sealed"
+        },
+        "producer": {
+          "const": "setup"
+        },
+        "producer_ids": {
+          "const": [
+            "graphical",
+            "guestcommand",
+            "setup"
+          ]
+        },
+        "last_seq": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "inventory_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "stage",
+        "producer",
+        "producer_ids",
+        "last_seq",
+        "inventory_sha256"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

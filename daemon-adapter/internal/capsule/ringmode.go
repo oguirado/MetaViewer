@@ -31,7 +31,7 @@ func (m *Manager) CaptureResident(ctx context.Context, id string, read func(Bind
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, ok := m.bindings[id]
-	if !ok || current.Container != b.Container || current.RunID != b.RunID || current.Surface.State != "active" || m.destroying[id] || m.hasPending(id) || m.inputEpochs[id] != epoch {
+	if !ok || current.Container != b.Container || current.RunID != b.RunID || current.Surface.State != "active" || m.destroying[id] || m.hasPending(id) || m.inputEpochs[id] != epoch || current.FrameRefreshEpoch != b.FrameRefreshEpoch {
 		return b, NativeFrame{}, fault("POLICY", "resident capture binding changed")
 	}
 	if err != nil {

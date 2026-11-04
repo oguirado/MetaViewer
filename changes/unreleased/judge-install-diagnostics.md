@@ -1,0 +1,1 @@
+- Point unavailable Docker users to app-only judging and report failed administrator package steps without claiming apt-get ran when sudo may have refused it.

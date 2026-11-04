@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://metaviewer.local/contracts/v0.2/guest_command_observation_envelope.schema.json",
+  "title": "Proposed read-only core to UI command observation envelope",
+  "type": "object",
+  "properties": {
+    "schema": {
+      "type": "string",
+      "const": "guest_command_observation_envelope/v0.2",
+      "maxLength": 39
+    },
+    "msg_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ts_ns": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "from": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "const": "core",
+          "maxLength": 4
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "component",
+        "instance"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "to": {
+      "type": "object",
+      "properties": {
+        "component": {
+          "type": "string",
+          "const": "ui",
+          "maxLength": 2
+        },
+        "instance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "required": [
+        "component",
+        "instance"
+      ],
+      "additionalProperties": false,
+      "maxProperties": 2
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "body": {
+      "$ref": "guest_command_observation.schema.json"
+    }
+  },
+  "required": [
+    "schema",
+    "msg_id",
+    "ts_ns",
+    "from",
+    "to",
+    "session_id",
+    "seq",
+    "nonce",
+    "body"
+  ],
+  "additionalProperties": false,
+  "maxProperties": 9
+}

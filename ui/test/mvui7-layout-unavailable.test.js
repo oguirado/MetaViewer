@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,7 +31,7 @@ function storageFor(facade) {
   });
 }
 const tick = async () => { await new Promise(resolve => setImmediate(resolve)); await vue.nextTick(); };
-async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runtime) {
+async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runtime, extraProps = {}) {
   const oldWindow = globalThis.window, oldDocument = globalThis.document;
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.document = { documentElement: { dataset: {} }, getElementById: () => null };
@@ -57,12 +61,12 @@ async function mountApp(storage, scheme = 'mv-light', displayOnly = false, runti
       './settings/MvSettingsPanel.vue': slotStub, './agent/AgentLaneHost.vue': slotStub,
       './activity/ActivityStrip.vue': slotStub,
       './surfaces/SurfaceCanvas.vue': slotStub, './nested/nested.js': { resolveNestedMode, applyNestedWall },
-      './surfaces/tileScheduler.js': { createTileScheduler },
+      './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
     });
     const fixture = resolveFixture('one').fixture;
     const layout = createWallLayout(SCOPE, [...fixture.capsules]);
     const view = mount(App, { fixture: { ...fixture, scheme }, layout, scope: SCOPE, storage,
-      runtime: runtime ?? createFixtureRuntime(fixture).mount.runtime,
+      runtime: runtime ?? createFixtureRuntime(fixture).mount.runtime, ...extraProps,
       nestedHost: { getNestedDepth: () => displayOnly ? 1 : 0, getSelfCapsuleId: () => null } });
     await captured.ready; await tick();
     return { ...captured, view, layout, close() { view.close(); globalThis.window = oldWindow; globalThis.document = oldDocument; } };
@@ -163,7 +167,7 @@ async function bootFixture(search) {
   };
   try {
     const code = main.replace(/^import\s+([^\n]+?)\s+from\s+(['"])(.*?)\2;?/gm,
-      (_all, binding, _quote, spec) => `const ${binding.trim()} = globalThis.__mvui7Boot[${JSON.stringify(spec)}];`)
+      (_all, binding, _quote, spec) => `const ${sfcImportBinding(binding)} = globalThis.__mvui7Boot[${JSON.stringify(spec)}];`)
       .replace(/^import\s+['"][^'"\n]+['"];?$/gm, '');
     await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#layout-${++serial}`);
     await tick();
@@ -268,30 +272,24 @@ for (const displayOnly of [false, true]) test(`notice grid mode renders correctl
     assert.equal(nodes(body).some(n => n.props?.class === 'mv-nested-wall'), displayOnly);
     const styles = parse(appSource).descriptor.styles.map(s => s.content).join('\n');
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested > .mv-shell-body' : '.mv-shell-body'),
-      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:3(?:;|$)/);
+      displayOnly ? /grid-row:1(?:;|$)/ : /grid-row:2(?:;|$)/);
     assert.match(declarationsFor(styles, displayOnly ? '.mv-shell--nested' : '.mv-shell'),
-      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) auto minmax\(0,1fr\)/);
+      displayOnly ? /grid-template-rows:minmax\(0,1fr\)/ : /grid-template-rows:var\(--cuk-component-app-shell-topbar-height\) minmax\(0,1fr\)/);
   } finally { app.close(); }
 });
 
-test('entry copy feedback expires, restarts on repeat, and unmount cancels its timer',async t=>{
-  t.mock.timers.enable({apis:['setTimeout']});
-  const previous=globalThis.metaviewer;
-  globalThis.metaviewer={operator:{entry:{copy:async()=>({ok:true})}}};
+test('removed entry action is absent from the sidebar in both rail states',async()=>{
   const app=await mountApp({readRaw:async()=>null,writeAtomic:async()=>{}});
-  try{
-    const click=async()=>{byId(app.view.root,'shell-use-metaviewer').props.onClick();await tick();};
-    await click();
-    const feedback=()=>nodes(app.view.root).find(n=>n.props?.class==='mv-entry-feedback');
-    assert.equal(text(feedback()),'Copied');assert.equal(feedback().props.role,'status');assert.equal(feedback().props['aria-live'],'polite');
-    t.mock.timers.tick(1500);await tick();assert.equal(text(feedback()),'Copied');
-    await click();t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'Copied');
-    t.mock.timers.tick(1000);await tick();assert.equal(text(feedback()),'');
-    await click();
-    const {descriptor}=parse(appSource);
-    assert.ok(descriptor.styles.some(s=>/\.mv-entry-feedback\s*\{[^}]*position:\s*absolute/s.test(s.content)),'feedback cannot reflow top-bar actions');
-  }finally{app.close();globalThis.metaviewer=previous;}
-  t.mock.timers.tick(2000);
+  try {
+    assert.equal(byId(app.view.root,'shell-use-metaviewer'),undefined);
+    assert.equal(nodes(app.view.root).some(n=>n.props?.class==='mv-entry-feedback'),false);
+    const toggle=byId(app.view.root,'shell/navigation/toggle');
+    assert.ok(toggle);assert.equal(toggle.props['aria-expanded'],true);
+    toggle.props.onClick();await tick();
+    assert.equal(byId(app.view.root,'shell/navigation/toggle').props['aria-expanded'],false);
+    assert.equal(byId(app.view.root,'shell-use-metaviewer'),undefined);
+    assert.doesNotMatch(appSource,/entryTimer|copyEntry/);
+  } finally {app.close();}
 });
 
 test('empty frame projection with an authority runtime waits for capsule frames',async()=>{
@@ -304,4 +302,18 @@ test('empty frame projection with an authority runtime waits for capsule frames'
     assert.doesNotMatch(status,/Core not connected/);
     assert.doesNotMatch(status,/Core connected/);
   }finally{app.close();runtime.dispose();}
+});
+
+
+test('ready owned MicroVM reports no frames needed without inventing a frame connection',async()=>{
+ const runtime=adapters.createAuthorityRuntime({subscribeFrames:()=>()=>{}});
+ const snapshot={available:true,busy:false,canCancel:false,uncertain:false,code:null,revision:1,session:{schema:'guest_command_session/v0.2',workload_id:'workload-one',generation:1,owner_id:'actor-one',profile_id:'guest-command-arm64-v1',backend:'firecracker',isa:'aarch64',phase:'ready',ownership:'held',jobs_started:0,job:null,controls:{cancel:null,stop:null}},stdout:'',stderr:''};
+ let publish;
+ const app=await mountApp({readRaw:async()=>null,writeAtomic:async()=>{}},'mv-dark',false,runtime,{guestCommandHost:{status:async()=>snapshot,subscribe:callback=>{publish=callback;return()=>{};}}});
+ try{
+  assert.match(text(byId(app.view.root,'shell-feed-status')),/MicroVM ready · No frames needed/);
+  assert.doesNotMatch(text(byId(app.view.root,'shell-feed-status')),/Waiting for capsule frames|Core connected/);
+  publish({...snapshot,revision:2,uncertain:true});await tick();
+  assert.doesNotMatch(text(byId(app.view.root,'shell-feed-status')),/MicroVM ready|No frames needed/);
+ }finally{app.close();runtime.dispose();}
 });

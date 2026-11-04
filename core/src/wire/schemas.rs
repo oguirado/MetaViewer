@@ -1,6 +1,66 @@
 //! Embedded contract references for scalar and union validation.
+// Embedded contracts are immutable, so each file is parsed once per process.
 pub(super) fn schema(name: &str) -> Option<serde_json::Value> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Cache = Mutex<HashMap<String, Option<serde_json::Value>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(value) = cache.lock().unwrap().get(name) {
+        return value.clone();
+    }
+    let value = schema_uncached(name);
+    cache.lock().unwrap().insert(name.to_owned(), value.clone());
+    value
+}
+
+fn schema_uncached(name: &str) -> Option<serde_json::Value> {
     let raw = match name {
+        "guest_command_observation.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_command_observation.schema.json")
+        }
+        "guest_command_observation_envelope.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_command_observation_envelope.schema.json")
+        }
+        "rewind_envelope.schema.json" => {
+            include_str!("../../../contracts/v0.2/rewind_envelope.schema.json")
+        }
+        "rewind_request.schema.json" => {
+            include_str!("../../../contracts/v0.2/rewind_request.schema.json")
+        }
+        "rewind_event.schema.json" => {
+            include_str!("../../../contracts/v0.2/rewind_event.schema.json")
+        }
+        "rewind_session.schema.json" => {
+            include_str!("../../../contracts/v0.2/rewind_session.schema.json")
+        }
+        "rewind_point.schema.json" => {
+            include_str!("../../../contracts/v0.2/rewind_point.schema.json")
+        }
+        "capsule_envelope.schema.json" => {
+            include_str!("../../../contracts/v0.2/capsule_envelope.schema.json")
+        }
+        "guest_command_request.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_command_request.schema.json")
+        }
+        "guest_command_event.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_command_event.schema.json")
+        }
+        "guest_command_session.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_command_session.schema.json")
+        }
+        "guest_transport_metadata.schema.json" => {
+            include_str!("../../../contracts/v0.2/guest_transport_metadata.schema.json")
+        }
+        "headless_request.schema.json" => {
+            include_str!("../../../contracts/v0.2/headless_request.schema.json")
+        }
+        "headless_event.schema.json" => {
+            include_str!("../../../contracts/v0.2/headless_event.schema.json")
+        }
+        "headless_session.schema.json" => {
+            include_str!("../../../contracts/v0.2/headless_session.schema.json")
+        }
         "action_proposal.schema.json" => {
             include_str!("../../../contracts/v0.2/action_proposal.schema.json")
         }
@@ -9,6 +69,12 @@ pub(super) fn schema(name: &str) -> Option<serde_json::Value> {
         }
         "action_verdict.schema.json" => {
             include_str!("../../../contracts/v0.2/action_verdict.schema.json")
+        }
+        "capsule_state_request.schema.json" => {
+            include_str!("../../../contracts/v0.2/capsule_state_request.schema.json")
+        }
+        "capsule_state_event.schema.json" => {
+            include_str!("../../../contracts/v0.2/capsule_state_event.schema.json")
         }
         "capsule_meta.schema.json" => {
             include_str!("../../../contracts/v0.2/capsule_meta.schema.json")

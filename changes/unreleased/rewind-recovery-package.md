@@ -1,0 +1,1 @@
+- Include the explicit rewind recovery command in the public operator package.
