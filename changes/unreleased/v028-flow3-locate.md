@@ -1,0 +1,1 @@
+- Set the demo authoring prompt's interactive locate wait to the builtin acquisition window and reject nonpositive acting-step waits before site admission with a repair hint.

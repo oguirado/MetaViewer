@@ -11,6 +11,8 @@
  * @module frames/displayPortRouter
  */
 
+import { convertRgb24ToRgba } from '../surfaces/tileScheduler.js';
+
 /** Notice type posted by preload to the main world for DISPLAY ports. @type {string} */
 export const DISPLAY_PORT_NOTICE_TYPE = 'metaviewer:display-port';
 
@@ -205,13 +207,7 @@ export function paintDisplayCanvas(canvas, frame) {
     scratch = { width, height, image };
     canvasScratchByElement.set(canvas, scratch);
   }
-  const rgba = image.data;
-  for (let s = 0, d = 0; s < bytes.byteLength; s += 3, d += 4) {
-    rgba[d] = bytes[s];
-    rgba[d + 1] = bytes[s + 1];
-    rgba[d + 2] = bytes[s + 2];
-    rgba[d + 3] = 255;
-  }
+  convertRgb24ToRgba(bytes, image.data, width, height);
   ctx.putImageData(image, 0, 0);
   return true;
 }

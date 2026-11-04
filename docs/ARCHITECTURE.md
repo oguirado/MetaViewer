@@ -181,13 +181,13 @@ lifetimes across crash recovery remain an open question.
 
 I verify and journal each frame witness in the core before fanning `frame_ready` out to the UI. Earlier debug-core timings do not establish current release-core latency; I retain the dated live21/live22 comparison in [README.md](../README.md#historical-live-evidence). To preserve witness availability,
 the publisher retains each `/dev/shm` generation for at least `4 s` (`>= 2 s`
-floor [TARGET, unit decision]), bounded by `128` [CITED] MiB per surface (`~38`
-full-resolution frames [TARGET, unit decision]), `512` [CITED] MiB globally across
+floor [TARGET]), bounded by `128` [CITED] MiB per surface (`~38`
+full-resolution frames [TARGET]), `512` [CITED] MiB globally across
 surfaces, and at most `64` [CITED] generations per surface (`daemon-adapter/internal/frames/publisher.go`),
 while active subscriptions suppress duplicate publications and `frame_ready`
 emissions after the initial `2` confirmation polls whenever `sha256_rgb24` and
 geometry are unchanged (`daemon-adapter/internal/frames/subscriptions.go`)
-[TARGET, unit decision]. The adapter runs a per-surface two-stage pipeline that
+[TARGET]. The adapter runs a per-surface two-stage pipeline that
 captures the next frame while decoding, hashing, and publishing the current frame
 via `PublishWithTimings` with a single-pass stdlib PNG decoder to RGB24
 (`daemon-adapter/internal/frames/publisher.go`), refuses byte or generation caps

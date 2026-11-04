@@ -225,9 +225,12 @@ impl Harness {
         self.temp.0.join("state/sessions/serve-mut")
     }
     fn events(&self) -> Vec<Value> {
-        let state = self.state();
+        // Commits append under the server lock; hold it so the scan never reads a line in flight.
+        let server = self.server.lock().unwrap();
+        let state: Value = serde_json::from_slice(&server.snapshot().unwrap()).unwrap();
         let root = self.root();
         let replay = scan(&root.join("journal.jsonl"), &root).unwrap();
+        drop(server);
         assert_eq!(serde_json::to_value(replay.state).unwrap(), state);
         (1..=state["core_seq"].as_u64().unwrap())
             .map(|seq| {

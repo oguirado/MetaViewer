@@ -199,6 +199,8 @@ class DemoTests(unittest.TestCase):
             self.assertEqual(shlex.split(command), ['python3', str(ROOT / 'tools/mv_demo.py'), 'check', '--site', 'example'])
             self.assertNotIn('@DEMO@', text)
             self.assertIn('text_len', text)
+            self.assertIn('locate_wait_ms: 5000', text)
+            self.assertIn('every interactive step', text)
             self.assertNotIn('secret', text)
             self.assertTrue((ROOT / 'tools/mv_demo.py').is_file())
             (checkout / 'standards/schemas/mw.v1.schema.json').unlink()
@@ -252,6 +254,45 @@ class DemoTests(unittest.TestCase):
                 demo.check('example')
             gate.assert_called_once()
             spawn.assert_not_called()
+
+    def test_acting_step_locate_wait_refused_before_build(self):
+        checkout, home = self.fixture_checkout()
+        (home / 'sites/example/site.json').write_text('valid')
+        workflows = home / 'sites/example/workflows'
+        workflows.mkdir()
+        workflow = workflows / 'example.json'
+        for kind in ('click', 'right_click', 'double_click', 'paste', 'key', 'scroll', 'drag'):
+            for wait in (0, -1, None, False, '5000'):
+                with self.subTest(kind=kind, wait=wait):
+                    workflow.write_text(json.dumps({'schema': 'mw.workflow.v1', 'steps': [
+                        {'action': {'kind': kind}, 'locate_wait_ms': wait}]}))
+                    with patch.dict(os.environ, {'MV_MEMORYWEB_REPO': str(checkout)}), \
+                            patch.object(demo, 'admitted_home', return_value=home), \
+                            patch.object(demo.subprocess, 'run') as build, \
+                            contextlib.redirect_stdout(io.StringIO()) as output:
+                        self.assertEqual(demo.main(['check', '--site', 'example']), 6)
+                        reply = json.loads(output.getvalue())
+                        self.assertFalse(reply['ok'])
+                        self.assertEqual(reply['error'], 'ACTING_STEP_LOCATE_WAIT_REQUIRED')
+                        self.assertIn('locate_wait_ms', reply['hint'])
+                        self.assertIn('5000', reply['hint'])
+                        build.assert_not_called()
+
+    def test_positive_acting_wait_and_zero_signal_wait_admitted_without_rewrite(self):
+        checkout, home = self.fixture_checkout()
+        (home / 'sites/example/site.json').write_text('valid')
+        workflows = home / 'sites/example/workflows'
+        workflows.mkdir()
+        workflow = workflows / 'example.json'
+        with patch.dict(os.environ, {'MV_MEMORYWEB_REPO': str(checkout)}), \
+                patch.object(demo, 'admitted_home', return_value=home):
+            for wait in (1, 5000):
+                original = json.dumps({'schema': 'mw.workflow.v1', 'steps': [
+                    {'action': {'kind': 'click'}, 'locate_wait_ms': wait},
+                    {'action': {'kind': 'wait_signal'}, 'locate_wait_ms': 0}]})
+                workflow.write_text(original)
+                self.assertTrue(demo.check('example')['validated'])
+                self.assertEqual(workflow.read_text(), original)
 
     def test_check_interpreter_and_interrupt_json(self):
         checkout, home = self.fixture_checkout()

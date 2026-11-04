@@ -1,0 +1,1 @@
+- Keep deleted identity-bound program sidecars out of host launcher rows while retaining standalone host programs and existing identities.

@@ -1,0 +1,10 @@
+{
+  "schema": "metaviewer.demo_control/v1",
+  "session_id": "pkg-synthetic",
+  "event": "ready",
+  "reply": {
+    "ok": true,
+    "url": "http://127.0.0.1:1234/"
+  },
+  "pid": 42
+}

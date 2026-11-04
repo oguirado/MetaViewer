@@ -1013,14 +1013,22 @@ def run_entry(args):
         need(base.is_absolute(), 'MW_PRIVATE_OUTPUT')
         evidence = base / 'metaviewer/runs' / uuid.uuid4().hex
         need(not evidence.is_relative_to(ROOT) and not evidence.is_relative_to(home), 'MW_PRIVATE_OUTPUT')
-        evidence.mkdir(mode=0o700, parents=True)
         need(not any(p.is_symlink() for p in (evidence, *evidence.parents)), 'MW_PRIVATE_OUTPUT')
+        base.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for path in (evidence.parent.parent, evidence.parent, evidence):
+            path.mkdir(mode=0o700, exist_ok=True)
+            metadata = path.lstat()
+            need(not path.is_symlink() and stat.S_ISDIR(metadata.st_mode) and
+                 metadata.st_uid == os.getuid() and stat.S_IMODE(metadata.st_mode) == 0o700,
+                 'MW_PRIVATE_OUTPUT')
         report = str(evidence / 'report.json')
         with connect(os.environ, trace) as client:
             backend = HostBackend(client, args.identity, evidence, os.environ)
             rc, code, receipt = execute(args, home, evidence, backend, trace=trace)
     except (OSError, ValueError, RuntimeError, KeyError, TypeError, AttributeError,
             ClientError, tools.ToolRefusal, tools.VerificationFailed, subprocess.SubprocessError) as error:
+        if callable(getattr(args, 'finish_wall_deadline', None)):
+            args.finish_wall_deadline()
         code = getattr(error, 'code', getattr(error, 'reason_code', 'MW_RUN_CONFIG'))
         message = str(error)
         if isinstance(error, subprocess.TimeoutExpired):
@@ -1036,12 +1044,16 @@ def run_entry(args):
                                               'wender-agent checkout at its deps.lock commit')
         print('mw_run: ' + (message if message and message.startswith(code) else
                             code + (': ' + message if message else '')), file=sys.stderr, flush=True)
+    if callable(getattr(args, 'finish_wall_deadline', None)):
+        args.finish_wall_deadline()
     result = dict(schema='metaviewer.mw_run/v1', rc=rc, verdict_code=code, receipt=receipt, report=report)
     if report is not None:
         try:
             ReplayOwner.write(Path(report), (json.dumps(dict(result, message=message,
                 network=getattr(backend, 'network_evidence', None), **trace), separators=(',', ':')) + '\n').encode())
         except OSError:
-            result.update(rc=6, verdict_code='MW_PRIVATE_OUTPUT')
+            result['report'] = None
+            if result['rc'] not in (4, 5):
+                result.update(rc=6, verdict_code='MW_PRIVATE_OUTPUT')
     print(json.dumps(result, separators=(',', ':')))
     return result['rc']

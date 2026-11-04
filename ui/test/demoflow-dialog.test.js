@@ -104,6 +104,7 @@ test('refusals keep the public code and add the next step',async t=>{
   assert.match(await refuse({start:async()=>({ok:false,code:'DEMO_REFUSED'})},r=>press(r,'Start')),/DEMO_REFUSED: Start refused\. Choose an unused demo id/);
   assert.match(await refuse({stop:async()=>({ok:false,code:'DEMO_REFUSED'})},async r=>{await press(r,'Start');await press(r,'Stop');}),/DEMO_REFUSED: The recording could not be sealed\. Start again with a new demo id/);
   assert.match(await refuse({check:async()=>({ok:false,code:'DEMO_REFUSED'})},r=>press(r,'Check site')),/DEMO_REFUSED: Check failed\. The site folder must exist/);
+  assert.match(await refuse({check:async()=>({ok:false,code:'ACTING_STEP_LOCATE_WAIT_REQUIRED'})},r=>press(r,'Check site')),/ACTING_STEP_LOCATE_WAIT_REQUIRED: Set locate_wait_ms to 5000/);
   assert.match(await refuse({start:async()=>({ok:false,code:'DEMO_BUSY'})},r=>press(r,'Start')),/DEMO_BUSY: Another demo operation is still running/);
   assert.match(await refuse({check:async()=>({ok:false,code:'BUTTON_UNAVAILABLE'})},r=>press(r,'Check site')),/BUTTON_UNAVAILABLE: .*MV_OPERATOR_REPO/);
 });

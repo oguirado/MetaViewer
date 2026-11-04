@@ -19,7 +19,7 @@ import {
   defaultMvSettings,
 } from '../src/settings/settingsModel.js';
 
-const FULL_DEFAULTS = { scheme: 'mv-light', density: 'compact', wallFps: 30, recordingFps: 3 };
+const FULL_DEFAULTS = { scheme: 'mv-dark', density: 'compact', wallFps: 30, recordingFps: 3 };
 const FPS_KEYS = [
   { key: 'wallFps', code: 'ERR_SETTINGS_UNKNOWN_WALL_FPS', fallback: 30 },
   { key: 'recordingFps', code: 'ERR_SETTINGS_UNKNOWN_RECORDING_FPS', fallback: 3 },
@@ -91,12 +91,12 @@ async function loadWithFullDefaultFallback(text) {
 }
 
 test('mvui35 D4: unknown keys refuse as a whole, store path falls back to full defaults', async () => {
-  const valid = '{"scheme":"mv-dark","density":"comfortable","wallFps":60,"recordingFps":12}';
+  const valid = '{"scheme":"mv-light","density":"comfortable","wallFps":60,"recordingFps":12}';
   assert.deepEqual({ ...(await loadWithFullDefaultFallback(valid)) }, JSON.parse(valid));
   for (const text of [
-    '{"scheme":"mv-dark","density":"comfortable","wallFps":60,"recordingFps":12,"extra":1}',
-    '{"scheme":"mv-dark","density":"comfortable","wallFps":60,"recordingFps":12,"limits":{"memory_bytes":1,"ring_bytes":1,"max_fps":30}}',
-    '{"scheme":"mv-dark","density":"comfortable","wallFps":30.0,"recordingFps":3}',
+    '{"scheme":"mv-light","density":"comfortable","wallFps":60,"recordingFps":12,"extra":1}',
+    '{"scheme":"mv-light","density":"comfortable","wallFps":60,"recordingFps":12,"limits":{"memory_bytes":1,"ring_bytes":1,"max_fps":30}}',
+    '{"scheme":"mv-light","density":"comfortable","wallFps":30.0,"recordingFps":3}',
   ]) {
     const stored = decodeStoredSettings(text);
     assert.equal(stored.ok, false, text);
@@ -105,7 +105,7 @@ test('mvui35 D4: unknown keys refuse as a whole, store path falls back to full d
     assert.deepEqual({ ...(await loadWithFullDefaultFallback(text)) }, FULL_DEFAULTS, text);
   }
   const limits = decodeStoredSettings(
-    '{"scheme":"mv-dark","density":"comfortable","wallFps":60,"recordingFps":12,"limits":{"max_fps":30}}',
+    '{"scheme":"mv-light","density":"comfortable","wallFps":60,"recordingFps":12,"limits":{"max_fps":30}}',
   );
   assert.equal(limits.ok === false && limits.error.code, 'ERR_SETTINGS_UNKNOWN_KEY');
 });
@@ -172,16 +172,16 @@ async function bootWithSettingsText(text) {
 
 test('mvui35 D4+D3: boot parser paints full defaults for unknown-key and float-lexeme storage', async () => {
   for (const text of [
-    '{"scheme":"mv-dark","density":"comfortable","wallFps":60,"recordingFps":12,"extra":1}',
-    '{"scheme":"mv-dark","density":"comfortable","wallFps":60,"recordingFps":12,"limits":{"max_fps":30}}',
-    '{"scheme":"mv-dark","density":"comfortable","wallFps":30.0,"recordingFps":3}',
+    '{"scheme":"mv-light","density":"comfortable","wallFps":60,"recordingFps":12,"extra":1}',
+    '{"scheme":"mv-light","density":"comfortable","wallFps":60,"recordingFps":12,"limits":{"max_fps":30}}',
+    '{"scheme":"mv-light","density":"comfortable","wallFps":30.0,"recordingFps":3}',
   ]) {
     const { mount, mounted, kitSchemes, documentElement } = await bootWithSettingsText(text);
     assert.equal(mount.textContent, '', text);
     assert.ok(mounted, text);
-    assert.equal(mounted.props.initialScheme, 'mv-light', `boot scheme for ${text}`);
+    assert.equal(mounted.props.initialScheme, 'mv-dark', `boot scheme for ${text}`);
     assert.equal(mounted.props.initialDensity, 'compact', `boot density for ${text}`);
-    assert.deepEqual(kitSchemes, ['mv-light'], `kit scheme for ${text}`);
+    assert.deepEqual(kitSchemes, ['mv-dark'], `kit scheme for ${text}`);
     assert.equal(documentElement.dataset.themeDensity, 'compact', `theme density for ${text}`);
   }
 });

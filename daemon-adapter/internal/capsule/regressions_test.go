@@ -206,3 +206,42 @@ func TestPreSpawnMissingAndNonExecutableBinaryRetry(t *testing.T) {
 	_, e = m.Handle(context.Background(), req("create", `{"kind":"browser","profile_id":"crash","geometry":{"w":2,"h":1}}`))
 	requireFault(t, e, "uncertain")
 }
+
+func TestJournalEndDuplicateDestroyWhileDrainingIsNotTerminal(t *testing.T) {
+	r := &scriptRunner{output: []byte(startOK)}
+	m := testManager(t, r)
+	id := createID(t, m)
+	entered, release := make(chan struct{}), make(chan struct{})
+	originalFailure := fault("test", "original drain failed")
+	m.cfg.BeforeDestroy = func(context.Context, string) error {
+		close(entered)
+		<-release
+		return originalFailure
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`))
+		done <- err
+	}()
+	awaitSignal(t, entered)
+	_, duplicate := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`))
+	if duplicate == nil || duplicate.Error() != "surface: destroy already in progress" {
+		t.Errorf("draining destroy must not claim terminal absence: %v", duplicate)
+	}
+	close(release)
+	if err := <-done; err != originalFailure {
+		t.Fatalf("original drain error was dropped: %v", err)
+	}
+	if m.bindings[id].Surface.State != "active" || m.destroying[id] {
+		t.Fatal("failed drain dropped state or retained the destroy lock")
+	}
+	m.cfg.BeforeDestroy = nil
+	r.output = []byte(`{"stopped":"srf-id-demo","removed_verified":true}`)
+	if _, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, terminal := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`))
+	if terminal == nil || terminal.Error() != "surface: unknown or terminal surface" {
+		t.Fatalf("negative control: completed destroy must remain terminal: %v", terminal)
+	}
+}
