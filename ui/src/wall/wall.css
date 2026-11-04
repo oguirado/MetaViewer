@@ -64,6 +64,7 @@
 /* Tile wrapper: owns the tile-state bar and stacks the capture chrome rail
  * above the kit panel; the kit panel fills the remaining body host. */
 .mv-tile {
+  position: relative;
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -437,3 +438,187 @@
   border-radius: var(--cuk-semantic-radius-pill);
   background: var(--cuk-semantic-status-error-border);
 }
+
+/* Compact capsule chrome: reveal tools over the surface without changing its
+ * box. SurfacePanel owns the matching native-view occlusion lease. */
+.mv-shell .mv-tile .cuk-capsule-panel__header {
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
+  padding: 0 4px;
+}
+.mv-shell .mv-tile .ui-capsule-toolbar {
+  height: 28px;
+  min-height: 0;
+  padding: 0;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.mv-shell .mv-tile .cuk-capsule-panel__title-cluster,
+.mv-shell .mv-tile .cuk-capsule-panel__actions {
+  flex-wrap: nowrap;
+  gap: 3px;
+}
+.mv-shell .mv-tile .cuk-capsule-panel__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mv-shell .mv-tile .cuk-capsule-panel__action-btn,
+.mv-shell .mv-tile .mv-role-menu-button {
+  min-height: 24px;
+  height: 24px;
+  min-width: 24px;
+  padding: 2px;
+}
+.mv-shell .mv-tile .mv-role-menu-host { display: contents; }
+.mv-shell .mv-tile .mv-role-mode-badge { font-size: 11px; white-space: nowrap; }
+.mv-shell .mv-tile .mv-host-window-badge {
+  font-size: 0;
+  flex: 0 0 auto;
+}
+.mv-shell .mv-tile .mv-host-window-badge::after {
+  content: 'Not isolated';
+  font-size: 11px;
+  white-space: nowrap;
+}
+.mv-shell .mv-tile .mv-tile-rail {
+  position: absolute;
+  top: 56px;
+  left: 0;
+  right: 0;
+  z-index: calc(var(--cuk-semantic-z-index-overlay) + 1);
+  background: var(--cuk-semantic-surface-panel);
+  visibility: hidden;
+  pointer-events: none;
+}
+.mv-shell .mv-tile .mv-tile-size-controls {
+  position: absolute;
+  top: 28px;
+  left: 0;
+  right: 0;
+  height: 28px;
+  background: var(--cuk-semantic-surface-panel);
+  display: flex;
+  z-index: calc(var(--cuk-semantic-z-index-overlay) + 1);
+  visibility: hidden;
+  pointer-events: none;
+}
+.mv-shell .mv-tile .mv-surface__strip {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 4;
+  visibility: hidden;
+  pointer-events: none;
+  background: var(--cuk-semantic-surface-panel);
+}
+.mv-shell .mv-tile .mv-surface__state { visibility: hidden; }
+.mv-shell .mv-tile[data-chrome-expanded="true"] .mv-surface__state { visibility: visible; }
+.mv-shell .mv-tile[data-chrome-expanded="true"] .mv-tile-rail,
+.mv-shell .mv-tile[data-chrome-expanded="true"] .mv-tile-size-controls,
+.mv-shell .mv-tile[data-chrome-expanded="true"] .mv-surface__strip {
+  visibility: visible;
+  pointer-events: auto;
+}
+.mv-shell .mv-tile .mv-tile-capid__id { display: none; }
+/* A single Dockview tab repeats the capsule title; retain multi-tab navigation. */
+.mv-shell .dv-tabs-and-actions-container:has(.dv-tabs-container > .dv-tab:only-child),
+.mv-shell .dv-tabs-and-actions-container:has(.dv-tabs-container:empty) {
+  display: none;
+}
+.mv-shell .dv-groupview:has(.dv-tabs-container > .dv-tab:only-child),
+.mv-shell .dv-groupview:has(.dv-tabs-container:empty) {
+  --dv-tabs-and-actions-container-height: 0px;
+}
+.mv-shell .mv-tile .cuk-capsule-panel__actions > :is([id^="window-hide-"], [id^="window-float-"], [id^="window-maximize-"]) {
+  position: absolute;
+  top: 29px;
+  z-index: calc(var(--cuk-semantic-z-index-overlay) + 2);
+  visibility: hidden;
+  pointer-events: none;
+}
+.mv-shell .mv-tile [id^="window-hide-"] { right: 52px; }
+.mv-shell .mv-tile [id^="window-float-"] { right: 28px; }
+.mv-shell .mv-tile [id^="window-maximize-"] { right: 4px; }
+.mv-shell .mv-tile[data-chrome-expanded="true"] .cuk-capsule-panel__actions > :is([id^="window-hide-"], [id^="window-float-"], [id^="window-maximize-"]) {
+  visibility: visible;
+  pointer-events: auto;
+}
+.mv-shell .mv-tile .ui-capsule-toolbar .p-toolbar-end { flex: 0 0 auto; }
+.mv-shell .mv-tile .ui-capsule-toolbar .p-toolbar-start { flex: 1 1 0; overflow: hidden; }
+.mv-tile-state-controls { display: flex; align-items: center; gap: 3px; }
+.mv-tile-terminal-toggle { flex:0 0 28px; min-width:28px; min-height:26px; padding:2px; font:inherit; cursor:pointer; color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-panel); border:1px solid var(--cuk-semantic-border-default); border-radius:4px; }
+.mv-tile-terminal-toggle[aria-expanded="true"] { box-shadow:inset 0 -2px var(--cuk-semantic-accent-primary); }
+
+/* This overlay is contained by its tile; its native sibling is coordinated. */
+.mv-tile-terminal-drawer { position:absolute; inset:auto 0 0; height:min(45%,360px); min-height:240px; z-index:calc(var(--cuk-semantic-z-index-overlay) + 2); display:flex; overflow:hidden; background:var(--cuk-semantic-surface-panel); border-top:1px solid var(--cuk-semantic-border-strong); }
+.mv-tile-terminal-drawer[hidden] { display:none; }
+.mv-tile-terminal-drawer > .mv-terminal-deck { width:100%; height:100%; min-width:0; min-height:0; }
+
+/* Keep identity, safety state and the menu reachable in narrow cells. */
+.mv-shell .mv-tile .cuk-capsule-panel__actions > button[data-semantic-anchor$="/close"] { position:absolute; top:29px; right:80px; z-index:calc(var(--cuk-semantic-z-index-overlay) + 2); visibility:hidden; pointer-events:none; }
+.mv-shell .mv-tile[data-chrome-expanded="true"] .cuk-capsule-panel__actions > button[data-semantic-anchor$="/close"] { visibility:visible; pointer-events:auto; }
+.mv-shell .mv-tile .mv-tile-terminal-toggle,
+.mv-shell .mv-tile .mv-role-menu-button { flex:0 0 24px; min-width:24px; width:24px; padding:2px; }
+.mv-shell .mv-tile .cuk-capsule-panel__title-cluster { min-width:0; }
+
+/* Opening the terminal reserves presentation space; the native guest keeps its
+   fixed resolution and remains live above this separate row. */
+.mv-tile[data-terminal-drawer="true"] {
+  display: grid;
+  grid-template-rows: minmax(0,1fr) min(45%,360px);
+  grid-template-columns: minmax(0,1fr);
+}
+.mv-tile[data-terminal-drawer="true"] > .cuk-capsule-panel {
+  grid-row: 1;
+  grid-column: 1;
+  min-height: 0;
+  height: 100%;
+}
+.mv-tile[data-terminal-drawer="true"] > .mv-tile-terminal-drawer {
+  grid-row: 2;
+  grid-column: 1;
+  position: relative;
+  inset: auto;
+  height: 100%;
+  min-height: 0;
+}
+
+/* Capture controls occupy the existing header only when its measured width
+ * fits them. The same instances/ids return to the reveal rail below 640px. */
+.mv-shell .mv-tile .mv-tile-chrome--compact { display:flex; flex:none; gap:3px; padding:0; }
+.mv-shell .mv-tile .mv-tile-chrome--compact .saas-record,
+.mv-shell .mv-tile .mv-tile-chrome--compact .mv-tile-chrome__shot,
+.mv-shell .mv-tile .mv-tile-chrome--compact .mv-tile-capid__copy {
+  width:24px; min-width:24px; height:24px; min-height:24px; padding:3px; justify-content:center;
+}
+.mv-tile-chrome--compact .saas-record-label,
+.mv-tile-chrome--compact .mv-tile-chrome__shot-label,
+.mv-tile-chrome--compact .mv-tile-copy-label { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.mv-tile-chrome--compact .saas-record-dot { width:9px; height:9px; animation:none; }
+.mv-tile-chrome--compact .saas-record-recording .saas-record-dot { border-radius:1px; }
+.mv-shell .mv-tile .mv-tile-chrome__badge--header { flex:none; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; padding:1px 4px; gap:3px; }
+.mv-shell .mv-tile .mv-tile-chrome__badge--header::before { width:5px; height:5px; }
+.mv-tile-chrome--compact .mv-tile-capid { flex:none; }
+.mv-tile-chrome--compact .mv-tile-capid__status,.mv-tile-chrome--compact .mv-tile-chrome__refusal { position:absolute; right:0; top:28px; max-width:100%; padding:5px 8px; background:var(--cuk-semantic-surface-panel); z-index:var(--cuk-semantic-z-index-overlay); }
+.mv-tile[data-chrome-expanded="false"] .mv-tile-chrome--compact :is(.mv-tile-capid__status,.mv-tile-chrome__refusal) { display:none; }
+
+@container tile-chrome (max-width: 639px) {
+  .mv-shell .mv-tile .mv-tile-chrome--compact { position:absolute; top:56px; right:0; max-width:calc(100% - 72px); min-height:28px; visibility:hidden; pointer-events:none; z-index:calc(var(--cuk-semantic-z-index-overlay) + 1); }
+  .mv-shell .mv-tile[data-chrome-expanded="true"] .mv-tile-chrome--compact { visibility:visible; pointer-events:auto; }
+}
+.mv-shell .mv-tile .mv-tile-chrome--compact { height:24px; flex-wrap:nowrap; border:0; }
+.mv-shell .mv-tile .mv-tile-chrome--compact .mv-tile-capid { padding:0; }
+
+.mv-tile-copy-icon { display:none; }
+.mv-tile-chrome--compact .mv-tile-copy-icon { display:block; }
+.mv-shell .mv-tile .mv-tile-chrome--compact .cuk-sidebar-icon { width:16px; height:16px; }
+
+.mv-tree-signal[data-tone="recording"] { color: var(--cuk-semantic-status-error-border); }
+.mv-demo-stop-error { color: var(--cuk-semantic-status-error-border); padding: .5rem; font-size: .8rem; }
+
+.mv-demo-stop { display: inline-flex; flex: none; min-width: 3em; align-items: center; justify-content: center; margin-inline-start: var(--cuk-semantic-spacing-xs); color: var(--cuk-semantic-text-primary); background: transparent; border: 1px solid var(--cuk-semantic-border-subtle); border-radius: var(--cuk-semantic-radius-sm); padding: var(--cuk-semantic-spacing-xxs) var(--cuk-semantic-spacing-xs); cursor: pointer; font: inherit; }
+.mv-demo-stop:disabled { opacity: .6; cursor: wait; }
+.mv-shell .mv-tile .mv-tile-chrome__badge--header[data-automation-recording="true"] { max-width: none; flex: none; }

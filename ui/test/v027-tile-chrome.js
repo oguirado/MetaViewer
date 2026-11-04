@@ -26,15 +26,33 @@ app.provide('displayPortRouter',{bindSurface:binding=>binding.onState({surfaceId
 app.mount('#app');
 const settle=async()=>{await nextTick();await new Promise(r=>setTimeout(r,100));};
 const rect=n=>n.getBoundingClientRect();
-const visible=n=>rect(n).width>0 && rect(n).height>0;
+const visible=n=>rect(n).width>0 && rect(n).height>0 && getComputedStyle(n).visibility!=='hidden';
 const assert=(ok,message)=>{if(!ok)throw Error(message);};
 async function probe(){
   const measurements=[];
   for(const w of [410,300,900]){
     width.value=w;count.value=w===300?4:w===900?1:3;await settle();
     const tile=document.querySelector('.mv-tile'),header=tile.querySelector('.cuk-capsule-panel__header');
-    assert(rect(header).height<= (w<500?40:110),`header too tall at ${w}: ${rect(header).height}`);
+    assert(rect(header).height<=28,`header too tall at ${w}: ${rect(header).height}`);
     assert(rect(tile.querySelector('.mv-tile-rail')).height<=44,`capture rail too tall at ${w}`);
+    const viewport=tile.querySelector('.mv-role-viewport');
+    const before=rect(viewport);
+    assert(!visible(tile.querySelector('.mv-tile-rail')),'tools collapsed at rest');
+    const capture=tile.querySelector('.mv-tile-chrome');
+    const headerBadge=header.querySelector('.mv-tile-chrome__badge');
+    assert(headerBadge && visible(headerBadge),'recording state remains visible at rest');
+    const captureInHeader=header.contains(capture);
+    assert(captureInHeader,'capture actions share the header mount without duplicate instances');
+    if(w>=640)assert(rect(capture).top>=rect(header).top && rect(capture).bottom<=rect(header).bottom,'wide controls stay inside the header');
+    for(const selector of ['.saas-record','.mv-tile-chrome__shot','.mv-tile-capid__copy']) {
+      assert(visible(tile.querySelector(selector))===(w>=640),`resting capture visibility at ${w}: ${selector}`);
+    }
+    const ids=[...document.querySelectorAll('[id]')].map(n=>n.id);
+    assert(ids.length===new Set(ids).size,'moving controls never duplicates ids');
+    tile.dispatchEvent(new PointerEvent('pointermove',{bubbles:true}));
+    header.dispatchEvent(new PointerEvent('pointermove',{bubbles:true}));await settle();
+    assert(visible(tile.querySelector('.mv-tile-rail')),'tools revealed on header hover');
+    assert(rect(viewport).height===before.height && rect(viewport).width===before.width,'hover never resizes canvas host');
     if(w<500){
       const strip=tile.querySelector('.mv-surface__strip');
       for(const selector of ['.mv-surface__display-chip','.mv-surface__guard']){
@@ -54,11 +72,11 @@ async function probe(){
       const b=rect(button),t=rect(tile);
       assert(b.left>=t.left-1 && b.right<=t.right+1,`button clipped at ${w}: ${button.ariaLabel||button.textContent}`);
       assert(button.ariaLabel || button.textContent.trim(),`unnamed button at ${w}`);
-      if(w<500 && !button.disabled)assert(button.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)),`button obscured at ${w}: ${button.ariaLabel||button.textContent}`);
+      if(w<500 && !button.disabled)assert(button.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)),`button obscured at ${w}: ${button.ariaLabel||button.textContent}; hit=${document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)?.outerHTML.slice(0,200)}`);
     }
     const resize=tile.querySelector('[id^="tile-size-wider-"]');
     if(w<500){
-      assert(!visible(resize),'resize stays in menu at narrow width');
+      assert(visible(resize),'resize is reachable in revealed tools at narrow width');
       tile.querySelector('.mv-role-menu-button').click();await settle();
       const item=tile.querySelector('[id^="tile-menu-size-wider-"]');
       assert(item && visible(item),'resize menu item reachable');
@@ -66,6 +84,18 @@ async function probe(){
       item.click();await settle();
       assert(sizes.at(-1)==='wider','resize menu preserves action');
     }else assert(visible(resize),'wide resize controls unchanged');
+    tile.dispatchEvent(new PointerEvent('pointerleave'));await settle();
+    assert(!visible(tile.querySelector('.mv-tile-rail')),'tools collapse on leave');
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'Control'}));await settle();
+    assert(visible(tile.querySelector('.mv-surface__strip')),'held Control reveals witness');
+    assert(rect(viewport).height===before.height,'held Control never resizes canvas host');
+    window.dispatchEvent(new KeyboardEvent('keyup',{key:'Control'}));await settle();
+    header.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,buttons:1}));
+    window.dispatchEvent(new KeyboardEvent('keydown',{key:'Control'}));await settle();
+    assert([...document.querySelectorAll('.mv-tile-rail')].every(node=>!visible(node)),'Control during a drag never reveals any tile tools');
+    assert(rect(viewport).height===before.height,'drag modifier never resizes canvas host');
+    window.dispatchEvent(new PointerEvent('pointerup'));
+    window.dispatchEvent(new KeyboardEvent('keyup',{key:'Control'}));await settle();
     measurements.push({width:w,header:rect(header).height,rail:rect(tile.querySelector('.mv-tile-rail')).height});
   }
   width.value=410;count.value=3;await settle();

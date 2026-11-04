@@ -1,0 +1,1 @@
+- Remove the Use MetaViewer sidebar button and its obsolete feedback while preserving the host prompt-copy API.

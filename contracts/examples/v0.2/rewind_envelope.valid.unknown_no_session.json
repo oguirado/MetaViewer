@@ -1,0 +1,28 @@
+{
+  "schema": "rewind_envelope/v0.2",
+  "msg_id": "message-one",
+  "ts_ns": 0,
+  "from": {
+    "component": "core",
+    "instance": "ui-one"
+  },
+  "to": {
+    "component": "agent",
+    "instance": "core-one"
+  },
+  "session_id": "session-one",
+  "seq": 1,
+  "nonce": "transport-nonce",
+  "body": {
+    "schema": "rewind_event/v0.2",
+    "event_id": "event-outcome-unknown",
+    "request_id": "request-pause",
+    "owner_id": "actor-one",
+    "event": "outcome_unknown",
+    "session": null,
+    "data": {
+      "op": "pause",
+      "code": "NATIVE"
+    }
+  }
+}

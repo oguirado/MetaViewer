@@ -1,0 +1,1 @@
+- Fix guest command cancellation acknowledgement to accept the daemon's cancelling job state while preserving terminal output and strict snapshot validation.

@@ -18,11 +18,11 @@
 #   - The identity store contents are never read; only the mode and owner of
 #     the profile directory are inspected.
 #
-# [TARGET, unit decision] Missing handoffs are implemented here, minimally:
+# Kit layout and installation state:
 #   - Kit layout: <kit>/judge/{metaviewer-judge.sh,preflight.sh,apparmor/},
 #     <kit>/assets/{SHA256SUMS,...}, <kit>/ui/tools/package.js and
 #     <kit>/tools/mv_ram_admission.py (the checkout layout also works).
-#   - Release assets (names fixed here, to be published by the release step):
+#   - Release asset names:
 #     metaviewer-linux-<x64|arm64>.tar.gz (holds MetaViewer-linux-<arch>/ and
 #     MetaViewer-linux-<arch>.sha256), node-linux-<arch>.tar.xz, and for T2
 #     opensuperficies-linux-<arch>.tar.gz (opensuperficies/{bin,firewall}),
@@ -81,6 +81,7 @@ if sub_valid "$SUB"; then :; else usage; fi # MUT:JUDGE_USAGE
 # ---------------------------------------------------------------- environment
 JUDGE_HOME=${MV_JUDGE_HOME:-${XDG_DATA_HOME:-$HOME_DIR/.local/share}/metaviewer-judge}
 case $JUDGE_HOME in
+    *[[:space:]]*) fail JUDGE_USAGE "MV_JUDGE_HOME must not contain whitespace" "export MV_JUDGE_HOME=/absolute/path-without-whitespace" ;;
     '' | / | "$HOME_DIR" | "$HOME_DIR"/) fail JUDGE_USAGE "MV_JUDGE_HOME '$JUDGE_HOME' would be the whole home or root" "unset MV_JUDGE_HOME or point it at a dedicated directory" ;;
     /*) ;;
     *) fail JUDGE_USAGE "MV_JUDGE_HOME must be an absolute path" "export MV_JUDGE_HOME=/absolute/path" ;;
@@ -124,7 +125,7 @@ export SRF_IDENTITY_STORE_ROOT="$STORE" MV_JUDGE_PROFILE="$PROFILE_ID" MV_JUDGE_
 export MV_JUDGE_APPARMOR_DIR="$APPARMOR_DIR" MV_JUDGE_FW_WITNESS="$WITNESS" MV_JUDGE_RUN_USER_ROOT="$RUN_USER_ROOT"
 
 
-# [TARGET, unit decision] Docker metadata may wait up to 120 seconds; image
+# Docker metadata may wait up to 120 seconds; image
 # load/save/pull/build may take 1800 seconds. Kill a stuck client after grace.
 # Environment overrides allow slower machines and offline deadline controls.
 bounded_docker() {
@@ -201,7 +202,7 @@ running_pid() {
     if pid_alive "$pid"; then printf '%s' "$pid"; fi
 }
 
-# [TARGET, unit decision] One owner spans the check, install/launch and cleanup.
+# One owner spans the check, install/launch and cleanup.
 # Keep the locked descriptor in the launcher; children must not retain it.
 lock_launcher() {
     mkdir -p "$JUDGE_HOME/run" && chmod 0700 "$JUDGE_HOME" "$JUDGE_HOME/run" ||
@@ -268,7 +269,7 @@ ensure_assets() { # asset names
         fi
         for n in $missing; do
             tmp="$ASSET_DIR/.$n.part"
-            # [TARGET, unit decision] Bound connection setup and a stalled
+            # Bound connection setup and a stalled
             # transfer, not total download time: large assets may take minutes.
             # Keep cleanup in this subshell so run's signal traps are untouched.
             if (
@@ -324,7 +325,7 @@ step_sysdeps() {
         0) ;;
         99) fail JUDGE_SUDO "required administrator step declined: install $pkgs" "sudo apt-get install -y $pkgs" ;;
         98) fail JUDGE_SUDO "sudo is not installed and you are not root" "su -c 'apt-get install -y $pkgs'" ;;
-        *) fail JUDGE_SYSDEP "apt-get failed (rc $rc) for: $pkgs" "sudo apt-get install -y $pkgs" ;;
+        *) fail JUDGE_SUDO "administrator package step failed (rc $rc) for: $pkgs; sudo authorization or apt-get may have failed" "read the administrator command's error above; ask an administrator to run apt-get install -y $pkgs, then re-run install as your normal user" ;;
     esac
     pkgs=$(pf --sysdep-packages --tier "$TIER")
     [ -z "$pkgs" ] || fail JUDGE_SYSDEP "packages still missing after apt-get: $pkgs" "sudo apt-get install -y $pkgs"
@@ -412,11 +413,14 @@ step_verify_smoke() {
     else
         fail JUDGE_SMOKE "package verification failed: $(tail -n 3 "$log" | tr '\n' ' ')" "download the release tarball again and re-run install"
     fi
-    if timeout 600 "$NODE_BIN" "$PKG_TOOL" --smoke "$ASSET_DIR/metaviewer-linux-$ARCHN.tar.gz" >>"$log" 2>&1; then # MUT:JUDGE_SMOKE
+    mkdir -p "$JUDGE_HOME/run/smoke-tmp" "$JUDGE_HOME/run/smoke-processes" &&
+        chmod 0700 "$JUDGE_HOME/run/smoke-tmp" "$JUDGE_HOME/run/smoke-processes" ||
+        fail JUDGE_SMOKE "cannot create private smoke state" "make $JUDGE_HOME/run writable"
+    if TMPDIR="$JUDGE_HOME/run/smoke-tmp" MV_PACKAGE_SMOKE_STATE_DIR="$JUDGE_HOME/run/smoke-processes" timeout 600 "$NODE_BIN" "$PKG_TOOL" --smoke "$ASSET_DIR/metaviewer-linux-$ARCHN.tar.gz" >>"$log" 2>&1; then # MUT:JUDGE_SMOKE
         say METAVIEWER_MAIN_SMOKE_OK
     else
         rc=$?
-        fail JUDGE_SMOKE "the install smoke failed (rc $rc): $(tail -n 3 "$log" | tr '\n' ' ')" "see $log; check DISPLAY/xvfb-run and the AppArmor profile, then re-run install"
+        fail JUDGE_SMOKE "the install smoke failed (rc $rc): $(tail -n 3 "$log" | tr '\n' ' ')" "see $log; run as a non-root user, check DISPLAY/xvfb-run and the AppArmor profile, then re-run install"
     fi
 }
 
@@ -540,7 +544,7 @@ ensure_capsule_net() { # supported launcher; all private metadata belongs to the
         umask 077
         mkdir -p "$netroot/policy" "$netroot/registry" "$netroot/audit" "$statedir" &&
             chmod 0700 "$netroot" "$netroot/policy" "$netroot/registry" "$netroot/audit" "$statedir" || exit 1
-        # [TARGET, unit decision] Exact-host approvals require operator input.
+        # Exact-host approvals require operator input.
         # The upstream schema has no wildcard: never invent an open-policy API.
         if [ ! -e "$netroot/policy/policy.json" ]; then
             printf '%s\n' '{"schema":"browserid.proxy-policy/v1","approved":{},"denied":[],"connect_ports":{}}' >"$netroot/policy/policy.json" || exit 1
@@ -671,7 +675,8 @@ cmd_run() {
     dest=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/recordings
     mkdir -p "$dest" && chmod 0700 "$dest" ||
         fail JUDGE_PROFILE "cannot prepare private recording directory $dest" "make XDG_STATE_HOME writable and retry run"
-    envv+=("MV_RECORDING_DESTINATION=$dest")
+    # A launcher default must not override the person's saved native folder choice.
+    envv+=("MV_RECORDING_DEFAULT_DESTINATION=$dest")
     if [ "$TIER" = T2 ]; then
         statedir=${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf
         ramroot=$SHM/vqa-ramws/opensuperficies/os-cu-0
@@ -734,7 +739,7 @@ cmd_run() {
 }
 
 # ---------------------------------------------------------------------- stop
-# [TARGET, unit decision] Program cleanup requires a private native receipt in
+# Program cleanup requires a private native receipt in
 # this launcher's state directory; a name prefix alone never admits a program.
 owned_programs() {
     command -v python3 >/dev/null 2>&1 || return 1
@@ -789,6 +794,13 @@ cmd_stop() {
         say "no running MetaViewer process"
     fi
     remove_owned_pid "$pid"
+    # Retain interrupted/unverified smoke ownership records. Stop must never
+    # turn missing cleanup proof into a clean verdict or kill guessed PIDs.
+    for f in "$JUDGE_HOME/run/smoke-processes"/* "$JUDGE_HOME/run/smoke-tmp"/*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        leaks=$((leaks + 1))
+        printf 'JUDGE_STOP_LEAK: smoke ownership/runtime %s remains -- fix: verify its recorded process identity and group have exited before removing this state\n' "$f" >&2
+    done
     if [ -x "$SRF_BIN/srf-identity-surface" ] && command -v docker >/dev/null 2>&1 &&
         bounded_docker info >/dev/null 2>&1 &&
         inventory=$(bounded_docker ps -a --filter 'name=^srf-' --format '{{.Names}}' 2>/dev/null); then

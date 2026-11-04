@@ -1,0 +1,12 @@
+{
+  "schema": "headless_event/v0.2",
+  "event_id": "event-37",
+  "request_id": "request-37",
+  "event": "refused",
+  "data": {
+    "workload_id": null,
+    "generation": null,
+    "code": "OWNER_MISMATCH",
+    "effect": "not_dispatched"
+  }
+}

@@ -1,3 +1,7 @@
+import * as rewindValues from '../electron/rewindValues.js';
+import {sfcImportBinding} from './sfc-import-binding.mjs';
+import * as guestWorkloadTile from '../src/wall/guestWorkloadTile.js';
+import * as guestCommandValues from '../electron/guestCommandValues.js';
 import * as p18cDesktopModel from '../electron/desktopLayout.js';
 // MVUI30 lane L: a lost capsule shows its last presented frame frozen with a
 // Lost badge instead of "Connecting to surface". Canvas state maps from the
@@ -99,7 +103,7 @@ function rewriteImports(code, deps) {
   out = out.replace(/import\s+([\s\S]*?)\s+from\s+(['"])(.*?)\2;?/g, (all, bindings, _q, spec) => {
     if (spec === 'vue') return all.replace(/(['"])vue\1/, vueUrl);
     assert.ok(spec in deps, `Unmapped SFC dependency: ${spec}`);
-    return `const ${bindings.trim()} = await import(${deps[spec]});`;
+    return `const ${sfcImportBinding(bindings)} = await import(${deps[spec]});`;
   });
   return out;
 }
@@ -590,7 +594,7 @@ async function loadApp(captured) {
     './creative/CreativeCapsule.vue': stub,
     './surfaces/SurfaceCanvas.vue': canvasStub,
     './nested/nested.js': { resolveNestedMode, applyNestedWall },
-    './surfaces/tileScheduler.js': { createTileScheduler },
+    './surfaces/tileScheduler.js': { createTileScheduler }, './wall/guestWorkloadTile.js': guestWorkloadTile, '../electron/guestCommandValues.js': guestCommandValues, '../electron/rewindValues.js': rewindValues,
   };
   const { descriptor } = parse(readFileSync(APP_URL, 'utf8'));
   const compiled = compileScript(descriptor, { id: `mvui30-app-${++appSerial}`, inlineTemplate: true });
@@ -600,7 +604,7 @@ async function loadApp(captured) {
       if (specifier === 'vue') {
         return all.replace(/(['"])vue\1/, JSON.stringify(pathToFileURL(require.resolve('vue')).href));
       }
-      return `const ${binding.trim()} = globalThis.__mvui30deps[${JSON.stringify(specifier)}];`;
+      return `const ${sfcImportBinding(binding)} = globalThis.__mvui30deps[${JSON.stringify(specifier)}];`;
     });
   return (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#mvui30-app-${appSerial}`)).default;
 }

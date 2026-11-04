@@ -1,3 +1,4 @@
+import {unavailableArmCapsules} from '../src/catalog/catalogModel.js';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -58,7 +59,7 @@ test('F08 delayed enable preserves the other canvas typing destination',()=>{
 function identityContext(extra={}) {
   return context(['openIdentity','invoke'].map(n=>identities[n]).join('\n'),{
     isForeignIdentity:()=>false,invocationGeneration:0,failedDelete:'',busy:ref(false),error:ref(''),login:ref(false),pendingDelete:ref(''),
-    rows:ref([{id:'editor',browser:'program'}]),modes:ref([{profileId:'editor',currentMode:'agent',surfaceId:'existing',available:true,binary:'editor'}]),
+    rows:ref([{id:'editor',browser:'program'}]),modesKnown:ref(true),modes:ref([{profileId:'editor',currentMode:'agent',surfaceId:'existing',available:true,binary:'editor'}]),
     modeFor:()=>({surfaceId:'existing',currentMode:'agent',available:true,binary:'editor'}),
     identityErrorText:code=>`identity tool: ${code}`,emit:()=>{},props:{host:{}},roleApi:{},...extra,
   });
@@ -81,6 +82,7 @@ test('F17 secondary identity refresh failure retains modes and announces unavail
   await c.invoke('list');
   assert.equal(calls,1,'secondary refresh must actually fail');
   assert.equal(c.modes.value[0]?.surfaceId,'existing');
+  assert.equal(c.modesKnown.value,false,'stored data stays blocked while status is unknown');
   assert.match(c.error.value,/unavailable|could not|OFFLINE/i);
 });
 test('F24 program launch refusal retains host installation guidance',async()=>{
@@ -96,6 +98,7 @@ test('F16/F44 program listing preserves lost/live binding even with unreadable s
   const code=source.slice(source.indexOf('async function programs()'),source.indexOf('\n  /** @param {any} choice */',source.indexOf('async function programs()')));
   for (const state of ['active','lost']) for (const corrupt of [false,true]) {
     const c=context(code,{
+      pruneProgramProfiles:()=>{},
       listIdentities:async()=>({ok:true,rows:[{id:'editor',browser:'program'}]}),
       savedPrograms:{hostProfiles:async()=>[],readLaunch:async()=>{if(corrupt)throw Error('CORRUPT');return {binary:'editor'};}},
       capsuleStates:new Map([['s1',{surface_id:'s1',profile_id:'editor',state}]]),
@@ -147,6 +150,7 @@ test('F22 busy mode switch keeps a retry confirmation and never removes the old 
 test('F19 late identity choices cannot replace an explicitly edited role',async()=>{
   let settle;
   const c=context(catalog.onCreate,{
+    disabledArmKinds:{get value(){return unavailableArmCapsules(c.props.arm64Capabilities);}},
     props:{visible:true},api:{choices:()=>new Promise(resolve=>{settle=resolve;})},
     buildCreateIntent:()=>({ok:true,intent:{kind:'browser'}}),choiceGeneration:0,
     pendingIntent:ref(null),roleChoice:ref('agent'),roleEdited:ref(false),editedRoleChoice:ref('agent'),roleError:ref(''),
@@ -183,7 +187,14 @@ test('F09/F51 Bootstrap paste destination and selected identity are visible besi
   const source=read('../src/terminal/TerminalDeckView.vue');
   const template=parse(source).descriptor.template.content;
   assert.match(template,/Paste Copy ID for AI here/);
-  assert.match(template,/Selected capsule identity:[\s\S]*?\{\{\s*pastedBootstrapText\s*\}\}/);
+  assert.match(template,/class="mv-terminal-deck__identity-pill"/);
+  assert.match(template,/Capsule ID:/);
+  assert.match(template,/:value="focusedPair\?\.surfaceId \?\? pastedBootstrapText"/);
+  assert.match(template,/placeholder="Paste AI ID…"/);
+  assert.match(template,/id="terminal-deck-bootstrap-paste-target"/);
+  assert.match(template,/:readonly="!!focusedPair"/);
+  assert.match(template,/@input="onBootstrapInput"/);
+  assert.match(source,/focusedPair\.value\?\.identityLine \?\? pastedBootstrapText\.value/);
 });
 
 test('F52 repeated close during grace leaves no stale confirmation, without any exit event',async()=>{
@@ -349,6 +360,7 @@ test('V027 program listing rechecks binding after saved launch settles',async()=
     let settle;
     const capsuleStates=new Map();
     const c=context(code,{
+      pruneProgramProfiles:()=>{},
       listIdentities:async()=>({ok:true,rows:[{id:'editor',browser:'program'}]}),
       savedPrograms:{hostProfiles:async()=>[],readLaunch:()=>new Promise((resolve,reject)=>{settle=()=>corrupt?reject(Error('CORRUPT')):resolve({binary:'editor'});})},
       capsuleStates,isForeignIdentity:()=>false,roleFor:()=> 'agent',creating:false,transitions:new Set(),process:{env:{}},env:{},

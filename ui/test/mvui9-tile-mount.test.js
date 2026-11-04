@@ -2,7 +2,7 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
-import { createSSRApp, h, reactive } from 'vue';
+import { createSSRApp, h, reactive, ref } from 'vue';
 import { renderToString } from '@vue/server-renderer';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -119,7 +119,7 @@ describe('mounted tile chrome', () => {
     assert.ok((await render()).includes('Recording 01:01'), 'recording entry shows elapsed');
     store.bySurface['cap-7'] = { phase: 'error', lastShot: null };
     const errored = await render();
-    assert.ok(errored.includes('>Idle<'), 'error phase renders no error text');
+    assert.ok(errored.includes('>Error<'), 'error phase has a semantic label without a raw refusal code');
     assert.doesNotMatch(errored, /ERR_/, 'no refusal code leaks into the rail');
   });
 
@@ -192,4 +192,15 @@ describe('mounted tile chrome', () => {
     assert.throws(() => assertTileTrio(html, 'cap-2'),
       assert.AssertionError, 'foreign surface fails the trio');
   });
+  test('automation label and Stop require the matching controller state, independently of frame capture',async()=>{
+    for(const [phase,identity,visible] of [['recording','example',true],['sealing','example',true],['idle','',false],['recording','other',false]]) {
+      const app=createSSRApp(Chrome,{capsuleId:'cap-demo',profileId:'example',capsuleLabel:'Example',captureState:stubStore({'cap-demo':recordingEntry()})});
+      app.provide('automation-recording',{snapshot:ref({schema:'metaviewer.demo_state/v1',ok:true,phase,identity,demo:visible?'sample':''}),pending:ref(false),stop:()=>{}});
+      const html=await renderToString(app);
+      assert.equal(html.includes('Recording automation'),visible);
+      assert.equal(html.includes('demo/stop/tile/cap-demo'),visible);
+      if(phase==='sealing')assert.match(html,/disabled[^>]*>Sealing/);
+    }
+  });
+
 });
