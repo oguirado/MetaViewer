@@ -224,6 +224,7 @@ pkg-content-revert.md	changes/unreleased/pkg-content-revert.md
 program-61837f6b5cd8	changes/unreleased/program-click-settle.md
 program-5f5847f0f976	changes/unreleased/program-current-baseline.md
 program-display.md	changes/unreleased/program-display.md
+program-d44e2c75b099	changes/unreleased/program-focused-key.md
 program-9c236b0bad7f	changes/unreleased/program-host-fresh-frames.md
 program-593ec53b328a	changes/unreleased/program-moves-in-a-row.md
 program-037135db5049	changes/unreleased/program-provider-kill-guard.md
@@ -323,6 +324,7 @@ v028-slots-store.md	changes/unreleased/v028-slots-store.md
 v028-slots-ui.md	changes/unreleased/v028-slots-ui.md
 v028-slots.md	changes/unreleased/v028-slots.md
 v028-tiles.md	changes/unreleased/v028-tiles.md
+v028-tux3-key-hold.md	changes/unreleased/v028-tux3-key-hold.md
 vm-capsule-create.md	changes/unreleased/vm-capsule-create.md
 vm-microvm-roadmap.md	changes/unreleased/vm-microvm-roadmap.md
 vmnativ-bc80f272a8e7	changes/unreleased/vm-native-pair-selection.md
