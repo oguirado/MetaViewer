@@ -45,18 +45,20 @@ export function installedAgentProfiles(env,resolve=resolveHostBinary,hostUser=us
         ? [path,'-c',`shell_environment_policy.set.XDG_RUNTIME_DIR=${JSON.stringify(hostEnv.XDG_RUNTIME_DIR)}`]
         : [path];
       if(entry.id==='agent-muse') {
-        if(!cleanAbsolute(path) || !cleanAbsolute(discoveryEnv.HOME) || !cleanAbsolute(discoveryEnv.XDG_RUNTIME_DIR)) throw Error('AGENT_HOST_ENV_UNAVAILABLE');
+        if(!cleanAbsolute(path) || !cleanAbsolute(discoveryEnv.HOME) || !cleanAbsolute(discoveryEnv.XDG_RUNTIME_DIR)
+          || !cleanAbsolute(env.MV_OPERATOR_REPO)) throw Error('AGENT_HOST_ENV_UNAVAILABLE');
+        const workspace=/** @type {string} */ (env.MV_OPERATOR_REPO);
         const helper=resolve('unshare',discoveryEnv).path;
         if(!cleanAbsolute(helper)) throw Error('AGENT_NAMESPACE_UNAVAILABLE');
         argv=[helper,'--user','--map-current-user','--pid','--fork','--mount-proc','--',path,
-          '--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max'];
+          '--workspace',workspace,'--contributor-mode','on','--model','muse-spark-1.3','--reasoning-effort','max'];
         // The TUI keeps its normal sandbox and trust checks. The launcher must
         // neither initiate a login nor replace the installed CLI during a run.
         launchEnv=validateProviderEnv({HOME:discoveryEnv.HOME,PATH:discoveryEnv.PATH,TERM:'xterm-256color',
           XDG_RUNTIME_DIR:discoveryEnv.XDG_RUNTIME_DIR,MUSE_LOGIN:'0',MUSE_NO_AUTO_UPDATE:'1'},
           ['HOME','PATH','TERM','XDG_RUNTIME_DIR','MUSE_LOGIN','MUSE_NO_AUTO_UPDATE']);
       }
-      profiles.set(entry.id,{argv,...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:discoveryEnv.HOME}:{}),...(launchEnv?{env:launchEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
+      profiles.set(entry.id,{argv,...(typeof discoveryEnv.HOME==='string' && discoveryEnv.HOME.startsWith('/')?{cwd:entry.id==='agent-muse'?env.MV_OPERATOR_REPO:discoveryEnv.HOME}:{}),...(launchEnv?{env:launchEnv}:{}),label:entry.label,hint:'Agent CLI · authentication stays with you'});
     } catch { /* Missing CLI is omitted, never replaced with a shell. */ }
   }
   return profiles;
