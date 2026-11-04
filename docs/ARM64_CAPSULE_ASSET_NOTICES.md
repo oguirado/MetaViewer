@@ -15,11 +15,20 @@ SHA256 values below identify measured local bytes unless explicitly marked as a 
 | Linux guest kernel | Linux 6.18.52 Image; `43597af54cfbca19bcd7d7d91666a0a55e5a33632eada679827b9ac43393edcf` [MEASURED] | Kernel COPYING: GPL-2.0-only with Linux-syscall-note; other per-file licenses also apply. Built from the pinned upstream archive and recorded configuration. |
 | BusyBox executable | Ubuntu busybox-static package 1:1.36.1-6ubuntu3.1 arm64; `52151e7f322f926b64049cdaa1410dc3ea6485525e0624b05813791c219ae933` [MEASURED] | Installed package copyright declares GNU GPL version 2. The executable is named busybox; package naming is not an additional executable path guarantee. |
 | Original guest-command broker | `9c6e47d2fd7dd7b609edda29139d02f9637155ccc67163939f4eb9daf3de98e0` [MEASURED] | AGPL-3.0-only, declared in its public Cargo.toml; Cargo.lock and third-party runtime notices must accompany any future distribution assessment. |
+| Rewind guest-command broker | `0b3a451d79a01d74497038d48b9d2d5c3e47c645bb873d2c5cd2b0f7d66cd5c6` [MEASURED] | AGPL-3.0-only, declared by the public guest-command-broker Cargo.toml. Separate `rewind-command-broker` binary with the `rewind-profile` feature; operator-local reference only, not a redistribution clearance. |
 | Operator VM image | Docker image ID `sha256:91a8a4b921aa078450cdeb9c97fecc7cfc7eac457dd7648def6343f495be3730` [CITED: retained VM receipt] | License, origin, complete component/source inventory and redistribution permission are UNKNOWN. Operator-local use only; no download/import/redistribution permission is implied. |
 | Private native/VE/Wender/OpenSuperficies tools | Existing operator-provided compiled tools, under their separate grants | Not relicensed by MetaViewer; existing judge/evaluation authorization is not a public source or redistribution grant. No private source is incorporated into these notices. |
 
 Firecracker provenance: official [v1.17.0 release](https://github.com/firecracker-microvm/firecracker/releases/tag/v1.17.0), archive SHA256 `e351ebe4f7a16b5873bbd51005d2e6767103cff4d5ebc829df2d3f95a93e2256` [MEASURED against retained receipt].
 Kernel provenance: [Linux 6.18.52 source archive](https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.52.tar.xz), SHA256 `2b69564f7d4fea0c859b1959ba33709ee6e9139bd100e30a853b57159a8221b8` [MEASURED]. The retained source acquisition verified a published checksum, not a source signature; do not describe it as signature-verified.
+
+## Recorded Rewind broker build
+
+The local Rewind broker above was built from the public `daemon-adapter/guest-command-broker` source. Its seventeen recorded source, manifest, lock and test files match the source audited at commit `8b44747c83f0ad760aed2550277aa88cd417fb30` [MEASURED]. This is source-byte correspondence, not a reproducible-build or complete binary-license clearance.
+
+The recorded Cargo.toml SHA256 is `e877da354619e2d7fdda688cf933f42910d2c29bbb7d5030639f15068e53632e`; Cargo.lock is `1393b1c67a8410d158ac0c379c42df9c1587a33775598a475550dfa9e4917ce5` [MEASURED]. The separate source entry is `src/bin/rewind-command-broker.rs`, SHA256 `9d91dbd8db67cd3e5c66b1922caa88c87e6142dcfcc895dbc31df7a604106f0b` [MEASURED].
+
+The retained build used the `aarch64-unknown-linux-gnu` release target, `--offline --features rewind-profile --bin rewind-command-broker`, and `RUSTFLAGS='-C target-feature=+crt-static -C relocation-model=static'` [CITED: retained local build receipt]. Its ELF has no interpreter or dynamic program segment [MEASURED]. The dependency and static-runtime assessment below still applies; no new runtime or redistribution clearance follows. No Rewind broker, kernel or image binary is committed or bundled by these notices.
 
 ## Broker dependency notices
 

@@ -9,3 +9,4 @@
 - Align test harness imports and canonical-family oracles without weakening malformed-message or codec rejection checks.
 
 - Keep one MicroVM console tile across Rewind generations and synchronize the native command state before confirming completion.
+- Keep fixture imports and disposal checks aligned with the closed Rewind routes, and document the bounded local Rewind acceptance and asset provenance.

@@ -1,3 +1,4 @@
+import * as capsulePanelRouter from '../src/wall/capsulePanelRouter.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as vue from 'vue';
@@ -32,7 +33,7 @@ const Workspace = vue.defineComponent({
   }),
 });
 const Wall = await compileSfc('wall/WallWorkspace.vue', {
-  'capsule-ui-kit/DockWorkspace': Workspace, './SurfacePanel.vue': SurfacePanel,
+  'capsule-ui-kit/DockWorkspace': Workspace, './SurfacePanel.vue': SurfacePanel, './capsulePanelRouter.js': capsulePanelRouter,
 });
 
 // v-show in the real CapsulePanel needs an element style object. Keep this
@@ -162,7 +163,7 @@ test('paired terminal capability survives Dockview isolated router roots',async(
   let Router, observed;
   const CaptureWorkspace=vue.defineComponent({props:['panelComponents'],setup:p=>{Router=p.panelComponents.CapsulePanel;return ()=>vue.h('div');}});
   const CapturePanel=vue.defineComponent({setup(){observed=vue.inject('capsuleTerminal',null);return ()=>vue.h('div');}});
-  const View=await compileSfc('wall/WallWorkspace.vue',{'capsule-ui-kit/DockWorkspace':CaptureWorkspace,'./SurfacePanel.vue':CapturePanel});
+  const View=await compileSfc('wall/WallWorkspace.vue',{'capsule-ui-kit/DockWorkspace':CaptureWorkspace,'./SurfacePanel.vue':CapturePanel,'./capsulePanelRouter.js':capsulePanelRouter});
   const runtime=createAuthorityRuntime({subscribeFrames(){return ()=>{};}});
   const wall=mountComponent(View,{workspaceComponent:CaptureWorkspace,scope:{},storage:{},ownerWindowId:'paired-wall',...runtime,tileScheduler:{}},{capsuleTerminal:capability});
   let isolated;
@@ -171,4 +172,10 @@ test('paired terminal capability survives Dockview isolated router roots',async(
     isolated=mountComponent(Router,{params:{api:{id:'capsule:surface-a',title:'A'},params:{capsuleId:'surface-a'}}});
     assert.equal(observed,capability,'independent router root must receive exact scoped authority');
   } finally {isolated?.app.unmount();wall.app.unmount();runtime.dispose();}
+});
+
+test('closed wall fixture refuses an omitted router dependency', async () => {
+  await assert.rejects(compileSfc('wall/WallWorkspace.vue', {
+    'capsule-ui-kit/DockWorkspace': Workspace, './SurfacePanel.vue': SurfacePanel,
+  }), /Unmapped SFC dependency: \.\/capsulePanelRouter\.js/);
 });
