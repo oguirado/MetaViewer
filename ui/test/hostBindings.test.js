@@ -2069,3 +2069,30 @@ test('capsule slot host waits through accepted and correlates completed while ot
  assert.deepEqual(await result,event);
  assert.ok(!JSON.stringify(await result).includes('/dev/'));
 });
+
+test('journal capacity reports a closed notice and refuses new work without disposing peers', async t => {
+  const f = await fixture(t);
+  const notices = [];
+  const bindings = await createMainBindings({...f, onSessionEnd: code => notices.push(code)});
+  t.after(() => bindings.core.dispose());
+  const notice = code => ({schema:'surface_event/v0.2',event:'error',data:{surface_id:'session',code,detail:'ignored foreign detail'}});
+  f.send(notice('UNRELATED'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(notices, [], 'negative control: unrelated errors do not end admission');
+  f.send(notice('JOURNAL_FULL'));
+  await waitForCondition(() => notices.length === 1);
+  f.send(notice('JOURNAL_FULL'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.deepEqual(notices, ['JOURNAL_FULL']);
+  assert.equal(bindings.core.getStatus().availability, 'live');
+  const before = f.requests.length;
+  const proposal = {schema:'action_proposal/v0.2',proposal_id:'after-full',surface_id:'s1',
+    based_on_frame:{generation:1,sha256:'a'.repeat(64)},action:{type:'click',x:1,y:1,button:'left'},
+    expectation:{type:'state_sha256_change'},budget:{max_ms:1000,max_retries:0}};
+  await assert.rejects(bindings.core.request({op:'propose',json:JSON.stringify(proposal)}), {code:'JOURNAL_FULL'});
+  assert.equal(f.requests.length, before);
+  assert.equal(bindings.core.getStatus().availability, 'live');
+  f.send(notice('JOURNAL_STOP_FAILED'));
+  await waitForCondition(() => notices.length === 2);
+  assert.deepEqual(notices, ['JOURNAL_FULL','JOURNAL_STOP_FAILED']);
+});
