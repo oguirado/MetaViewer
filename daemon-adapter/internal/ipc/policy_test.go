@@ -74,9 +74,22 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 	files = nil
 	seenAdditive := 0
 	seenRewind := 0
+	seenObservation := 0
 	for _, file := range allFiles {
 		name := filepath.Base(file)
-		if pin, added := rewindFixturePins[name]; added {
+		if pin, added := commandObservationFixturePins[name]; added {
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				return nil, err
+			}
+			sum := sha256.Sum256(raw)
+			if hex.EncodeToString(sum[:]) != pin {
+				return nil, fmt.Errorf("command observation fixture bytes changed: %s", name)
+			}
+			seenObservation++
+		} else if strings.HasPrefix(name, "guest_command_observation") {
+			return nil, fmt.Errorf("unrecorded command observation fixture: %s", name)
+		} else if pin, added := rewindFixturePins[name]; added {
 			raw, err := os.ReadFile(file)
 			if err != nil {
 				return nil, err
@@ -101,6 +114,9 @@ func verifyContractFixtureCorpus(examplesDir, schemasDir string) ([]string, erro
 		} else {
 			files = append(files, file)
 		}
+	}
+	if seenObservation != len(commandObservationFixturePins) {
+		return nil, errors.New("command observation fixture corpus incomplete")
 	}
 	if seenRewind != len(rewindFixturePins) {
 		return nil, errors.New("rewind fixture corpus incomplete")

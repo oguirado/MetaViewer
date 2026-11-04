@@ -10,6 +10,28 @@ import { createMainBindings } from '../electron/hostBindings.js';
 import { installAuthorityWire, deliverAuthorityFrame, WIRE_CHANNELS } from '../electron/authorityWire.js';
 import { installFrameDiag } from '../electron/frameDiag.js';
 
+
+function isKnownStartupObservation(args, observations) {
+  if (args[0] === 'metaviewer:guest-command.observation') {
+    assert.deepEqual(args, ['metaviewer:guest-command.observation',
+      {staged:null,active:null,history:[],uncertain:false,generation:null}]);
+    assert.equal(observations.length, 0, 'only one initial observation is expected');
+    observations.push(args);
+    return true;
+  }
+  assert.equal(args[0], 'metaviewer:authority.frames', 'unknown notification must not be filtered');
+  return false;
+}
+
+test('startup observation classification refuses unknown channels and authority fields', () => {
+  const snapshot={staged:null,active:null,history:[],uncertain:false,generation:null};
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:unknown',snapshot],[]),assert.AssertionError);
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:guest-command.observation',{...snapshot,canRun:true}],[]),assert.AssertionError);
+  const seen=[];
+  assert.equal(isKnownStartupObservation(['metaviewer:guest-command.observation',snapshot],seen),true);
+  assert.throws(()=>isKnownStartupObservation(['metaviewer:guest-command.observation',snapshot],seen),assert.AssertionError);
+});
+
 const STEP_TIMEOUT_MS = 5000;
 
 /** @type {Map<string, Set<Socket>>} */
@@ -358,12 +380,14 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
 
   const handlers = new Map();
   const senderFrame = { origin: 'app://metaviewer', url: 'app://metaviewer/index.html' };
-  const notices = [];
+  const notices = [], observations = [];
   const contents = {
     id: 41,
     mainFrame: senderFrame,
     isDestroyed: () => false,
-    postMessage: (channel, payload, transfer) => {
+    postMessage: (...args) => {
+      if(isKnownStartupObservation(args,observations))return;
+      const [channel,payload,transfer]=args;
       notices.push({ channel, payload, transfer, atMs: Date.now() });
     },
   };
@@ -380,6 +404,7 @@ test('W3-CONTROL-TIMEOUT: take_control and release_control are not starved or cl
     frameDiag: diag,
   });
   f.registerCleanup(() => wire.dispose());
+  assert.equal(observations.length,1);
 
   await withTimeout(
     handlers.get(WIRE_CHANNELS.subscribeFrames)({ sender: contents, senderFrame }),

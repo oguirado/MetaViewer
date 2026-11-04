@@ -100,7 +100,9 @@ func (r *RewindManager) Handle(ctx context.Context, body json.RawMessage, sessio
 	if _, ok := r.pending[q.ID]; ok {
 		return refuse("DUPLICATE")
 	}
-	if len(r.pending) >= 256 {
+	// Reserve the last history slot for the existing authenticated Stop path.
+	cleanup := q.Schema == "guest_command_request/v0.2" && q.Op == "stop"
+	if len(r.pending) >= 256 || (len(r.pending) >= 255 && !cleanup) {
 		return refuse("CAPACITY")
 	}
 	if q.Op == "cancel" {
