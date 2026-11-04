@@ -10,3 +10,4 @@
 
 - Keep one MicroVM console tile across Rewind generations and synchronize the native command state before confirming completion.
 - Keep fixture imports and disposal checks aligned with the closed Rewind routes, and document the bounded local Rewind acceptance and asset provenance.
+- Run the full UI test list with two workers under the existing budget, retain capability semantic mutant coverage, and check both Rewind handlers during rollback and disposal.

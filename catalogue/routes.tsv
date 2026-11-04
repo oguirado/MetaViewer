@@ -2409,6 +2409,7 @@ testgat-83c5e1ef7679	tests/test_gate_deps_pin_integrity.py
 testgat-3b33fe08e1e5	tests/test_gate_g_ai_harness.py
 test_gate_perf_leg.py	tests/test_gate_perf_leg.py
 testgat-9ef7362f7a22	tests/test_gate_target_isolation.py
+testgat-d96ff5f29aba	tests/test_gate_ui_concurrency.py
 testgat-00ce04a7a024	tests/test_gate_ui_smoke_leg.py
 testgit-a33a0afaaea0	tests/test_gitleaks_config.py
 test_hygiene.py	tests/test_hygiene.py
