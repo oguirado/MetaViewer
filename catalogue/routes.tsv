@@ -231,6 +231,7 @@ mwtermi-843dba820964	changes/unreleased/mw-terminal-deadline.md
 mw-wall-deadline.md	changes/unreleased/mw-wall-deadline.md
 nativec-d2be98483772	changes/unreleased/native-chrome-preview.md
 nativep-73cf1b146ad2	changes/unreleased/native-program-automation.md
+normala-0123b49a7983	changes/unreleased/normal-arm64-rewind-setup.md
 opfix-arm-cards.md	changes/unreleased/opfix-arm-cards.md
 opfixco-cf56b9a29339	changes/unreleased/opfix-copy-identifier.md
 opfixde-af5b2743aa57	changes/unreleased/opfix-desktop-recovery.md
@@ -246,6 +247,7 @@ opfix2r-06d31b5099f6	changes/unreleased/opfix2-retain-capsule-drawers.md
 opfix2s-f24cf262333c	changes/unreleased/opfix2-separate-terminal-panel.md
 opfix2t-07c2e902ca62	changes/unreleased/opfix2-terminal-geometry.md
 opfix2t-c6e5a419b2e9	changes/unreleased/opfix2-terminal-verification.md
+opfix2r-1e567714e07c	changes/unreleased/opfix2r2-terminal-launcher.md
 p12-display-reader.md	changes/unreleased/p12-display-reader.md
 p12-display-tap.md	changes/unreleased/p12-display-tap.md
 p18-opening-modes.md	changes/unreleased/p18-opening-modes.md
@@ -3256,6 +3258,7 @@ t5elecp-255635a73bb2	ui/test/t5-elec-pty-regression.test.js
 t5frame-876b9d009df2	ui/test/t5-frame-port-regression.test.js
 t5frame-5e2ca93fda52	ui/test/t5-frame-reader-regression.test.js
 terminal-host.test.js	ui/test/terminal-host.test.js
+termina-088a0df60175	ui/test/terminal-menu-placement.test.js
 termina-e0e91adcec21	ui/test/terminalClient.test.js
 terminalFix3.test.mjs	ui/test/terminalFix3.test.mjs
 termina-2c7c56d01ffb	ui/test/terminalHarden.test.mjs
