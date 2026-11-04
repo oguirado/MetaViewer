@@ -704,6 +704,10 @@ export function createWallWorkspaceController(options = {}) {
     const orderIndex = panelOrder.indexOf(panelId) >= 0 ? panelOrder.indexOf(panelId) : (prev?.orderIndex ?? 0);
     if (!panel) return;
     const group = panel.group ?? null;
+    if (windows?.state(panelId).floating || group?.api?.location?.type === 'floating') {
+      rememberSlot(profileId, {panelId, groupId: null, index: 0, referencePanel: null, direction: 'left', orderIndex});
+      return;
+    }
     const groupId = asNonEmptyString(group?.id);
     const groupPanels = Array.isArray(group?.panels) ? group.panels : [];
     const index = groupPanels.indexOf(panel);
@@ -715,7 +719,7 @@ export function createWallWorkspaceController(options = {}) {
     let referencePanel = /** @type {string|null} */ (null);
     let direction = 'left';
     const candidates = [...new Set([...panelOrder, ...rows.map((/** @type {any} */ r) => `${WALL_PANEL_ID_PREFIX}${r.id}`)])]
-      .filter(id => id !== panelId && api?.getPanel(id));
+      .filter(id => id !== panelId && api?.getPanel(id) && !windows?.state(id).floating && /** @type {any} */ (api?.getPanel(id))?.group?.api?.location?.type !== 'floating');
     if (candidates.length > 0) {
       referencePanel = candidates[0];
       const refPanelObj = /** @type {any} */ (api.getPanel(referencePanel));
@@ -834,10 +838,25 @@ export function createWallWorkspaceController(options = {}) {
       // after the creator closes, so snap and insertion use the same desktop.
       const doc = /** @type {any} */ (api.panels?.[0])?.group?.element?.ownerDocument;
       if ([...(doc?.querySelectorAll('[aria-modal="true"]') ?? [])].some(e=>e.getBoundingClientRect().width > 0)) return;
-      const occupied = [], inserted = [];
+      const floatingGroups = /** @type {any} */ (api).toJSON?.().floatingGroups ?? [];
+      const occupied = [], inserted = [], settled = new Set();
       for (const tile of tiles) {
+        if (!windows?.state(tile.id).floating) continue;
         const panel = /** @type {any} */ (api.getPanel(tile.id));
-        if (windows?.state(tile.id).floating) {
+        const fg = floatingGroups.find((/** @type {any} */ g)=>g.data?.views?.includes(tile.id));
+        const shared = (panel?.group?.panels?.length ?? 0) > 1 || (fg?.data?.views?.length ?? 0) > 1;
+        const profile = panelIdentities.get(tile.id), hint = profile ? savedCells?.()[profile] : null;
+        if (!shared && !(hint && !floatingLayout.has(panel?.group?.id))) {
+          settled.add(tile.id);
+          if (fg?.position) occupied.push({x:fg.position.left,y:fg.position.top,width:fg.position.width,height:fg.position.height});
+        }
+      }
+      for (const tile of tiles) {
+        if (settled.has(tile.id)) continue;
+        const panel = /** @type {any} */ (api.getPanel(tile.id));
+        const fg = floatingGroups.find((/** @type {any} */ g)=>g.data?.views?.includes(tile.id));
+        const shared = (panel?.group?.panels?.length ?? 0) > 1 || (fg?.data?.views?.length ?? 0) > 1;
+        if (windows?.state(tile.id).floating && !shared) {
           const profile=panelIdentities.get(tile.id), hint=profile ? savedCells?.()[profile] : null;
           if (hint && !floatingLayout.has(panel?.group?.id)) {
             const rect=nextFloatingCell(api.width,api.height,floatingGrid(),occupied,hint);
@@ -845,8 +864,6 @@ export function createWallWorkspaceController(options = {}) {
             /** @type {any} */ (api).addFloatingGroup(panel.group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
             occupied.push(rect); continue;
           }
-          const position = /** @type {any} */ (api).toJSON().floatingGroups?.find((/** @type {any} */ g)=>g.data?.views?.includes(tile.id))?.position;
-          if (position) occupied.push({x:position.left,y:position.top,width:position.width,height:position.height});
           continue;
         }
         const profile = panelIdentities.get(tile.id);
@@ -1131,25 +1148,40 @@ export function createWallWorkspaceController(options = {}) {
       };
       if (placement === 'split') options.position = { direction: 'right' };
       const profileId = asNonEmptyString(/** @type {any} */ (rowCheck.value).profile_id);
+      const hint = profileId ? savedCells?.()[profileId] : null;
+      const grid = floatingGrid?.();
+      const hasCellHint = Boolean(
+        (preset === null || preset === 'floating') &&
+        hint && grid && api.width && api.height &&
+        Number.isInteger(hint.col) && Number.isInteger(hint.row) &&
+        hint.col >= 0 && hint.col < grid.cols && hint.row >= 0 && hint.row < grid.rows
+      );
       const prior = profileId ? identitySlots.get(profileId) : null;
       if (prior && prior.panelId !== panelId) {
         const stalePanel = api.getPanel(prior.panelId);
         if (stalePanel) { captureSlot(prior.panelId); stalePanel.api.close(); collapseEmptyGroups(); }
       }
       const slot = profileId ? identitySlots.get(profileId) : null;
-      if (slot && slot.panelId !== panelId) {
-        if (slot.groupId && typeof api.getGroup === 'function' && api.getGroup(slot.groupId)) {
-          if (slot.referencePanel && api.getPanel(slot.referencePanel)) {
+      if (slot && slot.panelId !== panelId && preset !== 'floating' && !hasCellHint) {
+        const refPanel = slot.referencePanel ? /** @type {any} */ (api.getPanel(slot.referencePanel)) : null;
+        const refFloating = Boolean(slot.referencePanel && (windows?.state(slot.referencePanel).floating || refPanel?.group?.api?.location?.type === 'floating'));
+        const groupObj = slot.groupId && typeof api.getGroup === 'function' ? /** @type {any} */ (api.getGroup(slot.groupId)) : null;
+        const groupFloating = groupObj?.api?.location?.type === 'floating';
+        if (groupObj && !groupFloating) {
+          if (slot.referencePanel && refPanel && !refFloating) {
             options.position = { referencePanel: slot.referencePanel, direction: /** @type {any} */ ('within') };
           }
-        } else if (slot.referencePanel && api.getPanel(slot.referencePanel)) {
+        } else if (slot.referencePanel && refPanel && !refFloating) {
           options.position = { referencePanel: slot.referencePanel, direction: /** @type {any} */ (slot.direction) };
         }
       }
+      if (!options.position && (/** @type {any} */ (api).activeGroup?.api?.location?.type === 'floating' || /** @type {any} */ (api).activePanel?.group?.api?.location?.type === 'floating')) {
+        options.position = { direction: 'right' };
+      }
       const panel = api.addPanel(options);
-      if (slot && slot.panelId !== panelId && slot.groupId && typeof api.getGroup === 'function') {
-        const targetGroup = api.getGroup(slot.groupId);
-        if (targetGroup && typeof /** @type {any} */ (panel)?.api?.moveTo === 'function') {
+      if (slot && slot.panelId !== panelId && preset !== 'floating' && !hasCellHint && slot.groupId && typeof api.getGroup === 'function') {
+        const targetGroup = /** @type {any} */ (api.getGroup(slot.groupId));
+        if (targetGroup && targetGroup.api?.location?.type !== 'floating' && typeof /** @type {any} */ (panel)?.api?.moveTo === 'function') {
           /** @type {any} */ (panel).api.moveTo({ group: targetGroup, position: 'center', ...(Number.isInteger(slot.index) && slot.index >= 0 ? { index: slot.index } : {}) });
         }
       }
@@ -1164,39 +1196,36 @@ export function createWallWorkspaceController(options = {}) {
         }
         rememberSlot(profileId, {
           panelId,
-          groupId: asNonEmptyString(/** @type {any} */ (panel)?.group?.id) ?? slot?.groupId ?? null,
-          index: slot?.index ?? 0,
-          referencePanel: slot?.referencePanel ?? null,
-          direction: slot?.direction ?? 'left',
+          groupId: hasCellHint || preset === 'floating' ? null : (asNonEmptyString(/** @type {any} */ (panel)?.group?.id) ?? slot?.groupId ?? null),
+          index: hasCellHint || preset === 'floating' ? 0 : (slot?.index ?? 0),
+          referencePanel: hasCellHint || preset === 'floating' ? null : (slot?.referencePanel ?? null),
+          direction: hasCellHint || preset === 'floating' ? 'left' : (slot?.direction ?? 'left'),
           orderIndex: panelOrder.indexOf(panelId),
         });
       }
       collapseEmptyGroups(); trimHistory();
       if (placement === 'floating') windows.float(panelId);
       else panel.api.setActive();
-      // A float dragged from a grid preset becomes a custom layout. Its saved
-      // identity cell still belongs to this capsule after the surface ends.
-      // Restore only the new panel; existing custom geometry stays in place.
-      const hint = profileId ? savedCells?.()[profileId] : null;
-      if (preset === null && hint && floatingGrid && api.width && api.height) {
-        const grid = floatingGrid();
-        if (Number.isInteger(hint.col) && Number.isInteger(hint.row) &&
-            hint.col >= 0 && hint.col < grid.cols && hint.row >= 0 && hint.row < grid.rows) {
-          // Cold restore retains ended surfaces during the orphan grace period.
-          // They are not live occupants of the reopened identity's cell.
-          const livePanels = new Set(presentationRows().map(tile=>tile.id));
-          const occupied = (/** @type {any} */ (api).toJSON().floatingGroups ?? [])
-            .filter((/** @type {any} */ group)=>!group.data?.views?.includes(panelId) && group.data?.views?.some((/** @type {string} */ id)=>livePanels.has(id)))
-            .map((/** @type {any} */ group)=>({x:group.position.left,y:group.position.top,width:group.position.width,height:group.position.height}));
-          const rect = nextFloatingCell(api.width,api.height,grid,occupied,hint);
-          fitAllocation(panel,rect.width,rect.height);
-          // Detach this panel from any remembered tab group before positioning
-          // its new group; Dockview may clamp the panel's initial float bounds.
-          /** @type {any} */ (api).addFloatingGroup(panel,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
-          /** @type {any} */ (api).addFloatingGroup(/** @type {any} */ (panel).group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
-          retainFloatingHome(api);
-          void host?.completeUserGesture?.();
-        }
+      // A float dragged from a grid preset or in Floating preset retains its
+      // saved identity cell after the surface ends. Restore only the new panel
+      // as its own floating group; existing groups stay in place.
+      if (hasCellHint && grid && api.width && api.height) {
+        // Cold restore retains ended surfaces during the orphan grace period.
+        // They are not live occupants of the reopened identity's cell.
+        const livePanels = new Set(presentationRows().map(tile=>tile.id));
+        const occupied = (/** @type {any} */ (api).toJSON().floatingGroups ?? [])
+          .filter((/** @type {any} */ group)=>group.data?.views?.some((/** @type {string} */ id)=>id !== panelId && livePanels.has(id)))
+          .map((/** @type {any} */ group)=>({x:group.position.left,y:group.position.top,width:group.position.width,height:group.position.height}));
+        const rect = nextFloatingCell(api.width,api.height,grid,occupied,hint);
+        fitAllocation(panel,rect.width,rect.height);
+        // Detach this panel from any remembered tab group before positioning
+        // its new group; Dockview may clamp the panel's initial float bounds.
+        /** @type {any} */ (api).addFloatingGroup(panel,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+        fitAllocation(/** @type {any} */ (panel).group,rect.width,rect.height);
+        /** @type {any} */ (api).addFloatingGroup(/** @type {any} */ (panel).group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+        retainFloatingHome(api);
+        rememberFloatingBounds();
+        void host?.completeUserGesture?.();
       }
       return succeed(Object.freeze({ panelId }));
     } catch (error) {
