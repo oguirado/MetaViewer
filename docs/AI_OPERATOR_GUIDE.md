@@ -315,8 +315,10 @@ Click **`Identities`** in the top bar  to:
 
 ### From the CLI (`tools/mv_identity.py`)
 
-Use the same bindings as the running app. Copy its **Copy env path** and replace
-this placeholder in a dedicated shell before the commands below:
+Use the same bindings as the running app. Read the attachment path from the
+`METAVIEWER_ATTACH <path>` line printed in the terminal running
+`metaviewer-judge.sh run`. Replace this placeholder in a dedicated shell before
+the commands below:
 
 ```text
 export METAVIEWER_ATTACH='<copied-current.env-path>'
@@ -492,17 +494,19 @@ systemd-run --user --scope -q -p MemoryHigh=6G -p MemoryMax=8G -p MemorySwapMax=
 
 ### E. Browser Goal Runs (No Stored Workflow)
 
-The Terminal buttons keep their distinct purposes: **Automate** creates a
-reviewed workflow from a demonstration, **Use automation** selects a stored
-workflow, and **No automation** runs an observed goal without storing a workflow.
+The Terminal buttons keep their distinct purposes: **Create automation** prepares instructions to create a
+reviewed workflow from a demonstration, **Run automation** prepares a stored-workflow prompt, and **Direct task** prepares
+a goal prompt without storing a workflow. With a matching pair, choose an installed
+agent profile; the host launches it and pastes only after recognizing its input
+prompt, without sending Enter. Unpaired prompts copy to the clipboard.
 For an account-free judge, choose `--planner rules` (the default). It invokes the
 locked Wender rules CLI without Muse. `--planner muse` needs Muse Code installed
 and authenticated with a Muse account; it sends marks to that provider. There is
 no automatic fallback from rules to Muse.
 
 Read `tools/mw_run_browser_goal.md`. Copy the selected capsule's **Copy ID for AI**
-identity and the running app's **Copy env path** (`METAVIEWER_ATTACH`). Source the
-copied absolute path in a subshell with
+identity and the attachment path from the `METAVIEWER_ATTACH <path>` line printed
+in the terminal running `metaviewer-judge.sh run`. Source that absolute path in a subshell with
 `set -a; . "<copied-current.env-path>"; set +a`; it changes `XDG_RUNTIME_DIR`. It supplies
 `MV_CORE_CONFIG`, `XDG_RUNTIME_DIR`, `MV_SRF_STATE_DIR`, `MV_SRF_BIN_DIR`,
 `SRF_IDENTITY_STORE_ROOT`, and configured dependency roots. Missing pinned roots

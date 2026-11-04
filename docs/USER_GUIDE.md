@@ -94,7 +94,7 @@ The shell has three columns [CITED: `ui/src/App.vue`]: the left working tree, th
 - **Left tree:** expand or collapse navigation to select Humans, Agents, desktops and capsules.
 - **Wall:** a dockview tile workspace with one panel per capsule (`240x200` `[TARGET]` minimum tile size in `ui/src/wall/WallWorkspace.vue`), supporting tabs, splits, and floating panels.
 - **Paired terminal dock and drawer:** open Terminal on the right or the capsule terminal control. A paired terminal can appear in the capsule drawer. A package built without native terminal support (no `node-pty` in the package) cannot open a session: the terminal and the launch controls report `TERMINAL_UNAVAILABLE: terminal support is not bundled in this package` (`ui/electron/terminalHost.js`, `ui/src/terminal/BrokerLaunchControls.vue`) instead of a blank terminal.
-- **Activity strip:** in the left navigation above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`showing 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
+- **Activity strip:** in the left navigation above the status bar, lists up to `8` `[MEASURED: grep -c 'ACTIVITY_LIMIT = 8' ui/src/App.vue]` recent outcome entries (`ACTIVITY_LIMIT = 8` in `ui/src/App.vue` and `MV_ACTIVITY_LIMIT = 8` in `ui/src/activity/activityModel.js`) alongside the total live event count (`latest 8 of N`) in closed human sentences; raw reason codes never appear as visible text.
 - **Status bar:** shows the current view crumb (`Main wall`), `Core connected` / `Core not connected`, and the active capsule count.
 - **Settings:** switches the window between `Dark` (`mv-dark`, default) and `Light` themes live. An existing saved theme remains selected.
 
@@ -113,7 +113,7 @@ ARM64 VM, MicroVM and rewind require [developer setup](ARM64_CAPSULE_SETUP.md) a
 
 ### Nested MetaViewer capsules (`nested_depth`)
 
-Spawning a nested MetaViewer capsule (`program: "metaviewer-nested"`) sends `surface_request/v0.2` (`action: "create"`) with `nested_depth: 1` from an outer wall running at `nested_depth: 0` (`1` `[MEASURED: grep -c 'nested_depth' contracts/v0.2/surface_request.schema.json]` property definition in `contracts/v0.2/surface_request.schema.json`, `minimum: 0` `[TARGET]`, `maximum: 1` `[TARGET]`). Any attempt to spawn a capsule at `nested_depth >= 2` is deterministically refused by the contract validator and core (`nested_depth_exceeded` / `NESTED_DEPTH`).
+Spawning a nested MetaViewer capsule (`program: "metaviewer-nested"`) sends `surface_request/v0.2` (`action: "create"`) with `nested_depth: 1` from an outer wall running at `nested_depth: 0` (`1` `[MEASURED: grep -c 'nested_depth' contracts/v0.2/surface_request.schema.json]` property definition in `contracts/v0.2/surface_request.schema.json`, `minimum: 0` `[TARGET]`, `maximum: 1` `[TARGET]`). Any attempt to spawn a capsule at `nested_depth >= 2` is deterministically refused by the contract validator and core (schema `maximum: 1`, core `NestedDepth`, UI `NESTED_DEPTH`).
 
 ---
 
@@ -172,7 +172,7 @@ Pass `--verify-only` to check the hash chain without printing the state hash, or
 
 ## 8. `mvctl` basics
 
-`mvctl` (`agents/metaviewer_agents/mvctl.py`) is the command-line client for core admission. With `--v02`, it speaks the v0.2 protocol (`observe`, `propose`, `wait-verify`) over `--socket` (default `$XDG_RUNTIME_DIR/metaviewer/core.sock`):
+`mvctl` (`agents/metaviewer_agents/mvctl.py`) is the command-line client for core admission. It speaks the v0.2 protocol (`observe`, `list`, `propose`, `wait-verify`, `record-start`, `record-stop`), also selected by the optional leading `--v02`, over a required `--socket` path (normally `$XDG_RUNTIME_DIR/metaviewer/core.sock`):
 
 ```sh
 python3 -m metaviewer_agents.mvctl --v02 observe \
@@ -188,9 +188,9 @@ Refusals print one JSON record to `stderr` (`{"verdict":"refuse","code":"…","e
 
 ## 9. Multislot screen and RAM-first recording (`MvRecordingPanel.vue`)
 
-I open the multislot screen with **Open in multislot** and return with **Back to wall**. Multislot input defaults to `read` (keystrokes are not forwarded) and switches to `write` when I explicitly toggle it.
+The retained multislot screen and its embedded recording panel have no navigation entry from the live wall. They remain available to diagnostic fixtures (`ui/src/App.vue`). Use the capsule header **Record** and **Screenshot** buttons for live capture. The fixture multislot input defaults to `read`; an explicit switch to `write` enables forwarding.
 
-Capture is RAM-first (`AC-07`, `ui/src/recording/MvRecordingPanel.vue`, `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`): while `idle`, zero bytes are written to disk. `MvRecordingPanel.vue` drives the per-capsule in-RAM capture state machine (`idle` -> `starting` -> `recording` -> `stopping` -> `sealed`, bounded at `16` MiB `[TARGET]` and `4096` `[TARGET]` frames in RAM) and in-RAM PNG screenshots (**Take screenshot**). Exporting to disk (**Save recording**, which writes a `ustar` archive of PNG frames to `MV_RECORDING_DESTINATION`) is only enabled after a recording reaches `sealed` and `MV_RECORDING_DESTINATION` is configured; live surfaces render through `ui/src/surfaces/SurfaceCanvas.vue`.
+Capture is RAM-first (`AC-07`, `ui/src/recording/MvRecordingPanel.vue`, `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`): while `idle`, capture writes no pixel files to disk. `MvRecordingPanel.vue` drives the per-capsule in-RAM capture state machine (`idle` -> `starting` -> `recording` -> `stopping` -> `sealed`, bounded at `8` MiB per ring and `64` MiB total retained pixels in RAM [CITED: `core/src/record/capture.rs`]; export is bounded at `16` MiB and `4096` frames [CITED: `core/src/record/capture/export.rs`]) and in-RAM PNG screenshots (**Screenshot**). Exporting to disk (**Export**, which writes a `ustar` archive of PNG frames to the configured recording folder) is only enabled after a recording reaches `sealed` and a recording destination is active (the host `MV_RECORDING_DESTINATION` or the saved folder after app restart); live surfaces render through `ui/src/surfaces/SurfaceCanvas.vue`.
 
 `MvRecordingPanel.vue` queries `captureState.refresh(capsuleId)` (`ui/src/capture/capturePort.js` and `ui/src/recording/recordingModel.js`, backed by `window.metaviewer.capture.list()`) on initial mount, whenever the selected `capsuleId` or `captureState` store changes, after a screenshot, after a stop, and when a `sealed` capture event arrives. The capture facade has exactly six members: `screenshot`, `recordStart`, `recordStop`, `export`, `list` and `subscribe` (`ui/electron/preload.js`); there is no `status` member, so calling `window.metaviewer.capture.status(...)` in the developer tools throws a `TypeError`.
 
@@ -203,11 +203,11 @@ The panel has a **Frame rate (fps)** field next to **Record for AI**. Leave it e
 
 The rate is an upper bound, not a promise: frames are recorded up to the source rate. The live source stream delivered about `2.7` fps `[MEASURED: operator sweep, W1 judge brief]`, so a choice above that does not add frames; a lower choice keeps fewer. When you stop, the panel shows `Sealed N frames, M dropped.` where `M` is the count the core sealed with the recording (`dropped_frames`).
 
-Frames reach the recording only while a live frame is arriving: **Record for AI** and **Take screenshot** are refused until the first frame lands. **Automate from a demo** records through its own command (`tools/mv_demo.py record`, see below), not through this panel; its sampling rate is `ABSENT — do not invent`.
+Frames reach the recording only while a live frame is arriving: **Record for AI** and **Screenshot** are refused until the first frame lands. **Automate from a demo** records through its own command (`tools/mv_demo.py record`, see below), not through this panel; its sampling rate is `ABSENT — do not invent`.
 
 #### When a capture is refused
 
-A refused **Record for AI**, stop or **Take screenshot** now shows one line under the controls (role `status`, the typed code on its `data-error-code` attribute) instead of doing nothing, and the host connection stays up:
+A refused **Record for AI**, stop or **Screenshot** now shows one line under the controls (role `status`, the typed code on its `data-error-code` attribute) instead of doing nothing, and the host connection stays up:
 
 | Code | Line shown | What to do |
 | :--- | :--- | :--- |
@@ -219,7 +219,7 @@ A refused **Record for AI**, stop or **Take screenshot** now shows one line unde
 | `POLICY` | `The host refused this capture by policy.` | None from the panel. |
 | `NESTED_DISPLAY_ONLY` | `Capture is not available in a nested display.` | Use the outer wall. |
 
-The tile buttons on the wall do not show this line yet `[TARGET, owned by the wall unit]`; the panel does.
+This refusal line belongs to the retained recording panel; do not assume the live tile buttons show the same feedback.
 
 Storyboard is not available in release 0.2.6 because its creative service is unavailable. Its implementation and diagnostic fixtures remain in the repository; the live sidebar and rail do not expose an entry.
 
@@ -244,7 +244,7 @@ Storyboard is not available in release 0.2.6 because its creative service is una
 | :--- | :--- |
 | Status bar says `Core not connected` | Start `metaviewer-core` first and confirm `$XDG_RUNTIME_DIR/metaviewer/core.sock` exists with owner-only permissions. |
 | `This request is unavailable. Please try again.` banner | The host refused the last intent (`data-error-code` on the tile carries the typed code); the tile preserves its state. |
-| Nested capsule creation refused | `metaviewer-nested` is allowed at `nested_depth: 1` from an outer wall at `nested_depth: 0`; `nested_depth >= 2` is refused (`nested_depth_exceeded`). |
+| Nested capsule creation refused | `metaviewer-nested` is allowed at `nested_depth: 1` from an outer wall at `nested_depth: 0`; `nested_depth >= 2` is refused (`NESTED_DEPTH`). |
 | Keystrokes do nothing in multislot | Input mode defaults to `read`; toggle the surface input mode to `write`. |
 | **Record for AI** does nothing visible, or a red line appears under the controls | The line carries the typed refusal; see [When a capture is refused](#when-a-capture-is-refused). |
 | `Creative service unavailable.` | Storyboard wire schemas are not available yet (see [ROADMAP.md](ROADMAP.md)). |
@@ -291,10 +291,11 @@ is never retried or downgraded. See [Capsule network](INSTALL.md#capsule-network
 for installation prerequisites and allowlist rules.
 [CITED: `../ui/src/netmode/NetworkPanel.vue`, `INSTALL.md`]
 
-### Use MetaViewer
+### Bootstrap prompt
 
-The sidebar entry button is not available in this release. Copy the fenced prompt
-from [AGENT_ENTRY.md](AGENT_ENTRY.md), including its final newline, and give it
+**🚀 Bootstrap** in the terminal deck copies the fenced prompt from
+[AGENT_ENTRY.md](AGENT_ENTRY.md), including its final newline. You can also copy
+it from the document. Give it
 to your chosen agent with the operator present. It selects a stored workflow and
 runs `python3 -m metaviewer_agents.mw_run` from the agents directory against an
 already running browser identity. It neither starts a browser nor types credentials.
@@ -306,7 +307,7 @@ slot values must not contain secrets because process arguments expose them.
 
 Use **Create automation** to teach by demonstrating steps, **Run automation** to use a saved workflow, or **Direct task** to work without a saved workflow. Each prepares a prompt whose final line is `Task: `; type your task there.
 
-The prompt is copied to the clipboard. When a terminal is paired with a capsule, its actual identity is filled in. Paste the text into your agent CLI, never at a shell prompt; add your task and submit it when ready. Pairing does not identify the foreground process, so these buttons do not insert text or send Enter into the terminal. Automatic insertion remains unavailable until the host can attest an agent input target.
+Without a matching pair, the prompt is copied to the clipboard. With a paired capsule, the buttons offer installed agent profiles and launch the chosen CLI with the actual capsule identity. Once its input prompt is recognized, the instructions are pasted without Enter; add your task and submit it. The readiness wait is bounded at `15` seconds [CITED: `../ui/src/terminal/agentPromptGate.js`]. Missing, exited, unready or authentication-waiting agents receive no prompt. Plain shells remain copy-only.
 
 Open **＋ New terminal** to choose an installed CLI profile or **Custom CLI**, then **Launch**. The paired session starts as a host shell; pairing alone does not launch an agent. Review terminal errors rather than treating a copied prompt as proof of launch.
 [CITED: `../ui/src/terminal/TerminalDeckView.vue`, `../ui/src/terminal/pairedTerminals.js`]

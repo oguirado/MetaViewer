@@ -10,15 +10,24 @@
   "evidence": {
     "schema": "[TARGET] document format",
     "version": "[MEASURED] VERSION:1",
-    "date": "[CITED] operator assignment date; not a runtime measurement",
+    "date": "[CITED] reference publication date; not a runtime measurement",
     "licence": "[MEASURED] ui/package.json:4",
-    "private_components": "[CITED] operator disclosure boundary; pins in deps.lock:1"
+    "private_components": "[CITED] NOTICE-EVALUATION.md private-source boundary; pins in deps.lock:1"
   }
 }
 ```
 
 <a id="reading-map"></a>
-## 0. Reading map and prerequisites [TARGET: document structure]
+## 0. Reading map and prerequisites [TARGET]
+
+Judge summary:
+
+- Admission binds actions to fresh frames before dispatch (`core/src/admission/mod.rs:1219`) [MEASURED: inspected source].
+- Durable authority journals outcomes before publishing state (`core/src/admission/mod.rs:1422`) [MEASURED: inspected source].
+- Slot custody requires human confirmation before credential copying (`daemon-adapter/internal/capsule/slots/store.go:275`) [MEASURED: inspected source].
+- Transport input has explicit ceilings (`daemon-adapter/internal/ipc/config.go:20`) [MEASURED: inspected source].
+
+See the [worked refusal](#epistemic-contract), [public evidence guide](EVIDENCE.md), and [Judge Quickstart](JUDGE_QUICKSTART.md).
 
 Action rule: read the result contract, select a capsule boundary, then run the corresponding oracle before claiming support.
 If a prerequisite, runtime receipt or private component is missing, report **ABSENT — do not invent** and retain the refusal.
@@ -56,15 +65,15 @@ If a prerequisite, runtime receipt or private component is missing, report **ABS
 | `generation`, `sha256` | Frame identity used for freshness and content binding |
 | `epoch` | Executor incarnation; old execution evidence cannot authorize current work |
 | `operation_id`, `slot_id` | Slot operation identity and stored data selection |
-| [MEASURED] | Inspected source or named command; static evidence does not imply a live run |
-| [CITED] | Explicit external assertion, with its source identified |
+| [MEASURED] | Inspected source, counted files or a named executed command; the source/command states which. Static inspection does not imply a live run |
+| [CITED] | An identified source or external assertion; reported live results without repository receipts stay attributed |
 | [TARGET] | Intended contract or document structure; no runtime success implied |
 | ABSENT | Evidence is unavailable; it is neither a successful result nor a numeric zero |
 
 Numeric section labels, schema/version identifiers, architecture names and source coordinates are identifiers; tags on their containing statements describe their provenance. Bounds describe code predicates unless a live receipt is explicitly supplied.
 
 <a id="result-contract"></a>
-## 1. Abstract and result contract [TARGET: document structure]
+## 1. Abstract and result contract [TARGET]
 
 MetaViewer is a Linux wall for viewing and controlling capsule surfaces. Electron hosts a Vue interface; the Rust authority admits intents and action proposals; the Go adapter invokes native capsule executors and publishes observations. Human and agent control are explicit states. A tile, a frame and an execution receipt are different evidence objects. `ui/src/App.vue:148`, `core/src/admission/mod.rs:1`, `daemon-adapter/internal/capsule/manager.go:434` [MEASURED: implementation boundaries].
 
@@ -77,10 +86,10 @@ MetaViewer is a Linux wall for viewing and controlling capsule surfaces. Electro
 | No universal sandbox claim | Host-backed programs and attached desktop windows retain host access | `ui/src/surfaces/RoleSurface.vue:517` [MEASURED] |
 | No public private-source proof | wender-agent, vision-engine and OpenSuperficies are private; their algorithms cannot be audited from this checkout | [CITED: operator disclosure]; `deps.lock:1` [MEASURED: pin boundary] |
 
-The inspected checkout identifies itself as `0.2.5` [MEASURED: `VERSION:1`]. The requested release scope is `0.2.6` [TARGET: operator assignment]; this reference does not promote the checkout version or claim an unpublished release was tested.
+The inspected checkout identifies itself as `0.2.5` [MEASURED: `VERSION:1`]. The [published pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5) has its own assets and reported results [CITED: release notes]. Current source inspection does not certify that package or unpublished changes.
 
 <a id="definitions"></a>
-## 2. Definitions, validity and bounds [TARGET: document structure]
+## 2. Definitions, validity and bounds [TARGET]
 
 <a id="capsule-kinds"></a>
 ### Capsule kinds
@@ -167,10 +176,10 @@ Run from the checkout root with local toolchains and dependencies installed. The
 | Reference oracle | `python3 -m unittest discover -s tests -p test_reference_docs.py` | Anchors, evidence tags or source coordinates invalid |
 | Router freshness | `python3 tools/router_index.py --check` | Index differs from edited source; integration must refresh it |
 
-The Rust leg checks the whole crate with formatter `1.92.0` [MEASURED: `tools/gate.sh:1757`]. Router staleness after reference edits is expected and is not a unit blocker [CITED: operator execution header].
+The Rust leg checks the whole crate with formatter `1.92.0` [MEASURED: `tools/gate.sh:1757`]. Source coordinates must be rechecked after edits; an index freshness failure requires regeneration before routing can be trusted.
 
 <a id="architecture"></a>
-## 3. Architecture map [TARGET: document structure]
+## 3. Architecture map [TARGET]
 
 | Layer | Source coordinate | Responsibility and boundary |
 |---|---|---|
@@ -190,13 +199,19 @@ The Rust leg checks the whole crate with formatter `1.92.0` [MEASURED: `tools/ga
 <a id="private-boundary"></a>
 ### Private binaries boundary
 
-wender-agent (private), vision-engine (private) and OpenSuperficies (private) are separate dependencies [CITED: operator disclosure]. Pins are declared in `deps.lock:1` [MEASURED]. The public Go manager calls configured CLI binaries; it cannot prove their isolation internals. Fake executor tests prove adapter handling, not that a deployed private binary obeys the same contract. Missing binaries, images or profiles must remain typed unavailable results. No private source, credentials or internal deployment locations are needed to reproduce the public tests.
+`wender-agent`, `vision-engine` and `OpenSuperficies` are fully private: their repositories and source are closed. Compiled x64 builds are publicly downloadable from the pre-release for hackathon judge evaluation only; that download grants no general use or redistribution rights. MetaViewer itself is AGPL-3.0-only. See [NOTICE-EVALUATION.md](../NOTICE-EVALUATION.md) [CITED: licensing boundary]. Pins are declared in `deps.lock:1` [MEASURED]. The public Go manager calls configured CLI binaries; it cannot prove their isolation internals. Fake executor tests prove adapter handling, not that a deployed private binary obeys the same contract. Missing binaries, images or profiles must remain typed unavailable results. No private source, credentials or internal deployment locations are needed to reproduce the public tests.
 
 <a id="engineering-triptych"></a>
-## 4. Engineering triptych [TARGET: document structure]
+## 4. Engineering triptych [TARGET]
 
 <a id="epistemic-contract"></a>
 ### Panel A — epistemic contract
+
+Worked example: an agent proposes an action against an older frame generation or digest. Admission returns `STALE_FRAME` before dispatch (`core/src/admission/mod.rs:1219`) [MEASURED: source inspection].
+
+`Authority::apply_with_witnesses` appends the input, outcome and next state to the journal before replacing current state (`core/src/admission/mod.rs:1422`). `mv-replay` scans that journal and prints the reconstructed state digest (`core/src/bin/mv-replay.rs:25`) [MEASURED: source inspection].
+
+This is an inspected code path; a live stale-frame demo at this checkout is not established. The existing [admission journal tests](../core/tests/admission_journal.rs) exercise durable replay and refusal histories.
 
 | Claim | Evidence required | Falsifier |
 |---|---|---|
@@ -206,7 +221,7 @@ wender-agent (private), vision-engine (private) and OpenSuperficies (private) ar
 | Capsule is isolated | Route-specific executor boundary and live evidence | Host program or attached Desktop window |
 | Platform is qualified | Actual receipt from that platform and route | Cross-compilation, parser test or another architecture's receipt alone |
 
-The first claim is implemented in `core/src/admission/mod.rs:1207`; execution-only receipt semantics in `core/src/admission/mod.rs:16`; slot custody in `daemon-adapter/internal/capsule/slots/store.go:271` [MEASURED]. Platform qualification receipts for this unit are ABSENT — do not invent.
+The first claim is implemented in `core/src/admission/mod.rs:1207`; execution-only receipt semantics in `core/src/admission/mod.rs:16`; slot custody in `daemon-adapter/internal/capsule/slots/store.go:271` [MEASURED]. Raw platform qualification receipts in this repository are ABSENT — do not invent; reported historical results are attributed in [the evidence guide](EVIDENCE.md).
 
 <a id="negative-knowledge"></a>
 ### Panel B — negative knowledge
@@ -238,11 +253,11 @@ systemd-run --user --scope -p MemoryHigh=6G -p MemoryMax=8G -p MemorySwapMax=0 b
 For consistent bounded execution, place the first checks inside the same scope when running them separately. The document test breaks an anchor, removes an evidence tag and supplies invalid coordinates as negative controls. Its success means the reference is structurally navigable; the whole gate supplies independent implementation checks. Gate commands and formatter policy are implemented at `tools/gate.sh:1732` [MEASURED]. External UI kit and Electron distribution locations must be supplied through `CAPSULE_UI_KIT_REPO` and `ELECTRON_OVERRIDE_DIST_PATH`, never copied from a particular developer host. A failed leg retains its exact diagnostics.
 
 <a id="domain-contracts"></a>
-## 5. Domain contracts per capsule kind [TARGET: document structure]
+## 5. Domain contracts per capsule kind [TARGET]
 
-Legend: **configured** means code admits a route only with its dependencies; it is not a live qualification claim. **ABSENT** means no qualifying receipt is established here. Columns naming architectures are identifiers [CITED: operator platform matrix requirement].
+Legend: **configured** means code admits a route only with its dependencies; it is not a live qualification claim. **ABSENT** means no qualifying receipt is established here. Reported x64 browser and Program observations are listed in [Judge tour](JUDGE_TOUR.md), attributed to the maintainer; raw receipts are absent. The table below describes source capability, not a denial of those reports.
 
-| Kind / route | Isolation | Input | Frames | Save | Rewind | arm64 | x64 | Windows 10 WSL [CITED: operator target] |
+| Kind / route | Isolation | Input | Frames | Save | Rewind | arm64 | x64 | Windows via WSL2/WSLg |
 |---|---|---|---|---|---|---|---|---|
 | Identity browser | Private container executor boundary | Human control or admitted agent actions | Published surface frames | Stopped profile slots; credentials travel | Not browser rollback | Configured; live receipt ABSENT | Configured; live receipt ABSENT | Requires graphical Linux/display/container prerequisites; live receipt ABSENT |
 | Program | Private program-container boundary | Role-specific native input | Published surface frames | Compatible stopped profile slots | Not process rollback | Configured; live receipt ABSENT | Configured; live receipt ABSENT | Host GUI/image compatibility required; live receipt ABSENT |
@@ -256,26 +271,26 @@ Legend: **configured** means code admits a route only with its dependencies; it 
 Evidence for the table: launch targets `core/src/catalog/launch.rs:4`; native routing `daemon-adapter/internal/capsule/manager.go:434`; ARM capability refusal `ui/electron/guestCommandProfile.js:47`; slot kind/compatibility `daemon-adapter/internal/capsule/slots/store.go:278`; host warnings `ui/src/surfaces/RoleSurface.vue:517`; display/runtime checks `scripts/judge/preflight.sh:250` [MEASURED]. Private executor isolation is a boundary contract, not a public-source proof [TARGET].
 
 <a id="limits"></a>
-## 6. Applicability limits [TARGET: document structure]
+## 6. Applicability limits [TARGET]
 
 | Limit | Plain statement | Evidence |
 |---|---|---|
 | Guest display | The configured guest display is fixed at `1280x900`; tile resizing does not change the guest display | `tools/arm64_capsule_session.py:431` [MEASURED] |
 | Rewind scope | Rewind restores guest state only; host, journal and external effects remain outside its mandate | `core/src/rewind_flow.rs:1`, `daemon-adapter/rewind_runtime/native.py:122` [MEASURED: runtime boundary] |
 | Rewind setup | ARM rewind requires developer setup, protected configuration and reviewed artifacts | `daemon-adapter/rewind_runtime/config.py:15` [MEASURED] |
-| Release platform boundary | No x64 VM or MicroVM in `0.2.6` [TARGET: operator release boundary]; current code disables the ARM guest routes on non-ARM hosts | `ui/electron/guestCommandProfile.js:47` [MEASURED] |
+| Release platform boundary | No x64 VM or MicroVM in this release; current code disables the ARM guest routes on non-ARM hosts | `ui/electron/guestCommandProfile.js:47` [MEASURED] |
 | Host program | Host program is not isolated | `ui/src/catalog/CatalogLauncher.vue:317` [MEASURED] |
 | Desktop window | Desktop window is not isolated and can affect the real pointer/window | `ui/src/surfaces/RoleSurface.vue:518` [MEASURED: host attachment] |
 | Stored credentials | Slots carry credentials and signed-in sessions; copy requires human confirmation | `daemon-adapter/internal/capsule/slots/store.go:1`, `daemon-adapter/internal/capsule/slots/store.go:275` [MEASURED] |
 | Slot portability | Matching kind, image and architecture are required; no arbitrary cross-platform restore | `daemon-adapter/internal/capsule/slots/store.go:638` [MEASURED] |
 | Power loss | Slot power-loss qualification on btrfs/WSL is ABSENT — do not invent | `daemon-adapter/internal/capsule/slots/store.go:7` [MEASURED: declared qualification limit] |
 | Windows | Native Windows execution is not established; WSL requires an actual graphical Linux session and compatible dependencies | `scripts/judge/preflight.sh:177`, `scripts/judge/preflight.sh:250` [MEASURED] |
-| Untested scope | This unit performs documentation and deterministic checks, not live desktop, guest, network, power-loss or private-runtime qualification | Live evidence ABSENT — do not invent |
+| Untested scope | Source inspection and deterministic checks do not establish live desktop, guest, network, power-loss or private-runtime qualification | Live evidence ABSENT — do not invent |
 
 Repository tests can establish that a refusal is enforced. They cannot prove that a route was never tested anywhere. Historical exhaustive testing coverage is ABSENT — do not invent; no claim from an unmerged branch is admitted here.
 
 <a id="reproducibility"></a>
-## 7. Reproducibility [TARGET: document structure]
+## 7. Reproducibility [TARGET]
 
 <a id="install"></a>
 ### Install and doctor
@@ -294,7 +309,7 @@ For source reproduction, make cached dependency closure available, run `npm ci -
 <a id="tour"></a>
 ### Tour and result observation
 
-Follow [Judge tour](JUDGE_TOUR.md) for user gestures. Open an Identity browser with an available identity; distinguish Human from Agent, watch frames, take control, release, and re-run after manual handoff. Try Program separately from Host program and Desktop window. Read capability refusal reasons before attempting guest routes. Check the resulting observation against the requested goal; a successful launch or input receipt alone does not satisfy it. Handoff gestures are implemented in `ui/src/handoff/handoffModel.js:1` [MEASURED]. The tour is an operational guide; its historical claims are not substituted for this unit's missing live receipts.
+Follow [Judge tour](JUDGE_TOUR.md) for user gestures. Open an Identity browser with an available identity; distinguish Human from Agent, watch frames, take control, release, and re-run after manual handoff. Try Program separately from Host program and Desktop window. Read capability refusal reasons before attempting guest routes. Check the resulting observation against the requested goal; a successful launch or input receipt alone does not satisfy it. Handoff gestures are implemented in `ui/src/handoff/handoffModel.js:1` [MEASURED]. The tour is an operational guide; its reported historical results do not establish current-checkout acceptance.
 
 <a id="stop"></a>
 ### Stop and custody
@@ -319,4 +334,4 @@ Stop targets the launcher's scoped capsules and resources. The shared proxy rema
 | Recordings | `$XDG_STATE_HOME/metaviewer/recordings` with home fallback | Private recorded evidence; never publish unsanitized sessions |
 | Slots | `$SRF_IDENTITY_STORE_ROOT/slots` | Credential-bearing manifests/payload generations; keep private |
 
-Path rules are implemented at `core/src/serve/mod.rs:237`, `core/src/journal/mod.rs:3988`, `scripts/judge/metaviewer-judge.sh:84`, `scripts/judge/metaviewer-judge.sh:671`, `daemon-adapter/internal/capsule/slots/store.go:224` [MEASURED]. Runtime roots are variable templates, not developer machine paths. Runtime evidence is private until reviewed and scrubbed. This reference's mandate is limited to the public source and explicit operator disclosures identified above.
+Path rules are implemented at `core/src/serve/mod.rs:237`, `core/src/journal/mod.rs:3988`, `scripts/judge/metaviewer-judge.sh:84`, `scripts/judge/metaviewer-judge.sh:671`, `daemon-adapter/internal/capsule/slots/store.go:224` [MEASURED]. Runtime roots are variable templates, not developer machine paths. Runtime evidence is private until reviewed and scrubbed. This reference is limited to the public source and explicitly attributed external reports identified above.

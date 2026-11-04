@@ -1,6 +1,13 @@
 # MetaViewer
-Rust authority; Electron/Vue renders admitted snapshots and submits intents.
-Read first: AGENTS.md, then catalogue/protocol.json.
+Linux desktop wall of browser and application surfaces with human/agent control.
+Rust admits actions and journals outcomes; Electron/Vue renders admitted snapshots.
+Start judging here:
+1. README.md — what it is, how to run, what is proven.
+2. docs/JUDGE_QUICKSTART.md — packaged installation; docs/JUDGE_NO_DOCKER.md for T1.
+3. docs/JUDGE_TOUR.md — supported gestures and reported live limits.
+4. docs/REFERENCE.md#engineering-triptych — authority, negative knowledge and replay.
+5. docs/EVIDENCE.md — public tests, external reports and missing receipts.
+AGENTS.md and catalogue/protocol.json describe contributor editing and routing.
 Status: router unavailable.
 Release authority: VERSION; pending changes: changes/unreleased/.
 
@@ -11,3 +18,9 @@ Identities: Stored data manages slots containing saved data and signed-in sessio
 ARM64 VM, MicroVM and rewind need developer setup with verified local assets, arm64 only; no judge install is promised. x64 VM and MicroVM are not in this release. Windows 10 WSL has no nested KVM. wender-agent, vision-engine and OpenSuperficies remain fully private. See docs/USER_GUIDE.md and docs/ARM64_CAPSULE_SETUP.md.
 
 Reference for AI readers: docs/REFERENCE.md, evidence tagged, with source coordinates and verification gates.
+
+Private boundary: wender-agent, vision-engine and OpenSuperficies are fully private.
+Their source and repositories are closed; only compiled x64 evaluation builds are public.
+MetaViewer is AGPL-3.0-only; private components have the limited permission in NOTICE-EVALUATION.md.
+Public source tests establish interfaces and refusal behavior, not private internals.
+Current live acceptance is separate from static source verification.
