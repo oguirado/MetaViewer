@@ -1,0 +1,1 @@
+- Add a regression test for the per-architecture slot helper image candidates.
