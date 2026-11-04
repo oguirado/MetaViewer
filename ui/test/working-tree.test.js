@@ -94,3 +94,15 @@ test('finishing or cancelling a name edit returns focus to its original tree row
  await api.beginTreeRename('desktop','agent',{id:1,label:'Original'});edit.value.value='Renamed';await api.saveTreeRename();
  assert.deepEqual(saved,[['agent',1,'Renamed']]);assert.equal(focused.at(-1),'desktop-agent-1');assert.equal(edit.value,null);
 });
+
+test('automation badge follows only the matching live recorder and never hides a lost binding',()=>{
+ const state=createDesktopState();state.assignments={a:{view:'agent',desktop:1},b:{view:'agent',desktop:1}};
+ const rows=[row('a',{profile_id:'example'}),row('b',{profile_id:'other'})];
+ const caps=s=>build(rows,state,[],[],undefined,s)[1].desktops[0].capsules;
+ assert.deepEqual(caps(null).map(c=>c.status),['Agent','Agent']);
+ const recording={schema:'metaviewer.demo_state/v1',ok:true,phase:'recording',identity:'example',demo:'sample'};
+ assert.deepEqual(caps(recording).map(c=>c.status),['Recording automation','Agent']);
+ assert.equal(caps(recording)[0].symbol,'⏺');
+ assert.deepEqual(caps({...recording,phase:'idle',identity:'',demo:''}).map(c=>c.status),['Agent','Agent']);
+ rows[0].backendLifecycle='lost';assert.equal(caps(recording)[0].status,'Lost');
+});

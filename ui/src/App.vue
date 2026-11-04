@@ -1133,6 +1133,34 @@ function onCreateCapsule(intent, settle) {
 const hostOutcome = ref(/** @type {import('./core/hostAdapters.js').OutcomeRow|null} */ (null));
 let hostActive = true;
 onBeforeUnmount(() => { hostActive = false; });
+// This channel reports the owned recorder process, never frame-capture or CLI
+// activity inferred from text. The same snapshot drives the tree and tile rail.
+const demoRecordingSnapshot=shallowRef(/** @type {any} */(null));
+const demoRecordingError=ref(''),demoStopPending=ref(false);
+const demoApi=!props.fixture && !nestedMode.displayOnly ? /** @type {any} */(globalThis).metaviewer?.operator?.demo : null;
+let unsubscribeDemo=()=>{};
+onMounted(()=>{
+  if(!demoApi?.state)return;
+  const receive=(/** @type {any} */snapshot)=>{
+    if(!hostActive)return;
+    if(snapshot?.ok===true){demoRecordingSnapshot.value=snapshot;demoRecordingError.value='';}
+    else {demoRecordingSnapshot.value=null;demoRecordingError.value='Automation recording status unavailable.';}
+  };
+  unsubscribeDemo=demoApi.subscribe?.(receive)??(()=>{});
+  void demoApi.state().then(receive).catch(()=>{if(hostActive){demoRecordingSnapshot.value=null;demoRecordingError.value='Automation recording status unavailable.';}});
+});
+onBeforeUnmount(()=>unsubscribeDemo());
+async function stopAutomationRecording() {
+  if(demoStopPending.value || !demoApi?.stop)return;
+  demoStopPending.value=true;demoRecordingError.value='';
+  try {
+    const reply=await demoApi.stop();
+    if(!reply?.ok)demoRecordingError.value=`${reply?.code??'DEMO_REFUSED'}: Recording did not seal. Inspect the recorder result before authoring.`;
+  }catch{demoRecordingError.value='Automation recording stop unavailable.';}
+  finally{demoStopPending.value=false;}
+}
+provide('automation-recording',{snapshot:demoRecordingSnapshot,stop:stopAutomationRecording,pending:demoStopPending,error:demoRecordingError});
+
 /** Latest authority receipts (propose verdicts, intent acks/refusals) for
  * the activity strip. Bounded inline so stub harnesses never resolve the
  * model module; the bound mirrors MV_ACTIVITY_LIMIT in
@@ -1607,7 +1635,7 @@ const rows = computed(() => {
  * @param {string[]} pendingIds
  * @param {string[]} minimizedIds
  * @param {{apps:any[],programs:any[],browsers:any[]}} [metadata] */
-function buildWorkingTree(sourceRows, state, pendingIds, minimizedIds, metadata = {apps:[],programs:[],browsers:[]}) {
+function buildWorkingTree(sourceRows, state, pendingIds, minimizedIds, metadata = {apps:[],programs:[],browsers:[]}, demo = /** @type {any} */(null)) {
   const pending = new Set(pendingIds), minimized = new Set(minimizedIds);
   return ['human','agent'].map(view => {
     const desktops = state.views[view].desktops.map(desktop => ({id:desktop.id,label:desktop.label || `Desktop ${desktop.id}`,capsules:sourceRows.filter(row => state.assignments[row.id]?.view === view && state.assignments[row.id]?.desktop === desktop.id).map(row => {
@@ -1621,10 +1649,11 @@ function buildWorkingTree(sourceRows, state, pendingIds, minimizedIds, metadata 
       const lost = row.backendLifecycle === 'lost';
       const error = Boolean(row.refusal || row.readinessError);
       const connecting = row.attachmentState !== 'live';
+      const automationRecording=Boolean(row.profile_id && demo?.identity===row.profile_id && ['recording','sealing'].includes(demo.phase));
       const acting = row.aiSessionActivity === 'busy' || ['admitting','accepted','executing'].includes(row.dispatchOutcome);
-      const status = workload ? String(workload.phase) : needsYou ? 'Needs you' : lost ? 'Lost' : error ? 'Error' : connecting ? 'Connecting' : minimized.has(row.id) || row.visibility === 'folded' ? 'Minimized' : acting && view === 'agent' ? 'Acting' : view === 'human' ? 'Human' : 'Agent';
-      const tone = needsYou || error ? 'attention' : lost ? 'lost' : connecting ? 'pending' : acting && view === 'agent' ? 'active' : 'quiet';
-      return {id:row.id,title:(state.labels && Object.hasOwn(state.labels,row.profile_id || row.id)?state.labels[row.profile_id || row.id]:undefined) || surfaceLabel(row),kind,icon:app?.icon || '',status,tone,needsYou,notIsolated:Boolean(row.hostWindow || row.hostXpra || row.notIsolated),symbol:needsYou || error ? '▲' : row.hostWindow || row.hostXpra ? '⚠' : lost ? '○' : connecting ? '◐' : acting && view === 'agent' ? 'ϟ' : '●'};
+      const status = workload ? String(workload.phase) : needsYou ? 'Needs you' : lost ? 'Lost' : automationRecording ? 'Recording automation' : error ? 'Error' : connecting ? 'Connecting' : minimized.has(row.id) || row.visibility === 'folded' ? 'Minimized' : acting && view === 'agent' ? 'Acting' : view === 'human' ? 'Human' : 'Agent';
+      const tone = needsYou || error ? 'attention' : automationRecording ? 'recording' : lost ? 'lost' : connecting ? 'pending' : acting && view === 'agent' ? 'active' : 'quiet';
+      return {id:row.id,title:(state.labels && Object.hasOwn(state.labels,row.profile_id || row.id)?state.labels[row.profile_id || row.id]:undefined) || surfaceLabel(row),kind,icon:app?.icon || '',status,tone,needsYou,automationRecording,automationSealing:demo?.phase==='sealing',notIsolated:Boolean(row.hostWindow || row.hostXpra || row.notIsolated),symbol:automationRecording?'⏺':needsYou || error ? '▲' : row.hostWindow || row.hostXpra ? '⚠' : lost ? '○' : connecting ? '◐' : acting && view === 'agent' ? 'ϟ' : '●'};
     })}));
     return {id:view,label:view === 'human' ? 'Humans' : 'Agents',desktops,count:desktops.reduce((n,d)=>n+d.capsules.length,0),needsYou:desktops.some(d=>d.capsules.some(c=>c.needsYou))};
   });
@@ -1646,7 +1675,7 @@ async function refreshTreeMetadata() {
   };
 }
 watch([()=>rows.value.map(row=>row.profile_id || row.id).join('\n'),()=>launcherOpen.value],()=>{if(!launcherOpen.value)void refreshTreeMetadata();},{immediate:true});
-const navigationTree = computed(() => buildWorkingTree([...rows.value,...guestWorkloadTiles.value],desktopState.value,treeHandoffs.value,closedPanels.value,treeMetadata.value));
+const navigationTree = computed(() => buildWorkingTree([...rows.value,...guestWorkloadTiles.value],desktopState.value,treeHandoffs.value,closedPanels.value,treeMetadata.value,demoRecordingSnapshot.value));
 const treeRename=ref(/** @type {any} */ (null));
 /** @param {string} kind @param {string} view @param {any} item */
 async function beginTreeRename(kind,view,item) {
@@ -1806,6 +1835,7 @@ onMounted(() => {
   <div class="metaviewer mv-shell" :data-wall-settled="String(settled)" :class="{ 'mv-shell--nested': nestedMode.displayOnly, 'mv-shell--navigation-open': railOpen, 'mv-shell--terminal-open': terminalDockOpen }">
     <aside v-if="!nestedMode.displayOnly" class="mv-navigation" :class="{ 'mv-navigation--collapsed': !railOpen }" aria-label="Workspace navigation">
       <div class="mv-navigation-brand"><UiButton label="Navigation" id="shell/navigation/toggle" data-semantic-anchor="shell/navigation/toggle" type="button" :aria-expanded="railOpen" :aria-label="railOpen ? 'Collapse navigation' : 'Expand navigation'" @click="railOpen = !railOpen">☰</UiButton><strong v-if="railOpen">MetaViewer</strong></div>
+      <p v-if="demoRecordingError" role="alert" class="mv-demo-stop-error">{{ demoRecordingError }}</p>
       <div class="mv-navigation-scroll">
         <div class="mv-tree-shortcuts"><UiButton id="sidebar-add-capsule" data-semantic-anchor="sidebar/add-capsule" :label="railOpen ? '+ Add capsule' : '+'" aria-label="Add capsule" title="Add capsule" @click="launcherOpen = true" /></div>
         <div class="mv-views mv-working-tree" role="group" aria-label="Capsule views">
@@ -1830,6 +1860,7 @@ onMounted(() => {
                     <UiButton v-else :label="capsule.title" :id="`tree-capsule-${capsule.id}`" :data-semantic-anchor="`wall/tree/${capsule.id}`" class="mv-tree-capsule" :class="{ 'mv-tree-capsule--selected': selectedCapsuleId === capsule.id }" :title="`${capsule.title} · ${capsule.status}${capsule.notIsolated ? ' · Not isolated' : ''}`" :aria-label="`${capsule.title}, ${capsule.status}${capsule.notIsolated ? ', Not isolated' : ''}`" @click="selectTreeCapsule(capsule.id)" @dblclick.stop="beginTreeRename('capsule',view.id,capsule)" @keydown.f2.stop.prevent="beginTreeRename('capsule',view.id,capsule)">
                       <span class="mv-tree-capsule-content"><img v-if="capsule.icon" :src="capsule.icon" class="mv-tree-program-icon" alt="" width="18" height="18" /><BrowserIcon v-else-if="capsule.kind === 'browser'" class="mv-tree-program-icon" aria-hidden="true"/><SidebarIcon v-else-if="capsule.kind === 'microvm'" name="box" class="mv-tree-program-icon" /><span v-else class="mv-tree-program-icon" aria-hidden="true">◇</span><span class="mv-tree-signal" :data-tone="capsule.tone" aria-hidden="true">{{ capsule.symbol }}</span><span class="mv-tree-capsule-copy"><span class="mv-tree-capsule-name">{{ capsule.title }}</span><span class="mv-tree-capsule-meta"><span class="mv-tree-capsule-status" :data-tone="capsule.tone">{{ capsule.status }}</span><span v-if="capsule.notIsolated" class="mv-tree-isolation">Not isolated</span></span></span></span>
                     </UiButton>
+                    <UiButton v-if="capsule.automationRecording" label="Stop" :aria-label="`Stop recording automation for ${capsule.title}`" :data-semantic-anchor="`demo/stop/tree/${capsule.id}`" :disabled="demoStopPending || capsule.automationSealing" @click.stop="stopAutomationRecording" />
                   </li>
                   <li v-if="!desktop.capsules.length" class="mv-tree-empty">No capsules</li>
                 </ul>

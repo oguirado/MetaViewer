@@ -1,3 +1,4 @@
+import {installDemoControl} from './demoControl.js';
 import { isProtectedIdentity, isForeignIdentity } from './identityProtection.js';
 import {adapterNetworkProbe} from './coreLauncher.js';
 import {createButtonService,OPERATOR_STOP_BUDGET_MS} from './buttonBridge.js';
@@ -379,8 +380,10 @@ export function createOperatorService({env=process.env,runIdentity,buttons,notif
   return {request,refresh};
 }
 /** @param {any} options */
-export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,spawnTool=spawn,buttons=createButtonService({root:buttonRoot,demoRoot,clipboard,env,stopBudgetMs:OPERATOR_STOP_BUDGET_MS}),runIdentity=(()=>{const resolved=resolveIdentityTool({tool,env});return identityRunner({tool:resolved,env:identityEnvironment(env,resolved),spawnTool,openLogin});})()}) {
+export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demoRoot,clipboard,admit,openLogin,spawnTool=spawn,buttons=null,runIdentity=(()=>{const resolved=resolveIdentityTool({tool,env});return identityRunner({tool:resolved,env:identityEnvironment(env,resolved),spawnTool,openLogin});})()}) {
   let disposed=false;
+  buttons??=createButtonService({root:buttonRoot,demoRoot,clipboard,env,stopBudgetMs:OPERATOR_STOP_BUDGET_MS,onState:()=>{if(!disposed)contents.send('metaviewer:demo.state',buttons.state());}});
+  const demoControl=installDemoControl({env,buttons,privateDirectory});
   const service=createOperatorService({env,runIdentity,buttons,notify:(/** @type {any} */v)=>{if(!disposed)contents.send('metaviewer:handoff.state',v);}});
   /** @type {string[]} */ const installed=[];
   try {
@@ -393,5 +396,5 @@ export function installOperatorBridge({ipcMain,contents,env,tool,buttonRoot,demo
     }
   }catch(e){for(const c of installed)ipcMain.removeHandler(c);throw e;}
   const timer=setInterval(()=>service.refresh(),1000);timer.unref();
-  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);runIdentity.dispose?.();await buttons.dispose();}};
+  return {async dispose(){disposed=true;clearInterval(timer);for(const c of installed)ipcMain.removeHandler(c);runIdentity.dispose?.();await buttons.dispose();await demoControl?.dispose();}};
 }

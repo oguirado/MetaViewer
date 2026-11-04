@@ -1,5 +1,7 @@
 # Automate from a demo
 
+An attached CLI requires the matching app's private demo-control socket. `DEMO_HOST_UNAVAILABLE` means that the attachment is stale, the app has exited, or the running package predates host-controlled CLI recording. Start the matching package and copy/source its fresh attachment; never fall back to a detached recorder while claiming app-owned recording. Standalone CLI recording without an app attachment retains its direct native mode. The evidence directory and its MetaViewer parent must be owner-only; `UNSAFE_CONTROL_PATH` refuses an unsafe state directory before native recording starts. The owner must repair the selected state path rather than relaxing that gate. The host uses the operator state home captured by the launcher for durable evidence; prompt and check attach to that same controller environment.
+
 Before starting, use the running app's **Copy env path** and source that attachment in the tool subshell with `set -a; . "<copied-current.env-path>"; set +a`. The attachment and a live Agent capsule are prerequisites; a paired shell does not automatically inherit them. `MV_OPERATOR_REPO` selects the operator checkout, `MV_MEMORYWEB_REPO` selects the installed authoring checkout, and `MV_MW_HOME` selects private site data. These are different directories. Require `python3 tools/mw_home_check.py --repo .` to pass before authoring.
 
 If Run automation reports `admitted_sites_directory_absent`, no authored site is available in the selected home. This is a model diagnostic, not a successful preflight. Use Create automation to author and check the site there first; do not select a builtin substitute. For a new checkout home, the person can create the gitignored destination with `install -d -m 700 memoryweb/sites` from the MetaViewer checkout, then repeat home admission. An existing home with unsafe permissions, links, tracked files or browser profiles must be repaired by its owner; creating an empty directory does not admit a workflow. [CITED: `tools/mw_home_check.py`, `agents/metaviewer_agents/mw_home.py`]
@@ -12,8 +14,13 @@ Use a neutral public page for a rehearsal and verify that it actually loads befo
    credentials. Frames can show visible field contents: demonstrate with dummy data.
 2. Run `python3 tools/mv_demo.py record --identity example --demo example-demo`.
    Open the printed loopback viewer URL and demonstrate the task manually.
+   When attached to the app, the CLI uses its existing host recording controller.
+   The tile and tree show **Recording automation** with the record icon only
+   after the owned recording process announces its viewer. Their **Stop**
+   controls and Ctrl+C in the CLI use the same SIGINT-and-seal operation.
+   Wait for sealing and fresh Agent capture before authoring or replaying.
    The host wait is unbounded by design: the operator stops the recording.
-3. Stop with Ctrl+C and wait for native read-only restoration. A successful
+3. Stop with Ctrl+C or the tile/tree Stop control and wait for native read-only restoration. A successful
    recording is exported from RAM to
    `$XDG_STATE_HOME/metaviewer/demos/example-demo` (default state base:
    `$HOME/.local/state`). Evidence is private, with per-file SHA-256 digests.

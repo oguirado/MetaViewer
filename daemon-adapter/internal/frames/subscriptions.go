@@ -568,7 +568,7 @@ func (s *Subscriptions) poll(ctx context.Context, id string, t *task) {
 			return
 		}
 		if transientFailure {
-			if !resized {
+			if !resized && !nativeBusy {
 				s.recordDiagnosticWarning(id, fmt.Sprintf("transient capture failure (%d/%d): %v", consecutiveFailures, confirmedLossCaptureFailures, e))
 			}
 			next = next.Add(s.cfg.PollInterval)
