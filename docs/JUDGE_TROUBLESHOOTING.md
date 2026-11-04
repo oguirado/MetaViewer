@@ -1,5 +1,46 @@
 # Judge troubleshooting
 
+Answers: error, refusal, failed, why did it fail, what does this code mean, fix
+
+Every refusal of the judge launcher and preflight is a line
+`JUDGE_<CODE>: <problem> -- fix: <command>` on stderr with exit code 2
+[CITED: scripts/judge/metaviewer-judge.sh:48]; `JUDGE_USAGE` for a bad
+subcommand exits 64. Find the code below, read the linked source, then apply the
+printed fix. The table rows are checked against their source files by
+`tests/test_judge_troubleshooting_docs.py`.
+
+## Which table do I look in?
+
+Answers: symptom index, where is my error, I saw a message, what was I doing
+
+| What you were doing | Table |
+| --- | --- |
+| doctor, fetch, install or run printed `JUDGE_…` | [Kit install and run](#kit-install-and-run) |
+| Adding, starting or using a capsule | [Capsules](#capsules) |
+| Running a browser goal (`mw_run`, browser) | [Browser goals](#browser-goals) |
+| Running a program goal (`mw_run`, program) | [Program goals](#program-goals) |
+| The run stopped at a login or CAPTCHA page | [Walls](#walls) |
+| The stop command printed a leftover | [Stop](#stop) |
+| Something odd with no code | [Known open bugs](#known-open-bugs) |
+
+## How do I explain a refusal to someone?
+
+Answers: explain a bug, why does this happen, explain to a judge, root cause
+
+1. Copy the exact line, including the text after `-- fix:`.
+2. Find the code in the tables below and open the file in its **Source** column.
+3. Search that file for the code (for the launcher: `grep -n 'JUDGE_RAM' scripts/judge/preflight.sh`)
+   and read the condition just above it: that condition is the cause.
+4. Say the cause, the measured value printed in the message, and the fix. A refusal
+   is the launcher protecting the machine or the evidence, not a crash.
+
+Example: `JUDGE_RAM` is printed when `MemAvailable` is below min(MemTotal/4, 20 GiB)
++ 512 MiB [CITED: scripts/judge/preflight.sh:293].
+
+## What do the launcher messages say in general?
+
+Answers: overview, how to read this page, INPUT_UNCERTAIN, grounding
+
 Use this from the kit root on Linux x64 or arm64. Start with the area matching
 what you were doing; use **Ctrl+F** to find the exact code. The first column is
 an exact stable code or literal message,
@@ -57,6 +98,8 @@ state before continuing; no source-backed code-specific remedy is available.
 
 
 ## Kit install and run
+
+Answers: doctor failed, install failed, JUDGE codes, sudo declined, node too old, display not set
 
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
@@ -275,6 +318,8 @@ state before continuing; no source-backed code-specific remedy is available.
 
 
 ## Capsules
+
+Answers: capsule failed, Add capsule refused, RAM admission, image missing
 
 **Reused X11 id:** a closed Desktop window tile can retain an id later reused by
 a new window. **Add** then refuses because the window is already attached.
@@ -495,6 +540,8 @@ it. The x64 observation is not permission to bypass the binding check
 
 ## Browser goals
 
+Answers: browser goal failed, mw_run browser, text mismatch
+
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
 | `MW_BROWSER_GOAL_CONFIG` | Browser goal configuration is invalid. | Check the goal arguments and diagnostic before running again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
@@ -514,6 +561,8 @@ it. The x64 observation is not permission to bypass the binding check
 
 
 ## Program goals
+
+Answers: program goal failed, calculator, uncertified text
 
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
@@ -563,6 +612,8 @@ it. The x64 observation is not permission to bypass the binding check
 
 ## Walls
 
+Answers: login wall, CAPTCHA, handoff, human required
+
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
 | `MW_NOTICE` | The required execution notice is invalid. | Repair the workflow execution policy before running again. | [code](../agents/metaviewer_agents/mw_refusals.py) |
@@ -576,6 +627,8 @@ it. The x64 observation is not permission to bypass the binding check
 
 
 ## Stop
+
+Answers: stop failed, leftovers, leak, timeout
 
 | Exact code or message | Meaning | Next command or click | Source |
 | --- | --- | --- | --- |
@@ -593,3 +646,17 @@ it. The x64 observation is not permission to bypass the binding check
 Standalone package smoke can refuse with `PKG_SMOKE_SOCKET_PATH` when its temporary directory cannot hold the core or Electron socket. Set `TMPDIR` to a short private directory under `/tmp`, or use the judge installer, which records a short smoke root independently of `MV_JUDGE_HOME` ([package tool](../ui/tools/package.js)).
 
 This troubleshooting mandate is limited to the linked source code and the supplied tour’s verification claims.
+
+## Known open bugs
+
+Answers: known issues, open bugs, unexplained, pycache, terminal closed, journal full
+
+These were observed on live runs and are not fixed in this release [MEASURED].
+
+| Symptom | Cause | Workaround |
+| --- | --- | --- |
+| After an `mw_run`, a developer `--arm64` start holds with "exhaustive manifest inventory" | Running Python leaves `__pycache__` bytecode in the package tree, which the exhaustive inventory then rejects | Remove the `__pycache__` directories from the package tree, then start again |
+| The paired terminal exited after a very long typed line | ABSENT — do not invent: cause not diagnosed | Keep typed lines short; reopen the terminal from the dock |
+| A long session ends by itself | A full session journal ends the session by design | Start a fresh session for each long run |
+| Switching a Host program between human and agent restarts it | The program is relaunched for the new controller | Save work in the program before switching |
+| Replay with `mv-replay` reports Invalid on a good session | The session path was relative, a symlink or a copy | Pass the absolute real path of the original session directory |
