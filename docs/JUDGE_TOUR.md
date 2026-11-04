@@ -13,7 +13,7 @@ result on that architecture. Do not treat a parser test as live verification.
 
 **x64 browser automation: verified on local pages through the kit with the rules planner: goal, typing, exact read back, and a login wall stop.**
 
-**x64 release-package snapshot, commits c26 and c27 [CITED: maintainer evaluation]: browser rules goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent]; login wall `HUMAN_HANDOFF`; stop clean. Muse on x64 and real mouse drag under a window manager remain unverified.**
+**x64 release-package snapshot [CITED: maintainer evaluation; raw receipt absent]: browser rules goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent]; login wall `HUMAN_HANDOFF`; stop clean. Muse on x64 and real mouse drag under a window manager remain unverified.**
 
 ## Open the wall
 
@@ -86,8 +86,8 @@ the tile returns to watching and fresh observations are required before new inpu
 reason. Never issue agent input while human control is active or reuse an old
 planned action after taking control.
 
-**Architecture:** x64 and arm64 — available; independent live handoff verification
-is not documented here.
+**Architecture:** x64 — Take control and Release verified by clicks on WSL2;
+arm64 — verified [CITED: maintainer evaluation; raw receipt absent].
 
 ## Identity data and release
 
@@ -117,7 +117,7 @@ Use a GUI binary installed on the host and the required program image. Do not
 substitute Host program without reviewing its different isolation boundary.
 
 **Architecture:** x64 — isolated Program `gnome-calculator` as Agent verified
-from the release package [CITED: operator evaluation, c26/c27]; arm64 — calculator
+from the release package [CITED: maintainer evaluation; raw receipt absent]; arm64 — calculator
 automation verified, standalone Program launch is not separately attested.
 
 ## Host program and Desktop window
@@ -145,7 +145,7 @@ another display.
 
 **Architecture:** x64 — Host program `gnome-calculator` as Agent verified;
 Desktop window `gedit` attach, type, resize and closed message verified
-[CITED: operator evaluation, c26/c27]. Real mouse drag under a window manager
+[CITED: maintainer evaluation; raw receipt absent]. Real mouse drag under a window manager
 remains unverified. A closed tile can retain a reused X11 id: if **Add** refuses,
 press **Stop** on that old tile before attaching again. arm64 — both verified.
 
@@ -238,7 +238,7 @@ On x64, use the measured typed route rather than the small **+** button:
 Use the command in [Text in a program](#text-in-a-program) with the copied
 calculator identity and `--text '2+3'` instead of the sample text.
 
-The measured process exit was rc 0 [MEASURED], with verdict
+The reported process exit was rc 0 [CITED: maintainer evaluation; raw receipt absent], with verdict
 `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`. Inspect the calculator yourself;
 this does not certify exact text readback or the arithmetic result.
 
@@ -267,7 +267,7 @@ unique observed target, attachment and dependency pins. Without Muse Code use
 live verification. A visible effect is not proof of arithmetic correctness.
 
 **Architecture:** x64 — Agent calculator launch and typed `2+3` delivery verified
-with rc 0 [MEASURED], verdict `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`;
+with rc 0 [CITED: maintainer evaluation; raw receipt absent], verdict `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`;
 arithmetic result and the button route above are not certified by that result.
 Muse on x64 remains unverified. arm64 — calculator 7+8 by Muse verified.
 
@@ -291,7 +291,7 @@ observed field instead of `focused` if focus is not established. Known password
 fields refuse; do not use this flow for secrets. Program `--key` is unsupported.
 
 **Architecture:** arm64 — typed into gedit and read back once with OCR, not always exact;
-x64 — calculator `2+3` typed with rc 0 [MEASURED], verdict
+x64 — calculator `2+3` typed with rc 0 [CITED: maintainer evaluation; raw receipt absent], verdict
 `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; Desktop window `gedit` typing verified,
 without a supplied exact OCR readback result.
 
@@ -318,7 +318,7 @@ in the same strip. Inspect the capture badge for the sealed state. Capture
 stays in RAM; it does not save a video to your downloads. The recording panel
 implementation also has screenshot/recording rows and an export control gated
 on a configured destination, but a normal wall click route to that panel is
-not documented here in this checkout. Inspect frames before sharing them.
+not established by the supplied live evidence. Inspect frames before sharing them.
 
 **Success:** the screenshot control reads **Captured**, or the recording badge
 reads **Sealed**. Detailed rows and frame/drop information belong to the
@@ -367,8 +367,8 @@ available, separate cleanup verification not documented here.
 | Program capsule | Isolated `gnome-calculator` as Agent verified; Human Program `gedit` closed with `XPRA_MODE_REFUSED` | Calculator verified; launch route not separately attested |
 | Host program | `gnome-calculator` as Agent verified; requires xpra | Verified; requires xpra |
 | Desktop window | X11 `gedit` attach, type, resize, closed message verified; real mouse drag under a window manager unverified | Verified; X11 only |
-| Browser goals | Rules goals 10 of 10 [MEASURED]; Muse unverified | Verified with Muse and rules, local page |
-| Calculator 7+8 | Button arithmetic unverified; typed `2+3` sent, rc 0 [MEASURED], text uncertified | Muse verified |
+| Browser goals | Rules goals 10 of 10 [CITED: maintainer evaluation; raw receipt absent]; Muse unverified | Verified with Muse and rules, local page |
+| Calculator 7+8 | Button arithmetic unverified; typed `2+3` sent, rc 0 [CITED: maintainer evaluation; raw receipt absent], text uncertified | Muse verified |
 | Program text | `2+3`: `PROGRAM_TEXT_UNCERTIFIED_NOT_READABLE`; Desktop window `gedit` typing verified | gedit typed; verdict certifies only when OCR reads it back |
 | Wall stop | Verified on a local page | Verified on local pages |
 | Terminal, prompt buttons, capture | Available; live verification absent | Available; live verification absent |

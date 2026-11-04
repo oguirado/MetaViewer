@@ -203,8 +203,11 @@ guestco-6106b5a4ceef	changes/unreleased/guest-command-cancel-state.md
 guestco-e65e1dc50fac	changes/unreleased/guest-command-observation.md
 handoff-state-home.md	changes/unreleased/handoff-state-home.md
 identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
+judgein-6d7ef63592c7	changes/unreleased/judge-install-diagnostics.md
 judgeki-2abc0a3eae20	changes/unreleased/judge-kit-capsule-net.md
 judgeki-16dad1d0cde7	changes/unreleased/judge-kit-package-tool-deps.md
+judge-root-refusal.md	changes/unreleased/judge-root-refusal.md
+judgesc-91a8a932898f	changes/unreleased/judge-script-comments.md
 judgest-1257a8a92a8d	changes/unreleased/judge-stop-capsule-ram.md
 judge-sysdep-build.md	changes/unreleased/judge-sysdep-build.md
 judge-tour.md	changes/unreleased/judge-tour.md
@@ -2405,8 +2408,10 @@ judge_scenarios.py	tests/judge/judge_scenarios.py
 test_capsule_net.py	tests/judge/test_capsule_net.py
 test_first_run.py	tests/judge/test_first_run.py
 test_flow.py	tests/judge/test_flow.py
+testins-73c30e3697d8	tests/judge/test_install_diagnostics.py
 test_mutants.py	tests/judge/test_mutants.py
 test_preflight.py	tests/judge/test_preflight.py
+test_root_refusal.py	tests/judge/test_root_refusal.py
 test_static.py	tests/judge/test_static.py
 test_v027_fix_j1.py	tests/judge/test_v027_fix_j1.py
 test_v027_fix_l1.py	tests/judge/test_v027_fix_l1.py
