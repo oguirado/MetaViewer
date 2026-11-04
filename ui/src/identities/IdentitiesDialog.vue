@@ -6,7 +6,7 @@ import ConfirmDialog from '../../.kit/capsule-ui-kit/src/overlays/ConfirmDialog.
 import { operatorHost } from '../operatorHost.js';
 import { identityErrorText, identityFormRequest, validLabel, validIdentityName, normalizeIdentityName, retainTypedIdentityName } from './identityForm.js';
 import { isProtectedIdentity, isForeignIdentity } from '../../electron/identityProtection.js';
-const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null}});
+const props=defineProps({open:{type:Boolean,default:false},host:{type:Object,default:operatorHost},openProgram:{type:Function,default:null},initialProfile:{type:String,default:''}});
 const roleApi = /** @type {any} */(globalThis).metaviewerRoles;
 const emit=defineEmits(['close','open-identity']);
 const selectedSlots=ref(''), copyStatus=ref('');
@@ -21,6 +21,7 @@ function updateName(value) {
   void nextTick(()=>{if(nameInput.value?.$el)nameInput.value.$el.value=id.value;});
 }
 const modes=ref(/** @type {any[]} */ ([]));
+const modesKnown=ref(!roleApi);
 const modeFor = (/** @type {string} */ id) => modes.value.find(row => row.profileId === id);
 let invocationGeneration=0;
 let failedDelete='';
@@ -48,6 +49,7 @@ async function invoke(method,request) {
   if(request?.id && isForeignIdentity(request.id)){error.value=identityErrorText('IDENTITY_PROTECTED',request.id);return;}
   const generation=invocationGeneration;
   busy.value=true;error.value=method==='list' ? failedDelete : '';login.value=method==='login';
+  if (roleApi) modesKnown.value=false;
   try {
     const api=props.host?.identity;if(!api)throw new Error('IDENTITY_HOST_ABSENT');
     const result=await (request===undefined?api[method]():api[method](request));
@@ -62,6 +64,7 @@ async function invoke(method,request) {
       const programs = typeof roleApi.programs === 'function' ? await roleApi.programs() : [];
       if(generation!==invocationGeneration)return;
       modes.value = [...result, ...(Array.isArray(programs) ? programs : [])];
+      modesKnown.value=true;
       for (const program of (Array.isArray(programs) ? programs : [])) if (program.hostXpra && !rows.value.some(row => row.id === program.profileId)) rows.value.push({id:program.profileId,label:program.profileId,browser:'program'});
     }} catch {if(generation!==invocationGeneration)return;error.value = 'Capsule status is unavailable. Previously known states are retained; refresh Identities before opening another capsule.';} }
     if(method==='create'){id.value='';typedName.value='';labelEdited.value=false;label.value='';domains.value='';}
@@ -160,6 +163,8 @@ function syncModal(/** @type {boolean} */ open){
 watch(()=>props.open,open=>syncModal(open),{immediate:true,flush:'sync'});
 onBeforeUnmount(()=>syncModal(false));
 watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=false;if(open)void invoke('list');},{immediate:true,flush:'sync'});
+// Open and selection props can arrive in either order; select after the props settle.
+watch(()=>[props.open,props.initialProfile],([open,profile])=>{if(open)selectedSlots.value=String(profile);},{immediate:true,flush:'post'});
 </script>
 <template>
   <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Keep a separate browser session for each account." confirm-label="Add identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
@@ -186,7 +191,7 @@ watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=
     </ul>
     <section class="identity-saved-data" aria-label="Saved data">
       <p v-if="copyStatus" role="status" aria-live="polite">{{ copyStatus }}</p>
-      <StoredDataSlots v-if="selectedSlots && rows.some(row=>row.id===selectedSlots)" :key="selectedSlots" :profile-id="selectedSlots" :blocked="isOpen(selectedSlots)" @copied="copiedIdentity" />
+      <StoredDataSlots v-if="selectedSlots && rows.some(row=>row.id===selectedSlots)" :key="selectedSlots" :profile-id="selectedSlots" :blocked="busy || !modesKnown || isOpen(selectedSlots)" @copied="copiedIdentity" />
       <p v-if="!selectedSlots && rows.length">Select Stored data on an identity to manage its saved slots.</p>
     </section>
     <section class="identity-add" aria-label="Add identity">

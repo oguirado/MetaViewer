@@ -67,7 +67,7 @@ test('B5-30: a late valid identity clears only the obsolete NO_IDENTITY alert',a
 
 test('B5-31: failed delete diagnostic survives a closed dialog and refresh without replay',async()=>{
  const barrier=deferred();let deletes=0;
- const env={invocationGeneration:1,failedDelete:'',busy:ref(false),login:ref(false),error:ref(''),pendingDelete:ref('account'),isForeignIdentity:()=>false,identityErrorText:(code,id)=>`${code}: ${id}`,props:{host:{identity:{delete:()=>{deletes++;return barrier.promise;},list:async()=>({ok:true,rows:[]})}}},rows:ref([])};
+ const env={roleApi:null,modesKnown:ref(false),invocationGeneration:1,failedDelete:'',busy:ref(false),login:ref(false),error:ref(''),pendingDelete:ref('account'),isForeignIdentity:()=>false,identityErrorText:(code,id)=>`${code}: ${id}`,props:{host:{identity:{delete:()=>{deletes++;return barrier.promise;},list:async()=>({ok:true,rows:[]})}}},rows:ref([])};
  const unit=functions('identities',['invoke'],env);const pending=unit.invoke('delete',{id:'account'});env.invocationGeneration++;env.busy.value=false;
  barrier.resolve({ok:false,code:'IDENTITY_BOUND'});await pending;
  env.invocationGeneration++;await unit.invoke('list');assert.match(env.error.value,/IDENTITY_BOUND.*account/);assert.equal(deletes,1);assert.equal(env.pendingDelete.value,'account');

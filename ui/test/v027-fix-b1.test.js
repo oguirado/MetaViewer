@@ -58,7 +58,7 @@ test('F08 delayed enable preserves the other canvas typing destination',()=>{
 function identityContext(extra={}) {
   return context(['openIdentity','invoke'].map(n=>identities[n]).join('\n'),{
     isForeignIdentity:()=>false,invocationGeneration:0,failedDelete:'',busy:ref(false),error:ref(''),login:ref(false),pendingDelete:ref(''),
-    rows:ref([{id:'editor',browser:'program'}]),modes:ref([{profileId:'editor',currentMode:'agent',surfaceId:'existing',available:true,binary:'editor'}]),
+    rows:ref([{id:'editor',browser:'program'}]),modesKnown:ref(true),modes:ref([{profileId:'editor',currentMode:'agent',surfaceId:'existing',available:true,binary:'editor'}]),
     modeFor:()=>({surfaceId:'existing',currentMode:'agent',available:true,binary:'editor'}),
     identityErrorText:code=>`identity tool: ${code}`,emit:()=>{},props:{host:{}},roleApi:{},...extra,
   });
@@ -81,6 +81,7 @@ test('F17 secondary identity refresh failure retains modes and announces unavail
   await c.invoke('list');
   assert.equal(calls,1,'secondary refresh must actually fail');
   assert.equal(c.modes.value[0]?.surfaceId,'existing');
+  assert.equal(c.modesKnown.value,false,'stored data stays blocked while status is unknown');
   assert.match(c.error.value,/unavailable|could not|OFFLINE/i);
 });
 test('F24 program launch refusal retains host installation guidance',async()=>{

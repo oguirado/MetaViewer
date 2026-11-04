@@ -183,8 +183,10 @@ export function collectClipRects(el) {
 <script setup>
 import { onMounted, onBeforeUnmount, computed, ref, watch, inject, nextTick } from 'vue';
 const props = defineProps({surfaceId:{type:String,required:true},label:{type:String,default:''},control:{type:String,default:'agent'},canTakeControl:{type:Boolean,default:false},presentationActive:{type:Boolean,default:true}});
-const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control']);
+const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control','stored-data']);
 const progress = ref(''), confirmed = ref(false), recordingPaused = ref(false);
+const storedDataProfile = ref('');
+function openStoredData() { if (storedDataProfile.value && !hostXpra.value && !hostWindow.value) emit('stored-data', storedDataProfile.value); }
 const overlays = /** @type {ReturnType<typeof import('./overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
 const hiddenSessions = /** @type {ReturnType<typeof import('./hiddenSessions.js').createHiddenSessionPool>|null} */ (inject('hiddenSessionPool', null));
 const menuOpen = ref(false), menuHost = ref(/** @type {HTMLElement|null} */ (null)), headerTarget = ref(/** @type {Element|null} */ (null)), resourceReleased = ref(false);
@@ -261,6 +263,7 @@ async function sync() {
       if (!current()) return;
       if (status.ok === false) throw Error(status.code || 'XPRA_REFUSED');
       hostXpra.value = status.hostXpra === true;
+      storedDataProfile.value = status.storedData?.available === true && status.storedData.profileId === status.profileId && !status.hostWindow && !status.hostXpra ? status.profileId : '';
       if (status.hostWindow !== undefined) {
         hostWindow.value = status.hostWindow || null;
         if (status.hostWindow?.state === 'lost') {
@@ -465,6 +468,7 @@ onMounted(async () => {
     if (!alive || generation !== syncGeneration || progress.value || ended) return;
     if (!['human','agent'].includes(status.role)) throw Error(status.code || 'CAPSULE_ROLE_UNPROVEN');
     hostXpra.value = status.hostXpra === true;
+    storedDataProfile.value = status.storedData?.available === true && status.storedData.profileId === status.profileId && !status.hostWindow && !status.hostXpra ? status.profileId : '';
     if (status.hostWindow) {
       hostWindow.value = status.hostWindow;
       if (status.hostWindow.state === 'lost') {
@@ -497,6 +501,13 @@ onBeforeUnmount(() => { stopOverlaySubscription?.(); stopNativeFocus?.(); overla
         <div v-if="tileLayout" class="mv-tile-size-controls" aria-label="Tile size">
           <button v-for="control in sizeControls" :key="control.action" type="button" :id="`tile-size-${control.action}-${surfaceId}`" :title="control.title" :aria-label="control.title" @pointerdown.stop @click.stop="resizeTile(control.action)">{{ control.label }}</button>
         </div>
+        <template v-if="storedDataProfile && !hostXpra && !hostWindow">
+          <button v-for="action in ['save','load']" :key="action" type="button" class="mv-role-storage-button"
+            :id="`tile-state-${action}-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/state/${action}`"
+            :title="`${action === 'save' ? 'Save' : 'Load'} stored data — requires a stopped capsule`"
+            :aria-label="`${action === 'save' ? 'Save' : 'Load'} stored data (stopped only)`"
+            @click.stop="openStoredData">{{ action === 'save' ? 'Save' : 'Load' }}</button>
+        </template>
         <span class="mv-role-mode-badge" :title="hostWindow ? (hostWindow.state === 'lost' ? 'Window closed' : control === 'human' ? 'You control this window' : 'Agent controls this window') : role">{{ hostWindow ? (hostWindow.state === 'lost' ? 'Window closed' : control === 'human' ? 'Human' : 'Agent') : role }}</span>
         <span v-if="hostXpra" class="mv-host-window-badge" aria-label="Runs on your computer (not isolated)">Runs on your computer — not isolated</span>
         <span v-if="hostWindow" :id="`tile-host-indicator-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/host-window-indicator`" class="mv-host-window-badge" aria-label="Real desktop (not isolated)" :title="`${hostWindow.title} — ${hostWindow.program}. This tile is attached to a real window on your desktop, not an isolated container.`">Real desktop — not isolated</span>

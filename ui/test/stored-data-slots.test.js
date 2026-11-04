@@ -138,3 +138,33 @@ test('Identities mounts one selected saved-data panel instead of racing every id
   assert.match(text(mounted.root),/No saved slots for second-account/);
  }finally{mounted.close();globalThis.metaviewer=old;}
 });
+
+test('header entry selects only its existing identity and keeps running capsules blocked',async()=>{
+ const old=globalThis.metaviewer,oldRoles=globalThis.metaviewerRoles,calls=[];
+ globalThis.metaviewer={slots:{request:async request=>{calls.push(request);return {event:'completed',slots:[]};}}};
+ globalThis.metaviewerRoles={choices:async()=>[{profileId:'second-account',currentMode:'human',surfaceId:'surface-two'}],programs:async()=>[]};
+ const Slots=await component();
+ const host={identity:{list:async()=>({ok:true,rows:[{id:'first-account',label:'First'},{id:'second-account',label:'Second'}]})}};
+ const Dialog=await component('IdentitiesDialog.vue',Slots), opened=vue.ref(false), profile=vue.ref('');
+ const mounted=mount({setup:()=>()=>vue.h(Dialog,{open:opened.value,initialProfile:profile.value,host})},{});
+ try {
+  opened.value=true;profile.value='second-account';
+  await tick();await tick();
+  assert.match(text(mounted.root),/Stored data slots · second-account/);
+  assert.match(text(mounted.root),/Stop this capsule and close its login view before saving or loading/);
+  assert.equal(calls.length,0,'an open capsule must not dispatch a slot request');
+  assert.equal(button(mounted.root,'Save').props.disabled,true);
+  assert.doesNotMatch(text(mounted.root),/Stored data slots · first-account/);
+ } finally {mounted.close();globalThis.metaviewer=old;globalThis.metaviewerRoles=oldRoles;}
+});
+
+
+test('header storage stays blocked when capsule status cannot be established',async()=>{
+ const old=globalThis.metaviewer,oldRoles=globalThis.metaviewerRoles,calls=[];
+ globalThis.metaviewer={slots:{request:async request=>{calls.push(request);return {event:'completed',slots:[]};}}};
+ globalThis.metaviewerRoles={choices:async()=>{throw Error('status unavailable');}};
+ const Slots=await component();
+ const mounted=mount(await component('IdentitiesDialog.vue',Slots),{open:true,initialProfile:'work-account',host:{identity:{list:async()=>({ok:true,rows:[{id:'work-account',label:'Work'}]})}}});
+ try {await tick();await tick();assert.equal(calls.length,0);assert.equal(button(mounted.root,'Save').props.disabled,true);}
+ finally {mounted.close();globalThis.metaviewer=old;globalThis.metaviewerRoles=oldRoles;}
+});

@@ -1,6 +1,6 @@
 import { acquireCapsuleCreation } from './profilePicker.js';
 import { programBinaries } from './programBinaries.js';
-import { isForeignIdentity } from './identityProtection.js';
+import { isForeignIdentity, isProtectedIdentity } from './identityProtection.js';
 import { hostKeyboardLayout } from './keyboardLayout.js';
 import { stageOpeningMode } from './openingMode.js';
 import { identityMarkers } from './identityMarkers.js';
@@ -33,6 +33,15 @@ import { createHumanTraceFile, pruneHumanTraces } from './humanTrace.js';
 
 /** @param {any} s */
 const rendererSurface = s => Object.fromEntries(['schema','surface_id','profile_id','state','control','visibility','display','geometry'].filter(k => s[k] !== undefined).map(k => [k,s[k]]));
+
+/** Stored data is a stopped-identity capability, never a live VM snapshot.
+ * @param {any} surface @param {boolean} hostProgram @param {string} [liveProfile] */
+export function storedDataCapability(surface, hostProgram, liveProfile) {
+  const profileId = surface?.profile_id;
+  if (hostProgram !== false || !['browser','program'].includes(surface?.kind) ||
+      typeof profileId !== 'string' || !/^[a-z0-9][a-z0-9-]{1,39}$/.test(profileId) || profileId === liveProfile || isProtectedIdentity(profileId)) return null;
+  return {available:true,profileId};
+}
 
 const CHANNEL = 'metaviewer:roles.v0.3';
 /** @param {unknown} value */
@@ -463,7 +472,10 @@ export function installRoleHost({electron, window, core, env, capsuleStates, adm
       };
     }
     const s = authoritative(surfaceId);
-    return {role:roleFor(s), profileId:s.profile_id, control:s.control, hostXpra:programProfiles.get(s.profile_id)?.hostXpra === true,
+    const hostXpra = programProfiles.get(s.profile_id)?.hostXpra === true;
+    const storedData = storedDataCapability(programProfiles.has(s.profile_id) ? {...s,kind:'program'} : s,hostXpra,env.MV_SRF_LIVE_PROFILE);
+    return {role:roleFor(s), profileId:s.profile_id, control:s.control, hostXpra,
+      ...(storedData ? {storedData} : {}),
       view:viewStates.get(surfaceId) || {state:'closed'}, transition:transitions.get(s.profile_id) || null};
   };
   /** @param {string} surfaceId */
