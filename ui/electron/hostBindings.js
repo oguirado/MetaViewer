@@ -155,9 +155,9 @@ async function openPinned(path) {
 }
 
 /** Trusted options are host-only; no renderer pathname or capability is accepted.
- * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any,getPeerCredentials?:(socket:import('node:net').Socket)=>{pid:number,uid:number,gid:number,ino:number},inputDeadlineMs?:number}} [options]
+ * @param {{env?:NodeJS.ProcessEnv,createMessageChannel?:()=>any,getPeerCredentials?:(socket:import('node:net').Socket)=>{pid:number,uid:number,gid:number,ino:number},inputDeadlineMs?:number,onSessionEnd?:(code:string)=>void}} [options]
  * @returns {Promise<{core: any, wire: any}>} */
-export async function createMainBindings({env = process.env, createMessageChannel, getPeerCredentials = readPeerCredentials, inputDeadlineMs = DEADLINE} = {}) {
+export async function createMainBindings({env = process.env, createMessageChannel, getPeerCredentials = readPeerCredentials, inputDeadlineMs = DEADLINE, onSessionEnd} = {}) {
   /** @type {import('node:net').Socket | undefined} */ let socket;
   let acquisitionStep = 'CONFIG_ENV';
   try {
@@ -228,6 +228,8 @@ export async function createMainBindings({env = process.env, createMessageChanne
     /** @type {Map<string,number>} */ const failedFrameGenerations = new Map();
     /** @type {Map<string,{body:any,resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}>} */ const pending = new Map();
     /** @type {Map<string,{lastSeq:number,inFlightSeq:number,partialSeq:number,partialApplied:number,draining:boolean,queue:Array<{batch:any,events:any[],applied:number,resolve:(value:any)=>void}>}>} */ const surfaceInputQueues = new Map();
+    let journalEnded = false;
+    let journalEndNotified = false;
     const nonInputPendingCount = () => {
       let count = 0;
       for (const item of pending.values()) {
@@ -314,6 +316,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
     const helloTimer = setTimeout(() => shutdown(acquireFail('HELLO_TIMEOUT')), DEADLINE);
     /** @param {any} body @param {string} [messageId] @param {(error?: Error | null) => void} [onWritten] */
     function send(body, messageId = undefined, onWritten = undefined) {
+      if (journalEnded && !(body.schema === 'surface_request/v0.2' && body.op === 'list')) throw Object.assign(new Error('Session journal is full; start a new session.'), {code:'JOURNAL_FULL'});
       if (disposed || !socket || !Number.isSafeInteger(++seq)) throw fail();
       const value = {schema:envelopeTagForBody(body),msg_id:messageId || body.request_id || body.proposal_id || randomUUID(),ts_ns:0,
         from:ui.endpoint,to:config.core.endpoint,session_id:config.session_id,seq,nonce:randomUUID(),body};
@@ -500,6 +503,32 @@ export async function createMainBindings({env = process.env, createMessageChanne
         live = true;clearTimeout(helloTimer);ready();return;
       }
       if(body.schema==='rewind_event/v0.2'){if(!rewind)throw fail();rewind.receive(body);return;}
+      // [TARGET, unit decision] Closed session diagnostic; never render raw detail.
+      if (body.schema === 'surface_event/v0.2' && body.event === 'error'
+          && body.data?.surface_id === 'session'
+          && ['JOURNAL_FULL','JOURNAL_STOP_FAILED'].includes(body.data?.code)) {
+        if (!journalEnded) {
+          // Cleanup runs outside the accepted journal. Until confirmed, these
+          // last accepted frames cannot represent live, controllable capsules.
+          for (const state of surfaces.values()) {
+            if (state.state !== 'destroyed' && state.state !== 'lost') {
+              publishState({...state, state:'lost'});
+              surfaces.set(state.surface_id, Object.freeze({...state, state:'lost'}));
+              display.removeSurface(state.surface_id);
+            }
+          }
+          latestFrames.clear();
+          pendingDeliveries.clear();
+        }
+        journalEnded = true;
+        const error = Object.assign(new Error('Session journal is full; start a new session.'), {code:'JOURNAL_FULL'});
+        for (const [key,item] of pending) {clearTimeout(item.timer);pending.delete(key);item.reject(error);}
+        if (!journalEndNotified || body.data.code === 'JOURNAL_STOP_FAILED') {
+          journalEndNotified = true;
+          try { onSessionEnd?.(body.data.code); } catch { /* diagnostic must not close transport */ }
+        }
+        return;
+      }
       const observationMetadata={session_id:env.session_id,from:env.from,to:env.to,seq:env.seq};
       if(body.schema==='guest_command_observation/v0.2'){if(!observationEnvelopeValid(env))throw fail();guestCommand.observe(body,observationMetadata);return;}
       if(body.schema==='guest_command_event/v0.2'){guestCommand.receive(body,observationMetadata);if(body.event==='stopped')rewind?.guestClosed();return;}
@@ -974,6 +1003,7 @@ export async function createMainBindings({env = process.env, createMessageChanne
       },
       /** @param {any} message */
       async request(message) {
+        if (journalEnded) throw Object.assign(new Error('Session journal is full; start a new session.'), {code:'JOURNAL_FULL'});
         if (message?.op==='capsule-state') {
           const body=stateRequest(message.request);
           if (!live || disposed || nonInputPendingCount()>=MAX_ITEMS || pending.has(body.operation_id)) throw fail();

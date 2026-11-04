@@ -37,6 +37,7 @@ const Desktop=await compileSfc('wall/DesktopWorkspace.vue',{
 
 /** @param {Array<any>} rows @param {string|null} saved */
 async function mountDesktop(t,rows,saved=null){
+  const priorWalls=new Set(walls);
   globalThis.window??={};
   for(const name of ['addEventListener','removeEventListener'])globalThis.window[name]??=()=>{};
   const writes=[], exposed=vue.ref(null), root={children:[]};
@@ -59,7 +60,7 @@ async function mountDesktop(t,rows,saved=null){
   app.mount(root);
   t.after(()=>app.unmount());
   await flush();
-  const active=walls.find(entry=>entry.props.hidden===false);
+  const active=walls.find(entry=>!priorWalls.has(entry) && entry.props.hidden===false);
   assert.ok(active,'the active desktop mounts one wall');
   return {active,exposed,writes};
 }
@@ -130,4 +131,23 @@ test('V026 reopening an identity places it in its remembered cell, others take t
   const fresh=positions.get('panel-surface-1');
   assert.equal(fresh.left,0);assert.equal(fresh.top,0);
   controller.dispose();
+});
+
+test('CELL custom desktop persists its remembered snap after the live surface ends and reloads it for a new surface',async t=>{
+  const rows=vue.reactive([row('surface-before','work-browser','Browser')]);
+  const {active,writes}=await mountDesktop(t,rows);
+  active.emit('snap-grid-change',{cols:3,rows:2});
+  active.emit('custom-layout',null);
+  await flush();
+  await active.props.storage.writeAtomic(floatingLayout('surface-before',800,300));
+  rows.splice(0);await flush();
+  await active.props.storage.writeAtomic(JSON.stringify(wallLayout.createWallLayout()));
+  const saved=writes.at(-1),desktop=saved.views.agent.desktops[0];
+  assert.equal(desktop.preset,null);
+  assert.deepEqual(desktop.identityCells,{'work-browser':{col:2,row:1}});
+  assert.equal(Object.keys(desktop.layout.dockview.panels).length,0);
+  const again=await mountDesktop(t,[row('surface-after','work-browser','Browser')],JSON.stringify(saved));
+  assert.equal(again.active.props.projectionView.getProjection().rows[0].id,'surface-after');
+  assert.deepEqual({...again.active.props.identityCells['work-browser']},{col:2,row:1});
+  assert.deepEqual({...again.active.props.snapGrid},{cols:3,rows:2});
 });

@@ -471,8 +471,8 @@ async function runProbes({
     }
   });
 
-  // 9. Review Fix 3: programProfiles pruned when surface is destroyed or lost by any route.
-  await check('programProfiles-pruned-on-destroy-or-loss', async () => {
+  // 9. Only verified terminal removal makes the name immediately reusable.
+  await check('programProfiles-pruned-on-destroy', async () => {
     const root = await mkdtemp(join(tmpdir(), 'v023-prune-'));
     try {
       const binDir = join(root, 'bin');
@@ -520,8 +520,8 @@ async function runProbes({
         const first = await invoke('create-program', { choice: { binary: 'gedit' } });
         if (!first.ok || first.profileId !== 'gedit') return false;
 
-        // Route A: surface transitions to 'lost' outside roleHost.stop()
-        states.set(first.surfaceId, { ...states.get(first.surfaceId), state: 'lost' });
+        // Route A: surface transitions to 'destroyed' outside roleHost.stop()
+        states.set(first.surfaceId, { ...states.get(first.surfaceId), state: 'destroyed' });
         const staleStatus = await invoke('status', { surfaceId: first.surfaceId });
         if (staleStatus.ok !== false || staleStatus.code !== 'SURFACE_UNKNOWN') return false;
 
@@ -1467,7 +1467,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     assert.ok(failed.includes('clearMode-reject-resets-creating-and-keeps-error'), `Mutant 9 survived: ${failed}`);
   }
 
-  // Mutant 10 (Fix 3): pruneProgramProfiles does not prune destroyed or lost surfaces.
+  // Mutant 10 (Fix 3): pruneProgramProfiles does not prune destroyed surfaces.
   {
     const mutatedSrc = roleHostSrc.replace(
       'if (csDead || hsDead) {',
@@ -1476,7 +1476,7 @@ test('V023-HOST-MV: mutant suite kills every required mutant', async (t) => {
     assert.notEqual(mutatedSrc, roleHostSrc);
     const mutatedMod = await importMutatedRoleHost(mutatedSrc, 'm10');
     const failed = await runProbes({ roleHost: mutatedMod });
-    assert.ok(failed.includes('programProfiles-pruned-on-destroy-or-loss'), `Mutant 10 survived: ${failed}`);
+    assert.ok(failed.includes('programProfiles-pruned-on-destroy'), `Mutant 10 survived: ${failed}`);
   }
 
   // Mutant 11a (Fix 4 Launcher): CatalogLauncher falls back to api.createProgram when parent does not settle.

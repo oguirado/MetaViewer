@@ -238,7 +238,7 @@ function onShotClick() {
       role="status"
       :data-semantic-anchor="badgeAnchor"
       :title="demoActive ? (demoSealing ? 'Sealing automation' : 'Recording automation') : badgeTitle"
-    >{{ demoActive ? 'Recording automation' : phase === 'error' ? 'Error' : badgeText }}<button v-if="demoActive" type="button" class="mv-demo-stop" :aria-label="`Stop recording automation for ${props.capsuleLabel || props.profileId}`" :data-semantic-anchor="`demo/stop/tile/${props.capsuleId}`" :disabled="demoStopDisabled" @click.stop="automation?.stop?.()">{{ demoSealing ? 'Sealing…' : 'Stop' }}</button></span>
+    >{{ demoActive ? 'Recording automation' : phase === 'error' ? 'Error' : badgeText }}<button v-if="demoActive" :id="`${badgeId}-demo-stop`" type="button" class="mv-demo-stop" :aria-label="`Stop recording automation for ${props.capsuleLabel || props.profileId}`" :data-semantic-anchor="`demo/stop/tile/${props.capsuleId}`" :disabled="demoStopDisabled" @click.stop="automation?.stop?.()">{{ demoSealing ? 'Sealing…' : 'Stop' }}</button></span>
     </Teleport>
   </div>
 </template>

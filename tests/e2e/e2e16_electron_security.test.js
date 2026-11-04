@@ -27,7 +27,7 @@ function audit(report) {
   assert.deepEqual(report.slots, ['request']);
   assert.equal(report.slotsFrozen, true);
   assert.deepEqual(report.operator, {
-    demo: ['check', 'prompt', 'start', 'stop'],
+    demo: ['check', 'prompt', 'start', 'state', 'stop', 'subscribe'],
     entry: ['copy'],
     identity: ['create', 'delete', 'list', 'login', 'show'],
     egress: ['get', 'set'],

@@ -276,3 +276,27 @@ test('PKG-FIX L-01 + L-03 entry: refusals happen before any core spawn (with mut
     assert.match((await runEntry({source: lockMutant, env, lock: false, onLine: (l, c) => { if (l === 'CORE_SPAWN') c.kill('SIGKILL'); }})).stdout, /CORE_SPAWN/);
   } finally { await rm(host, {recursive: true, force: true}); }
 });
+
+
+test('journal packaged relaunch creates a fresh session even with an inherited ended session id', {timeout:60000}, async () => {
+  const {host,env}=await hostEnv();
+  const launch=async()=>{
+    let record;
+    const result=await runEntry({source:seamless,env,onLine:(line,child)=>{
+      if (line.startsWith('METAVIEWER_ATTACH ')) {
+        record=validateAttachRecord(JSON.parse(readFileSync(join(host,'metaviewer/attach/current.json'),'utf8')));
+        child.kill('SIGHUP');
+      }
+    }});
+    assert.equal(result.code,0,result.stderr); assert.ok(record);
+    return record;
+  };
+  try {
+    const first=await launch();
+    env.MV_SESSION_ID=first.session_id;
+    const second=await launch();
+    assert.notEqual(second.session_id,first.session_id);
+    assert.notEqual(second.core_socket,first.core_socket);
+    assert.equal(existsSync(join(host,'metaviewer/attach/current.json')),false);
+  } finally {await rm(host,{recursive:true,force:true});}
+});

@@ -1174,6 +1174,30 @@ export function createWallWorkspaceController(options = {}) {
       collapseEmptyGroups(); trimHistory();
       if (placement === 'floating') windows.float(panelId);
       else panel.api.setActive();
+      // A float dragged from a grid preset becomes a custom layout. Its saved
+      // identity cell still belongs to this capsule after the surface ends.
+      // Restore only the new panel; existing custom geometry stays in place.
+      const hint = profileId ? savedCells?.()[profileId] : null;
+      if (preset === null && hint && floatingGrid && api.width && api.height) {
+        const grid = floatingGrid();
+        if (Number.isInteger(hint.col) && Number.isInteger(hint.row) &&
+            hint.col >= 0 && hint.col < grid.cols && hint.row >= 0 && hint.row < grid.rows) {
+          // Cold restore retains ended surfaces during the orphan grace period.
+          // They are not live occupants of the reopened identity's cell.
+          const livePanels = new Set(presentationRows().map(tile=>tile.id));
+          const occupied = (/** @type {any} */ (api).toJSON().floatingGroups ?? [])
+            .filter((/** @type {any} */ group)=>!group.data?.views?.includes(panelId) && group.data?.views?.some((/** @type {string} */ id)=>livePanels.has(id)))
+            .map((/** @type {any} */ group)=>({x:group.position.left,y:group.position.top,width:group.position.width,height:group.position.height}));
+          const rect = nextFloatingCell(api.width,api.height,grid,occupied,hint);
+          fitAllocation(panel,rect.width,rect.height);
+          // Detach this panel from any remembered tab group before positioning
+          // its new group; Dockview may clamp the panel's initial float bounds.
+          /** @type {any} */ (api).addFloatingGroup(panel,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+          /** @type {any} */ (api).addFloatingGroup(/** @type {any} */ (panel).group,{position:{left:rect.x,top:rect.y},width:rect.width,height:rect.height,disableSmartGuides:true});
+          retainFloatingHome(api);
+          void host?.completeUserGesture?.();
+        }
+      }
       return succeed(Object.freeze({ panelId }));
     } catch (error) {
       return fail('ERR_REVEAL_FAILED', error instanceof Error ? error.message : String(error));

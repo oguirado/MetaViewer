@@ -206,6 +206,7 @@ identit-5e8ada4f5d6f	changes/unreleased/identity-create-retry.md
 judgein-6d7ef63592c7	changes/unreleased/judge-install-diagnostics.md
 judgeki-2abc0a3eae20	changes/unreleased/judge-kit-capsule-net.md
 judgeki-16dad1d0cde7	changes/unreleased/judge-kit-package-tool-deps.md
+judgere-2117af84a647	changes/unreleased/judge-recording-folder.md
 judge-root-refusal.md	changes/unreleased/judge-root-refusal.md
 judgesc-91a8a932898f	changes/unreleased/judge-script-comments.md
 judgest-1257a8a92a8d	changes/unreleased/judge-stop-capsule-ram.md
@@ -243,6 +244,7 @@ program-5f5847f0f976	changes/unreleased/program-current-baseline.md
 program-display.md	changes/unreleased/program-display.md
 program-d44e2c75b099	changes/unreleased/program-focused-key.md
 program-9c236b0bad7f	changes/unreleased/program-host-fresh-frames.md
+program-lost-stop.md	changes/unreleased/program-lost-stop.md
 program-593ec53b328a	changes/unreleased/program-moves-in-a-row.md
 program-037135db5049	changes/unreleased/program-provider-kill-guard.md
 program-53a257f2b164	changes/unreleased/program-standard-dirs.md
@@ -332,6 +334,7 @@ v027-window-close.md	changes/unreleased/v027-window-close.md
 v027-window-resize.md	changes/unreleased/v027-window-resize.md
 v027win-bfdd59ead78f	changes/unreleased/v027-window-reuse-message.md
 v027-x64-evidence.md	changes/unreleased/v027-x64-evidence.md
+v028-cell.md	changes/unreleased/v028-cell.md
 v028-copyfix.md	changes/unreleased/v028-copyfix.md
 v028-core-fix.md	changes/unreleased/v028-core-fix.md
 v028-docs-x64.md	changes/unreleased/v028-docs-x64.md
@@ -341,6 +344,7 @@ v028flo-c3083af1faea	changes/unreleased/v028-flow2-indicator.md
 v028flo-67575cdf4eb1	changes/unreleased/v028-flow2-recovery.md
 v028-flow2-setup.md	changes/unreleased/v028-flow2-setup.md
 v028-grid6.md	changes/unreleased/v028-grid6.md
+v028-journal-full.md	changes/unreleased/v028-journal-full.md
 v028jud-b1bae7918c82	changes/unreleased/v028-judge-home-whitespace.md
 v028-orphan-2.md	changes/unreleased/v028-orphan-2.md
 v028-orphan.md	changes/unreleased/v028-orphan.md
@@ -1695,6 +1699,8 @@ canonical.rs	core/src/serve/canonical.rs
 serve-capture.rs	core/src/serve/capture.rs
 guestco-bd3eb2342cae	core/src/serve/guest_command.rs
 serve-headless.rs	core/src/serve/headless.rs
+journal_end.rs	core/src/serve/journal_end.rs
+journal_end_tests.rs	core/src/serve/journal_end_tests.rs
 layout.rs	core/src/serve/layout.rs
 serve-mod.rs	core/src/serve/mod.rs
 receipt-5b6711b5d5ee	core/src/serve/receipt_evidence_tests.rs
@@ -2122,6 +2128,7 @@ DEMO_RUNBOOK.md	docs/DEMO_RUNBOOK.md
 EVIDENCE.md	docs/EVIDENCE.md
 HOLDING-41388780e954	docs/HOLDINGS_LESSONS_UI_ORCHESTRATOR.md
 INSTALL.md	docs/INSTALL.md
+JOURNAL_END.md	docs/JOURNAL_END.md
 JUDGES.md	docs/JUDGES.md
 JUDGE_NO_DOCKER.md	docs/JUDGE_NO_DOCKER.md
 JUDGE_QUICKSTART.md	docs/JUDGE_QUICKSTART.md
@@ -3266,6 +3273,7 @@ v027til-aec2d0c0bc3c	ui/test/v027-tile-chrome.test.js
 v027-u3c.test.js	ui/test/v027-u3c.test.js
 v027win-4af1694b2e2c	ui/test/v027-window-close-live-order.test.js
 v027win-4508650304ef	ui/test/v027-window-resize.test.js
+v028cel-40c6a0d80a02	ui/test/v028-cell-reopen.test.js
 v028dis-327661b55429	ui/test/v028-display-conversion.test.js
 v028-fit-render.cjs	ui/test/v028-fit-render.cjs
 v028fit-1d677c28111c	ui/test/v028-fit-render.test.js
@@ -3276,6 +3284,7 @@ v028orp-8bfbd9efdd7e	ui/test/v028-orphan-release-live.cjs
 v028orp-960ca38225fe	ui/test/v028-orphan-release-live.html
 v028orp-b574bd667de3	ui/test/v028-orphan-release-live.js
 v028orp-a675e6c6ca58	ui/test/v028-orphan-release.test.js
+v028pro-ab1961a1a105	ui/test/v028-program-recovery.test.js
 v028pro-c087ddecf946	ui/test/v028-program-sidecar.test.js
 v028-tiles-visual.js	ui/test/v028-tiles-visual.js
 v028-tiles.html	ui/test/v028-tiles.html

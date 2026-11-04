@@ -98,6 +98,7 @@ test('F16/F44 program listing preserves lost/live binding even with unreadable s
   const code=source.slice(source.indexOf('async function programs()'),source.indexOf('\n  /** @param {any} choice */',source.indexOf('async function programs()')));
   for (const state of ['active','lost']) for (const corrupt of [false,true]) {
     const c=context(code,{
+      pruneProgramProfiles:()=>{},
       listIdentities:async()=>({ok:true,rows:[{id:'editor',browser:'program'}]}),
       savedPrograms:{hostProfiles:async()=>[],readLaunch:async()=>{if(corrupt)throw Error('CORRUPT');return {binary:'editor'};}},
       capsuleStates:new Map([['s1',{surface_id:'s1',profile_id:'editor',state}]]),
@@ -359,6 +360,7 @@ test('V027 program listing rechecks binding after saved launch settles',async()=
     let settle;
     const capsuleStates=new Map();
     const c=context(code,{
+      pruneProgramProfiles:()=>{},
       listIdentities:async()=>({ok:true,rows:[{id:'editor',browser:'program'}]}),
       savedPrograms:{hostProfiles:async()=>[],readLaunch:()=>new Promise((resolve,reject)=>{settle=()=>corrupt?reject(Error('CORRUPT')):resolve({binary:'editor'});})},
       capsuleStates,isForeignIdentity:()=>false,roleFor:()=> 'agent',creating:false,transitions:new Set(),process:{env:{}},env:{},
