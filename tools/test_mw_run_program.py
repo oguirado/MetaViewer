@@ -1549,6 +1549,78 @@ finally:s.close()
                 self.b.vision.perceive.assert_called_once()
                 self.assertEqual(self.b.vision.perceive.call_args.args[0]['generation'],3)
 
+    def test_navigation_keys_use_core_receipts_without_planner_or_text_readback(self):
+        for key in program.PROGRAM_KEYS:
+            with self.subTest(key=key):
+                self.b.pending = {}
+                planner, submit, settle, order, submitted = self.text_fixture()
+                self.b.program_binding = dict(host_xpra=True)
+                with patch.object(self.b, 'ownership'), patch.object(self.b, 'check_program_frame'), \
+                     patch.object(host.tools, 'propose', side_effect=submit), \
+                     patch.object(host.tools, 'wait_verify', side_effect=settle):
+                    moves = program.run_moves(self.b, planner, 'focused-key', 1, 1000, key=key)
+                planner.plan_step.assert_not_called()
+                self.b.vision.perceive.assert_not_called()
+                self.assertEqual(order, ['key', 'publish'])
+                self.assertEqual(len(submitted), 1)
+                self.assertEqual(moves[0]['action'], dict(type='key', keys=['Return' if key == 'Enter' else key]))
+                self.assertEqual(moves[0]['status'], 'verified_key')
+                self.assertFalse(moves[0]['gameplay_verified'])
+                receipt = json.loads(Path(self.b.program_attempts[0]['receipt_artifact']).read_text())
+                self.assertEqual(receipt['verification'], moves[0]['verification'])
+
+    def test_navigation_refuses_legacy_password_and_ambiguous_dispatch_outcomes(self):
+        for binding in ({}, dict(host_xpra=False)):
+            self.text_fixture()
+            self.b.program_binding = binding
+            with patch.object(self.b, 'ownership'), patch.object(host.tools, 'propose') as submit:
+                with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_KEY_HOST_ONLY'):
+                    program.run_moves(self.b, None, 'focused-key', 1, 1000, key='Enter')
+            submit.assert_not_called()
+        self.text_fixture()
+        self.b.program_binding = dict(host_xpra=True)
+        perceive = self.b.perceive.side_effect
+        def password(observed, **kwargs):
+            sensed = perceive(observed)
+            sensed['table']['elements'][0]['name'] = 'Password'
+            return sensed
+        self.b.perceive.side_effect = password
+        with patch.object(self.b, 'ownership'), patch.object(host.tools, 'propose') as submit:
+            with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_PASSWORD'):
+                program.run_moves(self.b, None, 'focused-key', 1, 1000, key='Enter')
+        submit.assert_not_called()
+        self.text_fixture()
+        self.b.program_binding = dict(host_xpra=True)
+        with patch.object(self.b, 'ownership'), \
+             patch.object(host.tools, 'propose', side_effect=TimeoutError('reply lost')) as submit:
+            with self.assertRaisesRegex(TimeoutError, 'reply lost'):
+                program.run_moves(self.b, None, 'focused-key', 1, 1000, key='Right')
+        submit.assert_called_once()
+        self.assertEqual(self.b.program_attempts[-1]['status'], 'input_uncertain')
+
+    def test_navigation_request_and_rebind_guards(self):
+        for goal, steps, text, key, planner in (
+                ('focused-key', 1, None, None, 'rules'),
+                ('focused-key', 1, None, 'Escape', 'rules'),
+                ('focused-key', 2, None, 'Up', 'rules'),
+                ('focused-key', 1, 'hello', 'Enter', 'rules'),
+                ('focused', 1, None, 'Enter', 'rules'),
+                ('focused-key', 1, None, 'Enter', 'muse')):
+            with self.subTest(goal=goal, steps=steps, key=key, planner=planner):
+                with self.assertRaisesRegex(host.OwnerRefused, 'MW_PROGRAM_KEY_REQUEST'):
+                    program.validate_key_request(goal, steps, text, key, planner)
+        for change in (dict(surface_id='other'), dict(width=101), dict(height=81),
+                       dict(generation=0), dict(sha256='b' * 64)):
+            self.text_fixture()
+            self.b.program_binding = dict(host_xpra=True)
+            old = self.b.observe(1000)['frame_ref']
+            sensed = self.b.perceive(dict(frame_ref=old))
+            self.b.observe.side_effect = None
+            self.b.observe.return_value = dict(frame_ref=dict(old, **change))
+            with patch.object(self.b, 'ownership'), self.assertRaises(host.OwnerRefused):
+                self.b.rebind(sensed, dict(action=dict(type='key', keys=['Up']),
+                    target=None, focused_program_key=True), 1000)
+
     def test_focused_text_one_admission_without_planner_and_ocr_verdicts(self):
         for ocr, expected in (('hello', 'exact'), (None, 'not_readable'), ('wrong', 'mismatch')):
             with self.subTest(ocr=ocr):
