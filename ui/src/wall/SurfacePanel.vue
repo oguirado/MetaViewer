@@ -706,7 +706,10 @@ function onActivateSurface() {
   </Teleport>
   <div class="mv-tile-rail">
   <NetworkPanel :open="networkOpen && !props.displayOnly" :display-only="props.displayOnly" :capsule-id="props.capsuleId" :identity="row?.profile_id ?? ''" :refusal-code="row?.refusal?.code ?? row?.readinessError?.code ?? ''" @open="networkOpen=true" @close="networkOpen=false" />
+  <Teleport :to="stateControlTarget || 'body'" :disabled="!stateControlTarget">
   <TileCaptureChrome
+    :compact="Boolean(stateControlTarget)"
+    :header-target="stateControlTarget"
     :capsule-id="props.capsuleId"
     :capsule-label="props.title"
     :capture-state="props.captureState"
@@ -716,6 +719,7 @@ function onActivateSurface() {
     :tile-state="tile.tile"
     :clipboard="props.clipboard"
   />
+  </Teleport>
   </div>
   <CapsulePanel
     :capsule-id="props.capsuleId"
@@ -763,8 +767,8 @@ function onActivateSurface() {
   .mv-shell .mv-tile .mv-tile-capid { flex: 0 1 auto; min-width: 0; }
   .mv-shell .mv-tile .mv-tile-capid__id { display: none; }
   .mv-shell .mv-tile .mv-tile-capid__copy { font-size: 0; }
-  .mv-shell .mv-tile .mv-tile-capid__copy::after { content: "Copy ID"; font-size: 11px; }
-  .mv-shell .mv-tile .mv-tile-chrome__badge {
+  .mv-shell .mv-tile .mv-tile-chrome:not(.mv-tile-chrome--compact) .mv-tile-capid__copy::after { content: "Copy ID"; font-size: 11px; }
+  .mv-shell .mv-tile .mv-tile-chrome__badge:not(.mv-tile-chrome__badge--header) {
     overflow: visible;
     text-overflow: clip;
     white-space: normal;

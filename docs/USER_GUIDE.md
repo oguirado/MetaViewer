@@ -398,3 +398,5 @@ roles from the same source as their visible text.
 - [Electron shell notes](../ui/README.md)
 - [Python adapters](../agents/README.md)
 - [License](../LICENSE)
+
+Wide capsule headers keep Record, Screenshot and Copy ID available as icon buttons. Narrow tiles reveal them on header hover or focus. Recording state stays in the header; hover does not resize the capsule view.

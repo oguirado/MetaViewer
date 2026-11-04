@@ -556,7 +556,7 @@ describe('mutants are rejected by the oracles', () => {
     ['confirmation always shown', (c) => c.replace('<span v-if="copyStatusText !== \'\'" role="status"', '<span role="status"')],
     ['chip shown in display-only tiles', (c) => c.replace('<div v-if="!props.displayOnly" class="mv-tile-chrome"', '<div class="mv-tile-chrome"')],
     ['wrong id source (profile instead of surface id)', (c) => c.replace('surfaceId: capSurfaceId.value,\n  profileId', 'surfaceId: props.profileId || capSurfaceId.value,\n  profileId')],
-    ['button not a button (div)', (c) => c.replace('      <button\n        :id="copyIdDomId"\n        type="button"', '      <div\n        :id="copyIdDomId"').replace('{{ CAPSULE_COPY_LABEL }}</button>', '{{ CAPSULE_COPY_LABEL }}</div>')],
+    ['button not a button (div)', (c) => c.replace('      <button\n        :id="copyIdDomId"\n        type="button"', '      <div\n        :id="copyIdDomId"').replace('{{ CAPSULE_COPY_LABEL }}</span></button>', '{{ CAPSULE_COPY_LABEL }}</span></div>')],
     ['chip falls back to the capsule id without a surface id', (c) => c.replace('const capSurfaceId = computed(() => props.surfaceId);', 'const capSurfaceId = computed(() => props.surfaceId || props.capsuleId);')],
     ['reset timer not cleared on unmount', (c) => c.replace("onBeforeUnmount(() => { copyFeedback.dispose(); });", '')],
   ];

@@ -585,3 +585,33 @@
   height: 100%;
   min-height: 0;
 }
+
+/* Capture controls occupy the existing header only when its measured width
+ * fits them. The same instances/ids return to the reveal rail below 640px. */
+.mv-shell .mv-tile .mv-tile-chrome--compact { display:flex; flex:none; gap:3px; padding:0; }
+.mv-shell .mv-tile .mv-tile-chrome--compact .saas-record,
+.mv-shell .mv-tile .mv-tile-chrome--compact .mv-tile-chrome__shot,
+.mv-shell .mv-tile .mv-tile-chrome--compact .mv-tile-capid__copy {
+  width:24px; min-width:24px; height:24px; min-height:24px; padding:3px; justify-content:center;
+}
+.mv-tile-chrome--compact .saas-record-label,
+.mv-tile-chrome--compact .mv-tile-chrome__shot-label,
+.mv-tile-chrome--compact .mv-tile-copy-label { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+.mv-tile-chrome--compact .saas-record-dot { width:9px; height:9px; animation:none; }
+.mv-tile-chrome--compact .saas-record-recording .saas-record-dot { border-radius:1px; }
+.mv-shell .mv-tile .mv-tile-chrome__badge--header { flex:none; max-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; padding:1px 4px; gap:3px; }
+.mv-shell .mv-tile .mv-tile-chrome__badge--header::before { width:5px; height:5px; }
+.mv-tile-chrome--compact .mv-tile-capid { flex:none; }
+.mv-tile-chrome--compact .mv-tile-capid__status,.mv-tile-chrome--compact .mv-tile-chrome__refusal { position:absolute; right:0; top:28px; max-width:100%; padding:5px 8px; background:var(--cuk-semantic-surface-panel); z-index:var(--cuk-semantic-z-index-overlay); }
+.mv-tile[data-chrome-expanded="false"] .mv-tile-chrome--compact :is(.mv-tile-capid__status,.mv-tile-chrome__refusal) { display:none; }
+
+@container tile-chrome (max-width: 639px) {
+  .mv-shell .mv-tile .mv-tile-chrome--compact { position:absolute; top:56px; right:0; max-width:calc(100% - 72px); min-height:28px; visibility:hidden; pointer-events:none; z-index:calc(var(--cuk-semantic-z-index-overlay) + 1); }
+  .mv-shell .mv-tile[data-chrome-expanded="true"] .mv-tile-chrome--compact { visibility:visible; pointer-events:auto; }
+}
+.mv-shell .mv-tile .mv-tile-chrome--compact { height:24px; flex-wrap:nowrap; border:0; }
+.mv-shell .mv-tile .mv-tile-chrome--compact .mv-tile-capid { padding:0; }
+
+.mv-tile-copy-icon { display:none; }
+.mv-tile-chrome--compact .mv-tile-copy-icon { display:block; }
+.mv-shell .mv-tile .mv-tile-chrome--compact .cuk-sidebar-icon { width:16px; height:16px; }

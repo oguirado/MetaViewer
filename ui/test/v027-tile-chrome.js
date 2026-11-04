@@ -38,6 +38,17 @@ async function probe(){
     const viewport=tile.querySelector('.mv-role-viewport');
     const before=rect(viewport);
     assert(!visible(tile.querySelector('.mv-tile-rail')),'tools collapsed at rest');
+    const capture=tile.querySelector('.mv-tile-chrome');
+    const headerBadge=header.querySelector('.mv-tile-chrome__badge');
+    assert(headerBadge && visible(headerBadge),'recording state remains visible at rest');
+    const captureInHeader=header.contains(capture);
+    assert(captureInHeader,'capture actions share the header mount without duplicate instances');
+    if(w>=640)assert(rect(capture).top>=rect(header).top && rect(capture).bottom<=rect(header).bottom,'wide controls stay inside the header');
+    for(const selector of ['.saas-record','.mv-tile-chrome__shot','.mv-tile-capid__copy']) {
+      assert(visible(tile.querySelector(selector))===(w>=640),`resting capture visibility at ${w}: ${selector}`);
+    }
+    const ids=[...document.querySelectorAll('[id]')].map(n=>n.id);
+    assert(ids.length===new Set(ids).size,'moving controls never duplicates ids');
     tile.dispatchEvent(new PointerEvent('pointermove',{bubbles:true}));
     header.dispatchEvent(new PointerEvent('pointermove',{bubbles:true}));await settle();
     assert(visible(tile.querySelector('.mv-tile-rail')),'tools revealed on header hover');

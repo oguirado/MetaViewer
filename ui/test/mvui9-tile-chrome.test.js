@@ -371,7 +371,7 @@ describe('TileCaptureChrome static contract (pinned compiler)', async () => {
 
   test('rail renders the record handle, screenshot control and badge with tile anchors', () => {
     const template = source.slice(source.indexOf('<template>'));
-    assert.match(template, /<div v-if="!props\.displayOnly" class="mv-tile-chrome" role="group"/);
+    assert.match(template, /<div v-if="!props\.displayOnly" class="mv-tile-chrome"[^>]*role="group"/);
     assert.match(template, /<span :id="recordWrapId" class="mv-tile-chrome__record" :data-semantic-anchor="recordAnchor">/);
     assert.match(template, /<SaasRecordButton[\s\S]*?:phase="phase"[\s\S]*?:disabled="recordDisabled"[\s\S]*?:unavailable-reason="recordReason"[\s\S]*?@submit-intent="onRecordIntent"/);
     assert.match(template, /<button[\s\S]*?:id="shotId"[\s\S]*?class="mv-tile-chrome__shot"[\s\S]*?:data-semantic-anchor="shotAnchor"[\s\S]*?:aria-label="shotName"[\s\S]*?:disabled="shotDisabled"[\s\S]*?@click="onShotClick"/);
