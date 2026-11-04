@@ -1265,6 +1265,9 @@ func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
 		if err == nil && b.NativeKind == "browser" && m.egressState() != "" {
 			err = removeEgressStarted(m.egressState(), b.Surface.ProfileID)
 		}
+		if err == nil && b.NativeKind != "holdings" {
+			err = m.removeOwnedRAMRunDir(b)
+		}
 	}()
 	out, e := m.execute(ctx, m.cfg.Profiles[b.Surface.ProfileID], []string{"stop", "--container", b.Container}, nil)
 	if e != nil {
@@ -1305,6 +1308,38 @@ func (m *Manager) stopNative(ctx context.Context, b Binding) (err error) {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) removeOwnedRAMRunDir(b Binding) error {
+	p, ok := m.cfg.Profiles[b.Surface.ProfileID]
+	if !ok || p.RAMRoot == "" || b.RunID == "" || !runID.MatchString(b.RunID) {
+		return nil
+	}
+	if refuseProtectedContainer([]string{"--container", b.RunID}) != nil {
+		return nil
+	}
+	runDir := filepath.Join(p.RAMRoot, b.RunID)
+	if !under(p.RAMRoot, runDir) {
+		return fault("configuration", "native RAM run directory outside root")
+	}
+	rootInfo, err := os.Lstat(p.RAMRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || rootInfo.Mode()&os.ModeSymlink != 0 || !rootInfo.IsDir() {
+		return fault("configuration", "native RAM root invalid")
+	}
+	dirInfo, err := os.Lstat(runDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || dirInfo.Mode()&os.ModeSymlink != 0 || !dirInfo.IsDir() {
+		return fault("configuration", "native RAM run directory invalid")
+	}
+	if st, ok := dirInfo.Sys().(*syscall.Stat_t); !ok || st.Uid != uint32(os.Getuid()) {
+		return fault("configuration", "native RAM run directory owner mismatch")
+	}
+	return os.RemoveAll(runDir)
 }
 func (m *Manager) Capture(ctx context.Context, id string) (Binding, NativeFrame, error) {
 	m.mu.Lock()

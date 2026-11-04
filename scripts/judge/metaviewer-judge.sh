@@ -768,17 +768,37 @@ try:
         profile, name = lease.get("ProfileID"), capsule.get("container")
         if isinstance(profile, str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", profile) and isinstance(name, str) and re.fullmatch(r"srf-pg-[a-z0-9][a-z0-9-]{0,39}", name):
             names.add(name)
+    if len(sys.argv) > 2 and sys.argv[2]:
+        store = Path(sys.argv[2])
+        try:
+            smeta = store.lstat()
+        except OSError:
+            smeta = None
+        if smeta is not None and stat.S_ISDIR(smeta.st_mode) and smeta.st_uid == os.getuid() and stat.S_IMODE(smeta.st_mode) == 0o700:
+            audit = store / "audit.jsonl"
+            try:
+                ameta = audit.lstat()
+                if stat.S_ISREG(ameta.st_mode) and ameta.st_uid == os.getuid() and stat.S_IMODE(ameta.st_mode) == 0o600 and ameta.st_size <= 4194304:
+                    for line in audit.read_text().splitlines():
+                        try:
+                            rec = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(rec, dict) and isinstance(rec.get("profile_id"), str) and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", rec["profile_id"]) and isinstance(rec.get("holder"), str) and re.fullmatch(r"srf-pg-[a-z0-9][a-z0-9-]{0,39}", rec["holder"]):
+                            names.add(rec["holder"])
+            except OSError:
+                pass
     print("\n".join(sorted(names)))
 except OSError:
     sys.exit(1)
-' "$1"
+' "$1" "${2:-}"
 }
 
 cmd_stop() {
     local pid waited=0 leaks=0 name f ram adm inventory programs
     local statedir="${MV_SRF_STATE_DIR:-${XDG_STATE_HOME:-$HOME_DIR/.local/state}/metaviewer/srf}"
     # The app removes its opening receipts as it exits: read them before stopping it.
-    programs=$(owned_programs "$statedir" 2>/dev/null) || programs=
+    programs=$(owned_programs "$statedir" "$STORE" 2>/dev/null) || programs=
     pid=$(running_pid)
     if [ -n "$pid" ]; then
         kill -TERM "$pid" 2>/dev/null

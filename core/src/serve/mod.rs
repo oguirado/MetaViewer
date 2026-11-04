@@ -1456,7 +1456,9 @@ impl Server {
                             s.live
                                 || (op == "destroy"
                                     && env.from.component == Component::Ui
-                                    && !s.agent_controlled)
+                                    && (!s.agent_controlled
+                                        || self.headless_graphical_seen
+                                        || self.tool_state.is_stoppable_lost_surface(id)))
                         }) && !self.authority.state().is_destroyed(id)
                     })
                 {

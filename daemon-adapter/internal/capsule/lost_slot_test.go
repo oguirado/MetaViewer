@@ -3,6 +3,8 @@ package capsule
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"metaviewer/daemon-adapter/internal/cli"
@@ -150,5 +152,41 @@ func TestConfirmedAbsentDestroyRecoversWhenStopReportsUnavailable(t *testing.T) 
 	replacement := createID(t, m)
 	if replacement == id || m.bindings[replacement].Surface.State != "active" {
 		t.Fatalf("replacement create failed after confirmed-absent recovery: %s", replacement)
+	}
+}
+
+func TestStopNativeRemovesOwnedRAMRunDir(t *testing.T) {
+	ramRoot := t.TempDir()
+	r := &scriptRunner{output: []byte(`{"kind":"program","container":"srf-pg-deadbeef0001","run_id":"srf-pg-deadbeef0001","windows":[{"id":"w1","x":0,"y":0,"w":2,"h":1,"title":"Gedit"}]}` + "\n")}
+	m := testManager(t, r)
+	p := m.cfg.Profiles["demo"]
+	p.Kind, p.NativeKind, p.Program, p.RAMRoot = "desktop_capsule", "program", "notepad", ramRoot
+	m.cfg.Profiles["demo"] = p
+	runDir := filepath.Join(ramRoot, "srf-pg-deadbeef0001")
+	if err := os.MkdirAll(filepath.Join(runDir, "frames", "w1"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ev, err := m.Handle(context.Background(), req("create", `{"kind":"desktop_capsule","profile_id":"demo","geometry":{"w":2,"h":1}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct {
+		Data struct {
+			Surface Surface `json:"surface"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(ev[0], &created); err != nil {
+		t.Fatal(err)
+	}
+	id := created.Data.Surface.SurfaceID
+	if _, err := m.MarkLost(id, true); err != nil {
+		t.Fatal(err)
+	}
+	r.output = []byte(`{"stopped":"srf-pg-deadbeef0001","removed_verified":true}` + "\n")
+	if _, err := m.Handle(context.Background(), req("destroy", `{"surface_id":"`+id+`"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+		t.Fatalf("expected RAM run dir %s to be removed on destroy, got err=%v", runDir, err)
 	}
 }
