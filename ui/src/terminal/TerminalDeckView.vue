@@ -1009,13 +1009,14 @@ defineExpose({
               @input="onBootstrapInput" />
           </label>
           <button
-            v-for="action in [{kind:'automate',label:'Automate'}, {kind:'use-automation',label:'Use automation'}, {kind:'no-automation',label:'No automation'}]"
+            v-for="action in [{kind:'automate',label:'Create automation',hint:'Teach an automation by showing the steps.'}, {kind:'use-automation',label:'Run automation',hint:'Prepare a task using a saved automation.'}, {kind:'no-automation',label:'Direct task',hint:'Prepare a task without a saved automation.'}]"
             :key="action.kind"
             type="button"
             :id="`terminal-deck-${action.kind}`"
             :data-semantic-anchor="`terminal/${action.kind}`"
             class="mv-terminal-deck__action-btn"
-            @click="controller.copyWorkflowPrompt(action.kind, workflowIdentity)"
+            :title="action.hint"
+            @click="controller.useWorkflowPrompt(action.kind, workflowIdentity, pairMatchesTarget ? focusedPair?.slotId ?? null : null)"
           >{{ action.label }}</button>
           <span
             v-if="toastMessage"

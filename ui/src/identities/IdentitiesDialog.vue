@@ -167,7 +167,7 @@ watch(()=>props.open,open=>{invocationGeneration++;busy.value=false;login.value=
 watch(()=>[props.open,props.initialProfile],([open,profile])=>{if(open)selectedSlots.value=String(profile);},{immediate:true,flush:'post'});
 </script>
 <template>
-  <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Keep a separate browser session for each account." confirm-label="Add identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
+  <ConfirmDialog id="identities-dialog" :open="open" title="Identities" description="Accounts and saved data for each capsule" confirm-label="Add identity" back-label="Close" :busy="busy" :confirm-disabled="!validForm" @confirm="create" @back="emit('close')">
     <p v-if="login" role="status">Operator login view is open. Agent input stays refused until it closes.</p>
     <p v-if="!rows.length && !busy">No identities yet. Add your first identity below. No MetaViewer account is needed. For a browser identity, choose Log in to sign in to your site, then Open as human or Open as agent. If login reports a missing profile, ask the host operator to provision it using the reported instructions.</p>
     <ul class="identity-list" aria-label="Saved identities">
