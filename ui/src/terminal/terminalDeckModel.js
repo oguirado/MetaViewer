@@ -671,14 +671,14 @@ export function createTerminalDeckController(options = {}) {
   /** @type {{ entries?: unknown, capabilities?: unknown } | null} */
   let providerListing = null;
   let lastPastedText = '';
-  /** @type {Map<string, { getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void } | null>} */
+  /** @type {Map<string, { getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void, focus?: () => void } | null>} */
   const registeredTerminals = new Map();
   /** @type {WeakSet<object>} */
   const handledEvents = new WeakSet();
 
   /**
    * @param {string} slotId
-   * @param {{ getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void } | null} term
+   * @param {{ getSelection?: () => string, hasSelection?: () => boolean, paste?: (data: string) => void, focus?: () => void } | null} term
    */
   function registerTerminal(slotId, term) {
     if (typeof slotId !== 'string' || !slotId) return;
@@ -1682,6 +1682,26 @@ export function createTerminalDeckController(options = {}) {
     return { ok: copied, text: promptText, toast: toastMessage };
   }
 
+  /** Prepare instructions for an agent CLI. Pairing identifies a capsule, not
+   * the process reading its terminal. Until the host attests an agent input
+   * target, copy only: a shell must never receive these executable examples.
+   * @param {string} kind @param {string} identityLine @param {string|null} targetSlotId */
+  async function useWorkflowPrompt(kind, identityLine = '', targetSlotId = null) {
+    const text = assertSafeWorkflowPrompt(workflowPrompt(kind).replace(
+      '<operator-pasted capsule identity line>', () => identityLine || '<operator-pasted capsule identity line>'));
+    if (targetSlotId !== null) {
+      const slot = findSlot(targetSlotId)?.slot;
+      if (!identityLine || !slot || slot.status !== 'running' || !slot.sessionId) {
+        toastMessage = 'Paired terminal unavailable'; notify();
+        return {ok:false,pasted:false};
+      }
+    }
+    const result = await bootstrap(text);
+    toastMessage = result.ok ? 'Copied — paste into your agent CLI, not a shell.' : 'Copy unavailable';
+    notify();
+    return {...result, pasted:false};
+  }
+
   /**
    * Copies the active terminal selection (or `explicitText` if provided) to the
    * host clipboard. When there is no non-empty selection, does not overwrite the
@@ -2018,6 +2038,7 @@ export function createTerminalDeckController(options = {}) {
     switchScreen,
     focusSlot,
     bootstrap,
+    useWorkflowPrompt,
     copyWorkflowPrompt: (/** @type {string} */ kind, /** @type {string} */ identityLine = '') => bootstrap(assertSafeWorkflowPrompt(
       workflowPrompt(kind).replace('<operator-pasted capsule identity line>', () => identityLine || '<operator-pasted capsule identity line>'),
     )),

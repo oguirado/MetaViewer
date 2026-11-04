@@ -286,6 +286,12 @@ Read the JSON result and its private receipt/report before accepting success;
 slot values must not contain secrets because process arguments expose them.
 [CITED: `../ui/electron/buttonBridge.js`, `AGENT_ENTRY.md`]
 
+### Prepare a task for your agent CLI
+
+Use **Create automation** to teach by demonstrating steps, **Run automation** to use a saved workflow, or **Direct task** to work without a saved workflow. Each prepares a prompt whose final line is `Task: `; type your task there.
+
+The prompt is copied to the clipboard. When a terminal is paired with a capsule, its actual identity is filled in. Paste the text into your agent CLI, never at a shell prompt; add your task and submit it when ready. Pairing does not identify the foreground process, so these buttons do not insert text or send Enter into the terminal. Automatic insertion remains unavailable until the host can attest an agent input target.
+
 ### Automate from a demo
 
 Open **Automate from a demo**, choose an existing running identity, and enter a
