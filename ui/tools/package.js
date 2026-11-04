@@ -527,6 +527,14 @@ export function resolvePackagedConfigHome(env, runtimeDir, appRootDir = '') {
  * Refuse aliases, foreign owners and permissive modes rather than repairing them.
  * @param {NodeJS.ProcessEnv} env
  */
+export function museRuntimeParent(env, fallback) {
+  if (env.MV_MUSE_WORKSPACE === undefined) return fallback;
+  const root = env.MV_MUSE_WORKSPACE;
+  if (typeof root !== 'string' || !isAbsolute(root) || resolve(root) !== root || root !== env.XDG_RUNTIME_DIR
+      || !/^metaviewer-muse-[A-Za-z0-9_-]+$/.test(root.slice(root.lastIndexOf('/') + 1))) throw new Error('MUSE_WORKSPACE_UNAVAILABLE');
+  return root;
+}
+
 export async function preparePackagedAdmission(env) {
   const hostRuntime = env.XDG_RUNTIME_DIR;
   if (!hostRuntime || !isAbsolute(hostRuntime)) throw new Error('PKG_HOST_RUNTIME_REQUIRED');
@@ -1012,7 +1020,7 @@ export async function createPackagedBootLifecycle(options = {}) {
 
   try {
     await preparePackagedAdmission(env);
-    runtime = await fs.mkdtemp(join(tmpRoot, 'mv-pkg-'));
+    runtime = await fs.mkdtemp(join(museRuntimeParent(env, tmpRoot), 'mv-pkg-'));
     await fs.chmod(runtime, 0o700);
     await fs.mkdir(join(runtime, 'metaviewer'), { mode: 0o700 });
     const stateHome = join(runtime, 'state');
@@ -1193,6 +1201,7 @@ import { format } from 'node:util';
 ${headlessAgentInstance.toString().replace('export ', '')}
 ${arm64CapsuleSessionPlan.toString().replace('export ', '')}
 ${preparePackagedAdmission.toString().replace('export ', '')}
+${museRuntimeParent.toString().replace('export ', '')}
 ${preflightLiveRamRoot.toString().replace('export ', '')}
 ${validateAttachRecord.toString().replace('export ', '')}
 ${buildAttachRecord.toString().replace('export ', '')}
@@ -1468,7 +1477,7 @@ try {
     const hostRuntime = process.env.XDG_RUNTIME_DIR;
     await preparePackagedAdmission(process.env);
     const pin = JSON.parse(await fs.readFile(join(root, 'package-pin.json'), 'utf8'));
-    runtime = await fs.mkdtemp(join(tmpdir(), 'mv-pkg-'));
+    runtime = await fs.mkdtemp(join(museRuntimeParent(process.env, tmpdir()), 'mv-pkg-'));
     await fs.chmod(runtime, 0o700);
     await fs.mkdir(join(runtime, 'metaviewer'), {mode:0o700});
     const stateHome = join(runtime, 'state');

@@ -1,0 +1,1 @@
+- Add an exclusive, ephemeral Muse session workspace for socket and automation state without making repository guides writable.
