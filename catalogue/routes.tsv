@@ -224,6 +224,7 @@ microvm-host-agent.md	changes/unreleased/microvm-host-agent.md
 microvm-922c1683a554	changes/unreleased/microvm-rewind-scene.md
 microvm-2ad050142531	changes/unreleased/microvm-rewind-theme.md
 microvm-f937fea84c3b	changes/unreleased/microvm-workspace-presentation.md
+muse-agent-profile.md	changes/unreleased/muse-agent-profile.md
 mutatio-9bd8e2d9afd9	changes/unreleased/mutation-regression-tests.md
 mw-ax-dump.md	changes/unreleased/mw-ax-dump.md
 mwparti-1980adad520e	changes/unreleased/mw-partial-text-refusal.md
@@ -2870,6 +2871,7 @@ eshbutt-e35bca97f1a6	ui/test/esh-button-stop-budget.test.js
 eshcrea-1e9d7f1b3142	ui/test/esh-create-refusal-code.test.js
 eshhand-9cf159b4a09b	ui/test/esh-handoff-discovery.test.js
 display-4cc05133b5b7	ui/test/fixtures/display-pull-pressure.mjs
+muse-ready.json	ui/test/fixtures/muse-ready.json
 floatin-1846205a13b8	ui/test/floating-constraints-render.cjs
 floatin-c4f59778590b	ui/test/floating-constraints-render.test.js
 fps-indicator.test.js	ui/test/fps-indicator.test.js
@@ -2926,6 +2928,7 @@ microvm-b270d5ac69d2	ui/test/microvm-tile-controls.test.js
 multica-199756b14b9b	ui/test/multicap-profile-picker.test.js
 multisl-cc0b2c69edc0	ui/test/multislot-u5a-ui.test.js
 multisl-575193d23c36	ui/test/multislotfix-sweep.test.js
+museage-22ed427e19e1	ui/test/muse-agent-profile.test.js
 mutFram-75dd51c221d3	ui/test/mutFrameRefFix.test.mjs
 mutSett-c59c7ff27d3d	ui/test/mutSettingsHarden.test.mjs
 mutTerm-33a768ed0f4f	ui/test/mutTerminalHarden.test.mjs
