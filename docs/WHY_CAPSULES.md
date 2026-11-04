@@ -1,8 +1,9 @@
 # Why capsules
 
 MetaViewer runs each application a person or an AI agent works with as a
-**capsule**: one live, addressable surface with its own process boundary,
-owner, frame stream and journal entries, shown as one tile on a wall. This
+**capsule**: one live, addressable surface with an owner, frame stream and
+journal entries, shown as one tile on a wall. Its execution boundary depends
+on the kind; Host program and Desktop window are not isolated. This
 document answers why the product is built that way, what each capsule kind
 isolates and what it does not, and what an agent builder gains or loses
 compared with the usual alternatives.
@@ -226,8 +227,7 @@ Rewind need.
   with owner and generation.
 - **Rewind:** see [9](#rewind).
 - **Cost:** same guardian scope as the VM [TARGET]. A Back restore took
-  387.5 ms as shown by the app [MEASURED: operator live run on ARM64, 4 Nov
-  2026; raw receipt not in this repository].
+  387.5 ms as shown by the app [CITED: README.md, maintainer report; receipts absent].
 
 <a id="choose-a-kind"></a>
 ## 4. Which kind to choose
@@ -254,13 +254,15 @@ No head-to-head numbers were measured; each row is a design comparison read
 from the code, not a benchmark. Comparative performance:
 `ABSENT — do not invent`.
 
-| Alternative | What it gains | What it loses that a capsule keeps |
+| Alternative | What it offers | Comparison with MetaViewer's contracts |
 | --- | --- | --- |
-| Plain desktop with computer use | Zero setup; every app at once | One shared screen and pointer: a click can land in the wrong window; no per-app owner; no proof the screenshot is still current when the click lands; the person and the agent fight for one mouse |
-| One browser, many tabs | Cheap; one process | Tabs share a profile, cookies and process; one tab's login or crash affects the others; only the visible tab has fresh pixels; no per-tab ownership |
-| Containers alone (Docker) | Process and file isolation | No live picture, no human takeover, no frame-bound admission, no journal of what the agent did; MetaViewer uses containers as one boundary and adds those |
-| One VM per task | Strong boundary, snapshots | Heavy per task; still one screen per VM; snapshot alone does not say which action was admitted on which frame. MetaViewer offers VM and MicroVM where KVM exists (ARM64 only here) |
-| Remote desktop (VNC, RDP) | Remote viewing and control | A pixel stream with no authority: anyone connected can type; nothing refuses a stale or unowned action; no journal |
+| Plain desktop with computer use | Access to existing host applications | A desktop alone does not establish MetaViewer's per-surface ownership, frame-bound admission and journal contracts; other tooling may add checks. |
+| One browser, many tabs | Shared browser session and tab navigation; process layout depends on the browser | Tabs in one profile can share login state. Tabs alone do not establish MetaViewer's per-surface ownership or admission journal. |
+| Containers alone (Docker) | Process and filesystem boundaries, depending on configuration | Container isolation alone does not establish the frame stream, human takeover or admission journal that MetaViewer adds. |
+| One VM per task | Guest boundary and, with supporting tooling, snapshots | A snapshot alone does not identify the frame on which an action was admitted. MetaViewer's VM and MicroVM integrations require the documented ARM64 setup. |
+| Remote desktop (VNC, RDP) | Remote viewing and input, with access controls depending on server configuration | Remote access controls do not by themselves establish MetaViewer's owner, frame-binding and journal contracts; integrations may add their own policies. |
+
+[CITED: `core/src/admission/mod.rs`, `core/src/journal/mod.rs`, `daemon-adapter/internal/capsule/manager.go`]
 
 What MetaViewer loses in exchange: setup cost (Docker, images, RAM floor,
 KVM for guests), Linux only, and Host program and Desktop window do not give
@@ -278,9 +280,8 @@ action happens; what happens if the UI crashes.
 | Execution | Go daemon adapter (`daemon-adapter/`) | Start, stop and drive capsules after admission | Decide whether an agent action is allowed |
 | Authority | Rust core (`core/`) | Admit or refuse; own ownership, budgets, journal order | Draw pixels or run programs |
 
-Why: a bug or compromise in one part cannot grant itself the powers of
-another. The UI cannot fake an agent action, the adapter cannot admit one,
-and the core never touches pixels it has not verified. Details:
+The core enforces role checks for registered messages. These processes share the host-user trust boundary; this is not containment against a compromised component.
+[CITED: `core/src/transport/mod.rs:157`, `core/src/serve/mod.rs:2670`, `ui/electron/hostBindings.js:174`] Details:
 [ARCHITECTURE.md#process-and-transport-model](ARCHITECTURE.md#process-and-transport-model)
 and [UI_ARCHITECTURE.md](UI_ARCHITECTURE.md).
 

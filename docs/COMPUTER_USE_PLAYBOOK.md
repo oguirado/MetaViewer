@@ -68,7 +68,7 @@ Follow [INSTALL.md](INSTALL.md#2-installing-from-the-release-package-tarball) or
 compiled dependencies. Source-development requirements are different; this
 playbook does not fetch private components. The examples use Python's standard
 library, tkinter for their windows, and the named external commands `systemd-run`,
-`xwininfo`, `xdotool`, `wmctrl` and `ffmpeg`. A model CLI is optional for manual play.
+`xwininfo`, `xdotool`, `wmctrl`, `ffmpeg` and `ffprobe`. A model CLI is optional for manual play.
 
 Run the commands below from the repository root. Set `APP` to the installed
 executable and `DISPLAY` to the authorized X11 display. Set `EX` to the absolute

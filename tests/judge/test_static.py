@@ -67,7 +67,10 @@ class TestStatic(unittest.TestCase):
 
     def test_changelog_mentions_the_judge_scripts_without_naming_tools_as_authors(self):
         text = (REPO / "CHANGELOG.md").read_text()
-        unreleased = text.split("## [Unreleased]", 1)[1].split("\n## ", 1)[0]
+        version = (REPO / "VERSION").read_text().strip()
+        heading = re.search(r"^## (?:\[" + re.escape(version) + r"\]|" + re.escape(version) + r")(?=\s|$).*$", text, re.M)
+        self.assertIsNotNone(heading, "missing changelog section for VERSION")
+        unreleased = text[heading.end():].split("\n## ", 1)[0]
         self.assertRegex(unreleased, r"(?i)judge doctor, install, run and stop scripts")
         for word in ("co-authored-by", "generated with"):
             self.assertNotIn(word, unreleased.lower())

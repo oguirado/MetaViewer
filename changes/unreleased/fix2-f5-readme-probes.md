@@ -1,0 +1,1 @@
+- Restore the post-install doctor check, literal capsule kind identifiers and registered proposal CLI example in README.

@@ -1,0 +1,4 @@
+- Preserve literal error-code identity and token boundaries when routing diagnostics.
+- Require local discriminating evidence before returning capability matches, and include tests in explanatory retrieval.
+- Record separate development and unseen routing evaluations with dataset and router digests.
+- Document the question-to-command ladder and the limits of lexical routing.

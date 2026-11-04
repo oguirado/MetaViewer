@@ -149,7 +149,7 @@ The judge kit uses the release assets in `assets/` (verified against
 | `metaviewer-linux-<x64\|arm64>.tar.gz` | T1 & T2 | Packaged `MetaViewer-linux-<arch>/` bundle and `MetaViewer-linux-<arch>.sha256` [CITED: `docs/INSTALL.md`] |
 | `node-linux-<x64\|arm64>.tar.xz` | T1 & T2 | Node.js `>= 24` runtime (`*/bin/node` plus npm when included), extracted only when host `node` is missing or `< 24` |
 | `opensuperficies-linux-<x64\|arm64>.tar.gz` | T2 | `opensuperficies/bin/srf*` binaries and `opensuperficies/firewall/` |
-| `images-linux-<x64\|arm64>.tar` | T2 | `docker save` archive containing `opensuperficies-identity-browser-<arch>:0.2.0` and `:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0`, `opensuperficies-program-gtk-<arch>:0.1.0`, and `opensuperficies-desktop-<arch>:1.1.0` [CITED: maintainer evaluation; raw receipt absent] |
+| `images-linux-<x64\|arm64>.tar` | T2 | `docker save` archive whose default tags are `opensuperficies-identity-browser-<arch>:0.1.1`, `opensuperficies-program-host-<arch>:0.1.0` and `opensuperficies-desktop-<arch>:1.1.0`. These defaults do not establish the presence of Open browser `:0.2.0` or additional program images; verify the supplied archive before relying on those tags [CITED: `tools/build_release_assets.py` (line 440)] |
 | `vision-engine.tar.gz` | T2 | `vision-engine/` at the commit pinned in `deps.lock` |
 | `wender-agent.tar.gz` | T2 | `wender-agent/` at the commit pinned in `deps.lock` |
 

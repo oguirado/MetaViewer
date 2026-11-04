@@ -1,0 +1,3 @@
+- Align the source reference version with VERSION and correct judge entry links, installation citations, capsule trust boundaries and release asset expectations.
+- Preserve condition/remedy pairs in the generated error reference and clarify replay path and profile requirements.
+- Select the release changelog section matching VERSION in the judge static check without changing its content assertions.

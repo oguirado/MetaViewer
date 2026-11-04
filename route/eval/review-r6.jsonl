@@ -1,0 +1,30 @@
+{"id": "R6-I1", "q": "How do I select an app-only install versus an install with capsules?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I2", "q": "How do I point the installer at an existing release asset cache?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I3", "q": "Where does the installer keep its state and can that directory contain whitespace?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I4", "q": "How do I check host readiness before the runtime is installed?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-I5", "q": "Why can browser capsules work while Host program is disabled?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S1", "q": "Why does JUDGE_ROOT refuse to run Electron as root?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S2", "q": "What causes JUDGE_XDG_RUNTIME and how do I fix it on WSL?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S3", "q": "What causes JUDGE_IMAGE and how do I load the missing capsule image?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S4", "q": "What causes JUDGE_SHM when shared memory is not tmpfs?", "expect": ["scripts/judge/preflight.sh"], "abstain": false}
+{"id": "R6-S5", "q": "Why does JUDGE_ASSET say an archive does not match SHA256SUMS?", "expect": ["scripts/judge/metaviewer-judge.sh"], "abstain": false}
+{"id": "R6-A1", "q": "Can a model click when it reports low confidence or need_reasoning?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A2", "q": "What happens if the observed pixels change while a program action is being planned?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A3", "q": "Does a verified typing receipt prove that the requested text appeared on screen?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A4", "q": "How is the Enter key translated for native program input?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-A5", "q": "What happens when model planning exceeds its time budget before dispatch?", "expect": ["tools/mw_run_program.py"], "abstain": false}
+{"id": "R6-C1", "q": "Why give capsules separate run and frame identities even when they share a RAM root?", "expect": ["daemon-adapter/internal/capsule/shared_roots_test.go"], "abstain": false}
+{"id": "R6-C2", "q": "How does human takeover stop an AI action already in flight, and when can the AI resume?", "expect": ["daemon-adapter/internal/capsule/manager_handoff_test.go"], "abstain": false}
+{"id": "R6-C3", "q": "How does an AI turn a browser goal into an actual target rather than trusting arbitrary planner text?", "expect": ["tools/mw_run_browser_goal.py"], "abstain": false}
+{"id": "R6-C4", "q": "What should computer use do when the browser reaches a login or CAPTCHA wall?", "expect": ["tests/test_mw_browser_goal.py"], "abstain": false}
+{"id": "R6-C5", "q": "Does a browser-goal run prove that the user's goal was completed?", "expect": ["tools/mw_run_browser_goal.py"], "abstain": false}
+{"id": "R6-P1", "q": "Why can the UI save capsule state while an agent receives a policy refusal?", "expect": ["core/tests/capsule_state.rs"], "abstain": false}
+{"id": "R6-P2", "q": "Why is opening a capsule refused while a state copy involving that profile is pending?", "expect": ["core/tests/capsule_state.rs"], "abstain": false}
+{"id": "R6-P3", "q": "What proves that replayed input cannot inherit an earlier successful input's evidence?", "expect": ["daemon-adapter/internal/capsule/receipt_evidence_test.go"], "abstain": false}
+{"id": "R6-P4", "q": "Does a Holdings input timestamp prove native focus or identify a native window?", "expect": ["daemon-adapter/internal/capsule/receipt_evidence_test.go"], "abstain": false}
+{"id": "R6-P5", "q": "Why must a capsule creation fail before launching anything if durable inventory reservation is refused?", "expect": ["daemon-adapter/internal/capsule/inventory_test.go"], "abstain": false}
+{"id": "R6-N1", "q": "How do I live migrate a running capsule to another host?", "expect": [], "abstain": true}
+{"id": "R6-N2", "q": "How do I attach USB passthrough devices to a capsule?", "expect": [], "abstain": true}
+{"id": "R6-N3", "q": "How do I enable audio recording from capsules?", "expect": [], "abstain": true}
+{"id": "R6-N4", "q": "How do I run a Windows guest capsule?", "expect": [], "abstain": true}
+{"id": "R6-N5", "q": "How do I schedule cron jobs to launch capsules?", "expect": [], "abstain": true}

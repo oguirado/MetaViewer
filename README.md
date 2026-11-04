@@ -52,7 +52,8 @@ Answers: where do I start; what is MetaViewer; how do I read this repository; wh
 
 **Action rule.** Install with the judge kit and wait for `JUDGE_INSTALL_OK`. To find code, ask the router (`route/route_query.py`) and treat each answer as coordinates; open the cited span and read it before you state a cause. Never open a document whole: follow the anchors below. If a fact is not in the code or a cited receipt, say `ABSENT — do not invent`.
 
-### Quick start
+<a id="quick-start"></a>
+## Quickstart
 
 Answers: how do I install MetaViewer; what commands do I run; how do I know it worked.
 
@@ -66,11 +67,12 @@ SHA256SUMS_DIGEST='<paste the SHA256SUMS digest from the v0.2.6 release notes>'
 python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
 bash scripts/judge/metaviewer-judge.sh doctor --before-install --capsules   # JUDGE_DOCTOR_OK
 bash scripts/judge/metaviewer-judge.sh install --capsules                   # JUDGE_INSTALL_OK
+bash scripts/judge/metaviewer-judge.sh doctor --capsules                    # JUDGE_DOCTOR_OK
 bash scripts/judge/metaviewer-judge.sh run
 bash scripts/judge/metaviewer-judge.sh stop                                 # JUDGE_STOP_CLEAN
 ```
 
-Drop `--capsules` everywhere for tier T1 (no Docker). Keep it the same across `fetch`, `doctor` and `install`. The subcommands are exactly `doctor|install|run|stop` with flags `--before-install --capsules --yes --no-firewall` [CITED: `scripts/judge/metaviewer-judge.sh:55`]. Every failure prints `CODE: problem -- fix: remedy` and exits `2` [CITED: `scripts/judge/metaviewer-judge.sh:48`]. Full per-platform steps with expected output: [docs/INSTALL.md](docs/INSTALL.md) and [docs/JUDGES.md](docs/JUDGES.md).
+Drop `--capsules` everywhere for tier T1 (no Docker). Keep it the same across `fetch`, `doctor` and `install`. The subcommands are exactly `doctor|install|run|stop` with flags `--before-install --capsules --yes --no-firewall` [CITED: `scripts/judge/metaviewer-judge.sh:55`]. Operational failures use `fail()`, print `CODE: problem -- fix: remedy` and exit `2`; usage errors exit `64` [CITED: `scripts/judge/metaviewer-judge.sh:48`, `scripts/judge/metaviewer-judge.sh:55`]. Full per-platform steps with expected output: [docs/INSTALL.md](docs/INSTALL.md) and [docs/JUDGES.md](docs/JUDGES.md). Continue with the [Judge tour](docs/JUDGE_TOUR.md); use [Judge troubleshooting](docs/JUDGE_TROUBLESHOOTING.md) for refusals.
 
 ### Which question goes to which tool
 
@@ -106,7 +108,7 @@ Answers: what do I need before installing; what must I understand before install
 | `linux-arm64` with KVM (ARM64 tier only) | VM and MicroVM need hardware virtualisation | [docs/ARM64_CAPSULE_SETUP.md](docs/ARM64_CAPSULE_SETUP.md) |
 | Python 3 | `fetch_assets.py`, router, checks | `scripts/judge/fetch_assets.py` |
 | The idea of a frame `generation` | Every agent action names the frame it saw | [§2](#2-definitions-and-gates) |
-| The difference between capsule and Host program | Only capsules are isolated | [§5](#5-coverage-and-domain-contracts) |
+| The boundary of each capsule kind | Browser and Program use containers; Host program and Desktop window are not isolated | [§5](#5-coverage-and-domain-contracts) |
 
 ### Reading tracks
 
@@ -159,7 +161,7 @@ Answers: what is a capsule; what is a surface; what is a generation; what checks
 
 | Term | Definition |
 |---|---|
-| **Capsule** | One browser or program running in its own container, started through the private `OpenSuperficies` runtime by the Go adapter [CITED: `daemon-adapter/internal/capsule/manager.go`] |
+| **Capsule** | A live, addressable surface with an owner, frame stream and journal entries. Browser and Program use containers; ARM64 VM and MicroVM use guests; Host program and Desktop window run on the host and are not isolated [CITED: `docs/JUDGES.md`, `daemon-adapter/internal/capsule/manager.go`] |
 | **Host program** | A program on your own computer shown on the wall through Xpra. **Not isolated** and labelled so in the UI [CITED: `ui/src/catalog/CatalogLauncher.vue:319`, `ui/src/surfaces/RoleSurface.vue:532`] |
 | **Desktop window** | An existing X11 window attached to the wall. **Not isolated** [CITED: `ui/src/surfaces/RoleSurface.vue:533`] |
 | **Surface** | Anything on the wall that has frames and an owner |
@@ -271,8 +273,8 @@ Answers: is X available on x64; is X available on ARM64; is X isolated.
 |---|---|---|---|---|
 | Browser capsule (`identity-browser`) | Yes, container | T2 | T2, from source | T2 with rootful Docker inside WSL2 |
 | Program capsule (`program`) | Yes, container | T2 | T2, from source | T2 |
-| Host program | **No** | Yes | Yes | Needs an X11 server |
-| Desktop window | **No** | Yes | Yes | Needs an X11 server |
+| Host program (`host-program`) | **No** | Yes | Yes | Needs an X11 server |
+| Desktop window (`desktop-window`) | **No** | Yes | Yes | Needs an X11 server |
 | Graphical VM (fixed 1280×900) | Yes, VM | **No** | Developer setup [CITED: `tools/arm64_capsule_session.py:544`] | **No** |
 | MicroVM with guest commands and Rewind | Yes, MicroVM | **No** | Developer setup [CITED: `docs/ARM64_MICROVM_REWIND.md`] | **No** |
 
@@ -310,6 +312,23 @@ Answers: what steps should an AI follow to fix a bug here.
 3. Open only the cited span. Check it is FRESH; if STALE, re-find the symbol with `find`.
 4. Explain the cause from the code, with `path:line`. If the code does not show it, say `ABSENT — do not invent`.
 5. Cross-check against [docs/ERRORS.md](docs/ERRORS.md) and the known issues in [docs/DEBUG.md](docs/DEBUG.md).
+
+### Send a reviewed proposal from the CLI
+
+Use the running app's attachment to obtain the registered session, agent, core
+and socket values. On an authorized live capsule, replace `FILE` with the path
+to your reviewed action-proposal JSON. A proposal may dispatch input when admitted;
+observe the result and wait for verification before continuing.
+Transport limits below are explicit bounds [TARGET]; command arguments and
+registration checks are defined in `agents/metaviewer_agents/mvctl.py` [CITED].
+
+```bash
+PYTHONPATH=agents python3 -m metaviewer_agents.mvctl propose --json-arg FILE \
+  --socket "$MV_CORE_SOCKET" --session-id "$MV_SESSION_ID" \
+  --agent-instance "$MV_AGENT_INSTANCE" --core-instance "$MV_CORE_INSTANCE" \
+  --timeout-ms 5000 --max-line-bytes 65536 --max-reply-bytes 65536
+# Inspect the returned verdict and verify the resulting capsule state.
+```
 
 ### At the controls
 

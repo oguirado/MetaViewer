@@ -102,16 +102,16 @@ The identity store must be outside both the repository and MemoryWeb home;
 overlapping paths, including symlink aliases, are refused as
 `MUT-PROFILE-IN-REPO`. Control directories must be private to the current user.
 Host identity ids follow the public tool's `ID` pattern: lowercase letters,
-digits and hyphens, with a length of 2–40 characters [CITED: `tools/mv_identity.py:44`].
+digits and hyphens, with a length of 2–40 characters [CITED: `tools/mv_identity.py` (line 44)].
 The host validates returned capsule names with `CAPSULE` and refuses mismatches
-[CITED: `tools/mv_identity.py:47`, `tools/mv_identity.py:852`].
+[CITED: `tools/mv_identity.py` (line 47), `tools/mv_identity.py` (line 852)].
 
 `create` calls the public tool's Docker provisioning helper. Before a new
 login starts, `profile_state` requires a directory with mode `0700` and owner
-uid `10001` [CITED: `tools/mv_identity.py:50`, `tools/mv_identity.py:636`].
+uid `10001` [CITED: `tools/mv_identity.py` (line 50), `tools/mv_identity.py` (line 636)].
 `PROFILE_MISSING` or `PROFILE_NOT_PROVISIONED` means those checks failed;
 check Docker access and the installed judge images, then retry identity
-creation [CITED: `tools/mv_identity.py:58`, `tools/mv_identity.py:358`, `tools/mv_identity.py:531`].
+creation [CITED: `tools/mv_identity.py` (line 58), `tools/mv_identity.py` (line 358), `tools/mv_identity.py` (line 531)].
 Keep the store and its control directories private to the operator. These
 are public host checks, not claims about private component internals.
 
@@ -131,19 +131,19 @@ view. Native teardown restores read-only mode; capsule stop/start keeps the same
 profile directory. The tool does not inspect cookies, Local Storage or any
 profile payload and does not assert that authentication succeeded.
 
-[CITED: `tools/mv_identity.py:440`] List enumerates metadata names and obtains
+[CITED: `tools/mv_identity.py` (line 440)] List enumerates metadata names and obtains
 show replies through the public host tool. Delete removes
 only the exact validated identity while holding the native per-id guard; an
 active or malformed lease refuses deletion. Deletion never releases another
 identity's lease and leaves other identities' metadata and profiles untouched.
 The public tool invokes its Docker profile-removal helper; failed removal
-retains the metadata so the operation can be retried [CITED: `tools/mv_identity.py:445`, `tools/mv_identity.py:531`].
+retains the metadata so the operation can be retried [CITED: `tools/mv_identity.py` (line 445), `tools/mv_identity.py` (line 531)].
 
 During a registered login view, the adapter refuses agent-origin input with
 `LOGIN_ACTIVE`, including while login opens or teardown is uncertain. Human
 input retains the existing `take_control` requirement. The public adapter
 checks for `views/<container>.pid` and `views/<container>.login-pending` and
-blocks input on a check error [CITED: `daemon-adapter/internal/capsule/login_lock.go:14`].
+blocks input on a check error [CITED: `daemon-adapter/internal/capsule/login_lock.go` (line 14)].
 These checks do not establish how the private runtime implements login.
 If a crash leaves `views/<container>.login-pending`, stop the native login view
 and verify that no login process is still
@@ -597,7 +597,7 @@ in plain words. After `NET_OPEN_PREREQ`, nothing is saved by default; the
 operator may explicitly choose **Confirm save for next start anyway** to save
 the record for a future start once Open is available. Network is separate from global settings.
 
-[CITED: `ui/electron/operatorBridge.js:285`] With `MV_HANDOFF_PATHS` set,
+[CITED: `ui/electron/operatorBridge.js` (line 285)] With `MV_HANDOFF_PATHS` set,
 Electron uses the supplied JSON array of absolute `.handoff.json` paths; an
 explicit empty array disables discovery. With the variable absent, the host
 also discovers handoff records in private run directories and validates them

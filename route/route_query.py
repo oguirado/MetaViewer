@@ -25,7 +25,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / 'route'
-STOP = frozenset('the a an of in on to is are was for and or with without when then that this it its by from at as be not no never only almost every about gets get gives give after first second real what how why must hold holds where which does do'.split())
+STOP = frozenset('the a an of in on to is are was for and or with without when then that this it its by from at as be not no never only almost every about gets get gives give after first second real what how why must hold holds where which does do can could should would will may did have has had been being into through before while during whether if because also than even already anything another using use point existing actual rather such there their them they you your i my happens involving earlier successful arbitrary turn receives appeared cause causes occur say'.split())
 TEST = re.compile(r'(^|/)(test|tests|testdata|__tests__|e2e|fixtures?|goldens?)(/|$)|_test\.|\.test\.|\.spec\.')
 MANIFESTS = frozenset({'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'requirements.txt', 'deps.lock'})
 CODE = frozenset({'.rs', '.go', '.c', '.h', '.py', '.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx', '.vue', '.sh', '.ps1'})
@@ -37,6 +37,9 @@ SHORTLIST_ROWS = 20
 BM25_K1, BM25_B = 1.2, 0.75
 DOC_FIELDS = {'title': 3.0, 'answers': 3.0, 'doc': 2.0, 'body': 1.0}
 LEVELS = ('extract', 'part', 'folder', 'root', 'dossier')
+LEMMAS = {'installer': 'install', 'installation': 'install', 'creation': 'create',
+          'identify': 'identity', 'identifier': 'identity',
+          'reservation': 'reserve', 'resumption': 'resume'}
 
 
 def load_docs_tool(root=ROOT):
@@ -50,6 +53,10 @@ def stem(word):
     """Conservative English inflections; shared by questions and all evidence fields."""
     if not word.isalpha():
         return word
+    if word == 'windows':
+        return word
+    # Derivational nouns used in both prose and implementation identifiers.
+    word = LEMMAS.get(word, word)
     if len(word) > 4 and word.endswith('ies'):
         word = word[:-3] + 'y'
     elif len(word) > 4 and word.endswith('s') and not word.endswith(('ss', 'us', 'is')):
@@ -69,22 +76,35 @@ def stem(word):
 
 
 def words(value):
+    opaque = re.findall(r'\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b', value)
+    value = re.sub(r'\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b', ' ', value)
     value = re.sub(r'([a-z0-9])([A-Z][a-z])', r'\1 \2', value)
-    return [stem(word.lower()) for word in re.findall(r'[A-Za-z0-9]+', value)]
+    tokens = re.findall(r'[A-Za-z0-9]+', value)
+    return (opaque + [word.lower() if word in ('Windows', 'Holdings') else stem(word.lower())
+                      for word in tokens]
+            + [word.lower() for word in tokens if word.lower() in LEMMAS])
 
 
 STOP = frozenset(words(' '.join(STOP)))
 
 
 def terms(query):
-    return sorted({word for word in words(query) if word not in STOP and len(word) > 1})
+    # In an instruction-shaped question the leading verb states the intent;
+    # its object supplies the subject we need evidence for.
+    query = re.sub(r'\bhow (?:do|can|should|would) (?:i|we|you)\s+(?:use|drive|configure|manage)\b',
+                   ' ', query, flags=re.IGNORECASE)
+    return sorted({stem(LEMMAS[word]) if word in LEMMAS else word
+                   for word in words(query) if word not in STOP and len(word) > 1})
 
 
 def exact_phrase(text, query):
-    phrase = [word for word in words(text) if word not in STOP]
-    question = [word for word in words(query) if word not in STOP]
-    return len(phrase) >= 2 and any(question[i:i + len(phrase)] == phrase
-                                    for i in range(len(question) - len(phrase) + 1))
+    """Verbatim, case-sensitive text bounded by identifier characters."""
+    return bool(text and re.search(r'(?<![\w])' + re.escape(text) + r'(?![\w])', query))
+
+
+def identifiers(query):
+    """Error codes are opaque identifiers, never bags of stemmed words."""
+    return re.findall(r'\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b', query)
 
 
 def digest(data):
@@ -270,7 +290,10 @@ class Map:
         frequency = {word: sum(1 for row in rows if word in row[2]) for word in wanted}
         weight = {word: math.log(1 + (len(rows) + 1) / (1 + frequency[word])) for word in wanted}
         scored = []
+        codes = identifiers(query)
         for name, text, found, line in rows:
+            if codes and not all(exact_phrase(code, text) for code in codes):
+                continue
             score = sum(weight[word] for word in wanted if word in found)
             if score > 0:
                 exact = exact_phrase(text, query)
@@ -452,7 +475,7 @@ class Map:
                         for line in range(0, len(lines), 16)]
             records.append({'type': 'code', 'path': path, 'test': bool(TEST.search(path)),
                             'bag': Counter(words(text)), 'title': Counter(words(path + ' ' + metadata)),
-                            'passages': passages})
+                            'passages': passages, 'text': text})
         for node in self.docs_index:
             section, state = self.doc_section(node)
             if state != 'FRESH':
@@ -463,6 +486,8 @@ class Map:
             records.append({'type': 'doc', 'path': node['path'], 'node': node,
                             'bag': Counter(words(text)),
                             'title': Counter(words(node['title'] + ' ' + node['answers'])),
+                            'passages': [(i + 1, Counter(words('\n'.join(text.splitlines()[i:i + 32]))))
+                                         for i in range(0, len(text.splitlines()), 16)],
                             'text': text})
         for node in self.nodes:
             if any(cite[0].startswith(('route/', 'tools/route_')) for cite in node['s']):
@@ -471,7 +496,8 @@ class Map:
             if row['state'] not in ('FRESH', 'SHIFT'):
                 continue
             records.append({'type': 'finding', 'node': node, 'row': row,
-                            'bag': Counter(words(node['t'])), 'title': Counter()})
+                            'bag': Counter(words(node['t'])), 'title': Counter(), 'text': node['t'],
+                            'passages': [(1, Counter(words(node['t'])))]})
         return records
 
     @cached_property
@@ -488,28 +514,45 @@ class Map:
         Missing rare vocabulary outweighs generic matches. In a long question,
         an incidental unfamiliar word need not suppress strong local evidence.
         """
-        wanted = terms(query)
+        wanted = [word for word in terms(query) if word not in set(words('test prove proof'))]
         if not wanted:
             return []
         total = len(self.evidence)
         weights = {word: math.log(1 + (total + .5) / (self.vocabulary[word] + .5))
                    for word in wanted}
-        # Short feature queries must connect their rarest terms. Longer prose
-        # can contain incidental verbs; require a majority of its IDF mass.
-        if len(wanted) <= 5:
-            rare = sorted(wanted, key=lambda word: (self.vocabulary[word], word))[:2]
-            if any(not self.vocabulary[word] for word in rare):
-                return rare
-            if len(rare) == 2 and not any(all(word in record['bag'] or word in record['title']
-                                            for word in rare) for record in self.evidence):
-                return rare
-            return []
+        ordered = words(query)
+        rare = sorted(wanted, key=lambda word: (self.vocabulary[word], ordered.index(word)))[:2]
+        short = len(wanted) <= 5
+        if short and any(not self.vocabulary[word] for word in rare):
+            return rare
+        codes = identifiers(query)
+        # Preserve intervening words: "actions through MCP" is not a compound
+        # capability name, whereas adjacent modifiers must stay connected.
+        capability = bool(re.match(r'how (?:do|can|should|would) (?:i|we|you)\b', query, re.I))
+        adjacent = short and capability and len(rare) == 2 and any(
+            set(ordered[i:i + 2]) == set(rare) for i in range(len(ordered) - 1))
         required = sum(weights.values()) / 2
         for record in self.evidence:
-            covered = sum(weight for word, weight in weights.items()
-                          if word in record['bag'] or word in record['title'])
-            if covered >= required:
-                return []
+            if record.get('test') and not re.search(r'\b(test|tests|prove|proves|proof|conformance|why|what happens|how does)\b', query, re.I):
+                continue
+            if codes and not all(exact_phrase(code, record['text']) for code in codes):
+                continue
+            for line, bag in record['passages']:
+                # Neither a distant paragraph nor a filename can fill a gap.
+                if short and not all(word in bag for word in rare):
+                    continue
+                if codes and not all(code in bag for code in codes):
+                    continue
+                if not short and len(set(wanted) & set(bag)) < 3:
+                    continue
+                if adjacent:
+                    passage = '\n'.join(record['text'].splitlines()[line - 1:line + 31])
+                    sequence = [word for word in words(passage) if word not in STOP]
+                    if not any(set(rare) <= set(sequence[i:i + 4]) for i in range(len(sequence))):
+                        continue
+                covered = sum(weight for word, weight in weights.items() if word in bag)
+                if covered >= required:
+                    return []
         return wanted
 
     def any(self, query, k, level=None):
@@ -520,6 +563,7 @@ class Map:
         total = len(self.evidence)
         weights = {word: math.log(1 + (total + .5) / (self.vocabulary[word] + .5)) for word in wanted}
         proof = bool(set(wanted) & set(words('test prove proof conformance')))
+        explanation = bool(re.match(r'(why|what|how|which|does|can|may|is|are|when)\b', query, re.I))
 
         def score(bag, title):
             length = sum(bag.values())
@@ -543,7 +587,7 @@ class Map:
         for record in self.evidence:
             kind = record['type']
             if kind == 'code':
-                if level == 'dossier' or (record['test'] and not proof):
+                if level == 'dossier' or (record['test'] and not (proof or explanation)):
                     continue
                 passage = max(((score(bag, record['title']), line) for line, bag in record['passages']), default=(0, 1))
                 value, line = passage
@@ -586,8 +630,10 @@ class Map:
                         add(path, value, row, kind)
         # A literal phrase embedded in a natural-language question outranks fuzzy evidence.
         for hit in self.error(query, RANKED):
-            literal = hit['text'].lower().strip()
-            if exact_phrase(literal, query):
+            literal = hit['text'].strip()
+            coverage = sum(weights[word] for word in wanted if word in words(literal)) / sum(weights.values())
+            if ((identifiers(query) and all(exact_phrase(code, literal) for code in identifiers(query)))
+                    or (coverage >= .6 and exact_phrase(literal, query))):
                 row = {'type': 'code', 'path': hit['path'], 'line': hit['line'], 'error': hit['text']}
                 add(hit['path'], sum(weights.values()) * 4, row, 'exact')
         ordered = []

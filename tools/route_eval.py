@@ -6,6 +6,7 @@ prefixes. Expected targets are written before the run. Standard library only.
 """
 import argparse
 import importlib.util
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -62,6 +63,8 @@ def main(argv=None):
     parser.add_argument('--min-abstain', type=int, default=0)
     parser.add_argument('--output', type=Path)
     args = parser.parse_args(argv)
+    inputs = [args.dataset, ROOT / 'route/route_query.py']
+    hashes = [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]
     spec = importlib.util.spec_from_file_location('route_query', ROOT / 'route' / 'route_query.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -70,6 +73,13 @@ def main(argv=None):
     if not questions or len({item.get('id', item['q']) for item in questions}) != len(questions):
         parser.error('dataset must be nonempty with unique questions or ids')
     report = evaluate(module, route, questions, args.commands)
+    if hashes != [hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs]:
+        raise SystemExit('E_EVAL_CHANGED: dataset or router changed during evaluation')
+    report['provenance'] = {
+        'dataset_sha256': hashes[0],
+        'router_sha256': hashes[1],
+        'measurement': 'MEASURED',
+    }
     for row in report['results']:
         print(json.dumps(row))
     print(json.dumps({'totals': report['totals']}))

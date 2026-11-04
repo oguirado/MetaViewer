@@ -15,9 +15,10 @@ Answers: download T1 assets, fetch command, which release
 
 Use the [v0.2.6 source tag and release assets](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6).
 Copy the `SHA256SUMS` digest from that release's notes into `SHA256SUMS_DIGEST`
-before running fetch. The release has no ARM64 compiled assets. T1 uses only
-`SHA256SUMS`, `metaviewer-linux-x64.tar.gz` and, when host Node is older than 24,
-`node-linux-x64.tar.xz` [CITED: scripts/judge/metaviewer-judge.sh:353].
+before running fetch. The release has no ARM64 compiled assets. For T1,
+`SHA256SUMS`, `metaviewer-linux-x64.tar.gz` and `node-linux-x64.tar.xz` are always
+fetched. The Node archive is installed only when host Node is missing or older
+than `24` [CITED: scripts/judge/fetch_assets.py:26, scripts/judge/metaviewer-judge.sh:353].
 Run from the root of a clone of the same tag
 (`git clone --branch v0.2.6 --depth 1 https://github.com/oguirado/MetaViewer.git`):
 

@@ -225,6 +225,60 @@ class QueryTests(TreeCase):
         self.assertEqual(route.error('why install wall failed', 2)[0]['text'], 'install wall failed')
         self.assertEqual(route.any('install wall failed', 2)[0]['error'], 'install wall failed')
 
+    def test_exact_matching_preserves_identifier_boundaries_and_inflections(self):
+        self.assertTrue(QUERY.exact_phrase('JUDGE_ROOT', 'Why JUDGE_ROOT?'))
+        for query in ('JUDGE_ROOTED', 'NOT_JUDGE_ROOT', 'judge_root', 'JUDGE_ROOT_EXTRA'):
+            self.assertFalse(QUERY.exact_phrase('JUDGE_ROOT', query))
+        self.assertFalse(QUERY.exact_phrase('root refused', 'roots refusing'))
+        self.assertFalse(QUERY.exact_phrase('sender identity changed', 'sender identity has changed'))
+        self.assertEqual(QUERY.words('JUDGE_ROOT JUDGE_ROOTED'), ['JUDGE_ROOT', 'JUDGE_ROOTED'])
+        self.assertIn('JUDGE_ROOT', QUERY.terms('Why does JUDGE_ROOT occur?'))
+
+    def test_instruction_verb_is_not_a_required_capability(self):
+        (self.root / 'core' / 'admit.py').write_text('mvctl = "command line"\n')
+        self.assertTrue(self.route().any('How do I drive mvctl?', 5))
+        self.assertEqual(self.route().any('How do I activate nebulacluster?', 5), [])
+
+    def test_platform_name_does_not_collapse_to_window(self):
+        (self.root / 'core' / 'admit.py').write_text('# a window into guest capsule state\n')
+        self.assertEqual(self.route().any('How do I run a Windows guest capsule?', 5), [])
+
+    def test_compound_capability_cannot_join_distant_terms(self):
+        (self.root / 'core' / 'admit.py').write_text(
+            '# live capsule frames on the host\n'
+            '# migrate stored layout configuration into a new version\n')
+        self.assertEqual(self.route().any('How do I live migrate a running capsule to another host?', 5), [])
+
+    def test_error_identifier_does_not_return_partial_or_stemmed_codes(self):
+        (self.root / 'core' / 'admit.py').write_text(
+            'raise Error("ROOT_REFUSED")\nraise Error("JUDGE_ROOTED")\n')
+        self.assertEqual(self.route().error('Why JUDGE_ROOT?', 5), [])
+        with (self.root / 'core' / 'admit.py').open('a') as stream:
+            stream.write('raise Error("JUDGE_ROOT")\n')
+        self.assertEqual([row['text'] for row in self.route().error('Why JUDGE_ROOT?', 5)],
+                         ['JUDGE_ROOT'])
+
+    def test_generic_label_cannot_claim_exact_question_coverage(self):
+        (self.root / 'core' / 'admit.py').write_text('label = "Host program"\n')
+        (self.root / 'core' / 'preflight.py').write_text(
+            '# Browser capsules work while Host program is disabled when optional dependencies are missing.\n')
+        rows = self.route().any('Why can browser capsules work while Host program is disabled?', 5)
+        self.assertEqual(rows[0]['path'], 'core/preflight.py')
+        self.assertFalse(any('exact' in row['via'] for row in rows))
+
+    def test_feature_evidence_must_share_a_passage(self):
+        (self.root / 'core' / 'admit.py').write_text(
+            'windows = "platform"\n' + '# unrelated\n' * 70 + 'guest = "capsule"\n')
+        self.assertEqual(self.route().any('Windows guest capsule', 5), [])
+        (self.root / 'core' / 'admit.py').write_text(
+            '# Windows guest capsule\n')
+        self.assertTrue(self.route().any('Windows guest capsule', 5))
+
+    def test_long_feature_question_cannot_use_whole_file_coverage(self):
+        (self.root / 'core' / 'admit.py').write_text(
+            '# Live migrate\n' + '# unrelated\n' * 70 + '# running capsule host\n')
+        self.assertEqual(self.route().any('How do I live migrate a running capsule to another host?', 5), [])
+
     def test_show_anchor_returns_only_section_in_bytes(self):
         route = self.route()
         row = route.show('docs/guide.md#install-the-wall')
@@ -273,6 +327,33 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(EVAL.rank_of([{'path': 'ui/package.json.bak'}], ['ui/package.json']))
         self.assertEqual(EVAL.rank_of([{'ref': 'docs/guide.md#install'}], ['docs/guide.md']), 1)
         self.assertEqual(EVAL.rank_of([{'code': ['core/a.rs@10-20']}], ['core/']), 1)
+
+    def test_changed_router_cannot_publish_an_evaluation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'route').mkdir()
+            source = root / 'route' / 'route_query.py'
+            source.write_text('''from pathlib import Path
+import json
+SHORTLIST_BYTES = 2000
+class Map:
+    def __init__(self):
+        with Path(__file__).open('a') as stream:
+            stream.write('\\n# changed during evaluation\\n')
+    def any(self, query, k): return []
+    def unsupported(self, query): return []
+def shortlist(rows, reason): return json.dumps({'rows': rows})
+''')
+            dataset, output = root / 'questions.jsonl', root / 'result.json'
+            dataset.write_text('{"id":"N","q":"missing feature","expect":[],"abstain":true}\n')
+            previous = EVAL.ROOT
+            try:
+                EVAL.ROOT = root
+                with self.assertRaisesRegex(SystemExit, 'E_EVAL_CHANGED'):
+                    EVAL.main(['--dataset', str(dataset), '--commands', 'any', '--output', str(output)])
+            finally:
+                EVAL.ROOT = previous
+            self.assertFalse(output.exists())
 
 
 class RepositoryTests(unittest.TestCase):

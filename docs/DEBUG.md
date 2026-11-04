@@ -133,12 +133,13 @@ Add `--verify-only` to check the chain without printing the state hash.
 | rc 3 | Duplicate record | `core/src/bin/mv-replay.rs:45` |
 | rc 4 | Witness mismatch | `core/src/bin/mv-replay.rs:46` |
 
-Pass absolute real paths. Relative, symlinked or copied session paths give `Invalid`
-[MEASURED]. What the code shows: any path component that is a symlink or `..` is refused
-(`core/src/journal/mod.rs:1274`). The state, sessions, session, `events` and `artifacts`
-directories must each be owned by you with mode 0700 (`core/src/journal/mod.rs:1309`,
-`core/src/journal/mod.rs:1317`). A plain copy usually loses mode 0700, so this is the likely cause
-for copies (*unconfirmed*). Why relative paths fail is *unconfirmed*; use `realpath`.
+Pass absolute real paths. Symlinks and parent traversal are refused
+[CITED: `core/src/journal/mod.rs`]. The archive must preserve the required hierarchy:
+state, `sessions`, the session directory, `events` and `artifacts` must be owned by
+the current user with mode `0700` [CITED: `core/src/journal/mod.rs:1309`,
+`core/src/journal/mod.rs:1317`]. A preserved copy can pass these checks; copying is
+not itself a refusal condition. Keep journal and witness contents unchanged and
+verify the copy's paths, ownership and private modes before replay.
 
 Live replay of the release candidate is not established by this documentation review.
 The replay result, not the session marker alone, verifies the journal.
@@ -213,7 +214,7 @@ Answers: known bugs; open issues; what is broken right now
 | Human mode on a browser took about 20 s, and one site was unreachable | Not diagnosed | Wait; check the capsule network setting | [MEASURED]; cause ABSENT — do not invent |
 | Switching a Host program between human and agent restarts it | Expected behaviour | Save work in the program before switching | [MEASURED] |
 | A full journal ends the session | Expected behaviour | Fresh session per long run | [MEASURED], `core/src/serve/journal_end.rs:125` |
-| mv-replay refuses relative, symlinked or copied session paths | Expected behaviour, see [mv-replay](#replay-a-journal-with-mv-replay) | Use absolute real paths on the original directory | [MEASURED] |
+| mv-replay refuses an invalid archive path or private hierarchy | Expected validation, see [mv-replay](#replay-a-journal-with-mv-replay) | Use absolute paths without symlinks or traversal; preserve the hierarchy, ownership and private modes when copying | [CITED: `core/src/journal/mod.rs`] |
 
 
 ## Package inventory hold

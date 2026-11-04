@@ -1195,7 +1195,7 @@ Answers: what does Invalid mean; why do I get Invalid; how to fix Invalid
 - Meaning: Replay arguments or archive path invariants are invalid.
 - Cause and evidence: Missing/duplicate options, symlinks, parent traversal, ownership or directory mode mismatch; core/src/bin/mv-replay.rs:10 and core/src/journal/mod.rs:1280.
 - What the user sees: mv-replay writes Invalid to stderr and exits unsuccessfully [CITED: core/src/bin/mv-replay.rs].
-- Fix: Use the documented arguments and original private session hierarchy with real paths; preserve its evidence.
+- Fix: Use the documented arguments and a preserved private session hierarchy with absolute paths, valid ownership and private modes; copies must preserve the same requirements.
 - Verification: Replay validates the original archive and exits successfully.
 
 ### Review Io
@@ -1233,200 +1233,330 @@ Answers: what does JOURNAL_STOP_FAILED mean; why do I get JOURNAL_STOP_FAILED; h
 Answers: what does JUDGE_ARCH mean; why do I get JUDGE_ARCH; how to fix JUDGE_ARCH
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: unsupported machine '${MACHINE:-unknown}' [CITED: scripts/judge/preflight.sh:176]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: use Linux x86_64 or aarch64 (64-bit Linux x64/arm64 only) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| unsupported machine '&lt;MACHINE&gt;' | use Linux x86_64 or aarch64 (64-bit Linux x64/arm64 only) | [CITED: `scripts/judge/preflight.sh:176`] |
 
 ### Review JUDGE_ASSET
 
 Answers: what does JUDGE_ASSET mean; why do I get JUDGE_ASSET; how to fix JUDGE_ASSET
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: $name does not match the kit SHA256SUMS (expected '${expected:-no entry}', got '${actual:-unreadable}'); cannot create $ASSET_DIR; SHA256SUMS is missing from $ASSET_DIR; download declined, assets are missing:$missing; download of $n failed, stalled or was interrupted; $asset has unsafe or unexpected members; cannot unpack node from $asset; $asset has unsafe or unexpected members (absolute path, .., link or foreign directory); cannot unpack $asset; $asset holds no executable MetaViewer-linux-$ARCHN/metaviewer; cannot preserve installed app; cannot restore installed app from app.old; cannot publish extracted app; previous install preserved; cannot write the receipt $RECEIPT; cannot create $JUDGE_HOME [CITED: scripts/judge/metaviewer-judge.sh:268, scripts/judge/metaviewer-judge.sh:276, scripts/judge/metaviewer-judge.sh:277, scripts/judge/metaviewer-judge.sh:287, scripts/judge/metaviewer-judge.sh:309, scripts/judge/metaviewer-judge.sh:358]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: download $name again from $RELEASE_BASE and re-run install; choose a writable MV_JUDGE_ASSET_DIR; python3 \"$SELF_DIR/fetch_assets.py\" --source <complete-release-directory> --dest \"$ASSET_DIR\" $fetch_flags; place those files in $ASSET_DIR and re-run install; check the network and the release URL $RELEASE_BASE/$n, then re-run install; download $asset again from $RELEASE_BASE; download the tarball for $ARCHN; make $JUDGE_HOME writable and retry install; restore $JUDGE_HOME/app.old to $APP_ROOT before retrying; make $JUDGE_HOME writable; set MV_JUDGE_HOME to a writable directory Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| &lt;name&gt; does not match the kit SHA256SUMS (expected '&lt;expected&gt;', got '&lt;actual&gt;') | download &lt;name&gt; again from &lt;RELEASE_BASE&gt; and re-run install | [CITED: `scripts/judge/metaviewer-judge.sh:268`] |
+| cannot create &lt;ASSET_DIR&gt; | choose a writable MV_JUDGE_ASSET_DIR | [CITED: `scripts/judge/metaviewer-judge.sh:276`] |
+| SHA256SUMS is missing from &lt;ASSET_DIR&gt; | python3 "&lt;SELF_DIR&gt;/fetch_assets.py" --source &lt;complete-release-directory&gt; --dest "&lt;ASSET_DIR&gt;" &lt;fetch_flags&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:277`] |
+| download declined, assets are missing:&lt;missing&gt; | place those files in &lt;ASSET_DIR&gt; and re-run install | [CITED: `scripts/judge/metaviewer-judge.sh:287`] |
+| download of &lt;n&gt; failed, stalled or was interrupted | check the network and the release URL &lt;RELEASE_BASE&gt;/&lt;n&gt;, then re-run install | [CITED: `scripts/judge/metaviewer-judge.sh:309`] |
+| &lt;asset&gt; has unsafe or unexpected members | download &lt;asset&gt; again from &lt;RELEASE_BASE&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:358`] |
+| cannot unpack node from &lt;asset&gt; | download &lt;asset&gt; again from &lt;RELEASE_BASE&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:362`] |
+| &lt;asset&gt; has unsafe or unexpected members (absolute path, .., link or foreign directory) | download &lt;asset&gt; again from &lt;RELEASE_BASE&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:373`] |
+| cannot unpack &lt;asset&gt; | download &lt;asset&gt; again from &lt;RELEASE_BASE&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:376`] |
+| &lt;asset&gt; holds no executable MetaViewer-linux-&lt;ARCHN&gt;/metaviewer | download the tarball for &lt;ARCHN&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:377`] |
+| cannot preserve installed app | make &lt;JUDGE_HOME&gt; writable and retry install | [CITED: `scripts/judge/metaviewer-judge.sh:380`] |
+| cannot restore installed app from app.old | restore &lt;JUDGE_HOME&gt;/app.old to &lt;APP_ROOT&gt; before retrying | [CITED: `scripts/judge/metaviewer-judge.sh:384`] |
+| cannot publish extracted app; previous install preserved | make &lt;JUDGE_HOME&gt; writable and retry install | [CITED: `scripts/judge/metaviewer-judge.sh:386`] |
+| &lt;asset&gt; has unsafe or unexpected members | download &lt;asset&gt; again from &lt;RELEASE_BASE&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:581`] |
+| cannot unpack &lt;asset&gt; | download &lt;asset&gt; again from &lt;RELEASE_BASE&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:584`] |
+| cannot write the receipt &lt;RECEIPT&gt; | make &lt;JUDGE_HOME&gt; writable | [CITED: `scripts/judge/metaviewer-judge.sh:744`] |
+| cannot create &lt;JUDGE_HOME&gt; | set MV_JUDGE_HOME to a writable directory | [CITED: `scripts/judge/metaviewer-judge.sh:757`] |
 
 ### Review JUDGE_DISPLAY
 
 Answers: what does JUDGE_DISPLAY mean; why do I get JUDGE_DISPLAY; how to fix JUDGE_DISPLAY
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: Wayland-only session: DISPLAY is empty so there is no reachable XWayland; DISPLAY is not set; xdpyinfo is missing; display reachability is unverified; the X server at DISPLAY=$DISPLAY is not reachable [CITED: scripts/judge/preflight.sh:249, scripts/judge/preflight.sh:251, scripts/judge/preflight.sh:254, scripts/judge/preflight.sh:256]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: enable XWayland (WSLg provides it) and use a reachable desktop DISPLAY for the visible app; xvfb-run is only for headless install/smoke and supplies no visible desktop; xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY); sudo apt-get install -y x11-utils, then re-run doctor Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| Wayland-only session: DISPLAY is empty so there is no reachable XWayland | enable XWayland (WSLg provides it) and use a reachable desktop DISPLAY for the visible app; xvfb-run is only for headless install/smoke and supplies no visible desktop | [CITED: `scripts/judge/preflight.sh:249`] |
+| DISPLAY is not set | xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY) | [CITED: `scripts/judge/preflight.sh:251`] |
+| xdpyinfo is missing; display reachability is unverified | sudo apt-get install -y x11-utils, then re-run doctor | [CITED: `scripts/judge/preflight.sh:254`] |
+| the X server at DISPLAY=&lt;DISPLAY&gt; is not reachable | xvfb-run -a bash scripts/judge/metaviewer-judge.sh install (or use a reachable desktop DISPLAY) | [CITED: `scripts/judge/preflight.sh:256`] |
 
 ### Review JUDGE_DOCKER
 
 Answers: what does JUDGE_DOCKER mean; why do I get JUDGE_DOCKER; how to fix JUDGE_DOCKER
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: 'docker info' failed or timed out for this user; daemon availability or socket permission is unverified; the engine is rootless, which is not supported (capsule profile uid 10001); Docker context inspection failed or timed out; local endpoint is unverified [CITED: scripts/judge/preflight.sh:350, scripts/judge/preflight.sh:356, scripts/judge/preflight.sh:361, scripts/judge/preflight.sh:366]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker \$USER then log out and in again; retry docker info; without Docker, omit --capsules (docs/JUDGE_NO_DOCKER.md); install the rootful docker.io engine and stop the rootless one: systemctl --user disable --now docker; run docker context inspect; restore the local engine or run docker context use default, then retry Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| 'docker info' failed or timed out for this user; daemon availability or socket permission is unverified | check systemctl status docker; if the rootful service is stopped, sudo systemctl start docker; if socket permission is denied, sudo usermod -aG docker &lt;USER&gt; then log out and in again; retry docker info; without Docker, omit --capsules (docs/JUDGE_NO_DOCKER.md) | [CITED: `scripts/judge/preflight.sh:350`] |
+| the engine is rootless, which is not supported (capsule profile uid 10001) | install the rootful docker.io engine and stop the rootless one: systemctl --user disable --now docker | [CITED: `scripts/judge/preflight.sh:356`] |
+| Docker context inspection failed or timed out; local endpoint is unverified | run docker context inspect; restore the local engine or run docker context use default, then retry | [CITED: `scripts/judge/preflight.sh:361`] |
 
 ### Review JUDGE_DOCKER_HOST
 
 Answers: what does JUDGE_DOCKER_HOST mean; why do I get JUDGE_DOCKER_HOST; how to fix JUDGE_DOCKER_HOST
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: DOCKER_HOST or DOCKER_CONTEXT is set; the adapter does not forward it [CITED: scripts/judge/preflight.sh:340]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: unset DOCKER_HOST DOCKER_CONTEXT (rootless and remote engines are not supported) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| DOCKER_HOST or DOCKER_CONTEXT is set; the adapter does not forward it | unset DOCKER_HOST DOCKER_CONTEXT (rootless and remote engines are not supported) | [CITED: `scripts/judge/preflight.sh:340`] |
 
 ### Review JUDGE_HOME_PATH
 
 Answers: what does JUDGE_HOME_PATH mean; why do I get JUDGE_HOME_PATH; how to fix JUDGE_HOME_PATH
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: MV_JUDGE_HOME cannot fit the filesystem path limits [CITED: scripts/judge/metaviewer-judge.sh:106]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: export MV_JUDGE_HOME=\"\$HOME/mv-judge\" and retry Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| MV_JUDGE_HOME cannot fit the filesystem path limits | export MV_JUDGE_HOME="&lt;HOME&gt;/mv-judge" and retry | [CITED: `scripts/judge/metaviewer-judge.sh:106`] |
 
 ### Review JUDGE_IMAGE
 
 Answers: what does JUDGE_IMAGE mean; why do I get JUDGE_IMAGE; how to fix JUDGE_IMAGE
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: docker load of $asset failed; Open firewall is active but the kit lacks the Open browser image; image $img is not present [CITED: scripts/judge/metaviewer-judge.sh:595, scripts/judge/metaviewer-judge.sh:778, scripts/judge/preflight.sh:391]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: check 'docker info' and free disk space, then re-run install --capsules; obtain a kit containing opensuperficies-identity-browser-$ARCHN:0.2.0; bash scripts/judge/metaviewer-judge.sh install --capsules (loads the images from the kit) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| docker load of &lt;asset&gt; failed | check 'docker info' and free disk space, then re-run install --capsules | [CITED: `scripts/judge/metaviewer-judge.sh:595`] |
+| Open firewall is active but the kit lacks the Open browser image | obtain a kit containing opensuperficies-identity-browser-&lt;ARCHN&gt;:0.2.0 | [CITED: `scripts/judge/metaviewer-judge.sh:778`] |
+| image &lt;img&gt; is not present | bash scripts/judge/metaviewer-judge.sh install --capsules (loads the images from the kit) | [CITED: `scripts/judge/preflight.sh:391`] |
 
 ### Review JUDGE_NET
 
 Answers: what does JUDGE_NET mean; why do I get JUDGE_NET; how to fix JUDGE_NET
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: kit surface or proxy executable is absent; cannot provision private proxy metadata; supported proxy net up failed; host routes overlap the reserved capsule networks:${bad}; legacy network srf-idnet or the srf-egress-proxy container is not ready [CITED: scripts/judge/metaviewer-judge.sh:693, scripts/judge/metaviewer-judge.sh:704, scripts/judge/metaviewer-judge.sh:708, scripts/judge/preflight.sh:413, scripts/judge/preflight.sh:422]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: restore opensuperficies/bin from the verified kit; check ownership and permissions under $netroot; check kit binaries and $netroot metadata; an existing mismatched proxy requires explicit operator recovery; remove or renumber the conflicting route/VPN/LAN range (capsule ranges: 172.30.80.0/24 and 172.29.0.0/16 [CITED]); bash scripts/judge/metaviewer-judge.sh install --capsules (ensures the scoped capsule network) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| kit surface or proxy executable is absent | restore opensuperficies/bin from the verified kit | [CITED: `scripts/judge/metaviewer-judge.sh:693`] |
+| cannot provision private proxy metadata | check ownership and permissions under &lt;netroot&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:704`] |
+| supported proxy net up failed | check kit binaries and &lt;netroot&gt; metadata; an existing mismatched proxy requires explicit operator recovery | [CITED: `scripts/judge/metaviewer-judge.sh:708`] |
+| host routes overlap the reserved capsule networks:&lt;bad&gt; | remove or renumber the conflicting route/VPN/LAN range (capsule ranges: 172.30.80.0/24 and 172.29.0.0/16 [CITED]) | [CITED: `scripts/judge/preflight.sh:413`] |
+| legacy network srf-idnet or the srf-egress-proxy container is not ready | bash scripts/judge/metaviewer-judge.sh install --capsules (ensures the scoped capsule network) | [CITED: `scripts/judge/preflight.sh:422`] |
 
 ### Review JUDGE_NODE
 
 Answers: what does JUDGE_NODE mean; why do I get JUDGE_NODE; how to fix JUDGE_NODE
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: node is not installed; node is '${v:-unreadable}', major 24 or newer is required [CITED] [CITED: scripts/judge/metaviewer-judge.sh:366, scripts/judge/preflight.sh:183, scripts/judge/preflight.sh:191]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: bash scripts/judge/metaviewer-judge.sh install (installs Node 24 from the kit after confirmation) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| node is not installed | bash scripts/judge/metaviewer-judge.sh install (installs Node 24 from the kit after confirmation) | [CITED: `scripts/judge/preflight.sh:183`] |
+| node is '&lt;v&gt;', major 24 or newer is required [CITED] | bash scripts/judge/metaviewer-judge.sh install (installs Node 24 from the kit after confirmation) | [CITED: `scripts/judge/preflight.sh:191`] |
 
 ### Review JUDGE_NOT_INSTALLED
 
 Answers: what does JUDGE_NOT_INSTALLED mean; why do I get JUDGE_NOT_INSTALLED; how to fix JUDGE_NOT_INSTALLED
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: MetaViewer is not installed under $JUDGE_HOME [CITED: scripts/judge/metaviewer-judge.sh:803, scripts/judge/metaviewer-judge.sh:810]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: bash $0 install [--capsules] Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| MetaViewer is not installed under &lt;JUDGE_HOME&gt; | bash $0 install [--capsules] | [CITED: `scripts/judge/metaviewer-judge.sh:803`] |
 
 ### Review JUDGE_NPM
 
 Answers: what does JUDGE_NPM mean; why do I get JUDGE_NPM; how to fix JUDGE_NPM
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: the Node asset has no npm and package verification needs it [CITED: scripts/judge/metaviewer-judge.sh:415]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: sudo apt-get install -y npm Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| the Node asset has no npm and package verification needs it | sudo apt-get install -y npm | [CITED: `scripts/judge/metaviewer-judge.sh:415`] |
 
 ### Review JUDGE_PROFILE
 
 Answers: what does JUDGE_PROFILE mean; why do I get JUDGE_PROFILE; how to fix JUDGE_PROFILE
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: MV_SRF_PROFILES is not a valid profile pool; cannot create $STORE/profiles; identity publication failed for $pid in $STORE; cannot publish identity $pid in $STORE/identities; cannot provision $p via Docker; profile directory $p is not mode 0700 owned by uid 10001 (found '${st:-absent}'); cannot prepare private recording directory $dest; cannot prepare capsule state or RAM directories ($statedir, $ramroot, $STORE); profile directory $p is missing or not mode 0700 owned by uid 10001 (found '${st:-absent}') [CITED: scripts/judge/metaviewer-judge.sh:614, scripts/judge/metaviewer-judge.sh:617, scripts/judge/metaviewer-judge.sh:622, scripts/judge/metaviewer-judge.sh:626, scripts/judge/metaviewer-judge.sh:635, scripts/judge/metaviewer-judge.sh:639]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: set a valid profile pool and retry install --capsules; choose a writable SRF_IDENTITY_STORE_ROOT; check SRF_IDENTITY_STORE_ROOT ownership and run srf-identity-admin create --store-root '$STORE' --id '$pid' --label '$pid' --domains example.com; then retry install --capsules; choose a writable SRF_IDENTITY_STORE_ROOT and retry install --capsules; docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=$STORE/profiles,dst=/profiles opensuperficies-identity-browser-$ARCHN:$idver -c 'mkdir -p /profiles/$pid && chown 10001:10001 /profiles/$pid && chmod 0700 /profiles/$pid'; docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=$STORE/profiles,dst=/profiles opensuperficies-identity-browser-$ARCHN:$idver -c 'mkdir -p /profiles/$PROFILE_ID && chown 10001:10001 /profiles/$PROFILE_ID && chmod 0700 /profiles/$PROFILE_ID'; make XDG_STATE_HOME writable and retry run; check XDG_STATE_HOME, MV_JUDGE_SHM_DIR and SRF_IDENTITY_STORE_ROOT ownership and free space, then retry run; set a valid profile pool and provision its browser directories; bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| MV_SRF_PROFILES is not a valid profile pool | set a valid profile pool and retry install --capsules | [CITED: `scripts/judge/metaviewer-judge.sh:614`] |
+| cannot create &lt;STORE&gt;/profiles | choose a writable SRF_IDENTITY_STORE_ROOT | [CITED: `scripts/judge/metaviewer-judge.sh:617`] |
+| identity publication failed for &lt;pid&gt; in &lt;STORE&gt; | check SRF_IDENTITY_STORE_ROOT ownership and run srf-identity-admin create --store-root '&lt;STORE&gt;' --id '&lt;pid&gt;' --label '&lt;pid&gt;' --domains example.com; then retry install --capsules | [CITED: `scripts/judge/metaviewer-judge.sh:622`] |
+| cannot publish identity &lt;pid&gt; in &lt;STORE&gt;/identities | choose a writable SRF_IDENTITY_STORE_ROOT and retry install --capsules | [CITED: `scripts/judge/metaviewer-judge.sh:626`] |
+| cannot provision &lt;p&gt; via Docker | docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=&lt;STORE&gt;/profiles,dst=/profiles opensuperficies-identity-browser-&lt;ARCHN&gt;:&lt;idver&gt; -c 'mkdir -p /profiles/&lt;pid&gt; && chown 10001:10001 /profiles/&lt;pid&gt; && chmod 0700 /profiles/&lt;pid&gt;' | [CITED: `scripts/judge/metaviewer-judge.sh:635`] |
+| profile directory &lt;p&gt; is not mode 0700 owned by uid 10001 (found '&lt;st&gt;') | docker run --rm --pull=never --network none --user 0 --entrypoint /bin/sh --mount type=bind,src=&lt;STORE&gt;/profiles,dst=/profiles opensuperficies-identity-browser-&lt;ARCHN&gt;:&lt;idver&gt; -c 'mkdir -p /profiles/&lt;PROFILE_ID&gt; && chown 10001:10001 /profiles/&lt;PROFILE_ID&gt; && chmod 0700 /profiles/&lt;PROFILE_ID&gt;' | [CITED: `scripts/judge/metaviewer-judge.sh:639`] |
+| cannot prepare private recording directory &lt;dest&gt; | make XDG_STATE_HOME writable and retry run | [CITED: `scripts/judge/metaviewer-judge.sh:829`] |
+| cannot prepare capsule state or RAM directories (&lt;statedir&gt;, &lt;ramroot&gt;, &lt;STORE&gt;) | check XDG_STATE_HOME, MV_JUDGE_SHM_DIR and SRF_IDENTITY_STORE_ROOT ownership and free space, then retry run | [CITED: `scripts/judge/metaviewer-judge.sh:836`] |
+| MV_SRF_PROFILES is not a valid profile pool | set a valid profile pool and provision its browser directories | [CITED: `scripts/judge/preflight.sh:443`] |
+| profile directory &lt;p&gt; is missing or not mode 0700 owned by uid 10001 (found '&lt;st&gt;') | bash scripts/judge/metaviewer-judge.sh install --capsules (provisions profile directories via Docker without sudo) | [CITED: `scripts/judge/preflight.sh:457`] |
 
 ### Review JUDGE_RAM
 
 Answers: what does JUDGE_RAM mean; why do I get JUDGE_RAM; how to fix JUDGE_RAM
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: cannot read MemTotal and MemAvailable from $PROC/meminfo; MemAvailable is $(kib_mib "$avail") MiB [MEASURED], minimum $(kib_mib "$need") MiB [TARGET] needed (floor $(kib_mib "$floor") MiB + 512 MiB capsule reserve) [CITED: scripts/judge/preflight.sh:290, scripts/judge/preflight.sh:298]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: mount /proc and re-run; close applications, add RAM, or (WSL2) raise memory= in .wslconfig Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| cannot read MemTotal and MemAvailable from &lt;PROC&gt;/meminfo | mount /proc and re-run | [CITED: `scripts/judge/preflight.sh:290`] |
+| MemAvailable is &lt;computed value from diagnostic&gt; MiB [MEASURED], minimum &lt;computed value from diagnostic&gt; MiB [TARGET] needed (floor &lt;computed value from diagnostic&gt; MiB + 512 MiB capsule reserve) | close applications, add RAM, or (WSL2) raise memory= in .wslconfig | [CITED: `scripts/judge/preflight.sh:298`] |
 
 ### Review JUDGE_ROOT
 
 Answers: what does JUDGE_ROOT mean; why do I get JUDGE_ROOT; how to fix JUDGE_ROOT
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: Electron cannot run safely as root (never --no-sandbox) [CITED: scripts/judge/preflight.sh:521]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: log in as a normal user and re-run without sudo; install requests administrator steps itself Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| Electron cannot run safely as root (never --no-sandbox) | log in as a normal user and re-run without sudo; install requests administrator steps itself | [CITED: `scripts/judge/preflight.sh:521`] |
 
 ### Review JUDGE_SHM
 
 Answers: what does JUDGE_SHM mean; why do I get JUDGE_SHM; how to fix JUDGE_SHM
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: $SHM is '${fst:-unreadable}', a tmpfs is required [CITED: scripts/judge/preflight.sh:277, scripts/judge/preflight.sh:279]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: mount a tmpfs on $SHM (WSL2: check .wslconfig) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| &lt;SHM&gt; is '&lt;fst&gt;', a tmpfs is required | mount a tmpfs on &lt;SHM&gt; (WSL2: check .wslconfig) | [CITED: `scripts/judge/preflight.sh:277`] |
 
 ### Review JUDGE_SMOKE
 
 Answers: what does JUDGE_SMOKE mean; why do I get JUDGE_SMOKE; how to fix JUDGE_SMOKE
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: cannot install the package tool dependencies: $(tail -n 3 "$log" \| tr '\n' ' '); package tool imports still fail after npm ci; the package verification tool is missing from the kit ($PKG_TOOL); package verification failed: $(tail -n 3 "$log" \| tr '\n' ' '); the install smoke failed (rc $rc): $(tail -n 3 "$log" \| tr '\n' ' ') [CITED: scripts/judge/metaviewer-judge.sh:417, scripts/judge/metaviewer-judge.sh:420, scripts/judge/metaviewer-judge.sh:557, scripts/judge/metaviewer-judge.sh:563, scripts/judge/metaviewer-judge.sh:574]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: check the network, then run: npm --prefix $ui ci --ignore-scripts; see $log; restore the complete kit and retry npm --prefix $ui ci --ignore-scripts; extract the full judge kit again; download the release tarball again and re-run install; see $log; run as a non-root user, check DISPLAY/xvfb-run and the AppArmor profile, then re-run install Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| cannot install the package tool dependencies: &lt;computed value from diagnostic&gt; | check the network, then run: npm --prefix &lt;ui&gt; ci --ignore-scripts | [CITED: `scripts/judge/metaviewer-judge.sh:417`] |
+| package tool imports still fail after npm ci | see &lt;log&gt;; restore the complete kit and retry npm --prefix &lt;ui&gt; ci --ignore-scripts | [CITED: `scripts/judge/metaviewer-judge.sh:420`] |
+| the package verification tool is missing from the kit (&lt;PKG_TOOL&gt;) | extract the full judge kit again | [CITED: `scripts/judge/metaviewer-judge.sh:557`] |
+| package verification failed: &lt;computed value from diagnostic&gt; | download the release tarball again and re-run install | [CITED: `scripts/judge/metaviewer-judge.sh:563`] |
+| the install smoke failed (rc &lt;rc&gt;): &lt;computed value from diagnostic&gt; | see &lt;log&gt;; run as a non-root user, check DISPLAY/xvfb-run and the AppArmor profile, then re-run install | [CITED: `scripts/judge/metaviewer-judge.sh:574`] |
 
 ### Review JUDGE_SUDO
 
 Answers: what does JUDGE_SUDO mean; why do I get JUDGE_SUDO; how to fix JUDGE_SUDO
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: required administrator step declined: $what; sudo is not installed and you are not root: $what; administrator step failed (rc $rc): $what; required administrator step declined: install $pkgs; sudo is not installed and you are not root; administrator package step failed (rc $rc) for: $pkgs; sudo authorization or apt-get may have failed [CITED: scripts/judge/metaviewer-judge.sh:202, scripts/judge/metaviewer-judge.sh:203, scripts/judge/metaviewer-judge.sh:204, scripts/judge/metaviewer-judge.sh:345, scripts/judge/metaviewer-judge.sh:346, scripts/judge/metaviewer-judge.sh:347]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: run the command shown above yourself, then re-run install; install sudo or run the command shown above as root; run the command shown above yourself and read its error; sudo apt-get install -y $pkgs; su -c 'apt-get install -y $pkgs'; read the administrator command's error above; ask an administrator to run apt-get install -y $pkgs, then re-run install as your normal user Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| required administrator step declined: &lt;what&gt; | run the command shown above yourself, then re-run install | [CITED: `scripts/judge/metaviewer-judge.sh:202`] |
+| sudo is not installed and you are not root: &lt;what&gt; | install sudo or run the command shown above as root | [CITED: `scripts/judge/metaviewer-judge.sh:203`] |
+| administrator step failed (rc &lt;rc&gt;): &lt;what&gt; | run the command shown above yourself and read its error | [CITED: `scripts/judge/metaviewer-judge.sh:204`] |
+| required administrator step declined: install &lt;pkgs&gt; | sudo apt-get install -y &lt;pkgs&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:345`] |
+| sudo is not installed and you are not root | su -c 'apt-get install -y &lt;pkgs&gt;' | [CITED: `scripts/judge/metaviewer-judge.sh:346`] |
+| administrator package step failed (rc &lt;rc&gt;) for: &lt;pkgs&gt;; sudo authorization or apt-get may have failed | read the administrator command's error above; ask an administrator to run apt-get install -y &lt;pkgs&gt;, then re-run install as your normal user | [CITED: `scripts/judge/metaviewer-judge.sh:347`] |
 
 ### Review JUDGE_SYSDEP
 
 Answers: what does JUDGE_SYSDEP mean; why do I get JUDGE_SYSDEP; how to fix JUDGE_SYSDEP
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: curl is needed to download the assets; packages still missing after apt-get: $pkgs; missing system tools (packages: $pkgs) [CITED: scripts/judge/metaviewer-judge.sh:284, scripts/judge/metaviewer-judge.sh:350, scripts/judge/preflight.sh:234]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: sudo apt-get install -y curl; sudo apt-get install -y $pkgs Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| curl is needed to download the assets | sudo apt-get install -y curl | [CITED: `scripts/judge/metaviewer-judge.sh:284`] |
+| packages still missing after apt-get: &lt;pkgs&gt; | sudo apt-get install -y &lt;pkgs&gt; | [CITED: `scripts/judge/metaviewer-judge.sh:350`] |
+| missing system tools (packages: &lt;pkgs&gt;) | sudo apt-get install -y &lt;pkgs&gt; | [CITED: `scripts/judge/preflight.sh:234`] |
 
 ### Review JUDGE_USERNS
 
 Answers: what does JUDGE_USERNS mean; why do I get JUDGE_USERNS; how to fix JUDGE_USERNS
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: apparmor_parser is not installed, so the metaviewer profile cannot be loaded; kernel.apparmor_restrict_unprivileged_userns=1 and the metaviewer AppArmor profile is not loaded [CITED: scripts/judge/metaviewer-judge.sh:396, scripts/judge/preflight.sh:242]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: sudo apt-get install -y apparmor; bash scripts/judge/metaviewer-judge.sh install (loads the profile after confirmation; never --no-sandbox) Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| apparmor_parser is not installed, so the metaviewer profile cannot be loaded | sudo apt-get install -y apparmor | [CITED: `scripts/judge/metaviewer-judge.sh:396`] |
+| kernel.apparmor_restrict_unprivileged_userns=1 and the metaviewer AppArmor profile is not loaded | bash scripts/judge/metaviewer-judge.sh install (loads the profile after confirmation; never --no-sandbox) | [CITED: `scripts/judge/preflight.sh:242`] |
 
 ### Review JUDGE_XDG_RUNTIME
 
 Answers: what does JUDGE_XDG_RUNTIME mean; why do I get JUDGE_XDG_RUNTIME; how to fix JUDGE_XDG_RUNTIME
 
 - Meaning: A judge precondition failed; use the matching diagnostic below.
-- Cause and evidence: $d does not exist or is not owned by you [CITED: scripts/judge/preflight.sh:264]
+- Cause and evidence: Each row below pairs the emitted condition with its own remedy and source.
 - What the user sees: stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].
-- Fix: use a desktop session (logind); on WSL2 set systemd=true under [boot] in /etc/wsl.conf, then run wsl --shutdown Choose the remedy matching the emitted problem; shell variables are those of the launcher.
+- Fix: Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.
 - Verification: Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.
+
+| Condition | Matching remedy | Source |
+| --- | --- | --- |
+| &lt;d&gt; does not exist or is not owned by you | use a desktop session (logind); on WSL2 set systemd=true under [boot] in /etc/wsl.conf, then run wsl --shutdown | [CITED: `scripts/judge/preflight.sh:264`] |
 
 ### Review LOCKED_BY_OTHER
 
@@ -1532,10 +1662,10 @@ Answers: what does MW_WALL_DEADLINE mean; why do I get MW_WALL_DEADLINE; how to 
 
 Answers: what does NO_FREE_PROFILE mean; why do I get NO_FREE_PROFILE; how to fix NO_FREE_PROFILE
 
-- Meaning: Every configured profile is in use.
+- Meaning: No eligible configured browser profile is free.
 - Cause and evidence: The free profile list is empty; ui/electron/profilePicker.js:274.
-- What the user sees: The tile explains the configured profile pool is occupied.
-- Fix: Reuse or close an existing capsule, or configure another supported profile and restart the app.
+- What the user sees: The tile reports no free profile; the eligible pool may be empty or occupied.
+- Fix: Check that eligible browser profiles are configured; reuse or close an existing capsule, or configure another supported profile and restart the app.
 - Verification: The profile picker offers an available profile and its capsule starts.
 
 ### Review NO_IDENTITY

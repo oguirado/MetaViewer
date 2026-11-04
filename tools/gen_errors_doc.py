@@ -250,8 +250,10 @@ def extract_judge(tree):
                 continue
             code = m.group(2)
             problem, fix = split_judge_args(m.group(3))
-            entry = found.setdefault(code, {'defs': [], 'problems': [], 'fixes': []})
+            entry = found.setdefault(code, {'defs': [], 'problems': [], 'fixes': [], 'diagnostics': []})
             entry['defs'].append((path, n))
+            if problem and fix:
+                entry['diagnostics'].append((problem, fix, (path, n)))
             if problem and problem not in entry['problems']:
                 entry['problems'].append(problem)
             if fix and fix not in entry['fixes']:
@@ -367,10 +369,10 @@ reviewed('CAPSULE_SLOT_UNAVAILABLE', 'No suitable capsule or display slot is fre
     'The tile says no free capsule slot.',
     'Stop a capsule occupying the required slot and wait for verified release.',
     'Add capsule succeeds using the released slot and presents a live frame.')
-reviewed('NO_FREE_PROFILE', 'Every configured profile is in use.',
+reviewed('NO_FREE_PROFILE', 'No eligible configured browser profile is free.',
     'The free profile list is empty; ui/electron/profilePicker.js:274.',
-    'The tile explains the configured profile pool is occupied.',
-    'Reuse or close an existing capsule, or configure another supported profile and restart the app.',
+    'The tile reports no free profile; the eligible pool may be empty or occupied.',
+    'Check that eligible browser profiles are configured; reuse or close an existing capsule, or configure another supported profile and restart the app.',
     'The profile picker offers an available profile and its capsule starts.')
 reviewed('NO_IDENTITY', 'No eligible free profile has an available identity.',
     'No free profile has an identity in the returned set; ui/electron/profilePicker.js:277. Selection can also be unavailable at ui/electron/roleHost.js:948.',
@@ -468,7 +470,7 @@ for code, line, meaning, cause, fix in [
              fix, 'The same setup plan validates and the intended packaged app opens from that login.')
 
 for code, meaning, cause, fix, verify in [
-    ('Invalid', 'Replay arguments or archive path invariants are invalid.', 'Missing/duplicate options, symlinks, parent traversal, ownership or directory mode mismatch; core/src/bin/mv-replay.rs:10 and core/src/journal/mod.rs:1280.', 'Use the documented arguments and original private session hierarchy with real paths; preserve its evidence.', 'Replay validates the original archive and exits successfully.'),
+    ('Invalid', 'Replay arguments or archive path invariants are invalid.', 'Missing/duplicate options, symlinks, parent traversal, ownership or directory mode mismatch; core/src/bin/mv-replay.rs:10 and core/src/journal/mod.rs:1280.', 'Use the documented arguments and a preserved private session hierarchy with absolute paths, valid ownership and private modes; copies must preserve the same requirements.', 'Replay validates the original archive and exits successfully.'),
     ('Io', 'A filesystem operation needed by replay failed.', 'Metadata or file access fails; core/src/journal/mod.rs:1287.', 'Check existence, accessibility and original archive location without rewriting journal contents.', 'Replay can read the complete archive and verify it.'),
     ('Corrupt', 'Journal contents fail structural or chain validation.', 'Journal scan rejected the record stream; core/src/journal/mod.rs JournalError and scan.', 'Preserve the original evidence and investigate the rejected record; do not repair by editing the journal.', 'A separately preserved known-valid archive passes replay; the damaged original remains evidence.'),
     ('Duplicate', 'Replay rejects a duplicate or non-increasing record identity.', 'The scan reports JournalError::Duplicate; core/src/bin/mv-replay.rs:45.', 'Preserve the journal and investigate record publication/order; do not remove duplicate lines.', 'The original diagnostic is captured; a known-valid session replays without duplicates.'),
@@ -480,18 +482,42 @@ for code, meaning, cause, fix, verify in [
 # These judge branches were reviewed against fail/refuse predicates and their exact remedies.
 REVIEWED_JUDGE = frozenset('JUDGE_ARCH JUDGE_ASSET JUDGE_DISPLAY JUDGE_DOCKER JUDGE_DOCKER_HOST JUDGE_HOME_PATH JUDGE_IMAGE JUDGE_NET JUDGE_NODE JUDGE_NOT_INSTALLED JUDGE_NPM JUDGE_PROFILE JUDGE_RAM JUDGE_ROOT JUDGE_SHM JUDGE_SMOKE JUDGE_SUDO JUDGE_SYSDEP JUDGE_USERNS JUDGE_XDG_RUNTIME'.split())
 
+def judge_placeholders(text):
+    """Render shell expansions as inert placeholders, never runnable examples."""
+    text = text.replace(r'\$', '$').replace(r'\"', '"')
+    out = []
+    pos = 0
+    while pos < len(text):
+        if text.startswith('$(', pos):
+            depth = 1
+            end = pos + 2
+            while end < len(text) and depth:
+                if text[end] == '(':
+                    depth += 1
+                elif text[end] == ')':
+                    depth -= 1
+                end += 1
+            out.append('<computed value from diagnostic>')
+            pos = end
+        else:
+            match = re.match(r'\$\{([A-Za-z_][A-Za-z_0-9]*)[^}]*\}|\$([A-Za-z_][A-Za-z_0-9]*)', text[pos:])
+            if match:
+                out.append('<' + (match[1] or match[2]) + '>')
+                pos += len(match[0])
+            else:
+                out.append(text[pos])
+                pos += 1
+    return ''.join(out)
+
+
 def review_judge_entries(codes):
     for code in REVIEWED_JUDGE & codes.keys():
-        entry = codes[code]
-        problems = '; '.join(entry.get('problems', []))
-        fixes = '; '.join(entry.get('fixes', []))
-        if not problems or not fixes:
+        if not codes[code].get('diagnostics'):
             continue
-        locations = ', '.join('%s:%d' % site for site in entry['sites'][:MAX_SITES])
         reviewed(code, 'A judge precondition failed; use the matching diagnostic below.',
-                 problems + ' [CITED: ' + locations + ']',
+                 'Each row below pairs the emitted condition with its own remedy and source.',
                  'stderr prints the code, problem and matching fix; the check fails [CITED: scripts/judge/preflight.sh].',
-                 fixes + ' Choose the remedy matching the emitted problem; shell variables are those of the launcher.',
+                 'Use the remedy in the matching row. Angle-bracket placeholders stand for values in the actual diagnostic; replace them before running a command.',
                  'Rerun the failed subcommand and doctor with the same capsule/tier options; require its success marker. Preserve smoke.log when the smoke step fails.')
 
 
@@ -584,6 +610,14 @@ def render(root=ROOT):
         for field, label in [('meaning', 'Meaning'), ('causes', 'Cause and evidence'),
                              ('sees', 'What the user sees'), ('fix', 'Fix'), ('verify', 'Verification')]:
             out.append('- %s: %s' % (label, esc(note[field])))
+        diagnostics = codes[code].get('diagnostics', [])
+        if diagnostics:
+            out += ['', '| Condition | Matching remedy | Source |', '| --- | --- | --- |']
+            for problem, fix, (path, line) in diagnostics:
+                out.append('| %s | %s | [CITED: `%s:%d`] |' % (
+                    esc(judge_placeholders(problem)).replace('<', '&lt;').replace('>', '&gt;'),
+                    esc(judge_placeholders(fix)).replace('<', '&lt;').replace('>', '&gt;'),
+                    path, line))
     return '\n'.join(out).rstrip('\n') + '\n'
 
 

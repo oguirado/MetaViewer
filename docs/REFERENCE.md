@@ -1,7 +1,7 @@
 ```json
 {
   "schema": "metaviewer.reference/v1",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "status": "source-reference; live qualification is separate",
   "licence": "AGPL-3.0-only",
   "private_components": ["wender-agent", "vision-engine", "OpenSuperficies"],
@@ -86,7 +86,7 @@ MetaViewer is a Linux wall for viewing and controlling capsule surfaces. Electro
 | No universal sandbox claim | Host-backed programs and attached desktop windows retain host access | `ui/src/surfaces/RoleSurface.vue:532` [MEASURED] |
 | No public private-source proof | wender-agent, vision-engine and OpenSuperficies are private; their algorithms cannot be audited from this checkout | [CITED: operator disclosure]; `deps.lock:1` [MEASURED: pin boundary] |
 
-The inspected checkout identifies itself as `0.2.5` [MEASURED: `VERSION:1`]. The [published pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5) has its own assets and reported results [CITED: release notes]. Current source inspection does not certify that package or unpublished changes.
+The inspected checkout identifies itself as `0.2.6` [MEASURED: `VERSION:1`]. The [published pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5) has its own assets and reported results [CITED: release notes]. Current source inspection does not certify that package or unpublished changes.
 
 <a id="definitions"></a>
 ## 2. Definitions, validity and bounds [TARGET]
