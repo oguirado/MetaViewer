@@ -215,6 +215,8 @@ const App = await (async () => {
     './activity/ActivityStrip.vue': stub,
     'capsule-ui-kit/DockWorkspace': stub,
     '../.kit/capsule-ui-kit/src/index-shell.js': { ShellWorkspace: stub, TopBar: stub, Sidebar: stub, StatusBar: stub },
+    '@openvue/icons/windowmaximize': {render:()=>null},
+    '../.kit/capsule-ui-kit/src/shell/SidebarIcon.vue': {render:()=>null},
     'capsule-ui-kit/ui': { UiButton: stub },
     'capsule-ui-kit/theme': { setKitScheme() {} },
     './wall/DesktopWorkspace.vue': stub,

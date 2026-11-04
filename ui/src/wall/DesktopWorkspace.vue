@@ -4,7 +4,7 @@ import WallWorkspace from './WallWorkspace.vue';
 import {createWallLayout} from './layout.js';
 import {decodeAndMigrateLayoutProfile} from '../../.kit/capsule-ui-kit/src/workspace/layoutProfile.js';
 import {DESKTOP_SCHEMA, VIEWS, createDesktopState, validateDesktopState, addDesktop as appendDesktop,
-  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout, normalizeDesktopLayout, renumberDesktops, moveSurface as relocateSurface} from '../../electron/desktopLayout.js';
+  assignSurface, desktopRows, removeDesktop as deleteDesktop, pruneDesktopLayout, normalizeDesktopLayout, renumberDesktops, moveSurface as relocateSurface, renameDesktop as setDesktopName, renameCapsule as setCapsuleName, capsuleDisplayLabel} from '../../electron/desktopLayout.js';
 import {desktopShortcut} from '../../electron/desktopShortcuts.js';
 defineOptions({inheritAttrs:false});
 const props = defineProps({
@@ -87,7 +87,7 @@ function adapter(view,id) {
   const key = keyOf(view,id);
   if (adapters.has(key)) return adapters.get(key);
   const owner = state.value.views[view].desktops.find(d=>d.id === id);
-  const rows = () => desktopRows(state.value,props.rows,view,owner?.id ?? -1);
+  const rows = () => desktopRows(state.value,props.rows,view,owner?.id ?? -1).map(row=>{const title=capsuleDisplayLabel(state.value,row);return title?{...row,title}:row;});
   const snapshot = () => {
     const base = props.projectionView.getSnapshot();
     return base?.envelope ? {...base,envelope:{...base.envelope,projection:{...base.envelope.projection,rows:rows()}}} : base;
@@ -326,7 +326,29 @@ function forgetSurface(/** @type {string} */ id) {
 }
 /** @param {string} id */
 function revealWorkload(id){const home=homeOf(id);if(!home)return;state.value.activeView=home.view;state.value.views[home.view].active=home.desktop;announce();return walls.get(keyOf(home.view,home.desktop))?.revealWorkload?.(id);}
-defineExpose({revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
+const pendingNames=new Set();
+/** Save through the existing host layout owner; failed writes restore the label.
+ * @param {string} view @param {number} id @param {string} value */
+async function renameDesktop(view,id,value) {
+  const pendingKey=`desktop:${view}:${id}`;
+  if(!loaded.value || readOnly || pendingNames.has(pendingKey))return false;
+  const desktop=state.value.views[view]?.desktops.find(item=>item.id===id),previous=desktop?.label;
+  if(!setDesktopName(state.value,view,id,value))return false;
+  pendingNames.add(pendingKey);
+  try {await persist();announce();return true;} catch {if(desktop){if(previous===undefined)delete desktop.label;else desktop.label=previous;}announce();return false;} finally {pendingNames.delete(pendingKey);}
+}
+/** @param {string} id @param {string} value */
+async function renameCapsule(id,value) {
+  if(!loaded.value || readOnly)return false;
+  const row=props.rows.find(item=>item.id===id) ?? props.workloadTiles.find(item=>item.id===id);
+  if(!row)return false;
+  const key=row.profile_id || row.id,previous=capsuleDisplayLabel(state.value,row),pendingKey=`capsule:${key}`;
+  if(pendingNames.has(pendingKey))return false;
+  if(!setCapsuleName(state.value,id,value,key))return false;
+  pendingNames.add(pendingKey);
+  try {await persist();announce();return true;} catch {if(previous===undefined)delete state.value.labels?.[key];else if(state.value.labels)state.value.labels[key]=previous;announce();return false;} finally {pendingNames.delete(pendingKey);}
+}
+defineExpose({renameDesktop,renameCapsule,revealWorkload,moveTile,resizeTile,forgetSurface,revealSurface,followSurface,applyPresentationIntent,applyLayoutEcho,setPreset,selectView,selectDesktop,addDesktop,removeDesktop});
 </script>
 <template>
   <div class="mv-desktop-workspace" :hidden="$attrs.hidden === true">

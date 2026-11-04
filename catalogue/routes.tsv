@@ -229,6 +229,7 @@ release-a747f046972d	changes/unreleased/release-control-fresh-frame.md
 routed-map.md	changes/unreleased/routed-map.md
 termina-ea00cc828bad	changes/unreleased/terminal-persist-copy-paste.md
 termina-c004f7723c0f	changes/unreleased/terminal-workflow-program-identities.md
+tree-display-names.md	changes/unreleased/tree-display-names.md
 u1-pty-pkg-revert.md	changes/unreleased/u1-pty-pkg-revert.md
 u3-broker-classes.md	changes/unreleased/u3-broker-classes.md
 u5a-multislot-ui.md	changes/unreleased/u5a-multislot-ui.md
@@ -2717,6 +2718,7 @@ desktop-901a25840d3e	ui/test/desktop-applications.test.js
 display-b8cac33de3ce	ui/test/display-electron-main.mjs
 display-e269df34c2ff	ui/test/display-electron.test.js
 display-holds.test.js	ui/test/display-holds.test.js
+display-names.test.js	ui/test/display-names.test.js
 display-38e38244c4e9	ui/test/display-polish.test.js
 display-4225eef73ec2	ui/test/display-pull-orderings.test.js
 display-04c2f125230b	ui/test/display-reader.test.js

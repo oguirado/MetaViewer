@@ -1,3 +1,4 @@
+import {ref,watch,nextTick} from 'vue';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -35,7 +36,7 @@ const navigation=extract('async function selectTreeCapsule(', '// Reconcile only
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
 async function navigate(text,id,result={ok:true}) {
  const events=[],selected={value:'prior'};
- const f=await new AsyncFunction('rows','desktopState','selectTreeDesktop','nextTick','wall','markPanelOpen','selectedCapsuleId',text+';return selectTreeCapsule;')({value:[{id:'a'}]},{value:{assignments:{a:{view:'human',desktop:2}}}},(v,d)=>events.push(['desktop',v,d]),async()=>events.push(['settled']),{value:{revealSurface:(id,p)=>{events.push(['reveal',id,p]);return result;}}},id=>events.push(['restored',id]),selected);
+ const f=await new AsyncFunction('rows','guestWorkloadTiles','desktopState','selectTreeDesktop','nextTick','wall','markPanelOpen','selectedCapsuleId',text+';return selectTreeCapsule;')({value:[{id:'a'}]},{value:[]},{value:{assignments:{a:{view:'human',desktop:2}}}},(v,d)=>events.push(['desktop',v,d]),async()=>events.push(['settled']),{value:{revealSurface:(id,p)=>{events.push(['reveal',id,p]);return result;}}},id=>events.push(['restored',id]),selected);
  await f(id);return {events,selected:selected.value};
 }
 test('capsule selection switches desktop before restoring and focusing a minimized tile',async()=>{
@@ -51,4 +52,45 @@ test('working tree retains navigation identities and keeps Storyboard fixture-on
  assert.match(source,/mv-navigation--collapsed \.mv-tree-desktops/);
  assert.match(source,/mv-tree-needs-dot/);
  assert.match(source,/\.mv-tree-capsule-name \{[^}]*overflow:hidden;[^}]*text-overflow:ellipsis/);
+});
+
+
+test('tree program icons come only from known binaries and browser identities',()=>{
+ const state=createDesktopState();for(const id of ['p','b','u','vm'])state.assignments[id]={view:'agent',desktop:1};
+ const metadata={apps:[{binary:'/usr/bin/editor',icon:'data:image/png;base64,AAAA'}],programs:[{profileId:'editor-profile',binary:'/usr/bin/editor'}],browsers:[{profileId:'browser-profile'}]};
+ const caps=build([row('p',{profile_id:'editor-profile'}),row('b',{profile_id:'browser-profile'}),row('u'),row('vm',{kind:'guest-command',snapshot:{session:{phase:'ready'}}})],state,[],[],metadata)[1].desktops[0].capsules;
+ assert.deepEqual(caps.map(c=>c.kind),['program','browser','unknown','microvm']);assert.equal(caps[0].icon,metadata.apps[0].icon);assert.equal(caps[2].icon,'');assert.equal(caps[3].status,'ready');
+ state.labels={'editor-profile':'My editor'};assert.equal(build([row('p',{profile_id:'editor-profile'})],state,[],[],metadata)[1].desktops[0].capsules[0].title,'My editor');
+});
+
+
+test('unchanged capsule frames do not repeat host icon and identity lookups',async()=>{
+ const state=ref([{id:'a',profile_id:'one',title:'Frame 1'}]),open=ref(false),stops=[],calls=[];
+ const nativeApi={listApps:async()=>{calls.push('apps');return {apps:[]};},programs:async()=>{calls.push('programs');return [];},choices:async()=>{calls.push('browsers');return [];}};
+ const body=extract('const treeMetadata=', 'const navigationTree');
+ new Function('ref','watch','rows','launcherOpen','nativeApi','hostActive',body)(ref,(...args)=>{const stop=watch(...args);stops.push(stop);return stop;},state,open,nativeApi,true);
+ try {
+  await nextTick();await Promise.resolve();assert.equal(calls.length,3);
+  state.value=[{id:'a',profile_id:'one',title:'Frame 2'}];await nextTick();await Promise.resolve();assert.equal(calls.length,3);
+  state.value=[{id:'b',profile_id:'two',title:'New capsule'}];await nextTick();await Promise.resolve();assert.equal(calls.length,6);
+ } finally {for(const stop of stops)stop();}
+});
+
+
+test('ambiguous executable names and inherited labels remain generic',()=>{
+ const state=createDesktopState();state.assignments={a:{view:'human',desktop:1}};state.labels={};
+ const metadata={apps:[{binary:'/first/editor',icon:'first'},{binary:'/second/editor',icon:'second'}],programs:[],browsers:[]};
+ const capsule=build([row('a',{profile_id:'toString',hostWindow:{program:'editor'}})],state,[],[],metadata)[0].desktops[0].capsules[0];
+ assert.equal(capsule.title,'a');assert.equal(capsule.icon,'');
+});
+
+
+test('finishing or cancelling a name edit returns focus to its original tree row',async()=>{
+ const edit=ref(null),focused=[],saved=[];
+ const body=extract('async function beginTreeRename(', '/** @param {string} view @param {number} desktop */');
+ const api=new Function('treeRename','nextTick','document','wall',body+';return {beginTreeRename,cancelTreeRename,saveTreeRename};')(edit,async()=>{}, {getElementById:id=>({focus:()=>focused.push(id),select(){}})}, {value:{renameDesktop:async(...args)=>{saved.push(args);return true;}}});
+ await api.beginTreeRename('desktop','agent',{id:1,label:'Original'});
+ await api.cancelTreeRename();assert.equal(focused.at(-1),'desktop-agent-1');assert.equal(edit.value,null);
+ await api.beginTreeRename('desktop','agent',{id:1,label:'Original'});edit.value.value='Renamed';await api.saveTreeRename();
+ assert.deepEqual(saved,[['agent',1,'Renamed']]);assert.equal(focused.at(-1),'desktop-agent-1');assert.equal(edit.value,null);
 });

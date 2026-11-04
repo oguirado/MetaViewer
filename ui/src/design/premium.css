@@ -152,3 +152,9 @@
 .s8n-dialog .s8n-create:not(:disabled):hover,.mv-shell .s1-topbar .s1-topbar-new:hover { background:var(--cuk-semantic-accent-primary); color:var(--cuk-semantic-text-inverse); }
 .s1-confirm-panel button:disabled { color:var(--cuk-semantic-text-disabled); }
 @media(max-width:1000px) { .mv-settings-screen > .p-button { margin-left:12px; } .mv-settings-screen > p { margin-left:12px; } }
+
+.mv-tree-program-icon { width:18px; height:18px; flex:0 0 18px; object-fit:contain; }
+.mv-tree-name-edit { display:flex; flex-wrap:wrap; gap:4px; width:100%; }
+.mv-tree-rename { min-width:0; width:100%; box-sizing:border-box; padding:5px 7px; border:1px solid var(--cuk-semantic-accent-primary); border-radius:4px; color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-panel); font:inherit; }
+.mv-tree-rename-error { color:var(--cuk-semantic-status-error-text); font-size:12px; }
+.mv-tree-desktop-content > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
