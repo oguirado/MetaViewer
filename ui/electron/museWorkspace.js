@@ -28,8 +28,15 @@ export function claimMuseWorkspace(env) {
   const configStat=lstatSync(config);
   if(!configStat.isFile()||configStat.isSymbolicLink()||configStat.uid!==process.getuid?.()||(configStat.mode&0o777)!==0o600||configStat.size>65536)return refuse();
   if(JSON.parse(readFileSync(config,'utf8')).session_id!==env.MV_SESSION_ID)return refuse();
-  const allowed=new Set(['.owner.json','metaviewer','memoryweb',posix.basename(session)]);
-  if(readdirSync(workspace).some(name=>!allowed.has(name)))return refuse();
+  // GTK places its per-session runtime state here, never its account store.
+  const allowed=new Set(['.owner.json','metaviewer','memoryweb','dconf',posix.basename(session)]);
+  for(const name of readdirSync(workspace)) {
+    if(!allowed.has(name))return refuse();
+    if(name!=='.owner.json') {
+      const path=posix.join(workspace,name), st=lstatSync(path);
+      if(!st.isDirectory()||st.isSymbolicLink()||st.uid!==process.getuid?.()||(st.mode&0o777)!==0o700||realpathSync(path)!==path)return refuse();
+    }
+  }
   writeFileSync(posix.join(workspace,'.app-claim.json'),JSON.stringify({session_id:env.MV_SESSION_ID,pid:process.pid}),{flag:'wx',mode:0o600});
   return workspace;
   } catch {
