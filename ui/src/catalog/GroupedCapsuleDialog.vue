@@ -41,6 +41,7 @@ import {
 const props = defineProps({
   visible: { type: Boolean, default: false },
   types: { type: Array, default: () => [] },
+  disabledReasons: { type: /** @type {import('vue').PropType<Record<string,string>>} */ (Object), default: () => ({}) },
   title: { type: String, default: 'New Capsule' },
   subtitle: { type: String, default: 'Select a capsule type to open in the workspace' },
   categoriesLabel: { type: String, default: 'Categories' },
@@ -67,6 +68,8 @@ const filtered = computed(() => filterCapsuleTypes(
   filterCapsuleTypesByCategory(catalog.value, categoryId.value),
   query.value,
 ));
+const isDisabled = (/** @type {string} */ id) => Object.hasOwn(props.disabledReasons,id);
+const selectable = computed(()=>filtered.value.filter(type=>!isDisabled(type.id)));
 const isApp = (/** @type {NewCapsuleType} */ type) => /^(app|recent)-/.test(type.id);
 const groups = computed(() => [
   {id:'kinds',label:'Capsule kinds',apps:false,types:filtered.value.filter(type=>!isApp(type))},
@@ -74,7 +77,7 @@ const groups = computed(() => [
   {id:'apps',label:'Installed apps',apps:true,types:filtered.value.filter(type=>type.id.startsWith('app-'))},
 ].filter(group=>group.types.length));
 /** @type {import('vue').ComputedRef<NewCapsuleType|null>} */
-const selected = computed(() => filtered.value.find((type) => type.id === selectedId.value) ?? null);
+const selected = computed(() => selectable.value.find((type) => type.id === selectedId.value) ?? null);
 
 const MODE_LABELS = Object.freeze({ tab: 'Tab', split: 'Split', floating: 'Floating' });
 /** @param {string} mode */
@@ -105,7 +108,7 @@ function typeAnchorAlias(id) {
 function reset() {
   query.value = '';
   categoryId.value = null;
-  const first = catalog.value[0] ?? null;
+  const first = catalog.value.find(type=>!isDisabled(type.id)) ?? null;
   selectedId.value = first?.id ?? null;
   placement.value = first?.opensAs ?? 'tab';
 }
@@ -132,6 +135,7 @@ function onVisible(open) {
 }
 /** @param {string} id */
 function selectType(id) {
+  if(isDisabled(id))return;
   selectedId.value = id;
 }
 function createSelected() {
@@ -144,7 +148,7 @@ function createSelected() {
 function onSearchKey(event) {
   if (event.key === 'ArrowDown') {
     event.preventDefault();
-    const first = filtered.value[0] ?? null;
+    const first = selectable.value[0] ?? null;
     if (first) {
       selectedId.value = first.id;
       focusCard(first.id);
@@ -172,15 +176,15 @@ function onGridKey(event) {
   }
   if (key !== 'ArrowRight' && key !== 'ArrowLeft' && key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'Home' && key !== 'End') return;
   event.preventDefault();
-  const at = filtered.value.findIndex((type) => type.id === selectedId.value);
-  const next = moveCapsuleCardIndex(filtered.value.length, at, key, NEWCAPSULE_GRID_COLUMNS);
-  const target = next >= 0 ? filtered.value[next] : undefined;
+  const at = selectable.value.findIndex((type) => type.id === selectedId.value);
+  const next = moveCapsuleCardIndex(selectable.value.length, at, key, NEWCAPSULE_GRID_COLUMNS);
+  const target = next >= 0 ? selectable.value[next] : undefined;
   if (target) {
     selectedId.value = target.id;
     focusCard(target.id);
   }
 }
-watch(filtered, (list) => {
+watch(selectable, (list) => {
   if (!list.some((type) => type.id === selectedId.value)) {
     const first = list[0] ?? null;
     selectedId.value = first?.id ?? null;
@@ -289,8 +293,9 @@ defineExpose({ openDialog: showDialog, closeDialog });
             :data-semantic-anchor="typeAnchor(type.id)"
             :data-anchor-alias="typeAnchorAlias(type.id)"
             :aria-label="selectName(type)"
-            :aria-describedby="group.apps ? `shell/new-capsule/group-${group.id}-warning` : undefined"
+            :aria-describedby="isDisabled(type.id) ? `capsule-${type.id}-reason` : group.apps ? `shell/new-capsule/group-${group.id}-warning` : undefined"
             :aria-pressed="selectedId === type.id"
+            :disabled="isDisabled(type.id)"
             class="s8n-card"
             @click="selectType(type.id)"
           >
@@ -299,14 +304,16 @@ defineExpose({ openDialog: showDialog, closeDialog });
                 <SidebarIcon :name="type.icon ?? 'marker'" />
               </slot>
             </span>
-            <span class="s8n-card-text">
+            <span class="s8n-card-text" :data-semantic-anchor="isDisabled(type.id) ? `dialog/new-capsule/unavailable-${type.id}` : undefined">
               <span class="s8n-card-title">{{ type.label }}</span>
               <span class="s8n-card-id">{{ type.id }}</span>
             </span>
             <span v-if="selectedId === type.id" class="s8n-card-check" aria-hidden="true"><CheckIcon /></span>
             <span v-else class="s8n-card-check" aria-hidden="true" />
-            <span v-if="!group.apps" class="s8n-card-desc">{{ type.description }}</span>
-            <span v-if="!group.apps" class="s8n-card-foot">
+            <span v-if="isDisabled(type.id)" :id="`capsule-${type.id}-reason`" class="s8n-card-desc" :data-semantic-anchor="`dialog/new-capsule/unavailable-reason-${type.id}`">{{ disabledReasons[type.id] }}</span>
+            <span v-else-if="!group.apps" class="s8n-card-desc">{{ type.description }}</span>
+            <span v-if="isDisabled(type.id)" class="s8n-card-foot">Enable: configure verified local assets using the ARM64 capsule setup guide.</span>
+            <span v-else-if="!group.apps" class="s8n-card-foot">
               <UiTag :label="`Opens as: ${type.opensAs}`" status="info" />
               <span class="s8n-card-footprint">{{ type.footprint }}</span>
             </span>
@@ -368,6 +375,7 @@ defineExpose({ openDialog: showDialog, closeDialog });
           data-anchor-alias="shell/navigation/new-capsule-create"
           :label="createLabel"
           :aria-label="createLabel"
+          :disabled="!selected"
           intent="primary"
           class="s8n-create"
           @click="createSelected"
@@ -538,7 +546,8 @@ defineExpose({ openDialog: showDialog, closeDialog });
   color: var(--cuk-semantic-text-primary);
   text-align: left; cursor: pointer;
 }
-.s8n-card:hover{background: var(--cuk-semantic-surface-interactive-hover);}
+.s8n-card:hover:not(:disabled){background: var(--cuk-semantic-surface-interactive-hover);}
+.s8n-card:disabled{cursor:not-allowed;}
 .s8n-card[aria-pressed="true"]{
   background: var(--cuk-semantic-surface-interactive);
   box-shadow: inset calc(var(--cuk-semantic-border-width) * 2) 0 0 var(--cuk-semantic-accent-primary);

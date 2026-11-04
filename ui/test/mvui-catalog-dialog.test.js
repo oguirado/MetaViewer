@@ -69,7 +69,7 @@ test('launcher composes the kit dialog with catalog bindings and events', () => 
 
 test('unknown kinds render as conditional typed error rows in the empty slot', () => {
   assert.ok(template.includes('#empty'));
-  assert.ok(template.includes('v-if="catalogErrors.length || disabledArmKinds.length || appListError"'));
+  assert.ok(template.includes('v-if="catalogErrors.length || appListError"'));
   assert.ok(template.includes('v-for="row in catalogErrors"'));
   assert.ok(template.includes(':key="row.key"'));
   assert.ok(template.includes('catalog-launcher/error-'));
@@ -79,8 +79,8 @@ test('unknown kinds render as conditional typed error rows in the empty slot', (
   assert.ok(!template.includes('{{ row.message }}'));
   assert.ok(template.includes('aria-label="Unavailable capsule kinds"'));
   // Negative control: an unconditional slot (kit fallback lost) fails.
-  const unconditional = template.replace('v-if="catalogErrors.length || disabledArmKinds.length || appListError" ', '');
-  assert.throws(() => assert.ok(unconditional.includes('v-if="catalogErrors.length || disabledArmKinds.length || appListError"')),
+  const unconditional = template.replace('v-if="catalogErrors.length || appListError" ', '');
+  assert.throws(() => assert.ok(unconditional.includes('v-if="catalogErrors.length || appListError"')),
     assert.AssertionError);
 });
 

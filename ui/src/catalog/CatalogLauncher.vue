@@ -192,9 +192,11 @@ function cancelWindow() {
 }
 const normalized = computed(() => normalizeCatalogEntries(props.kinds));
 const disabledArmKinds=computed(()=>unavailableArmCapsules(props.arm64Capabilities));
+const disabledReasons=computed(()=>Object.fromEntries(disabledArmKinds.value.map(row=>[row.kind,row.reason])));
+const disabledArmTypes=computed(()=>normalizeCatalogEntries(disabledArmKinds.value.map(row=>row.kind)).types.map(type=>({...type,category:'Windows'})));
 const dialogTypes = computed(() => {
   const appType = (/** @type {{id:string,name:string,binary:string,icon:string}} */ app, /** @type {boolean} */ recent) => ({id:`${recent?'recent':'app'}-${app.id}`,label:app.name,category:recent?'Recent':'Installed apps',description:'Host program — not isolated',opensAs:'tab',footprint:'',keywords:[app.name,app.binary],icon:'box'});
-  return [...normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable,props.headlessAvailable,props.arm64Capabilities).includes(type.id)).map(type=>type.id==='microvm'&&props.guestCommandAvailable?{...type,description:'Run commands inside an isolated ARM64 guest. No interactive terminal or desktop.'}:type),...recentApps.value.flatMap(id=>{const app=installedApps.value.find(a=>a.id===id);return app?[appType(app,true)]:[];}),...installedApps.value.map(app=>appType(app,false))];
+  return [...normalized.value.types.filter(type => availableCatalogKindIds(props.vmAvailable,props.headlessAvailable,props.arm64Capabilities).includes(type.id)).map(type=>type.id==='microvm'&&props.guestCommandAvailable?{...type,description:'Run commands inside an isolated ARM64 guest. No interactive terminal or desktop.'}:type),...disabledArmTypes.value,...recentApps.value.flatMap(id=>{const app=installedApps.value.find(a=>a.id===id);return app?[appType(app,true)]:[];}),...installedApps.value.map(app=>appType(app,false))];
 });
 const catalogErrors = computed(() => normalized.value.errors);
 
@@ -431,6 +433,7 @@ function onClose() {
   <NewCapsuleDialog v-else
     :visible="visible"
     :types="dialogTypes"
+    :disabled-reasons="disabledReasons"
     :title="title"
     :subtitle="subtitle"
     :empty-text="emptyText"
@@ -444,10 +447,7 @@ function onClose() {
       <img v-if="appByCard.get(type.id)?.icon" class="mv-installed-app-icon" :src="appByCard.get(type.id)?.icon || ''" alt="" width="32" height="32" />
       <SidebarIcon v-else :name="type.icon || 'box'" />
     </template>
-    <template v-if="catalogErrors.length || disabledArmKinds.length || appListError" #empty>
-      <section v-if="disabledArmKinds.length" aria-label="Unavailable ARM64 capsules" class="mv-arm64-unavailable">
-        <div v-for="row in disabledArmKinds" :key="row.kind" :data-semantic-anchor="`dialog/new-capsule/unavailable-${row.kind}`"><button type="button" disabled :aria-describedby="`capsule-${row.kind}-reason`">{{ row.label }}</button><p :id="`capsule-${row.kind}-reason`" :data-semantic-anchor="`dialog/new-capsule/unavailable-reason-${row.kind}`" role="status">{{ row.reason }}</p></div>
-      </section>
+    <template v-if="catalogErrors.length || appListError" #empty>
       <p v-if="appListError" role="status">{{ appListError }}</p>
       <ul class="mv-catalog-errors" aria-label="Unavailable capsule kinds">
         <li
