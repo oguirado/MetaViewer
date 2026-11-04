@@ -108,7 +108,7 @@ or `arm64`. The checksum command runs inside the bundle, as described in
 - To keep downloads outside the checkout, set `MV_JUDGE_ASSET_DIR` to an absolute
   writable directory and pass `--dest "$MV_JUDGE_ASSET_DIR"` to fetch. Fetch does
   not read that variable itself. `MV_JUDGE_HOME` selects a separate absolute
-  installation/state directory; its default is `$XDG_DATA_HOME/metaviewer-judge`
+  installation/state directory without whitespace; its default is `$XDG_DATA_HOME/metaviewer-judge`
   (home fallback). Keep these variables set for doctor, install, run and stop
   [CITED: `scripts/judge/fetch_assets.py`, `scripts/judge/metaviewer-judge.sh`].
 - Without Docker or private-runtime access, use [the app-only route](JUDGE_NO_DOCKER.md).
