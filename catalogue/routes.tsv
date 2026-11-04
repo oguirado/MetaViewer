@@ -348,6 +348,7 @@ v028-flow2-setup.md	changes/unreleased/v028-flow2-setup.md
 v028-flow3-locate.md	changes/unreleased/v028-flow3-locate.md
 v028flo-98bcee25013a	changes/unreleased/v028-flow4-static-handoff.md
 v028-grid6.md	changes/unreleased/v028-grid6.md
+v028-gridx.md	changes/unreleased/v028-gridx.md
 v028-journal-full.md	changes/unreleased/v028-journal-full.md
 v028jud-b1bae7918c82	changes/unreleased/v028-judge-home-whitespace.md
 v028-orphan-2.md	changes/unreleased/v028-orphan-2.md
@@ -3284,6 +3285,7 @@ v028-fit-render.cjs	ui/test/v028-fit-render.cjs
 v028fit-1d677c28111c	ui/test/v028-fit-render.test.js
 v028-fit.test.js	ui/test/v028-fit.test.js
 v028-grid6.test.js	ui/test/v028-grid6.test.js
+v028gri-0ee1395b5805	ui/test/v028-gridx-reopen.test.js
 v028orp-31921e5b8e12	ui/test/v028-orphan-release-live-build.mjs
 v028orp-8bfbd9efdd7e	ui/test/v028-orphan-release-live.cjs
 v028orp-960ca38225fe	ui/test/v028-orphan-release-live.html
