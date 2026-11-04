@@ -1,3 +1,4 @@
+import {withoutPairedTerminalControl} from './pairedTerminalMarkup.js';
 // Lane T tile freshness: a deterministic latest-frame badge on live-axis
 // tiles, departed rows keeping a Lost tile, and recovery back to live.
 import { test, describe } from 'node:test';
@@ -244,12 +245,12 @@ describe('tile markup contracts', () => {
   });
 
   test('badge adds zero bare controls and no focus overrides', () => {
-    assert.deepEqual(interactiveTags(template), [], 'no lane-owned button/input/select/link');
+    assert.deepEqual(interactiveTags(withoutPairedTerminalControl(template)), [], 'no lane-owned button/input/select/link');
     assert.doesNotMatch(template, /tabindex/, 'no lane focus order overrides');
   });
 
   test('negative control: a control without an anchor fails the anchor predicate', () => {
-    for (const tag of interactiveTags(template)) assertAnchoredControl(tag);
+    for (const tag of interactiveTags(withoutPairedTerminalControl(template))) assertAnchoredControl(tag);
     assert.throws(
       () => assertAnchoredControl('<button id="tile-freshness-copy">Copy</button>'),
       assert.AssertionError,

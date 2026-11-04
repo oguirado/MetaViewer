@@ -31,6 +31,8 @@ try {
         ([group,verbs])=>[group,Object.keys(verbs).sort()])),
       operatorCallable:Object.values(window.metaviewer?.operator||{}).every(
         verbs=>Object.values(verbs).every(verb=>typeof verb==='function')),
+      slots:Object.keys(window.metaviewer?.slots||{}).sort(),
+      slotsFrozen:Object.isFrozen(window.metaviewer?.slots),
       capture:Object.keys(window.metaviewer?.capture||{}).sort(),
       authority:Object.keys(window.metaviewer?.authority||{}).sort(),
       terminal:Object.keys(window.metaviewer?.sideTerminal||{}).sort(),

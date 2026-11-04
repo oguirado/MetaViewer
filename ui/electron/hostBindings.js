@@ -1,3 +1,4 @@
+import { stateRequest, stateEvent } from './preload.js';
 // @ts-check
 /** [TARGET, unit decision] Attach to the already running owner-only core socket
  * at $XDG_RUNTIME_DIR/metaviewer/core.sock, using the UI registration and core
@@ -459,6 +460,14 @@ export async function createMainBindings({env = process.env, createMessageChanne
           || !Number.isSafeInteger(env.seq) || env.seq <= received || !id(env.nonce) || !id(env.msg_id)
           || !env.body || typeof env.body !== 'object' || Array.isArray(env.body)) throw fail();
       received = env.seq;const body = env.body;
+      if (body.schema==='capsule_state_event/v0.2') {
+        const event=stateEvent(body), item=pending.get(event.operation_id);
+        if (!item) return;
+        if (item.body.schema!=='capsule_state_request/v0.2' || item.body.profile_id!==event.profile_id
+            || item.body.slot_id!==event.slot_id || item.body.op!==event.op) throw fail();
+        if (event.event!=='accepted') {clearTimeout(item.timer);pending.delete(event.operation_id);item.resolve(event);}
+        return;
+      }
       if (!live) {
         if (!isDeepStrictEqual(body,config.core.hello)) throw fail();
         live = true;clearTimeout(helloTimer);ready();return;
@@ -930,6 +939,15 @@ export async function createMainBindings({env = process.env, createMessageChanne
       },
       /** @param {any} message */
       async request(message) {
+        if (message?.op==='capsule-state') {
+          const body=stateRequest(message.request);
+          if (!live || disposed || nonInputPendingCount()>=MAX_ITEMS || pending.has(body.operation_id)) throw fail();
+          return new Promise((resolve,reject)=>{
+            const timer=setTimeout(()=>{pending.delete(body.operation_id);reject(new Error('SLOT_OPERATION_TIMEOUT'));},190000);
+            pending.set(body.operation_id,{body,resolve,reject,timer});
+            try {send(body,body.operation_id);} catch {shutdown();}
+          });
+        }
         // [TARGET, unit decision] Serialize creates: v0.2 created/error events
         // carry no request id. This closed path is never a wire passthrough.
         if (message?.schema === 'surface_request/v0.2' || message?.op === 'create') {

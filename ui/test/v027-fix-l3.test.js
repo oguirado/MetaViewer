@@ -51,9 +51,9 @@ test('B5-29: saved program completion is fenced after reopening and a fresh refr
  const env={isForeignIdentity:()=>false,identityErrorText:x=>x,invocationGeneration:1,busy:ref(false),error:ref(''),rows:ref([{id:'editor',browser:'program'}]),modeFor:()=>({available:true,binary:'/bin/editor'}),roleApi:{createProgram:()=>barrier.promise},props:{},emit:event=>emits.push(event)};
  const unit=functions('identities',['openIdentity'],env);const pending=unit.openIdentity('editor','human');env.invocationGeneration++;env.busy.value=true;
  barrier.resolve({ok:true});await pending;assert.deepEqual(emits,[]);assert.equal(env.busy.value,true);
- let listed=0;env.props={open:false};env.login=ref(false);env.invoke=()=>{listed++;};env.watch=(_get,callback)=>{env.busy.value=true;callback(true);};
+ let listed=0;env.props={open:false};env.login=ref(false);env.pendingRelease=ref({profileId:'account-a',holder:'srf-id-orphan'});env.invoke=()=>{listed++;};env.watch=(_get,callback)=>{env.busy.value=true;callback(true);};
  watchCode('identities','identity-refresh',env);
- assert.equal(listed,1);assert.equal(env.busy.value,false);
+ assert.equal(listed,1);assert.equal(env.busy.value,false);assert.equal(env.pendingRelease.value,null);
 });
 
 test('B5-30: a late valid identity clears only the obsolete NO_IDENTITY alert',async()=>{
@@ -67,7 +67,7 @@ test('B5-30: a late valid identity clears only the obsolete NO_IDENTITY alert',a
 
 test('B5-31: failed delete diagnostic survives a closed dialog and refresh without replay',async()=>{
  const barrier=deferred();let deletes=0;
- const env={invocationGeneration:1,failedDelete:'',busy:ref(false),login:ref(false),error:ref(''),pendingDelete:ref('account'),isForeignIdentity:()=>false,identityErrorText:(code,id)=>`${code}: ${id}`,props:{host:{identity:{delete:()=>{deletes++;return barrier.promise;},list:async()=>({ok:true,rows:[]})}}},rows:ref([])};
+ const env={roleApi:null,modesKnown:ref(false),invocationGeneration:1,failedDelete:'',busy:ref(false),login:ref(false),error:ref(''),pendingDelete:ref('account'),isForeignIdentity:()=>false,identityErrorText:(code,id)=>`${code}: ${id}`,props:{host:{identity:{delete:()=>{deletes++;return barrier.promise;},list:async()=>({ok:true,rows:[]})}}},rows:ref([])};
  const unit=functions('identities',['invoke'],env);const pending=unit.invoke('delete',{id:'account'});env.invocationGeneration++;env.busy.value=false;
  barrier.resolve({ok:false,code:'IDENTITY_BOUND'});await pending;
  env.invocationGeneration++;await unit.invoke('list');assert.match(env.error.value,/IDENTITY_BOUND.*account/);assert.equal(deletes,1);assert.equal(env.pendingDelete.value,'account');
@@ -104,7 +104,7 @@ test('B5-35: retained scheduler history is baselined; subsequent presentations s
 
 function roleEnv() {
  const barrier=deferred(),calls=[];
- const env={syncGeneration:0,ended:false,notifiedEnd:false,alive:true,mounted:true,busy:false,resync:false,transferring:false,signature:'',shown:true,api:{status:()=>barrier.promise,close:async()=>{calls.push('close');},stop:async()=>{calls.push('stop');return {ok:true};},detachWindow:async()=>{calls.push('detach');return {ok:true};},mount:async()=>{calls.push('mount');return {ok:true};},resize:async()=>{calls.push('resize');return {ok:true};}},props:{surfaceId:'s',control:'human',presentationActive:true},error:ref(''),progress:ref(''),resourceReleased:ref(false),hostWindow:ref({state:'active'}),hostXpra:ref(false),reopenableHostWindow:ref(false),viewState:ref('ready'),hasConnected:ref(true),recordingPaused:ref(false),menuOpen:ref(false),hiddenSessions:null,root:ref({getBoundingClientRect:()=>({})}),collectClipRects:()=>({}),floatingPresentation:()=>({}),clipRoleBounds:()=>({visible:true,bounds:{}}),subtractRoleOccluders:()=>({visible:true,bounds:{}}),isRoleElementPainted:()=>true,isModalActive:()=>false,wanted:()=>true,role:ref('human'),watching:ref(false),emit:()=>{},isGeometricallyShown:()=>true,releaseHiddenSession(){},setTimeout};
+ const env={nativeThemeSignature:'',nativePreview:ref(''),previewOccluded:ref(false),syncGeneration:0,ended:false,notifiedEnd:false,alive:true,mounted:true,busy:false,resync:false,transferring:false,signature:'',shown:true,api:{status:()=>barrier.promise,close:async()=>{calls.push('close');},stop:async()=>{calls.push('stop');return {ok:true};},detachWindow:async()=>{calls.push('detach');return {ok:true};},mount:async()=>{calls.push('mount');return {ok:true};},resize:async()=>{calls.push('resize');return {ok:true};}},props:{surfaceId:'s',control:'human',presentationActive:true},error:ref(''),progress:ref(''),resourceReleased:ref(false),hostWindow:ref({state:'active'}),hostXpra:ref(false),reopenableHostWindow:ref(false),viewState:ref('ready'),hasConnected:ref(true),recordingPaused:ref(false),menuOpen:ref(false),hiddenSessions:null,root:ref({getBoundingClientRect:()=>({})}),collectClipRects:()=>({}),floatingPresentation:()=>({}),clipRoleBounds:()=>({visible:true,bounds:{}}),subtractRoleOccluders:()=>({visible:true,bounds:{}}),isRoleElementPainted:()=>true,isModalActive:()=>false,wanted:()=>true,role:ref('human'),watching:ref(false),emit:()=>{},isGeometricallyShown:()=>true,releaseHiddenSession(){},setTimeout};
  return {env,barrier,calls};
 }
 test('B5-36: detach fences the pending status before it can mount or resize',async()=>{

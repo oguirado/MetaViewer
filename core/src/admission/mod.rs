@@ -1,4 +1,11 @@
 #![forbid(unsafe_code)]
+//! Admission control for every proposal, host event and capsule slot operation.
+//! [TARGET, unit decision] Capsule slots fence source/copy-destination profiles
+//! independently of surface states. UI confirmation is mandatory; native custody
+//! remains adapter-owned. Retain at most 256 operation outcomes per session;
+//! unknown create/effect outcomes stay fenced until authoritative reconciliation.
+//! [TARGET, unit decision] Pending creates only fence slot work; count concurrent
+//! creates per profile and bind lifecycle/profile evidence in a single journal event.
 //! [TARGET, unit decision] Trusted host events form a private replay ABI, not
 //! component messages. Callers serialize Authority access and authenticate host
 //! events; proposals enter only through closed decoding and peer binding.
@@ -19,7 +26,11 @@
 //! [TARGET, unit decision] HumanInput admits UI surface_request/v0.2 op="input"
 //! (click/key/type/scroll) only when the surface is live, not agent_controlled,
 //! free of lease/draining conflicts, within frame/delta bounds, and with budget.
-use crate::wire::payload::{ActionProposal, ActionProposalAction, ActionProposalExpectation};
+use crate::wire::payload::{
+    ActionProposal, ActionProposalAction, ActionProposalExpectation, CapsuleStateEvent,
+    CapsuleStateEventSchema, CapsuleStateOp, CapsuleStatePhase, CapsuleStateRequest,
+};
+use crate::wire::Optional;
 use crate::{decode_envelope, Command, Component, Endpoint, Envelope, Refusal};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -109,6 +120,31 @@ pub enum LifecycleUpdate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "event", deny_unknown_fields)]
 pub enum Input {
+    /// [TARGET, unit decision] Slot authority is separate from surface lifecycle.
+    CapsuleStateRequest {
+        sender: Endpoint,
+        request: CapsuleStateRequest,
+    },
+    CapsuleStateEvent {
+        epoch: u64,
+        #[serde(rename = "result")]
+        event: CapsuleStateEvent,
+    },
+    /// Journal a create-in-flight fence before forwarding to the daemon. A failed
+    /// or unknown create remains fenced until authoritative binding/reconciliation.
+    ProfileCreate {
+        profile_id: String,
+    },
+    /// Atomically journal lifecycle and its authoritative profile evidence.
+    ProfileLifecycle {
+        surface_id: String,
+        profile_id: String,
+        update: LifecycleUpdate,
+    },
+    ProfileBind {
+        surface_id: String,
+        profile_id: String,
+    },
     /// [TARGET, unit decision] Journal closed lifecycle requests before forwarding.
     SurfaceRequest {
         request: crate::wire::payload::SurfaceRequest,
@@ -169,6 +205,16 @@ pub struct Outcome {
     pub cancellation_reason: Option<Refusal>,
     pub control_ready: bool,
 }
+/// [TARGET, unit decision] Bounded operation history provides idempotent replies.
+/// Pending work stays fenced on reconnect/recovery; no blind destructive retry.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotOperation {
+    pub request: CapsuleStateRequest,
+    pub sender: Endpoint,
+    pub epoch: u64,
+    pub event: CapsuleStateEvent,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CoreState {
@@ -181,6 +227,17 @@ pub struct CoreState {
     pub leases: BTreeMap<String, String>,
     pub pending: BTreeMap<String, Pending>,
     pub draining: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub slot_ops: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub slot_history: BTreeMap<String, SlotOperation>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profile_surfaces: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub profile_creates: BTreeSet<String>,
+    /// Additional in-flight creates beyond the first; preserve old snapshots.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profile_create_extras: BTreeMap<String, u64>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     destroyed: BTreeSet<String>,
     /// Immutable role inferred only from an authoritative human-owned creation.
@@ -213,6 +270,11 @@ impl CoreState {
             leases: BTreeMap::new(),
             pending: BTreeMap::new(),
             draining: BTreeMap::new(),
+            slot_ops: BTreeMap::new(),
+            slot_history: BTreeMap::new(),
+            profile_surfaces: BTreeMap::new(),
+            profile_creates: BTreeSet::new(),
+            profile_create_extras: BTreeMap::new(),
             destroyed: BTreeSet::new(),
             human_roles: BTreeSet::new(),
             seen: BTreeSet::new(),
@@ -235,7 +297,166 @@ impl CoreState {
             value["human_roles"] = serde_json::to_value(&self.human_roles)
                 .map_err(|_| AdmissionError::InvalidInput)?;
         }
+        for (name, field) in [
+            ("slot_ops", serde_json::to_value(&self.slot_ops)),
+            ("slot_history", serde_json::to_value(&self.slot_history)),
+            (
+                "profile_surfaces",
+                serde_json::to_value(&self.profile_surfaces),
+            ),
+            (
+                "profile_creates",
+                serde_json::to_value(&self.profile_creates),
+            ),
+            (
+                "profile_create_extras",
+                serde_json::to_value(&self.profile_create_extras),
+            ),
+        ] {
+            let field = field.map_err(|_| AdmissionError::InvalidInput)?;
+            if field.as_object().is_some_and(|v| !v.is_empty())
+                || field.as_array().is_some_and(|v| !v.is_empty())
+            {
+                value[name] = field;
+            }
+        }
         crate::journal::canonical_bytes(&value).map_err(|_| AdmissionError::InvalidInput)
+    }
+    fn settle_profile_create(&mut self, profile: &str) {
+        if let Some(count) = self.profile_create_extras.get_mut(profile) {
+            *count -= 1;
+            if *count == 0 {
+                self.profile_create_extras.remove(profile);
+            }
+        } else {
+            self.profile_creates.remove(profile);
+        }
+    }
+    fn profile_busy(&self, profile: &str) -> bool {
+        self.profile_creates.contains(profile)
+            || self.slot_ops.contains_key(profile)
+            || self.surfaces.iter().any(|(id, surface)| {
+                // Legacy live surfaces without profile evidence fence all slots.
+                let matches = self.profile_surfaces.get(id).is_none_or(|p| p == profile);
+                matches
+                    && (surface.live
+                        || self.leases.contains_key(id)
+                        || self.draining.values().any(|sid| sid == id)
+                        || (!self.is_destroyed(id) && !surface.live))
+            })
+    }
+    fn reduce_slot_request(
+        &mut self,
+        sender: &Endpoint,
+        request: &CapsuleStateRequest,
+        out: &mut Outcome,
+    ) -> Result<(), AdmissionError> {
+        if sender.component != Component::Ui {
+            out.reason = Some(Refusal::Policy);
+            return Ok(());
+        }
+        if let Some(previous) = self.slot_history.get(&request.operation_id) {
+            if previous.request != *request || previous.sender != *sender {
+                out.reason = Some(Refusal::Policy);
+            } else if previous.event.event == CapsuleStatePhase::Refused {
+                out.reason = Some(
+                    if previous.event.reason_code == Optional::Present("BUDGET_EXCEEDED".into()) {
+                        Refusal::BudgetExceeded
+                    } else {
+                        Refusal::Policy
+                    },
+                );
+            }
+            return Ok(());
+        }
+        // [TARGET, unit decision] Retain at most 256 outcomes per session rather
+        // than evicting idempotency evidence. Journal/budget limits still apply.
+        if self.slot_history.len() >= 256 {
+            out.reason = Some(Refusal::Policy);
+            return Ok(());
+        }
+        let destination = match &request.destination_profile_id {
+            Optional::Present(profile) => Some(profile.as_str()),
+            Optional::Missing => None,
+        };
+        let copy = request.op == CapsuleStateOp::Copy;
+        let mut reason = None;
+        if !request.credential_copy_confirmed
+            || (copy != destination.is_some())
+            || destination == Some(request.profile_id.as_str())
+            || self.profile_busy(&request.profile_id)
+            || destination.is_some_and(|p| self.profile_busy(p))
+            || request.profile_id.starts_with("mv-")
+            || destination.is_some_and(|p| p.starts_with("mv-"))
+        {
+            reason = Some(Refusal::Policy);
+        } else if self.remaining_budget == 0 {
+            reason = Some(Refusal::BudgetExceeded);
+        }
+        let mut event = CapsuleStateEvent {
+            schema: CapsuleStateEventSchema::Value,
+            slots: Optional::Missing,
+            operation_id: request.operation_id.clone(),
+            op: request.op.clone(),
+            profile_id: request.profile_id.clone(),
+            slot_id: request.slot_id.clone(),
+            event: CapsuleStatePhase::Accepted,
+            reason_code: Optional::Missing,
+            generation: Optional::Missing,
+            sha256: Optional::Missing,
+        };
+        if let Some(refused) = reason {
+            event.event = CapsuleStatePhase::Refused;
+            event.reason_code = Optional::Present(
+                if refused == Refusal::BudgetExceeded {
+                    "BUDGET_EXCEEDED"
+                } else {
+                    "POLICY"
+                }
+                .into(),
+            );
+            out.reason = Some(refused);
+        } else {
+            self.remaining_budget -= 1;
+            self.slot_ops
+                .insert(request.profile_id.clone(), request.operation_id.clone());
+            if let Some(profile) = destination {
+                self.slot_ops
+                    .insert(profile.into(), request.operation_id.clone());
+            }
+            out.dispatch = true;
+        }
+        self.slot_history.insert(
+            request.operation_id.clone(),
+            SlotOperation {
+                request: request.clone(),
+                sender: sender.clone(),
+                epoch: self.epoch,
+                event,
+            },
+        );
+        Ok(())
+    }
+    fn reduce_slot_event(&mut self, epoch: u64, event: &CapsuleStateEvent, out: &mut Outcome) {
+        let Some(operation) = self.slot_history.get_mut(&event.operation_id) else {
+            out.reason = Some(Refusal::Policy);
+            return;
+        };
+        if epoch != self.epoch
+            || epoch != operation.epoch
+            || event.op != operation.request.op
+            || event.profile_id != operation.request.profile_id
+            || event.slot_id != operation.request.slot_id
+            || operation.event.event != CapsuleStatePhase::Accepted
+            || !self.slot_ops.values().any(|id| id == &event.operation_id)
+        {
+            out.reason = Some(Refusal::Policy);
+            return;
+        }
+        if event.event != CapsuleStatePhase::Accepted {
+            operation.event = event.clone();
+            self.slot_ops.retain(|_, id| id != &event.operation_id);
+        }
     }
     pub fn is_destroyed(&self, id: &str) -> bool {
         self.destroyed.contains(id)
@@ -261,20 +482,62 @@ impl CoreState {
             control_ready: false,
         };
         match input {
+            Input::CapsuleStateRequest { sender, request } => {
+                self.reduce_slot_request(sender, request, &mut out)?;
+            }
+            Input::CapsuleStateEvent { epoch, event } => {
+                self.reduce_slot_event(*epoch, event, &mut out);
+            }
+            Input::ProfileCreate { profile_id } => {
+                if self.slot_ops.contains_key(profile_id) {
+                    out.reason = Some(Refusal::Policy);
+                } else if !self.profile_creates.insert(profile_id.clone()) {
+                    let count = self
+                        .profile_create_extras
+                        .entry(profile_id.clone())
+                        .or_default();
+                    *count = count.checked_add(1).ok_or(AdmissionError::Overflow)?;
+                }
+            }
+            Input::ProfileBind {
+                surface_id,
+                profile_id,
+            } => {
+                if !self.surfaces.contains_key(surface_id)
+                    || self
+                        .profile_surfaces
+                        .get(surface_id)
+                        .is_some_and(|old| old != profile_id)
+                    || self.slot_ops.contains_key(profile_id)
+                {
+                    out.reason = Some(Refusal::Policy);
+                } else if self
+                    .profile_surfaces
+                    .insert(surface_id.clone(), profile_id.clone())
+                    .is_none()
+                {
+                    self.settle_profile_create(profile_id);
+                }
+            }
             Input::SurfaceRequest { request } => {
                 let value =
                     serde_json::to_value(request).map_err(|_| AdmissionError::InvalidInput)?;
                 if !matches!(
                     value["op"].as_str(),
                     Some("create" | "destroy" | "list" | "frame_subscribe" | "frame_unsubscribe")
-                ) || value["params"]["surface_id"].as_str().is_some_and(|id| {
-                    // [TARGET, unit decision] Explicit Stop may retire a lost human
-                    // binding; this grants no input, frames or renewed liveness.
-                    self.is_destroyed(id)
-                        || self.surfaces.get(id).is_some_and(|s| {
-                            !s.live && (value["op"] != "destroy" || s.agent_controlled)
-                        })
-                }) || !valid_surface_create_policy(request)
+                ) || (value["op"] == "create"
+                    && value["params"]["profile_id"]
+                        .as_str()
+                        .is_some_and(|profile| self.slot_ops.contains_key(profile)))
+                    || value["params"]["surface_id"].as_str().is_some_and(|id| {
+                        // [TARGET, unit decision] Explicit Stop may retire a lost human
+                        // binding; this grants no input, frames or renewed liveness.
+                        self.is_destroyed(id)
+                            || self.surfaces.get(id).is_some_and(|s| {
+                                !s.live && (value["op"] != "destroy" || s.agent_controlled)
+                            })
+                    })
+                    || !valid_surface_create_policy(request)
                 {
                     out.reason = Some(Refusal::Policy);
                 } else if self.remaining_budget == 0 {
@@ -364,6 +627,7 @@ impl CoreState {
             Input::SurfaceNotice => {}
             Input::Refuse { reason } => out.reason = Some(*reason),
             Input::Lifecycle { surface_id, .. }
+            | Input::ProfileLifecycle { surface_id, .. }
             | Input::Frame { surface_id, .. }
             | Input::TakeControl { surface_id }
             | Input::ReleaseControl { surface_id }
@@ -371,62 +635,92 @@ impl CoreState {
             {
                 out.reason = Some(Refusal::Policy);
             }
-            Input::Lifecycle { surface_id, update } => match update {
-                LifecycleUpdate::Created(surface) => {
-                    if surface_id.is_empty()
-                        || surface.display.is_empty()
-                        || surface.frame.is_some()
-                        || self.surfaces.contains_key(surface_id)
-                    {
-                        out.reason = Some(Refusal::Policy);
-                    } else {
-                        if !surface.agent_controlled {
-                            self.human_roles.insert(surface_id.clone());
-                        }
-                        self.surfaces.insert(surface_id.clone(), surface.clone());
-                    }
+            Input::Lifecycle { surface_id, update }
+            | Input::ProfileLifecycle {
+                surface_id, update, ..
+            } => {
+                let profile = match input {
+                    Input::ProfileLifecycle { profile_id, .. } => Some(profile_id),
+                    _ => None,
+                };
+                if profile.is_some_and(|profile| {
+                    self.slot_ops.contains_key(profile)
+                        || self
+                            .profile_surfaces
+                            .get(surface_id)
+                            .is_some_and(|old| old != profile)
+                }) {
+                    out.reason = Some(Refusal::Policy);
+                    self.core_seq = next;
+                    return Ok(out);
                 }
-                _ => {
-                    if let Some(old) = self.surfaces.get_mut(surface_id) {
-                        match update {
-                            LifecycleUpdate::Updated(surface) => {
-                                if surface.display.is_empty() || surface.frame.is_some() {
-                                    return Err(AdmissionError::InvalidInput);
-                                }
-                                if !old.live {
-                                    out.reason = Some(Refusal::Policy);
-                                } else {
-                                    old.display = surface.display.clone();
-                                    old.live |= surface.live;
-                                    old.agent_controlled &= surface.agent_controlled;
-                                    // Wire metadata carries no capability grant.
-                                }
+                match update {
+                    LifecycleUpdate::Created(surface) => {
+                        if surface_id.is_empty()
+                            || surface.display.is_empty()
+                            || surface.frame.is_some()
+                            || self.surfaces.contains_key(surface_id)
+                        {
+                            out.reason = Some(Refusal::Policy);
+                        } else {
+                            if !surface.agent_controlled {
+                                self.human_roles.insert(surface_id.clone());
                             }
-                            LifecycleUpdate::Lost => {
-                                if !old.live {
-                                    out.reason = Some(Refusal::Policy);
-                                } else {
+                            self.surfaces.insert(surface_id.clone(), surface.clone());
+                        }
+                    }
+                    _ => {
+                        if let Some(old) = self.surfaces.get_mut(surface_id) {
+                            match update {
+                                LifecycleUpdate::Updated(surface) => {
+                                    if surface.display.is_empty() || surface.frame.is_some() {
+                                        return Err(AdmissionError::InvalidInput);
+                                    }
+                                    if !old.live {
+                                        out.reason = Some(Refusal::Policy);
+                                    } else {
+                                        old.display = surface.display.clone();
+                                        old.live |= surface.live;
+                                        old.agent_controlled &= surface.agent_controlled;
+                                        // Wire metadata carries no capability grant.
+                                    }
+                                }
+                                LifecycleUpdate::Lost => {
+                                    if !old.live {
+                                        out.reason = Some(Refusal::Policy);
+                                    } else {
+                                        old.live = false;
+                                    }
+                                }
+                                LifecycleUpdate::Destroyed => {
                                     old.live = false;
+                                    self.destroyed.insert(surface_id.clone());
+                                }
+                                LifecycleUpdate::Created(_) => unreachable!(),
+                            }
+                            if out.reason.is_none() {
+                                old.refresh_after = Some(next);
+                                if !old.live || !old.agent_controlled {
+                                    out.cancelled = self.cancel_surface(surface_id);
+                                    out.cancellation_reason =
+                                        Some(Refusal::SurfaceNotAgentControlled);
                                 }
                             }
-                            LifecycleUpdate::Destroyed => {
-                                old.live = false;
-                                self.destroyed.insert(surface_id.clone());
-                            }
-                            LifecycleUpdate::Created(_) => unreachable!(),
+                        } else {
+                            out.reason = Some(Refusal::Policy);
                         }
-                        if out.reason.is_none() {
-                            old.refresh_after = Some(next);
-                            if !old.live || !old.agent_controlled {
-                                out.cancelled = self.cancel_surface(surface_id);
-                                out.cancellation_reason = Some(Refusal::SurfaceNotAgentControlled);
-                            }
-                        }
-                    } else {
-                        out.reason = Some(Refusal::Policy);
                     }
                 }
-            },
+                if out.reason.is_none() {
+                    if let Some(profile) = profile {
+                        if !self.profile_surfaces.contains_key(surface_id) {
+                            self.profile_surfaces
+                                .insert(surface_id.clone(), profile.clone());
+                            self.settle_profile_create(profile);
+                        }
+                    }
+                }
+            }
             Input::Connect => {
                 self.epoch = self.epoch.checked_add(1).ok_or(AdmissionError::Overflow)?;
                 for p in self.pending.values_mut() {

@@ -1,0 +1,1 @@
+- Keep a restored native view visible when its pending preview capture rejects.

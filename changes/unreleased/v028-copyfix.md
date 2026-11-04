@@ -1,0 +1,1 @@
+- Prevent stored-data Copy helpers from inheriting custody guards so Program and browser copies can load and open; log refusal stages and underlying adapter causes.

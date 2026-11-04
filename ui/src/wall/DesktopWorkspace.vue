@@ -46,7 +46,7 @@ function announce() {
 /** @param {import("../../electron/desktopLayout.js").DesktopState} value */
 function cleanLayouts(value) {
   for (const view of VIEWS) for (const desktop of value.views[view].desktops) {
-    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid');
+    desktop.layout = pruneDesktopLayout(desktop.layout,id => value.assignments[id]?.view === view && value.assignments[id]?.desktop === desktop.id,desktop.preset === 'grid' || desktop.preset === 'grid-3x2');
   }
   return value;
 }
@@ -102,7 +102,26 @@ function adapter(view,id) {
     },writeAtomic:async (/** @type {string} */ json) => {
       const desktop = owner;
       if (!desktop) return;
-      desktop.layout = JSON.parse(json); await persist();
+      desktop.layout = JSON.parse(json);
+      // [TARGET, unit decision] Bounded identity hints outlive stopped surface IDs.
+      const grid = desktop.snapGrid ?? {cols:2,rows:2};
+      for (const group of desktop.layout.dockview?.floatingGroups ?? []) {
+        const position = group.position;
+        if (!position) continue;
+        const layout = desktop.layout.dockview;
+        const col = Math.round(position.left*grid.cols/layout.grid.width), row = Math.round(position.top*grid.rows/layout.grid.height);
+        if (col < 0 || col >= grid.cols || row < 0 || row >= grid.rows) continue;
+        for (const panelId of group.data?.views ?? []) {
+          const surfaceId = layout.panels[panelId]?.params?.capsuleId;
+          const profile = props.rows.find(r=>r.id === surfaceId)?.profile_id;
+          if (!profile || ['__proto__','constructor','prototype'].includes(profile) || !/^[a-z0-9][a-z0-9-]{0,63}$/.test(profile)) continue;
+          desktop.identityCells ??= {};
+          delete desktop.identityCells[profile];
+          desktop.identityCells[profile] = {col,row};
+          while (Object.keys(desktop.identityCells).length > 256) delete desktop.identityCells[Object.keys(desktop.identityCells)[0]];
+        }
+      }
+      await persist();
     }},
     defaultProfile:createWallLayout(props.scope),
   });
@@ -180,6 +199,8 @@ function setPreset(preset) {
   const result = walls.get(activeKey())?.setPreset(preset);
   if (!desktop || !result?.ok) return result ?? {ok:false,code:'ERR_NOT_READY'};
   desktop.preset = preset;
+  if (preset === 'grid-3x2') desktop.snapGrid = {cols:3,rows:2};
+  if (preset === 'grid') desktop.snapGrid = {cols:2,rows:2};
   return result;
 }
 // Transfer tokens are local ownership handoffs, never backend lifecycle verbs.
@@ -310,6 +331,7 @@ defineExpose({moveTile,resizeTile,forgetSurface,revealSurface,followSurface,appl
         v-bind="$attrs" :hidden="!isActive(view,desktop.id)" :data-desktop="key"
         :intent-builders="/** @type {any} */ (intentBuilders)" :control-registry="controlRegistry" :scheduler="scheduler" :tile-scheduler="/** @type {any} */ (tileScheduler)"
         :scope="scope" :default-profile="adapter(view,desktop.id).defaultProfile" :storage="adapter(view,desktop.id).storage"
+        :identity-cells="desktop.identityCells" :snap-grid="desktop.snapGrid" @custom-layout="desktop.preset = $event ?? null" @snap-grid-change="desktop.snapGrid = $event"
         :projection-view="adapter(view,desktop.id).feed" :owner-window-id="`main-wall-${key}`"
         @ready="wallReady(key)" @wall-settled="emit('wall-settled')" @activate-surface="activateTile($event)"
         @layout-error="emit('layout-error',$event)" @panel-closed="emit('panel-closed',$event)" @submit-intent="emit('submit-intent',$event)">

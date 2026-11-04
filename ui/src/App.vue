@@ -34,6 +34,14 @@ import { createTileScheduler } from './surfaces/tileScheduler.js';
 /** @typedef {Pick<InstanceType<typeof WallWorkspace>['$props'], 'projectionView'|'intentBuilders'|'controlRegistry'|'scheduler'|'tileScheduler'>} WallRuntime */
 /** @typedef {{readRaw:()=>Promise<string|null>,writeAtomic:(json:string)=>Promise<void>}} LayoutStorage */
 const identitiesOpen = ref(false);
+const storedDataProfile = ref('');
+/** @param {string} profileId */
+function openStoredData(profileId) {
+  if (typeof profileId !== 'string' || !/^[a-z0-9][a-z0-9-]{1,39}$/.test(profileId)) return;
+  storedDataProfile.value = profileId;
+  identitiesOpen.value = true;
+}
+
 const moreOpen = ref(false);
 const overlayCoordinator = /** @type {ReturnType<typeof import('./surfaces/overlayCoordinator.js').createOverlayCoordinator>|null} */ (inject('overlayCoordinator', null));
 const appOverlayOwner = {};
@@ -173,7 +181,7 @@ watch(() => [launcherOpen.value, props.authorityHost], async (_, __, onCleanup) 
     if (current) vmAvailable.value = available === true;
   } catch { /* Missing or failed availability leaves VM hidden. */ }
 }, { immediate: true, flush: 'sync' });
-const railOpen = ref(false);
+const railOpen = ref(true);
 const settingsOpen = ref(props.fixture?.screen === 'settings');
 const creativeOpen = ref(props.fixture?.key === 'creative');
 const creativeFrames = computed(() => /** @type {unknown[]} */ (props.fixture?.ui.creativeFrames ?? []));
@@ -196,6 +204,47 @@ const foldOverrides = ref(/** @type {Record<string, boolean>} */ ({}));
 const selectedFolded = computed(() => selectedSurface.value
   ? foldOverrides.value[selectedSurface.value.id] ?? selectedSurface.value.visibility === 'folded' : false);
 const selectedSurface = computed(() => rows.value.find(row => row.id === selectedCapsuleId.value) ?? rows.value[0] ?? null);
+const pairedTerminalTarget = shallowRef(/** @type {any} */ (null));
+const activeTerminalPair = ref(/** @type {string|null} */ (null));
+const terminalPreferDock = ref(false);
+const terminalDrawerHosts = shallowRef(/** @type {Record<string,{element:HTMLElement,width:number,height:number,visible:boolean}>} */ ({}));
+/** Keep the wall cell stable; sufficiently tall visible tiles reserve a row
+ * below their live viewport. Unknown geometry stays in the side dock.
+ * @param {any} target @param {Record<string,any>} hosts @param {boolean} open @param {boolean} preferDock */
+function pairedDrawerTarget(target, hosts, open, preferDock) {
+  const host=target && hosts[target.surfaceId];
+  return open && !preferDock && host?.visible && host.width >= 400 && host.height >= 600 ? host.element : null;
+}
+const terminalDrawerTarget = computed(() => pairedDrawerTarget(pairedTerminalTarget.value,terminalDrawerHosts.value,terminalDeckOpen.value,terminalPreferDock.value));
+const terminalInDrawer = computed(() => Boolean(terminalDrawerTarget.value));
+const terminalDockOpen = computed(() => terminalDeckOpen.value && !terminalInDrawer.value);
+watch(activeTerminalPair,(id,previous) => {
+  if (previous && terminalInDrawer.value && id !== pairedTerminalTarget.value?.surfaceId) terminalPreferDock.value=true;
+});
+function toggleTerminalDock() {
+  if (terminalInDrawer.value) {terminalPreferDock.value=true;return;}
+  toggleTerminal();
+}
+provide('capsuleTerminal', {
+  available: () => !nestedMode.displayOnly && typeof props.terminalBroker?.open === 'function',
+  isOpen: (/** @type {string} */ id) => terminalDeckOpen.value && activeTerminalPair.value === id,
+  inDrawer: (/** @type {string} */ id) => terminalInDrawer.value && pairedTerminalTarget.value?.surfaceId === id,
+  registerDrawer(/** @type {string} */ id, /** @type {HTMLElement|null} */ element, /** @type {{width:number,height:number,visible:boolean}} */ geometry) {
+    const previous=terminalDrawerHosts.value[id];
+    if (previous?.element===element && previous?.width===geometry.width && previous?.height===geometry.height && previous?.visible===geometry.visible) return;
+    const next={...terminalDrawerHosts.value};
+    if (element) next[id]={element,...geometry}; else delete next[id];
+    terminalDrawerHosts.value=next;
+  },
+  toggle(/** @type {string} */ id) {
+    if (terminalDeckOpen.value && activeTerminalPair.value === id) { terminalOpen.value=false; return; }
+    const row=rows.value.find(row=>row.id===id && row.backendLifecycle!=='destroyed' && row.backendLifecycle!=='lost');
+    if (!row) return;
+    terminalPreferDock.value=false;
+    if (!terminalDeckOpen.value) toggleTerminal();
+    pairedTerminalTarget.value={surfaceId:row.id,profileId:row.profile_id,title:surfaceLabel(row)};
+  },
+});
 /** Renderer intents remain events until a host supplies an authoritative dispatcher. */
 const emit = defineEmits(['submit-intent', 'create-capsule']);
 /** HANDOFF F5 (INPUT-ARM): the handoff take-control also selects and reveals
@@ -649,8 +698,8 @@ function onDesktopsChange(state) { desktopState.value = state; desktopStateLoade
 /** @param {string} view */
 function selectGlobalView(view) {
   creativeOpen.value = false; settingsOpen.value = false; multislotOpen.value = false;
-  terminalOpen.value = false; moreOpen.value = false; identitiesOpen.value = false;
-  launcherOpen.value = false; demoOpen.value = false; railOpen.value = false;
+  moreOpen.value = false; identitiesOpen.value = false;
+  launcherOpen.value = false; demoOpen.value = false;
   wall.value?.selectView?.(view);
 }
 const capsuleModes = ref(/** @type {Record<string,string>} */ ({}));
@@ -707,7 +756,7 @@ function onCapsuleLifecycle({surfaceId,completion}) {
 const pendingModeSwitch = ref(/** @type {any} */ (null));
 const browserCreatePending = ref(false);
 const browserCreateNotice = ref('');
-const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value || moreOpen.value || settingsOpen.value || multislotOpen.value || (terminalOpen.value && !terminalDeckOpen.value) || railOpen.value));
+const modalOpen = computed(() => !nestedMode.displayOnly && Boolean(pendingModeSwitch.value || launcherOpen.value || identitiesOpen.value || demoOpen.value || moreOpen.value || settingsOpen.value || multislotOpen.value || (terminalOpen.value && !terminalDeckOpen.value)));
 function syncModalAttr(open = modalOpen.value) {
   if (overlayCoordinator) { overlayCoordinator.set(appOverlayOwner, open); return; }
   const body = /** @type {any} */ (globalThis.document)?.body;
@@ -1589,55 +1638,66 @@ onMounted(() => {
 });
 </script>
 <template>
-  <div class="metaviewer mv-shell" :data-wall-settled="String(settled)" :class="{ 'mv-shell--nested': nestedMode.displayOnly }">
-    <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"
-      :palette-items="catalog" @toggle-nav="railOpen = !railOpen" @new-capsule="launcherOpen = true" @open="openCapsule">
-      <template #context>
+  <div class="metaviewer mv-shell" :data-wall-settled="String(settled)" :class="{ 'mv-shell--nested': nestedMode.displayOnly, 'mv-shell--navigation-open': railOpen, 'mv-shell--terminal-open': terminalDockOpen }">
+    <aside v-if="!nestedMode.displayOnly" class="mv-navigation" :class="{ 'mv-navigation--collapsed': !railOpen }" aria-label="Workspace navigation">
+      <div class="mv-navigation-brand"><UiButton label="Navigation" id="shell/navigation/toggle" data-semantic-anchor="shell/navigation/toggle" type="button" :aria-expanded="railOpen" :aria-label="railOpen ? 'Collapse navigation' : 'Expand navigation'" @click="railOpen = !railOpen">☰</UiButton><strong v-if="railOpen">MetaViewer</strong></div>
+      <div class="mv-navigation-scroll">
         <div class="mv-views" role="group" aria-label="Capsule views">
           <div v-for="view in ['human','agent']" :key="view" class="mv-view-column">
-            <UiButton :id="`view-${view}`" :data-semantic-anchor="`wall/view/${view}`" class="mv-view-button" :label="view === 'human' ? 'Humans' : 'Agents'" :aria-pressed="!terminalDeckOpen && desktopState.activeView === view" @click="selectGlobalView(view)" />
-            <div v-if="!terminalDeckOpen && desktopState.activeView === view" class="mv-desktop-numbers" :aria-label="`${view === 'human' ? 'Humans' : 'Agents'} desktops`">
+            <UiButton :id="`view-${view}`" :data-semantic-anchor="`wall/view/${view}`" class="mv-view-button" :label="view === 'human' ? 'Humans' : 'Agents'" :aria-pressed="desktopState.activeView === view" @click="selectGlobalView(view)" />
+            <div v-if="desktopState.activeView === view" class="mv-desktop-numbers" :aria-label="`${view === 'human' ? 'Humans' : 'Agents'} desktops`">
               <UiButton v-for="desktop in desktopState.views[view].desktops" :key="desktop.id" :id="`desktop-${view}-${desktop.id}`" :data-semantic-anchor="`wall/desktop/${view}/${desktop.id}`" :label="String(desktop.id)" :aria-label="`Desktop ${desktop.id}`" :aria-pressed="desktopState.views[view].active === desktop.id" @click="selectGlobalView(view); wall?.selectDesktop(desktop.id)" />
               <UiButton id="desktop-add" data-semantic-anchor="wall/desktop/add" label="+" aria-label="Add desktop" :disabled="!desktopStateLoaded || desktopState.views[desktopState.activeView].desktops.length >= MAX_DESKTOPS_PER_VIEW" @click="selectGlobalView(desktopState.activeView); wall?.addDesktop()" />
               <UiButton v-if="desktopState.views[view].active !== 1" id="desktop-remove" data-semantic-anchor="wall/desktop/remove" label="−" aria-label="Remove empty desktop" :disabled="Object.values(desktopState.assignments).some(home => home.view === view && home.desktop === desktopState.views[view].active)" @click="wall?.removeDesktop(desktopState.views[view].active)" />
             </div>
           </div>
         </div>
-      </template>
-      <template #actions>
-        <span class="mv-entry-copy"><UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
-        <span class="mv-entry-feedback" role="status" aria-live="polite" aria-atomic="true">{{ entryMessage }}</span></span>
-        <UiButton id="shell-identities" data-semantic-anchor="identities/open" label="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
-        <div ref="moreMenu" class="mv-more-menu" @keydown.esc="moreOpen = false">
-          <UiButton id="shell-more" data-semantic-anchor="shell/menu/more" label="More" aria-haspopup="menu" aria-controls="shell-more-menu" :aria-expanded="moreOpen" @click="moreOpen = !moreOpen" />
-          <div :hidden="!moreOpen" id="shell-more-menu" ref="morePopup" popover="manual" class="mv-menu-popover" role="menu" aria-label="More">
-        <UiButton role="menuitem" id="shell-creative" data-semantic-anchor="creative/open" label="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="moreOpen = false; toggleCreative()" />
-        <UiButton role="menuitem" id="shell-settings" data-semantic-anchor="settings/open" label="Settings" :aria-expanded="settingsOpen" @click="moreOpen = false; toggleSettings()" />
-        <UiButton role="menuitem" id="shell-terminal" data-semantic-anchor="terminal/toggle" label="Terminal" :aria-expanded="terminalOpen" @click="moreOpen = false; toggleTerminal()" />
-          </div>
-        </div>
-      </template>
-    </TopBar>
+
+        <nav aria-label="Workspace tools" class="mv-navigation-tools">
+          <UiButton id="sidebar-add-capsule" data-semantic-anchor="sidebar/add-capsule" :label="railOpen ? 'Add capsule' : '+'" aria-label="Add capsule" title="Add capsule" @click="launcherOpen = true" />
+          <UiButton id="shell-identities" data-semantic-anchor="identities/open" :label="railOpen ? 'Identities' : 'ID'" aria-label="Identities" title="Identities" :aria-expanded="identitiesOpen" @click="identitiesOpen = true" />
+          <UiButton id="shell-settings" data-semantic-anchor="settings/open" :label="railOpen ? 'Settings' : '⚙'" aria-label="Settings" title="Settings" :aria-expanded="settingsOpen" @click="toggleSettings()" />
+          <UiButton id="shell-creative" data-semantic-anchor="creative/open" :label="railOpen ? 'Storyboard' : '▦'" aria-label="Storyboard" title="Storyboard" :aria-expanded="creativeOpen" :disabled="!selectedSurface" @click="toggleCreative()" />
+        </nav>
     <div v-if="!nestedMode.displayOnly" id="mv-layout-notice" class="mv-layout-notice">
       <!-- Reserve the longest outcome before the wall becomes interactive, including while panels open. -->
-      <div v-if="!nestedMode.displayOnly && wallView === 'workspace' && !terminalDeckOpen" class="mv-tile-presets" aria-label="Tile layout presets">
-        <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1 tile" :aria-pressed="activeDesktopPreset === 'single'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('single')" />
-        <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2 side by side" :aria-pressed="activeDesktopPreset === 'side-by-side'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('side-by-side')" />
-        <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" :aria-pressed="activeDesktopPreset === 'grid'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid')" />
-        <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus + strip" :aria-pressed="activeDesktopPreset === 'focus-strip'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('focus-strip')" />
-        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Floating layout" :aria-pressed="activeDesktopPreset === 'floating'" title="Float every tile in a cascaded window" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('floating')" />
-        <span v-if="presetError" role="status">{{ presetError }}</span>
-      </div>
       <p class="mv-layout-notice-reserve" aria-hidden="true"><strong>Layout unavailable.</strong> The default layout is shown read-only. Changes will not be saved.</p>
-      <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !terminalDeckOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
+      <p v-if="layoutUnavailable && !creativeOpen && !settingsOpen && !multislotOpen && !nestedMode.displayOnly" id="mv-layout-unavailable" data-semantic-anchor="layout/unavailable"
         class="mv-layout-unavailable" role="alert" :data-error-code="layoutUnavailable.code">
         <strong>Layout unavailable.</strong> {{ layoutUnavailable.saveRefused
           ? 'Changes cannot be saved in this session.'
           : 'The default layout is shown read-only. Changes will not be saved.' }}
       </p>
     </div>
+
+      </div>
+      <div class="mv-navigation-foot">
+        <span class="mv-entry-copy"><UiButton id="shell-use-metaviewer" data-semantic-anchor="entry/copy" label="Use MetaViewer" @click="copyEntry" />
+        <span class="mv-entry-feedback" role="status" aria-live="polite" aria-atomic="true">{{ entryMessage }}</span></span>
+
+        <HandoffNotice @activity="recordActivity" @take-control="takeHandoffControl" />
+        <ActivityStrip :entries="activityFeed" />
+        <div class="mv-sidebar-status"><StatusBar :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]"><template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template><template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.filter(row => row.backendLifecycle !== 'lost').length} capsules${rows.some(row => row.backendLifecycle === 'lost') ? ` · ${rows.filter(row => row.backendLifecycle === 'lost').length} lost` : ''}` : 'Ready when you are' }}</span></template></StatusBar></div>
+      </div>
+    </aside>
+    <TopBar v-if="!nestedMode.displayOnly" product="MetaViewer" new-label="Add capsule" search-placeholder="Find a capsule…" :nav-expanded="railOpen"
+      :palette-items="catalog" @toggle-nav="railOpen = !railOpen" @new-capsule="launcherOpen = true" @open="openCapsule">
+      <template #nav><span hidden aria-hidden="true"></span></template><template #identity><span hidden aria-hidden="true"></span></template>
+      <template #actions>
+      <div v-if="!nestedMode.displayOnly" class="mv-tile-presets" aria-label="Tile layout presets">
+        <UiButton id="tile-preset-single" data-semantic-anchor="wall/preset/single" label="1" title="1 tile" aria-label="1 tile" :aria-pressed="activeDesktopPreset === 'single'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('single')" />
+        <UiButton id="tile-preset-side-by-side" data-semantic-anchor="wall/preset/side-by-side" label="2" title="2 side by side" aria-label="2 side by side" :aria-pressed="activeDesktopPreset === 'side-by-side'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('side-by-side')" />
+        <UiButton id="tile-preset-grid" data-semantic-anchor="wall/preset/grid" label="2×2" :aria-pressed="activeDesktopPreset === 'grid'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid')" />
+        <UiButton id="tile-preset-grid-3x2" data-semantic-anchor="wall/preset/grid-3x2" label="3×2" :aria-pressed="activeDesktopPreset === 'grid-3x2'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('grid-3x2')" />
+        <UiButton id="tile-preset-focus-strip" data-semantic-anchor="wall/preset/focus-strip" label="Focus" title="Focus + strip" aria-label="Focus + strip" :aria-pressed="activeDesktopPreset === 'focus-strip'" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('focus-strip')" />
+        <UiButton id="tile-preset-floating" data-semantic-anchor="wall/preset/floating" label="Float" aria-label="Floating layout" :aria-pressed="activeDesktopPreset === 'floating'" title="Float every tile in a cascaded window" :disabled="!desktopStateLoaded" @click="setActiveDesktopPreset('floating')" />
+        <details id="shell-grid-tools" class="mv-grid-tools"><summary id="shell-grid-tools-toggle" data-semantic-anchor="wall/grid-tools" aria-label="Custom grid" title="Custom grid">⋯</summary></details>
+        <span v-if="presetError" role="status">{{ presetError }}</span>
+      </div>
+      </template>
+    </TopBar>
     <div class="mv-shell-body">
-      <div v-if="!nestedMode.displayOnly && !creativeOpen && !terminalDeckOpen" class="mv-shell-rail"><Sidebar :groups="groups" :collapsed="!railOpen" :overlay="true" workspace-label="MetaViewer" @open="openCapsule" /></div>
+
       <main id="shell-wall" aria-label="MetaViewer capsule wall">
         <HostOutcome :row="hostOutcome" />
         <p v-if="browserCreatePending" role="status" aria-live="polite">Opening capsule… Please wait for the host.</p>
@@ -1647,13 +1707,13 @@ onMounted(() => {
             <SurfaceCanvas :surface-id="surface.id" :generation="surface.generation" :epoch="snapshot?.envelope?.epoch ?? ''" :frame="surfaceWitness(surface).frame" :digest="surfaceWitness(surface).digest" :frame-width="surfaceWitness(surface).width" :frame-height="surfaceWitness(surface).height" :state="canvasStateFor(surface)" :scroll-enabled="!surface.hostWindow" :input-enabled="inputEnabledFor(surface)" :stream-id="surfaceStreamId(surface)" />
           </article>
         </section>
-        <DesktopWorkspace v-else :hidden="creativeOpen || terminalDeckOpen" :clipboard="props.clipboard" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
+        <DesktopWorkspace v-else :hidden="creativeOpen" :clipboard="props.clipboard" :rows="rows" :modes="capsuleModes" @desktops-change="onDesktopsChange" @navigate="selectGlobalView" @layout-error="layoutUnavailable = {code:'LAYOUT_SAVE_REFUSED',saveRefused:true}" ref="wall" :workspace-component="chromeWorkspace" :scope="props.scope" :default-profile="props.layout" :storage="workspaceStorage"
           owner-window-id="main-wall" :projection-view="feed" :capture-state="captureAvailable ? captureState : undefined" :display-only="nestedMode.displayOnly" :allow-lost-surface="admitLostRows" :intent-builders="props.runtime?.intentBuilders ?? intentBuilders"
           :control-registry="props.runtime?.controlRegistry ?? controlRegistry" :scheduler="props.runtime?.scheduler ?? scheduler" :tile-scheduler="props.runtime?.tileScheduler ?? tileScheduler"
           :color-scheme="scheme === 'mv-dark' ? 'dark' : 'light'" :density="density" @ready="onWallReady" @wall-settled="onWorkspaceSettled" @activate-surface="selectCapsule" @panel-closed="onPanelClosed" @submit-intent="onWallIntent">
           <template #surface="{ surface, capsuleId, desktopActive }">
             <template v-if="surface && (!multislotOpen || capsuleId !== selectedSurface?.id)">
-            <RoleSurface :presentation-active="desktopActive && !creativeOpen && !terminalDeckOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
+            <RoleSurface :presentation-active="desktopActive && !creativeOpen" :label="surfaceLabel(surface)" :surface-id="capsuleId" :control="surface.control" :can-take-control="wallInputState(surface) === 'view'" @take-control="takeWallControl(surface)" @stored-data="openStoredData" @mode="onCapsuleMode" @lifecycle="onCapsuleLifecycle">
             <div v-if="wallInputState(surface) !== ''" class="mv-input-indicator" :data-input-state="wallInputState(surface)" :data-semantic-anchor="`capsule/${capsuleId}/input`">
               <span v-if="wallInputRefusal[capsuleId] && wallInputState(surface) === 'view'" class="mv-input-indicator__text mv-input-indicator__refusal" role="status">{{ wallInputRefusal[capsuleId] }}</span>
               <span v-else-if="wallInputState(surface) === 'pending'" class="mv-input-indicator__text" role="status">{{ wallInputRefusal[capsuleId] ?? 'Taking control…' }}</span>
@@ -1692,21 +1752,15 @@ onMounted(() => {
           <p>MetaViewer · AGPL-3.0-only · <a id="settings-license-source" data-semantic-anchor="settings/license-source" href="https://github.com/oguirado/MetaViewer" target="_blank" rel="noopener noreferrer">Source</a></p>
           <MvSettingsPanel :settings-host="props.settingsHost ?? {}" v-model:density="density" :frames-port="props.framesPort ?? null" @scheme-change="onScheme" />
         </section>
-        <section v-if="!nestedMode.displayOnly" :hidden="!terminalDeckOpen" :inert="!terminalDeckOpen ? true : undefined" :aria-hidden="!terminalDeckOpen ? 'true' : undefined" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
-          <TerminalDeckView :open="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @update:open="terminalOpen = $event" />
-        </section>
+
       </main>
     </div>
-    <div v-if="!nestedMode.displayOnly">
-      <HandoffNotice @activity="recordActivity" @take-control="takeHandoffControl" />
-      <ActivityStrip v-if="!nestedMode.displayOnly" :entries="activityFeed" />
-    </div>
-    <!-- L2-7: strong tone keeps the wall crumb at AA on the sunken bar in
-      mv-light and mv-dark; the kit accent default measures 4.35:1 rendered. -->
-    <StatusBar v-if="!nestedMode.displayOnly" :crumbs="[{ id: 'wall', label: 'Main wall', tone: 'strong' }]" :shortcuts="[]">
-      <template #telemetry><span id="shell-feed-status" class="mv-feed-status" role="status"><i aria-hidden="true"></i>{{ snapshot?.envelope ? 'Core connected' : props.runtime ? 'Waiting for capsule frames' : 'Core not connected' }}</span></template>
-      <template #shortcuts><span class="mv-shell-caption">{{ rows.length ? `${rows.filter(row => row.backendLifecycle !== 'lost').length} capsules${rows.some(row => row.backendLifecycle === 'lost') ? ` · ${rows.filter(row => row.backendLifecycle === 'lost').length} lost` : ''}` : 'Ready when you are' }}</span></template>
-    </StatusBar>
+    <aside v-if="!nestedMode.displayOnly" class="mv-terminal-dock" :class="{ 'mv-terminal-dock--open': terminalDockOpen }" aria-label="Terminal dock">
+      <UiButton label="Terminal" id="shell-terminal" data-semantic-anchor="terminal/toggle" class="mv-terminal-dock-toggle" type="button" :aria-expanded="terminalOpen" :aria-label="terminalDockOpen ? 'Collapse terminal dock' : 'Open terminal dock'" @click="toggleTerminalDock()"><span aria-hidden="true">›_</span><span v-if="terminalDockOpen">Terminal</span><span v-if="terminalDockOpen" aria-hidden="true">×</span></UiButton>
+        <section v-if="!nestedMode.displayOnly" :hidden="!terminalDeckOpen || terminalInDrawer" :inert="!terminalDeckOpen ? true : undefined" :aria-hidden="!terminalDeckOpen || terminalInDrawer ? 'true' : undefined" id="mv-terminal-deck-screen" class="mv-terminal-deck-screen" aria-label="Terminal deck" data-semantic-anchor="terminal/deck">
+          <Teleport :to="terminalDrawerTarget || 'body'" :disabled="!terminalInDrawer"><TerminalDeckView :compact="terminalInDrawer" @request-dock="terminalPreferDock = true" :open="terminalDeckOpen" :paired-target="pairedTerminalTarget" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" :terminal-session-port="props.terminalSessionPort" :host-providers="props.hostProviders" :broker-commands="props.brokerCommands" :clipboard="props.clipboard" :storage="preferences" @pair-focus="activeTerminalPair = $event" @update:open="terminalOpen = $event" /></Teleport>
+        </section>
+    </aside>
     <div class="mv-terminal" :hidden="!terminalOpen || nestedMode.displayOnly || multislotOpen">
       <SideTerminalOverlay v-if="!nestedMode.displayOnly && !multislotOpen && !creativeOpen" :deck="terminalDeckOpen" :terminal-binding="props.terminal" :terminal-broker="props.terminalBroker" v-model:open="terminalOpen" :storage="preferences" :top-offset="terminalTop" :bottom-offset="terminalBottom" />
     </div>
@@ -1721,7 +1775,7 @@ onMounted(() => {
         </div>
       </div>
     </div>
-    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :open-program="createProgramCapsule" @close="identitiesOpen=false" @open-identity="openIdentityChoice" />
+    <IdentitiesDialog v-if="!nestedMode.displayOnly" :open="identitiesOpen" :initial-profile="storedDataProfile" :open-program="createProgramCapsule" @close="identitiesOpen=false; storedDataProfile=''" @open-identity="openIdentityChoice" />
     <CatalogLauncher v-if="!nestedMode.displayOnly" v-model:visible="launcherOpen" :vm-available="vmAvailable" @create="onCreateCapsule" />
     <AgentLaneHost :screen="nestedMode.displayOnly ? 'nested' : creativeOpen ? 'creative' : settingsOpen ? 'settings' : multislotOpen ? 'multislot' : 'wall'" :fixture-key="props.fixture?.key ?? ''" />
   </div>
@@ -1729,11 +1783,11 @@ onMounted(() => {
 <style>
 html, body, #metaviewer-app { width:100%; height:100%; margin:0; overflow:hidden; }
 body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sans-serif); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); }
-.mv-shell { height:100dvh; display:grid; grid-template-columns:minmax(0,1fr); grid-template-rows:var(--cuk-component-app-shell-topbar-height) auto minmax(0,1fr) auto var(--cuk-component-app-shell-status-height); background:var(--cuk-semantic-surface-canvas); }
+.mv-shell { height:100dvh; display:grid; grid-template-columns:48px minmax(0,1fr) 48px; grid-template-rows:var(--cuk-component-app-shell-topbar-height) minmax(0,1fr); background:var(--cuk-semantic-surface-canvas); }
 .mv-terminal { position:fixed; inset:0; z-index:var(--cuk-semantic-z-index-overlay); pointer-events:none; }
 .mv-terminal[hidden] { display:none; }
 .mv-terminal > * { pointer-events:auto; }
-.mv-shell-body { grid-row:3; display:flex; min-width:0; min-height:0; position:relative; }
+.mv-shell-body { grid-column:2; grid-row:2; display:flex; min-width:0; min-height:0; position:relative; }
 .mv-shell-rail { width:var(--cuk-semantic-size-rail-collapsed-width); flex:none; position:relative; }
 .mv-shell main { position:relative; flex:1; min-height:0; min-width:0; overflow:auto; }
 .mv-mode-confirm { position:fixed; inset:0; z-index:var(--cuk-component-dialog-host-z-index); background:var(--cuk-component-dialog-host-backdrop); display:flex; align-items:center; justify-content:center; padding:var(--cuk-semantic-spacing-lg); }
@@ -1746,15 +1800,15 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 #shell-wall #mv-host-outcome { pointer-events:none; z-index:var(--cuk-semantic-z-index-overlay); }
 /* Both paragraphs share one flow-sized cell; the reserve never enters the accessibility tree. */
 .mv-tile-presets [aria-pressed="true"] { outline:2px solid var(--cuk-semantic-accent-primary); outline-offset:-2px; }
-.mv-layout-notice { grid-row:2; display:grid; min-width:0; }
+.mv-layout-notice { grid-row:auto; display:grid; min-width:0; }
 .mv-layout-notice-reserve, .mv-layout-unavailable { grid-area:1 / 1; margin:0; padding:var(--cuk-semantic-spacing-sm); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-canvas); border:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-default); font-size:var(--cuk-semantic-typography-font-size-sm); }
 .mv-layout-notice-reserve { visibility:hidden; }
 .mv-shell .cuk-capsule-panel { height:100%; }
 .mv-shell .mv-surface-host { width:100%; height:100%; min-height:0; }
 .mv-shell .mv-tile-capture-host { display:flex; flex-direction:column; min-height:0; }
 .mv-shell .mv-tile-capture-host > .mv-surface { flex:1 1 auto; min-height:0; }
-.mv-input-indicator { flex:0 0 auto; display:flex; align-items:center; justify-content:flex-end; gap:var(--cuk-semantic-spacing-xs); min-width:0; padding:var(--cuk-semantic-spacing-xs) var(--cuk-semantic-spacing-sm); font-size:var(--cuk-semantic-typography-font-size-xs); line-height:var(--cuk-semantic-typography-line-height-normal); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-panel); border-bottom:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-subtle); }
-.mv-input-indicator__text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mv-input-indicator { box-sizing:border-box; width:100%; flex:0 0 auto; display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:var(--cuk-semantic-spacing-xs); min-width:0; padding:var(--cuk-semantic-spacing-xs) var(--cuk-semantic-spacing-sm); font-size:var(--cuk-semantic-typography-font-size-xs); line-height:var(--cuk-semantic-typography-line-height-normal); color:var(--cuk-semantic-text-primary); background:var(--cuk-semantic-surface-panel); border-bottom:var(--cuk-semantic-border-width) solid var(--cuk-semantic-border-subtle); }
+.mv-input-indicator__text { min-width:0; overflow-wrap:anywhere; }
 .mv-input-indicator__action { min-width:0; max-width:100%; }
 .mv-tile-capture-host:has(> .mv-input-indicator[data-input-state="view"]) .mv-surface__canvas { cursor:default; }
 .mv-tile-capture-host:has(> .mv-input-indicator[data-input-state="interactive"]) { outline:var(--cuk-semantic-focus-ring-width) solid var(--cuk-semantic-accent-primary); outline-offset:calc(var(--cuk-semantic-focus-ring-width) * -1); }
@@ -1807,14 +1861,14 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-menu-popover[popover]:not(:popover-open) { display:none; }
 .mv-tile { position:relative; }
 .mv-tile .cuk-capsule-panel__axes { display:none; }
-.mv-tile .cuk-capsule-panel__actions > button:not([id^="window-"]):not([data-semantic-anchor$="/close"]) { display:none; }
+.mv-tile .cuk-capsule-panel__actions > button:not(.mv-tile-terminal-toggle):not([id^="window-"]):not([data-semantic-anchor$="/close"]) { display:none; }
 /* Window-hidden is permanent presentation state, including the entire shell. */
 .mv-tile[hidden] { display:none !important; }
 .dv-resize-container:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])), .dv-groupview:has([data-mv-window-hidden="true"]):not(:has([data-mv-window-hidden="false"])) { display:none !important; }
 </style>
 
 <style>
-.mv-shell { --cuk-component-app-shell-topbar-height:72px; }
+.mv-shell { --cuk-component-app-shell-topbar-height:40px; }
 .mv-views { display:flex; align-self:stretch; gap:4px; margin-right:12px; }
 .mv-view-column { display:flex; flex-direction:column; align-items:flex-start; min-width:88px; }
 .mv-view-button, .mv-desktop-numbers button { cursor:pointer; color:var(--cuk-semantic-text-primary); background:transparent; border:1px solid var(--cuk-semantic-border-default); border-radius:5px; padding:4px 10px; font:inherit; }
@@ -1823,4 +1877,70 @@ body { font-family:var(--cuk-semantic-typography-font-family-sans, system-ui, sa
 .mv-desktop-numbers button { padding:1px 6px; flex-shrink:0; }
 .mv-desktop-numbers button:disabled { opacity:.4; cursor:default; }
 .mv-view-button:focus-visible, .mv-desktop-numbers button:focus-visible { outline:2px solid currentColor; outline-offset:2px; }
+</style>
+
+<style>
+/* Three persistent columns. Side docks participate in layout, never occlusion. */
+.mv-shell--navigation-open { grid-template-columns:224px minmax(0,1fr) 48px; }
+.mv-shell--terminal-open { grid-template-columns:48px minmax(0,1fr) minmax(320px,35vw); }
+.mv-shell--navigation-open.mv-shell--terminal-open { grid-template-columns:224px minmax(0,1fr) minmax(320px,35vw); }
+.mv-navigation { grid-column:1; grid-row:1 / -1; min-width:0; min-height:0; display:flex; flex-direction:column; border-right:1px solid var(--cuk-semantic-border-default); background:var(--cuk-semantic-surface-panel); overflow:hidden; }
+.mv-navigation-brand { height:40px; flex:none; display:flex; align-items:center; gap:8px; padding:0 8px; border-bottom:1px solid var(--cuk-semantic-border-default); }
+.mv-navigation-brand button { min-width:30px; min-height:28px; padding:2px; color:var(--cuk-semantic-text-primary); background:transparent; border:0; cursor:pointer; }
+.mv-navigation-scroll { flex:1; min-height:0; overflow:auto; padding:12px 8px; }
+.mv-navigation .mv-views { display:flex; flex-direction:column; gap:12px; margin:0 0 16px; }
+.mv-navigation .mv-view-column { min-width:0; gap:4px; }
+.mv-navigation .mv-view-button { width:100%; text-align:left; }
+.mv-navigation .mv-desktop-numbers { max-width:100%; flex-wrap:wrap; overflow:visible; }
+.mv-navigation-tools { display:flex; flex-direction:column; gap:6px; }
+.mv-navigation-tools button { justify-content:flex-start; width:100%; }
+.mv-navigation-foot { flex:none; min-width:0; border-top:1px solid var(--cuk-semantic-border-default); }
+.mv-navigation .mv-entry-copy { display:flex; flex-wrap:wrap; padding:6px; }
+.mv-navigation .mv-activity { border:0; }
+.mv-sidebar-status { height:auto; min-height:0; display:grid; gap:4px; padding:8px; font-size:11px; color:var(--cuk-semantic-text-muted); }
+.mv-navigation .mv-layout-notice { margin-top:12px; font-size:11px; }
+.mv-navigation .mv-layout-notice-reserve,.mv-navigation .mv-layout-unavailable { font-size:11px; }
+.mv-navigation--collapsed .mv-navigation-scroll { padding:8px 4px; }
+.mv-navigation--collapsed .mv-view-button { font-size:0; padding:5px; text-align:center; }
+.mv-navigation--collapsed #view-human::after { content:'H'; font-size:12px; }
+.mv-navigation--collapsed #view-agent::after { content:'A'; font-size:12px; }
+.mv-navigation--collapsed .mv-desktop-numbers { gap:2px; }
+.mv-navigation--collapsed .mv-desktop-numbers button { padding:2px 3px; }
+.mv-navigation--collapsed .mv-entry-copy,.mv-navigation--collapsed .mv-sidebar-status,.mv-navigation--collapsed .mv-layout-notice-reserve { display:none; }
+.mv-navigation--collapsed .mv-activity__bar { flex-wrap:wrap; padding:3px; gap:2px; }
+.mv-navigation--collapsed .mv-activity__bar .mv-activity__empty { display:none; }
+.mv-navigation--collapsed .mv-activity__bar button { font-size:0; }
+.mv-navigation--collapsed .mv-activity__bar button::after { content:'≡'; font-size:14px; }
+.mv-shell > .s1-topbar { grid-column:2; grid-row:1; min-height:40px; height:40px; padding:0 8px; gap:8px; }
+.mv-shell > .s1-topbar .s1-topbar-left { display:none; }
+.mv-shell > .s1-topbar .s1-topbar-center { flex:1; min-width:80px; }
+.mv-shell > .s1-topbar #shell-command-open { width:100%; max-width:none; }
+.mv-shell > .s1-topbar .s1-topbar-right { gap:4px; }
+.mv-shell > .s1-topbar .s1-topbar-divider { display:none; }
+.mv-shell .mv-tile-presets { display:flex; gap:3px; margin:0; padding:0; flex-wrap:nowrap; }
+.mv-shell .mv-tile-presets button { padding:3px 6px; min-height:28px; }
+.mv-shell .mv-tile-presets [aria-pressed="true"] { outline:0; background:var(--cuk-semantic-surface-canvas); box-shadow:inset 0 -2px var(--cuk-semantic-accent-primary); }
+.mv-terminal-dock { grid-column:3; grid-row:1 / -1; min-width:0; min-height:0; display:flex; flex-direction:column; border-left:1px solid var(--cuk-semantic-border-default); background:var(--cuk-semantic-surface-panel); }
+.mv-terminal-dock-toggle { display:flex; align-items:center; justify-content:space-between; gap:8px; flex:none; width:100%; height:40px; padding:0 12px; color:var(--cuk-semantic-text-primary); background:transparent; border:0; border-bottom:1px solid var(--cuk-semantic-border-default); cursor:pointer; }
+.mv-terminal-dock .mv-terminal-deck-screen { position:relative; inset:auto; display:flex; flex:1; min-height:0; min-width:0; overflow:hidden; }
+.mv-terminal-dock .mv-terminal-deck { min-width:0; width:100%; }
+.mv-terminal-dock .mv-terminal-deck__header { flex-wrap:wrap; gap:4px; padding:6px; }
+.mv-shell--nested { grid-template-columns:minmax(0,1fr); grid-template-rows:minmax(0,1fr); }
+.mv-shell--nested > .mv-shell-body { grid-column:1; grid-row:1; }
+@media (max-width:1000px) {
+  .mv-shell--navigation-open { grid-template-columns:176px minmax(0,1fr) 48px; }
+  .mv-shell--navigation-open.mv-shell--terminal-open { grid-template-columns:176px minmax(0,1fr) 320px; }
+  .mv-shell .s1-topbar-kbd,.mv-shell .s1-topbar-new-label { display:none; }
+  .mv-shell .mv-tile-presets button { padding:3px; }
+}
+</style>
+
+<style>
+.mv-shell .mv-sidebar-status > .s1-statusbar { display:grid; grid-template-columns:minmax(0,1fr); height:auto; min-height:0; width:100%; box-sizing:border-box; padding:8px; white-space:normal; }
+.mv-shell .mv-sidebar-status > .s1-statusbar > * { min-width:0; max-width:100%; white-space:normal; }
+.mv-grid-tools summary { list-style:none; cursor:pointer; padding:3px 6px; min-height:24px; color:var(--cuk-semantic-text-primary); }
+.mv-grid-tools summary:focus-visible { outline:2px solid var(--cuk-semantic-accent-primary); }
+.mv-shell .wall-workspace { position:relative; }
+.mv-shell .wall-grid-controls { display:none; position:absolute; top:0; left:0; right:0; z-index:var(--cuk-semantic-z-index-overlay); background:var(--cuk-semantic-surface-panel); border-bottom:1px solid var(--cuk-semantic-border-default); }
+.mv-shell:has(#shell-grid-tools[open]) .wall-grid-controls { display:flex; }
 </style>
