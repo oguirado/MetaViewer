@@ -7,3 +7,5 @@
 
 - Keep the packaged Rewind core opt-in bound to a validated local profile and actor; preserve the closed core environment.
 - Align test harness imports and canonical-family oracles without weakening malformed-message or codec rejection checks.
+
+- Keep one MicroVM console tile across Rewind generations and synchronize the native command state before confirming completion.

@@ -122,6 +122,8 @@ class Adapter:
             if self.stopping:return
             state=self.rw_session(binding,self.backend.phase,None)
             if op=='restore':state['last_good_usable']=request['params']['point_id']
+            if state['phase']=='ready':
+                self.gc.update(phase='ready',job=None,controls={'cancel':None,'stop':None})
             self.event('rewind_event/v0.2',request,'completed',{'op':op,'point_id':packet['point_id'] or None},state)
         except BaseException:
             if op=='mark':self.backend.native.rollback_mark(packet['point_id'])

@@ -5,7 +5,7 @@ export const GUEST_WORKLOAD_PANEL_PREFIX='guest-console-panel:';
 export function guestWorkloadTile(snapshot) {
  if(!gcSnapshot(snapshot)||!snapshot.session)return null;
  const s=snapshot.session;
- return Object.freeze({kind:'guest-command',id:`guest-console:${s.workload_id}:${s.generation}`,workload_id:s.workload_id,generation:s.generation,title:'ARM64 MicroVM',snapshot});
+ return Object.freeze({kind:'guest-command',id:`guest-console:${s.owner_id}:${s.workload_id}`,workload_id:s.workload_id,generation:s.generation,title:'ARM64 MicroVM',snapshot});
 }
 /** @param {any} value */
 export function validGuestWorkloadTile(value) {

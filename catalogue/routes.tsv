@@ -2018,6 +2018,7 @@ guestco-c4153ef42c85	daemon-adapter/tools/guest_command_runner.py
 headless_runner.py	daemon-adapter/tools/headless_runner.py
 rewind_runner.py	daemon-adapter/tools/rewind_runner.py
 testhea-e85579ae90cc	daemon-adapter/tools/test_headless_runner.py
+testrew-38a1e34309ba	daemon-adapter/tools/test_rewind_generation.py
 test_rewind_runner.py	daemon-adapter/tools/test_rewind_runner.py
 deps.lock	deps.lock
 ADAPTER-f520074e84c0	docs/ADAPTER_INPUT_LIMITS.md
@@ -2722,6 +2723,7 @@ guestco-9b715f05165d	ui/test/guest-command-host.test.js
 guestco-8fa2f673be90	ui/test/guest-command-panel.test.js
 guestco-996637030635	ui/test/guest-command-profile.test.js
 guestco-cb9d57e33163	ui/test/guest-command-transport.test.js
+guestwo-d31657ddc4ab	ui/test/guest-workload-generation.test.js
 handoff-8d0c5534ac13	ui/test/handoff-notice.test.js
 handoff-3ec2ac4efaee	ui/test/handoffstyle-notice.test.js
 headless-app.test.js	ui/test/headless-app.test.js
