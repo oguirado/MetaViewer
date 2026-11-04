@@ -1,5 +1,14 @@
 {
  "corpus": "mv",
+ "docs": {
+  "built_on": "40b833a29b1679fa169eedb433d4189733e74968",
+  "files": 82,
+  "index": "route/docs.jsonl",
+  "nodes": 616,
+  "note": "built_on is the commit checked out at build time; check compares bytes, not commits",
+  "schema": "route.docs.v1",
+  "sha256": "f0fb0a938837849ad9172335a5bfa9aa513e0aee72fef9e4229d890bdf2b1ee3"
+ },
  "removed_count": {
   "local_path": 8,
   "private_repo": 21,
@@ -313,6 +322,7 @@
  "review": "Findings are model output with no human review; coordinates, not proof.",
  "schema": "route.manifest.v1",
  "skip": "(^|/)(catalogue|router|route|third_party|vendor|vendored|node_modules|\\.kit)(/|$)|^docs/papers/|\\.min\\.",
+ "study": {},
  "study_pin": "188e3b388e363c1ff250e1e6b4e55d226a1515de",
  "symbols_at": "7df63db885b4689efa88dd1390490c6dde2c7571"
 }
