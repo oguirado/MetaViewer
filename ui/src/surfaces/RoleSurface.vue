@@ -182,8 +182,8 @@ export function collectClipRects(el) {
 </script>
 <script setup>
 import { onMounted, onBeforeUnmount, computed, ref, watch, inject, nextTick } from 'vue';
-const props = defineProps({surfaceId:{type:String,required:true},label:{type:String,default:''},control:{type:String,default:'agent'},canTakeControl:{type:Boolean,default:false},presentationActive:{type:Boolean,default:true}});
-const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control','stored-data']);
+const props = defineProps({surfaceId:{type:String,required:true},label:{type:String,default:''},control:{type:String,default:'agent'},canTakeControl:{type:Boolean,default:false},presentationActive:{type:Boolean,default:true},recordingAvailable:{type:Boolean,default:false}});
+const emit = defineEmits(['mode','reveal','stopped','lifecycle','take-control','stored-data','recordings']);
 const progress = ref(''), confirmed = ref(false), recordingPaused = ref(false);
 const storedDataProfile = ref('');
 function openStoredData() { if (storedDataProfile.value && !hostXpra.value && !hostWindow.value) emit('stored-data', storedDataProfile.value); }
@@ -521,6 +521,7 @@ onBeforeUnmount(() => { viewportResizeObserver?.disconnect(); stopOverlaySubscri
         <span v-if="recordingPaused" class="mv-role-recording-paused" role="status">Recording paused (size limit)</span>
         <button type="button" :id="`tile-menu-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/menu`" class="mv-role-menu-button" :aria-label="`${label || surfaceId}: ${role} tile menu`" aria-haspopup="menu" :aria-controls="`tile-actions-${surfaceId}`" :aria-expanded="menuOpen" :disabled="!!progress" @click="menuOpen = !menuOpen">⋮</button>
         <div v-if="menuOpen" ref="menuPopup" :id="`tile-actions-${surfaceId}`" popover="manual" class="mv-menu-popover" role="menu" :aria-label="`${role} tile actions`">
+          <button v-if="recordingAvailable" type="button" role="menuitem" :id="`tile-recordings-${surfaceId}`" :data-semantic-anchor="`capsule/${surfaceId}/recordings`" @click="runMenu(() => emit('recordings'))">Recordings and screenshots</button>
           <div class="mv-role-compact-actions">
             <span>{{ hostWindow ? (hostWindow.state === 'lost' ? 'Window closed' : control === 'human' ? 'Human' : 'Agent') : role }}</span>
             <span v-if="recordingPaused" role="status">Recording paused (size limit)</span>

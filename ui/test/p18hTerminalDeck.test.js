@@ -2921,3 +2921,12 @@ test('paired workflow chooses a host agent then refuses authentication without w
     assert.equal(mounted.findById('terminal-deck-agent-choice'),null);
   } finally {mounted.app.unmount();}
 });
+
+test('Custom CLI rejects C0, DEL and C1 before creating a shell or writing bytes',async()=>{
+ const harness=createBrokerDouble({providers:[],enforceAdmission:true});
+ const controller=deckModel.createTerminalDeckController({broker:harness.broker,sessionFacade:harness.sessionFacade});
+ try {
+  for(const value of ['echo\tBAD','echo\x1b[2J','echo\x7fBAD','echo\x85BAD','echo\x9bBAD','\techo bad']) await assert.rejects(()=>controller.launchCustomCli(value),/single line/);
+  assert.equal(harness.openCalls.length,0);assert.equal(harness.writeCalls.length,0);
+ } finally {controller.dispose();}
+});

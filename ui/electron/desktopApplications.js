@@ -3,6 +3,7 @@ import { readdir, realpath, open, mkdir, writeFile, rename } from 'node:fs/promi
 import { join, basename, isAbsolute, resolve as resolvePath, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
+import { validDisplayLabel } from './desktopLayout.js';
 const MAX_APPS = 256, MAX_FILE = 65536;
 /** @param {string} text */
 export function desktopEntry(text) {
@@ -12,11 +13,13 @@ export function desktopEntry(text) {
   for (const line of section.split(/\r?\n/)) { const m = /^([A-Za-z]+)=(.*)$/.exec(line); if (m && !(m[1] in fields)) fields[m[1]] = m[2]; }
   if (fields.Type !== 'Application' || /^(true|1)$/i.test(fields.Hidden || '') || /^(true|1)$/i.test(fields.NoDisplay || '') || /^(true|1)$/i.test(fields.Terminal || '')) return null;
   const name = fields.Name?.trim();
-  if (!name || name.length > 120 || /[\x00-\x1f\x7f]/.test(name)) return null;
-  // Desktop files are data: only the first executable token is admitted.
+  if (!validDisplayLabel(name)) return null;
+  // The Host program API accepts a binary, not argv. Hide launchers whose
+  // required arguments would be lost; file/URL placeholders may be omitted.
   const token = /^(?:"([^"\\]+)"|([^\s"\\]+))(?=\s|$)/.exec(fields.Exec?.trim() || '');
   const binary = token?.[1] || token?.[2];
   if (!binary || /%/.test(binary) || ['env','sh','bash','zsh','fish'].includes(basename(binary))) return null;
+  if (!/^(?:\s+%[fFuU])*\s*$/.test((fields.Exec || '').trim().slice(token[0].length))) return null;
   return {name,binary,icon:fields.Icon || '',tryExec:fields.TryExec || ''};
 }
 /** @param {{env?:NodeJS.ProcessEnv, stateDir:string, resolve:(binary:string)=>{path:string,name:string}, nativeImage?:any, directories?:string[]}} options */
