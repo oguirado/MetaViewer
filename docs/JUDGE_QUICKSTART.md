@@ -16,13 +16,113 @@ capsules.
 - Full build and environment reference: [INSTALL.md](INSTALL.md).
 - Operator walkthrough: [USER_GUIDE.md](USER_GUIDE.md).
 
-Supported architecture: Linux `x86_64` (`x64`) or `aarch64` (`arm64`). The verified
+Supported architecture: Linux `x86_64` (`x64`) or `aarch64` (`arm64`); the release
+assets are x64 only, so arm64 means a source build ([Path E](#path-e-linux-arm64)). The verified
 host is Ubuntu 24.04 LTS. Debian 12/13 is a candidate platform and emits an
 unverified-host warning. Windows 11 uses WSL2 + WSLg with rootful Docker Engine
 inside the Ubuntu distro (Docker Desktop is not supported). macOS is not supported.
 No GPU or CPU pinning is required. Minimums: see [Hardware](#hardware).
+Hub and requirement table: [JUDGES.md](JUDGES.md).
+
+## Judge paths by platform and tier
+
+Answers: how do I install, install steps, which commands, expected output, install on Ubuntu, install on WSL, install on arm64, headless install
+
+Pick exactly one row; each path is complete. Run every command as your normal
+user from the root of the cloned tag, never with `sudo` in front of the launcher.
+
+| Platform | Tier | Path |
+| --- | --- | --- |
+| Ubuntu 24.04 x64 desktop | T1 app only, no Docker | [Path A](#path-a-x64-desktop-app-only-t1) |
+| Ubuntu 24.04 x64 desktop | T2 live capsules | [Path B](#path-b-x64-desktop-with-capsules-t2) |
+| Headless x64 server | install and smoke only | [Path C](#path-c-headless-x64-install-check) |
+| Windows 11 | T1 or T2 | [Path D](#path-d-windows-11-through-wsl2) |
+| Linux arm64 | none from the release | [Path E](#path-e-linux-arm64) |
+| macOS, Windows without WSL2 | none | Unsupported |
+
+### Path A: x64 desktop, app only (T1)
+
+Answers: install without docker, app only, T1 commands
+
+Gives the wall, core and adapter; no live capsule ([tiers](JUDGES.md#which-capsules-does-each-tier-give)).
+Copy the `SHA256SUMS` digest from the v0.2.6 release notes into `SHA256SUMS_DIGEST` first.
+
+| Step | Command | Success marker | If it fails |
+| --- | --- | --- | --- |
+| 1 Clone | `git clone --branch v0.2.6 --depth 1 https://github.com/oguirado/MetaViewer.git && cd MetaViewer` | `git describe --tags` prints `v0.2.6` | Network or tag error: check the [release page](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6) |
+| 2 Check host | `bash scripts/judge/metaviewer-judge.sh doctor --before-install` | `JUDGE_DOCTOR_OK tier=T1 phase=before-install (installed runtime not checked)` | Each `JUDGE_<CODE>:` line: [troubleshooting](JUDGE_TROUBLESHOOTING.md#kit-install-and-run) |
+| 3 Fetch | `python3 scripts/judge/fetch_assets.py --source https://github.com/oguirado/MetaViewer/releases/download/v0.2.6 --sums-sha256 "$SHA256SUMS_DIGEST"` | `JUDGE_FETCH_OK arch=x64 tier=T1` | `JUDGE_ASSET` or `JUDGE_USAGE`: wrong digest, missing asset or no network |
+| 4 Install | `bash scripts/judge/metaviewer-judge.sh install` | `METAVIEWER_MAIN_SMOKE_OK`, then `JUDGE_INSTALL_OK tier=T1 network=legacy receipt=…` | `JUDGE_SUDO` if you declined a package step; `JUDGE_SMOKE` for the smoke; see the table |
+| 5 Full check | `bash scripts/judge/metaviewer-judge.sh doctor` | `JUDGE_DOCTOR_OK tier=T1` | Same table |
+| 6 Run | `bash scripts/judge/metaviewer-judge.sh run` | Terminal shows `METAVIEWER_RENDERER_READY` and `METAVIEWER_MAIN_READY`; the wall opens | `JUDGE_NOT_INSTALLED`, `JUDGE_RUNNING`; `METAVIEWER_ADAPTER_DEGRADED` is expected in T1 |
+| 7 Stop (second terminal) | `bash scripts/judge/metaviewer-judge.sh stop` | `stopped pid <n>` then `JUDGE_STOP_CLEAN` | `JUDGE_STOP_LEAK`, `JUDGE_STOP_TIMEOUT`: [stop table](JUDGE_TROUBLESHOOTING.md#stop) |
+
+Install asks before each administrator step and prints the exact command; on a
+fresh Ubuntu it asks to install missing packages such as `x11-utils`. Answer `y`,
+or run the printed `sudo apt-get install -y …` yourself and rerun install.
+
+### Path B: x64 desktop with capsules (T2)
+
+Answers: install with docker, live capsules, T2 commands, browser capsules
+
+Before step 2, make Docker Engine work for your user: `docker info` must succeed
+without sudo ([Docker](#docker-tier-t2-only)). Then use Path A with `--capsules`
+on every launcher and fetch command:
+
+| Step | Command | Success marker |
+| --- | --- | --- |
+| 2 Check host | `bash scripts/judge/metaviewer-judge.sh doctor --capsules --before-install` | `JUDGE_DOCTOR_OK tier=T2 phase=before-install (installed runtime not checked)` |
+| 3 Fetch | `python3 scripts/judge/fetch_assets.py --source https://github.com/oguirado/MetaViewer/releases/download/v0.2.6 --capsules --sums-sha256 "$SHA256SUMS_DIGEST"` | `JUDGE_FETCH_OK arch=x64 tier=T2` |
+| 4 Install | `bash scripts/judge/metaviewer-judge.sh install --capsules` | `METAVIEWER_MAIN_SMOKE_OK`, then `JUDGE_INSTALL_OK tier=T2 network=<open\|legacy> receipt=…` |
+| 5 Full check | `bash scripts/judge/metaviewer-judge.sh doctor --capsules` | `JUDGE_DOCTOR_OK tier=T2` |
+| 6 Run | `bash scripts/judge/metaviewer-judge.sh run` | The wall opens and reports **Core connected**; continue with the [tour](JUDGE_TOUR.md) |
+| 7 Stop | `bash scripts/judge/metaviewer-judge.sh stop` | `JUDGE_STOP_CLEAN` |
+
+`run` and `stop` take no `--capsules`: run reads the tier from the install receipt
+[CITED: scripts/judge/metaviewer-judge.sh:809]. Install offers one firewall step
+for the Open network; declining it gives `network=legacy`, which reaches no public
+site ([capsule network](#capsule-network-tier-t2-only)).
+
+### Path C: headless x64 install check
+
+Answers: no display, server, CI, xvfb
+
+Proves install and smoke only; no visible wall. Use Path A or B commands, wrapping
+install and doctor with `xvfb-run -a` (see [Headless installation](#headless-installation)).
+Success: `JUDGE_INSTALL_OK`. Without a display, doctor refuses `JUDGE_DISPLAY`.
+
+### Path D: Windows 11 through WSL2
+
+Answers: windows, WSL, WSLg
+
+Prepare Ubuntu 24.04 in WSL2 with systemd and WSLg as in [Windows (WSL2)](#windows-wsl2),
+then follow Path A or Path B inside Ubuntu. Docker Desktop refuses
+`JUDGE_DOCKER_DESKTOP`; install Docker Engine inside the distro. Without systemd,
+doctor refuses `JUDGE_XDG_RUNTIME`.
+
+### Path E: Linux arm64
+
+Answers: arm64, aarch64, raspberry, ARM laptop, VM, MicroVM
+
+The release has no arm64 assets: fetch and install have nothing to unpack. Build
+from source with [INSTALL.md](INSTALL.md); ARM64 VM, MicroVM and rewind need the
+[developer setup](ARM64_CAPSULE_SETUP.md) with KVM and verified local assets.
+
+### What did the maintainer run on this checkout?
+
+Answers: was this tested, verification of these instructions
+
+On a cloud box (x64, 4 CPUs, 16 GiB RAM, no KVM, no Docker daemon, no sudo for the
+test user) `doctor --before-install` printed `JUDGE_DOCTOR_OK tier=T1 phase=before-install`
+for a non-root user with a runtime directory [MEASURED]; as root it refused
+`JUDGE_ROOT` [MEASURED]; without `/run/user/<uid>` it refused `JUDGE_XDG_RUNTIME`
+[MEASURED]; `--capsules` refused `JUDGE_DOCKER` [MEASURED]; install stopped at the
+declined package step with `JUDGE_SUDO` [MEASURED]; `stop` with nothing running
+printed `JUDGE_STOP_CLEAN` [MEASURED]. Install, run and T2 were not run there.
 
 ## 0. Licence
+
+Answers: licence, license, may I redistribute, AGPL, private components permission
 
 MetaViewer source may be used, modified and redistributed under AGPL-3.0-only
 ([LICENSE](../LICENSE)). The separate proprietary programs `wender-agent`,
@@ -33,6 +133,8 @@ external components in the kit; this restriction does not prevent redistribution
 of MetaViewer source under the AGPL.
 
 ## 1. Release assets and verification
+
+Answers: release assets, download, SHA256SUMS, checksum, which files, asset names
 
 The judge kit uses the release assets in `assets/` (verified against
 `assets/SHA256SUMS` before anything is unpacked):
@@ -55,12 +157,17 @@ as the assets: set `RELEASE_TAG` to that published tag, run
 then `cd MetaViewer` and run `scripts/judge/fetch_assets.py` as shown below.
 
 Set these variables from the maintainer's matching release notes before fetching.
-The public [v0.2.5 pre-release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.5)
-has compiled x64 assets [CITED: release asset list]. Set `RELEASE_TAG=v0.2.5`
-when using that set. The matching asset base URL is:
+The [v0.2.6 release](https://github.com/oguirado/MetaViewer/releases/tag/v0.2.6)
+is the judge release; its compiled assets are x64 only and carry the names the
+launcher expects (`metaviewer-linux-x64.tar.gz`, `node-linux-x64.tar.xz`,
+`opensuperficies-linux-x64.tar.gz`, `images-linux-x64.tar`, `vision-engine.tar.gz`,
+`wender-agent.tar.gz`, `SHA256SUMS`) [CITED: scripts/judge/metaviewer-judge.sh:25].
+Set `RELEASE_TAG=v0.2.6`. The launcher downloads from the release named by the
+checkout's `VERSION`, so a clone of one tag never mixes with another tag's assets
+[CITED: scripts/judge/metaviewer-judge.sh:128]. The matching asset base URL is:
 
 ```bash
-export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.5
+export RELEASE_ASSET_URL=https://github.com/oguirado/MetaViewer/releases/download/v0.2.6
 # Copy SHA256SUMS_DIGEST from that release's notes before running this command.
 python3 scripts/judge/fetch_assets.py --source "$RELEASE_ASSET_URL" --capsules --sums-sha256 "$SHA256SUMS_DIGEST"
 ```
@@ -96,6 +203,8 @@ or `arm64`. The checksum command runs inside the bundle, as described in
 
 ## Before you start
 
+Answers: prerequisites, run as root, sudo, XDG_RUNTIME_DIR, asset directory, MV_JUDGE_HOME
+
 - Run as a normal user. Electron refuses root without disabling its sandbox;
   do not run the launcher with `sudo` or add `--no-sandbox` to bypass it.
   Preflight refuses `JUDGE_ROOT` before installation; install requests its own
@@ -114,6 +223,8 @@ or `arm64`. The checksum command runs inside the bundle, as described in
 - Without Docker or private-runtime access, use [the app-only route](JUDGE_NO_DOCKER.md).
 
 ## 2. Check your machine (no changes made)
+
+Answers: doctor, preflight, check my machine, before install
 
 ```bash
 bash scripts/judge/preflight.sh --tier T2 --phase static
@@ -139,6 +250,8 @@ print `JUDGE_DOCTOR_OK tier=<T1|T2>`. T0 uses the separate fixture below.
 | T2 | T1 plus up to 4 concurrent live browser and Linux program capsules (Docker, images, network, sudo-free profiles) |
 
 ## 3. Install (asks before every sudo step)
+
+Answers: what does install do, install order, sudo steps, receipt
 
 ```bash
 # App only (tier T1)
@@ -167,6 +280,8 @@ command and asking first (`--yes` answers for you in non-interactive runs). In o
 
 ### System packages
 
+Answers: apt packages, missing tools, x11-utils, xvfb
+
 A clean Ubuntu/Debian host needs the system packages checked by `scripts/judge/preflight.sh` (`tar` plus):
 
 ```text
@@ -176,6 +291,8 @@ sudo apt-get install -y xvfb x11-utils xauth zip unzip strace git coreutils pyth
 Tier T2 (`--capsules`) additionally requires `docker.io` (or `docker-ce`, rootful Docker Engine) [CITED: `scripts/judge/preflight.sh`]. Building the Linux package from source (`scripts/bootstrap.sh` / `ui/tools/package.js`) additionally requires Node 24 (`>=24` [CITED: `ui/package.json`]), Go (`1.26.0` [CITED: `daemon-adapter/go.mod`]) and Rust (`1.97.0` compiler and Clippy, `1.92.0` formatter [CITED: `Cargo.toml`, `.github/workflows/ci.yml`]) per the CI pins in [INSTALL.md](INSTALL.md#required-toolchains-and-pins).
 
 ### Docker (tier T2 only)
+
+Answers: docker group, rootless docker, Docker Desktop, docker permission denied
 
 Docker must be rootful Docker Engine, reachable by your user through the `docker` group.
 Rootless Docker and Docker Desktop are not supported: the adapter talks to the local
@@ -188,6 +305,8 @@ sudo usermod -aG docker "$USER"
 Log out and back in, then re-run `doctor --capsules --before-install`. On WSL, close the distro, run `wsl --shutdown` from Windows and reopen it.
 
 ### Capsule network (tier T2 only)
+
+Answers: open network, legacy network, firewall, public websites unreachable, srf-idnet
 
 The installer loads the shipped image archive before offering the Open firewall step.
 Open requires the actual `opensuperficies-identity-browser-<arch>:0.2.0` image
@@ -210,6 +329,8 @@ result does not certify a legacy kit or an install that declined the firewall.
 
 ### Headless installation
 
+Answers: headless, xvfb-run, no DISPLAY
+
 The install smoke needs an X server. On a headless host, install the display tools and
 wrap the entire install (retain `--capsules` only for T2):
 
@@ -231,16 +352,17 @@ command itself does not install npm packages.
 
 ## 4. Run
 
+Answers: run the app, what will I see, wall, profile pool, Add capsule
+
 ```bash
 bash scripts/judge/metaviewer-judge.sh run
 ```
 
-The UI described below is the current source checkout. The published
-`v0.2.5` package has an older light shell without the left Humans/Agents tree
-[CITED: maintainer evaluation; raw receipt absent]. Use that release's matching
-source tag and instructions when evaluating its binary. Matching assets and a
-checksum digest for this checkout are not supplied here; do not combine the old
-binary with these UI expectations.
+The UI described below is the source at the v0.2.6 tag, which the v0.2.6 package
+is built from [TARGET]. The older `v0.2.5` package has a light shell without the
+left Humans/Agents tree [CITED: maintainer evaluation; raw receipt absent]; if you
+evaluate that binary, use its own tag and instructions and do not combine it with
+these UI expectations.
 
 The current source shell defaults to Dark unless a saved theme overrides it. Its three columns
 [CITED: `../ui/src/App.vue`, `../ui/src/settings/settingsModel.js`] hold the left tree,
@@ -282,6 +404,8 @@ See [USER_GUIDE.md](USER_GUIDE.md#stored-data-slots).
 
 ## 5. Stop
 
+Answers: stop the app, cleanup, JUDGE_STOP_CLEAN
+
 ```bash
 bash scripts/judge/metaviewer-judge.sh stop
 ```
@@ -291,6 +415,8 @@ reservations. The shared `srf-egress-proxy` remains running; `JUDGE_STOP_CLEAN`
 excludes that proxy. Other capsule, socket or RAM leftovers are reported.
 
 ## Windows (WSL2)
+
+Answers: windows, WSL2 setup, wsl.conf, .wslconfig
 
 1. From Windows: `wsl --install -d Ubuntu-24.04`.
 2. In Ubuntu, add `[boot]` and `systemd=true` to `/etc/wsl.conf`, then run `wsl --shutdown`
@@ -307,14 +433,18 @@ the launcher refuses to start. Windows itself is not a supported host
 
 ## Hardware
 
+Answers: hardware, minimum RAM, CPU, shared memory, disk
+
 Full table and sources: [INSTALL.md](INSTALL.md#hardware). Designed for a standard
-8-core, 16 GiB RAM x64 or arm64 Linux laptop:
+8-core, 16 GiB RAM x64 Linux laptop (release assets are x64 only):
 
 - **App only (T1)**: 2+ cores, `floor + 512 MiB` available RAM (`floor = min(MemTotal/4, 20 GiB)`), `512 MiB` `/dev/shm` `tmpfs`, `2 GB` free disk [TARGET].
 - **Live capsules (T2)**: 8 logical CPUs recommended (no CPU pinning required; `MV_JUDGE_REQUIRE_CPUSET` defaults to `none`), 16 GiB RAM (`MemAvailable >= floor + 512 MiB` install/doctor minimum, i.e. `4.5 GiB` on a 16 GiB machine [TARGET]; each **Add capsule** also needs at least `6` GiB MemAvailable or refuses with `RAM_ADMISSION_REFUSED` [CITED: `ui/electron/profilePicker.js`]; warns below `floor + 4 GiB`, i.e. `8 GiB` [TARGET]), `>= 1 GiB` `/dev/shm` `tmpfs` (`>= 2.5 GiB` recommended [TARGET]), `>= 15 GB` free disk (`>= 30 GB` recommended [TARGET]), rootful Docker Engine.
 - VM capsules are not part of judging.
 
 ## Troubleshooting
+
+Answers: compiled kit, wender-runtime, vision-runtime, Host program tools, PKG codes
 
 The app includes public Python agents, tools, dependency locks and contracts in
 `resources/operator` [CITED: `ui/tools/package.js`]. Python remains a host prerequisite.
@@ -366,6 +496,8 @@ Codes are [CITED: `ui/tools/package.js`, `daemon-adapter/internal/daemon/ram_adm
 
 ### Legacy kit proxy setup
 
+Answers: proxy, policy.json, egress proxy, net up
+
 The sudo-free fallback calls the kit's `srf-identity-surface net up` with
 `--proxy-bin` pointing to the kit's `srf-egress-proxy`. The launcher selects the
 proxy entrypoint, internal network and bridge attachment. It refuses if
@@ -390,5 +522,7 @@ The installer detects this before offering a new firewall. Retagging `0.1.1` wou
 Open for its default image. Use a legacy-only kit without an active Open witness, or obtain a compatible Open kit.
 
 ## ARM64 developer setup
+
+Answers: arm64 VM, MicroVM, rewind, KVM
 
 ARM64 VM, MicroVM and rewind require developer setup on arm64 with KVM and verified local assets; they are not a judge installation route. x64 VM and MicroVM are not in this release. Windows 10 WSL has no nested KVM. See [local ARM64 setup](ARM64_CAPSULE_SETUP.md) and the [VM roadmap](../VM_MICROVM_ROADMAP.md) for prerequisites and evidence limits.

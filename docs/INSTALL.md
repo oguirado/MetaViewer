@@ -1,14 +1,34 @@
 # Installing and Building MetaViewer on Linux (`arm64` and `x64`)
 
+Answers: build from source, developer install, install guide, how to compile
+
+**Judges:** use the packaged kit in [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md#judge-paths-by-platform-and-tier)
+(one path per platform and tier); this page is for building from source and for
+the package internals. The release assets are x64 only; on arm64 this page is the
+install route.
+
+| You want | Section |
+| --- | --- |
+| Toolchain versions | [Required Toolchains and Pins](#required-toolchains-and-pins) |
+| Build and test | [3. Building from Source and Running the Gate](#3-building-from-source-and-running-the-gate) |
+| Install a tarball by hand | [2. Installing from the Release Package Tarball](#2-installing-from-the-release-package-tarball) |
+| `PKG_…` error codes | [7. Troubleshooting Gate and Package Failures](#7-troubleshooting-gate-and-package-failures) |
+| Where data is stored | [5. RAM-First Data Policy and XDG Locations](#5-ram-first-data-policy-and-xdg-locations) |
+| Remove everything | [6. Uninstall](#6-uninstall) |
+
 I build and test MetaViewer on Linux as a desktop shell for isolated application surfaces governed by a Rust admission and journaling core (multi-capsule acceptance remains [TARGET]; current-pin live wall fps and latency are unmeasured). I distinguish the earlier debug-core live21 and release-core live22 results in [historical live evidence](../README.md#historical-live-evidence). This guide covers platform and toolchain requirements, installing and verifying the deterministic Linux release tarball, building from source and running the offline gate, resolving optional pinned external components, the RAM-first capture policy and XDG storage layout, uninstallation, and troubleshooting with exact gate and package error codes.
 
 ## 1. Platform and Requirements
+
+Answers: supported platforms, architectures, macOS, Windows, requirements
 
 MetaViewer is Linux-first: **`linux-arm64` (`aarch64`) is the primary target** and **`linux-x64` (`x86_64`) is supported** [CITED: `ui/tools/package.js`, `.github/workflows/ci.yml`, `.github/workflows/package.yml`].
 
 macOS and Windows are **not supported**. In `ui/tools/package.js`, `packageArchitecture()` rejects any architecture other than `arm64` and `x64` with `PKG_ARCH_UNSUPPORTED` (checking ELF machine `183` for `arm64` and `62` for `x64`) [CITED: `ui/tools/package.js`]. In `.github/workflows/ci.yml`, the `build-macos` and `build-windows` jobs are non-blocking (`continue-on-error: true`), excluded from `ci-required.needs`, and emit `NOT_APPLICABLE` gate receipts [CITED: `.github/workflows/ci.yml`].
 
 ### Required Toolchains and Pins
+
+Answers: Rust version, Go version, Node version, Electron version, toolchain pins
 
 | Component | Required Version / Pin | Source of Truth | Notes |
 | --- | --- | --- | --- |
@@ -23,6 +43,8 @@ macOS and Windows are **not supported**. In `ui/tools/package.js`, `packageArchi
 
 ### Headless Display and Host Utilities
 
+Answers: xvfb, host utilities, headless build
+
 For headless UI smoke tests (`ui-smoke` leg in `tools/gate.sh`) and clean-install package verification (`--smoke` in `ui/tools/package.js`), the host must provide:
 
 - `xvfb-run` (required by `tools/gate.sh` for `ui/test/smoke.mjs` and `ui/test/smoke-main.mjs`, and by `ui/tools/package.js` for `--smoke`) [CITED: `tools/gate.sh`, `ui/tools/package.js`].
@@ -33,6 +55,8 @@ Distribution-specific package manager commands (`apt`, `dnf`, `pacman`) for inst
 RAM admission serializes native creates across daemons and reserves 512 MiB per incumbent above a host `MemAvailable` floor of min(20 GiB, 25 percent of `MemTotal`) [CITED: `daemon-adapter/internal/daemon/ram_admission.go`]. Reservations live in the uid-owned `0700` directory `$MV_RAM_ADMISSION_DIR`, or `$XDG_RUNTIME_DIR/metaviewer/ram-admission` when the override is unset; all daemons for the uid must share it. PID death alone never releases a reservation. Run `python3 tools/mv_ram_admission.py reclaim --dry-run` as the operator to print each proposed removal and its proof, then explicitly use `--apply` after review. The command holds the admission lock, checks owner death, and reads the local Docker inventory (including stopped containers). Any `srf-id-*` or `srf-ng-hcap-*` container, or any running `xpra*`/`Xvfb` host process, conservatively keeps all reservations. Named records additionally require absence of `srf-pg-<profile>` and `srf-vm-<profile>`; legacy hash-only records require absence of every `srf-id-*`, `srf-pg-*` and `srf-vm-*` container. Unknown or remote inventories keep reservations. The command never changes containers [CITED: `tools/mv_ram_admission.py`]. Reclaim is never automatic; run it with the same Docker context and admission directory as the daemon. Offline tests use private admission directories and never reclaim host records.
 
 ### Hardware
+
+Answers: hardware, RAM, CPU, disk for building
 
 No hardware profile has been measured on a small machine; every figure is [TARGET] unless a source is cited. MetaViewer needs 64-bit Linux (`x86_64` or `aarch64`, Ubuntu 24.04 recommended) [CITED: `ui/tools/package.js`]. No GPU or CUDA is required: the pinned vision component is integer/CPU only [CITED: vision-engine README at the pinned commit]. A judge-oriented walkthrough is in [JUDGE_QUICKSTART.md](JUDGE_QUICKSTART.md) and a complete AI operator guide is in [AI_OPERATOR_GUIDE.md](AI_OPERATOR_GUIDE.md).
 
@@ -46,6 +70,8 @@ No hardware profile has been measured on a small machine; every figure is [TARGE
 Capsule RAM admission is described under [Concurrent identities and RAM admission](#concurrent-identities-and-ram-admission). VM-kind capsules are outside the judge matrix: they need `/dev/kvm` and at least 16 GiB of `MemAvailable` [CITED: operator strategy note].
 
 ### Ubuntu packages
+
+Answers: apt packages for building
 
 On Ubuntu 24.04, for both architectures [TARGET; not yet verified on a clean host], install the host utilities named above plus the display and container tools:
 
@@ -61,6 +87,8 @@ sudo apt-get install xvfb x11-utils xauth tar zip strace git coreutils util-linu
 
 ## Identities
 
+Answers: identity store, profiles, login identities, SRF_IDENTITY_STORE_ROOT
+
 Browser sessions are credentials: the operator logs in by hand inside the native
 capsule view. MetaViewer has no password vault and agents never type credentials.
 Distinct identity ids may use the same domains for separate accounts.
@@ -75,15 +103,15 @@ overlapping paths, including symlink aliases, are refused as
 `MUT-PROFILE-IN-REPO`. Control directories must be private to the current user.
 Host identity ids are limited to a suffix of at most 40 characters [TARGET],
 so an explicit `srf-id-<identity>` fits native `capsuleRE` [CITED:
-OpenSuperficies `a9ac1ac8`, `src/browserid/surface/surface.go:184`].
+OpenSuperficies private source; not in this repository].
 Login requests that explicit capsule on start and uses the validated native reply;
 an active lease may instead name any native-valid capsule, including a random
 `srf-id-<hex>` capsule started elsewhere.
 
 Before a real start, the operator must provision `profiles/<identity>` as a
 private directory with mode `0700` and owner uid `10001` [CITED: OpenSuperficies
-`a9ac1ac8`, `src/browserid/surface/surface.go:392-393`; `3cb86d752`,
-`src/browserid/surface/surface.go:404-407`].
+private source; not in this repository; the public launcher check is
+`scripts/judge/metaviewer-judge.sh`, function `step_profile`].
 Native `srf-identity-admin create` creates `profiles/<identity>` owned by the
 calling operator and exposes no chown or container provisioning verb; changing
 ownership to uid `10001` on the host requires a one-time operator provisioning
@@ -121,8 +149,8 @@ It may require the operator's existing native profile-removal permissions.
 During a registered login view, the adapter refuses agent-origin input with
 `LOGIN_ACTIVE`, including while login opens or teardown is uncertain. Human
 input retains the existing `take_control` requirement. Native registration is
-`views/<container>.pid` under the state directory (OpenSuperficies
-`src/browserid/surface/viewstop.go:20-31`); the host also reserves a pending marker
+`views/<container>.pid` under the state directory (OpenSuperficies private
+source; not in this repository); the host also reserves a pending marker
 before launching login. If a crash leaves `views/<container>.login-pending`,
 first stop the native login view and verify that no login process is still
 opening or holding that capsule. Set `container` to the exact validated capsule
@@ -141,6 +169,8 @@ provide an identities menu (create, log in, list, delete) and a human-control
 banner during login; all credential entry remains in the capsule view.
 
 ## 2. Installing from the Release Package Tarball
+
+Answers: install the tarball by hand, what is in the package
 
 The packaging pipeline (`scripts/bootstrap.sh` and `ui/tools/package.js`) produces a deterministic GNU tar archive outside the repository at `$MV_PKG_OUT/MetaViewer-linux-<arch>.tar` (`MetaViewer-linux-arm64.tar` on `arm64`, `MetaViewer-linux-x64.tar` on `x64`) alongside `$MV_PKG_OUT/MetaViewer-linux-<arch>.sha256` [CITED: `ui/tools/package.js`].
 
@@ -196,6 +226,8 @@ On launch, the packaged entry creates an isolated `0700` temporary runtime direc
 - **Nested display-only mode**: pass `--nested-depth=1` (`./metaviewer --nested-depth=1`) only for the separate display-only view [CITED: `ui/tools/package.js`].
 
 ## 3. Building from Source and Running the Gate
+
+Answers: build from source, compile, run tests, offline gate
 
 All source builds and tests run offline against pre-populated local caches (`--offline` for Cargo and npm, `GOPROXY=off GOSUMDB=off GOTOOLCHAIN=local` for Go) [CITED: `tools/gate.sh`, `ui/tools/package.js`].
 
@@ -280,6 +312,8 @@ Hosted CI runs on both `ubuntu-24.04` (`x64` / `x86_64`) and `ubuntu-24.04-arm` 
 
 ## 4. Optional Pinned Components and Resolution (`deps.lock`)
 
+Answers: deps.lock, external components, OpenSuperficies path
+
 External runtime components are pinned in `deps.lock` by component name, kind, repository, version, and full 40-character lowercase Git commit SHA. Under Law L2 and Law L5, they stay in their own repositories and are **never vendored** into this tree [CITED: `LAWS.md`, `deps.lock`, `tools/gate.sh`]:
 
 | Component | Kind | Repository | Version | Pinned Commit (`deps.lock`) | Runtime Environment Variable |
@@ -311,6 +345,8 @@ The Go daemon adapter (`daemon-adapter/internal/daemon/environment.go`) and pack
 
 ## 5. RAM-First Data Policy and XDG Locations
 
+Answers: where is data stored, XDG paths, recordings location
+
 ### RAM-First Capture and Recording Export
 
 I designed frame transport and surface recording to be strictly RAM-first [CITED: `docs/ARCHITECTURE.md`, `core/src/record/capture/export.rs`, `ui/electron/captureBridge.js`]:
@@ -330,6 +366,8 @@ I designed frame transport and surface recording to be strictly RAM-first [CITED
 
 ## 6. Uninstall
 
+Answers: uninstall, remove MetaViewer
+
 MetaViewer installs no system-wide daemons, privileged helpers, or root-owned files [CITED: `ui/tools/package.js`, `ui/electron/authorityWire.js`].
 
 To remove an installed release bundle and all user state:
@@ -347,6 +385,8 @@ rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/metaviewer" \
 If you built from source, also remove your external `MV_PKG_OUT` and `CARGO_TARGET_DIR` directories, any exported capture archives under `MV_RECORDING_DESTINATION`, and the repository checkout.
 
 ## 7. Troubleshooting Gate and Package Failures
+
+Answers: PKG error codes, gate failed, smoke failed
 
 ### Packaging, `--verify-install`, and `--smoke` Error Codes (`ui/tools/package.js`)
 
@@ -386,6 +426,8 @@ If you built from source, also remove your external `MV_PKG_OUT` and `CARGO_TARG
 | `DESTINATION_UNSET` / `NOT_SEALED` / `DESTINATION_UNAVAILABLE` / `DESTINATION_EXISTS` / `LIMIT` / `CAPTURE_UNAVAILABLE` | `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs` | Recording export requires a `sealed` recording, `MV_RECORDING_DESTINATION` set to an existing writable directory outside the repository, and an archive size within `16 MiB` (`4096` frames max) [CITED: `ui/electron/captureBridge.js`, `core/src/record/capture/export.rs`]. |
 
 ## Capsule network
+
+Answers: capsule network, proxy, egress, srf-idnet
 
 OpenSuperficies is pinned to `3cb86d752f38457b6730eefd235d4da4c4039721`
 [CITED: `deps.lock`]. This is the interim net-modes pin, not the final open-ready
@@ -464,6 +506,8 @@ startup snapshot determines the argv used for that capsule. These adapter-local 
 The hosted web runner retains its explicit offline barrier.
 
 ### Concurrent identities and RAM admission
+
+Answers: several capsules, RAM admission refused, concurrent identities
 
 [CITED: `tools/mv_ram_admission.py`] Configure `MV_SRF_PROFILES` with separate browser profile
 IDs (`mv-live-1` through `mv-live-4`), the one shared existing canonical `/dev/shm/vqa-ramws/opensuperficies/os-cu-0` `RAMRoot` (or disjoint canonical `/dev/shm/` roots), and distinct `Display` values (`:100` to `:103`).
@@ -569,6 +613,8 @@ persistence leaves it visible. Acknowledgement does not resume an agent run.
 
 
 ## Automation entry, demo authoring, and private MemoryWeb home
+
+Answers: automation, mw_run, MemoryWeb home
 
 Configure `MV_MW_HOME` as an absolute private site-data directory, or use the
 checkout's gitignored `memoryweb/` default. Home admission requires an owner-only
