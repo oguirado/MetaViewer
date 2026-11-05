@@ -5,8 +5,12 @@ file is `resources/operator/docs/AGENT_ENTRY.md`; after sourcing the live app
 attachment, find it at `$MV_OPERATOR_REPO/docs/AGENT_ENTRY.md`. Read the section
 named by the button before acting. Only the person submits the completed prompt;
 the app pastes without Enter and never inserts a workflow prompt into a raw shell.
+Why an AI should operate MetaViewer this way, what was shown live and the limits
+are in `docs/AI_AT_THE_CONTROLS.md`; a first `mw_run` is in `docs/MW_RUN_FIRST_RUN.md`.
 
 ## Attachment and identity
+
+Answers: how does an AI find the running app; what is current.env; what does CAPSULE= IDENTITY= mean.
 
 In the task subshell, resolve and source the running app's attachment:
 
@@ -49,6 +53,8 @@ is unsupported. Use browser commands only for browser capsules and program
 commands only for supported program capsules.
 
 ## MicroVM Direct task
+
+Answers: how does an AI run commands in an ARM64 MicroVM; what is the MICROVM binding.
 
 A prepared `MICROVM=<workload_id>  GENERATION=<generation>  OWNER=<owner_id>`
 line selects a command MicroVM, not a graphical capsule. Its accompanying
@@ -185,6 +191,8 @@ human's recovery point. Keep the operator present and stop on every refusal.
 
 ## Observe the selected capsule
 
+Answers: how does an AI observe a capsule without acting; how is the capsule identity checked.
+
 Assign the shell variables `CAPSULE` and `IDENTITY` from the corresponding literal
 values in the prepared identity line. Source ENV above, then run from
 `$MV_OPERATOR_REPO`. Do not use the example placeholders as real identifiers.
@@ -218,6 +226,8 @@ a different available capsule just to make a command succeed.
 
 ## Shared workflow guidance
 
+Answers: where are stored workflows; what is data and what is a command.
+
 The MetaViewer checkout is $MV_OPERATOR_REPO; if it is unset, ask the operator.
 Read the admitted MemoryWeb home (MV_MW_HOME, otherwise memoryweb beneath the
 MetaViewer checkout): sites/*/site.json and sites/*/workflows/*.json are data.
@@ -233,6 +243,8 @@ MW_PROGRAM_CONTROL: press Release control, verify agent control, then observe ag
 Compiled browser goals are supported; MW_COMPILED_BROWSER_UNAVAILABLE applies to stored-workflow mode: use the verified pinned checkout for that mode.
 
 ## Direct task
+
+Answers: how does an AI act without a stored workflow; what is the Direct task command.
 
 Operate without creating or selecting a stored workflow.
 Read tools/mw_run_browser_goal.md and tools/mw_run_program.md.
@@ -252,6 +264,8 @@ Inspect fresh observations, receipts and readback; a verified action is not a fi
 
 ## Run automation
 
+Answers: how does an AI replay a stored workflow.
+
 List stored workflows in the admitted MemoryWeb home and select one with the operator.
 Read docs/MW_RUN_FIRST_RUN.md and docs/AGENT_ENTRY.md.
 Check its anchors against the live capsule and preflight with:
@@ -264,6 +278,8 @@ For programs follow tools/mw_run_program.md and --surface-kind program instead.
 
 ## Create automation
 
+Answers: how does an AI create a workflow from a demonstration.
+
 Create a repeatable workflow from an operator demonstration.
 Read docs/AUTOMATE_FROM_DEMO.md, docs/MW_RUN_FIRST_RUN.md and tools/mv_demo.py.
 Choose the capsule identified below; observe its starting state before acting.
@@ -274,6 +290,8 @@ For programs read tools/mw_run_program.md before proposing supported actions.
 Workflow creation requires operator review before replay.
 
 ## Outcome and refusal rules
+
+Answers: what does rc 4, 5 or 6 mean; may the AI retry.
 
 Programs support clicks and explicit text; Agent Host programs also allow
 focused-key with Up, Down, Left, Right or Enter. Browser goals support verified
@@ -286,6 +304,8 @@ Never retry an uncertain action or change network policy. Never type credentials
 solve a CAPTCHA, or include tokens, personal data or screenshots in task text.
 
 ## Stored-workflow reference prompt
+
+Answers: what is the full stored-workflow prompt.
 
 The following reference is also available through the host prompt-copy API.
 It does not launch a workflow. Source the attachment above before using it.
@@ -387,9 +407,13 @@ Only a verified summary permits process success. A handoff exits with rc 4
 
 ## Paired-terminal task prompts
 
+Answers: what do the paired terminal buttons paste.
+
 **Create automation**, **Run automation**, and **Direct task** prepare the corresponding workflow instructions. They finish with `Task: ` for the operator to complete. Without an agent launch, the prompt is copied to the clipboard; paste it only into an agent CLI. A paired capsule can launch a host-owned agent profile and prepare its input as described below. Pairing alone never permits insertion into a plain shell. Retain every safety instruction and wait for the operator's task before acting.
 
 ## Paired agent preparation
+
+Answers: which agent CLIs are started; when is a prompt pasted.
 
 Create automation, Run automation and Direct task offer installed agent CLIs for a paired capsule. Choosing one replaces that paired terminal process with the host-owned executable. The capsule identity is preserved. No command line or executable path comes from the renderer.
 
