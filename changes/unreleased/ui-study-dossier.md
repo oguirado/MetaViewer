@@ -1,0 +1,2 @@
+- Add `route/study/ui.jsonl`: 562 routed findings for the UI (wall, layouts, tree, add capsule, terminals, Direct task, modes, identities, recording, activity), each citation byte-checked on this commit.
+- Add `docs/dossiers/ui.md`: a per-subsystem UI dossier with Answers lines, failure and refusal tables, and `path:line` coordinates.
