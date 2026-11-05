@@ -366,7 +366,7 @@ class CheckSite(FlowBase):
         home.mkdir()
         with patch.dict(os.environ, {'MV_MEMORYWEB_REPO': str(checkout)}), \
                 patch.object(demo, 'admitted_home', return_value=home):
-            self.assertEqual(demo.check('meta-ai')['source'], 'builtin')
+            self.assertEqual(demo.check('sample-chat')['source'], 'builtin')
 
     def test_symlinks_in_an_authored_site_refuse_before_any_copy_or_build(self):
         checkout, home = self.checkout()

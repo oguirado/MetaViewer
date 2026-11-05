@@ -1,0 +1,1 @@
+- Replace the built-in chat draft and the offline site fixtures with a neutral `sample-chat` site on a reserved example origin; the offline tests keep the same login, challenge-wall, provenance and replay checks.

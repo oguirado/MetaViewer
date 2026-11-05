@@ -27,7 +27,7 @@ import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
-FIXTURE = ROOT / 'tests/e2e/fixtures/mw_perplexity'
+FIXTURE = ROOT / 'tests/e2e/fixtures/mw_sample_chat'
 ANSWER = 'Offline fixture answer: Paris is the capital of France.'
 
 
@@ -166,7 +166,7 @@ class Pages(SimpleHTTPRequestHandler):
 
 def stage_home(work, origin):
     home = work / 'memoryweb'
-    site = home / 'sites/perplexity'
+    site = home / 'sites/sample-chat'
     shutil.copytree(FIXTURE / 'site', site)
     for path in (home, *home.rglob('*')):
         path.chmod(0o700 if path.is_dir() else 0o600)
@@ -625,7 +625,7 @@ def main(argv=None):
                 from unittest.mock import patch
                 with patch.dict(os.environ, MV_WENDER_ROOT=str(args.wender_root)), backend.connect(attached) as client:
                     host = backend.HostBackend(client, 'mv-live-1', work, attached)
-                    workflow = json.loads((home / 'sites/perplexity/workflows/ask.json').read_text())
+                    workflow = json.loads((home / 'sites/sample-chat/workflows/ask.json').read_text())
                     result = host.capture_answer(workflow)
                     require(result.get('captured') is True, json.dumps(result))
                     require(Path(result['path']).read_text() == ANSWER, 'forced answer mismatch')
@@ -638,7 +638,7 @@ def main(argv=None):
         # Use the app's ordinary evidence location so its real handoff watcher sees the run.
         caller.pop('XDG_STATE_HOME', None)
         preflight = command([sys.executable, args.operator_repo / 'tools/mw_home_check.py', '--repo',
-                             args.operator_repo, '--home', home, '--workflow', 'perplexity/ask'], env=caller)
+                             args.operator_repo, '--home', home, '--workflow', 'sample-chat/ask'], env=caller)
         require(json.loads(preflight.stdout)['ok'], 'home preflight refused')
         forced_transport = False
         if args.file_fixture:
@@ -697,7 +697,7 @@ def main(argv=None):
             entry_argv = ([sys.executable, str(probe), str(args.operator_repo), str(work / (page + '.trace.jsonl'))]
                           if probe else [sys.executable, '-m', 'metaviewer_agents.mw_run'])
             result = command([*entry_argv, '--identity', 'mv-live-1',
-                              '--site', 'perplexity', '--workflow', 'ask', '--slot',
+                              '--site', 'sample-chat', '--workflow', 'ask', '--slot',
                               'prompt=What is the capital of France? Ω'], cwd=args.operator_repo / 'agents',
                               env=caller, check=False, timeout=210)
             # Preserve only our packaged session's authority evidence before the
@@ -786,7 +786,7 @@ def self_test():
             host = importlib.util.module_from_spec(spec)
             sys.path.insert(0, str(ROOT / 'agents'))
             spec.loader.exec_module(host)
-            args = SimpleNamespace(site='perplexity', workflow='ask', identity='mv-live-1', slot=[])
+            args = SimpleNamespace(site='sample-chat', workflow='ask', identity='mv-live-1', slot=[])
             result = SimpleNamespace(rc=5, verdict_code='INPUT_UNCERTAIN', diagnostic='OWNER_FAILURE',
                                      handoff_path=None)
             backend = SimpleNamespace(call=lambda *a: {'mode': 'legacy'}, last_core_refusal='STALE_FRAME')
@@ -1029,7 +1029,7 @@ def self_test():
             with tempfile.TemporaryDirectory() as directory:
                 home = stage_home(Path(directory), 'http://127.0.0.1:12345')
                 self.assertEqual(home.stat().st_mode & 0o777, 0o700)
-                site = json.loads((home / 'sites/perplexity/site.json').read_text())
+                site = json.loads((home / 'sites/sample-chat/site.json').read_text())
                 self.assertEqual(site['domains'], ['127.0.0.1'])
                 self.assertEqual(site['execution_policy']['min_notice_s'], 10)
             self.assertEqual((FIXTURE / 'site/site.json').read_bytes(), source)
